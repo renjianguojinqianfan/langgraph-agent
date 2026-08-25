@@ -1,0 +1,100 @@
+classDiagram
+    %% ── Settings 扩展 ──
+    class Settings {
+        <<existing>>
+        +int context_token_budget = 8000
+        +int context_keep_recent = 10
+        +int context_max_messages = 0
+        +str context_compress_strategy = "truncate"
+        +int context_summary_max_tokens = 300
+        +int tool_failure_threshold = 3
+        +int tool_cooldown_sec = 30
+        +float tool_backoff_base = 1.0
+        +int tool_backoff_factor = 2
+        +int tool_max_retries = 2
+        +str plugins_dir = "backend/plugins"
+        +bool plugins_autoload = True
+        +bool trace_enabled = True
+        +str trace_dir = "data/traces"
+        +plugins_path Path
+        +trace_path Path
+    }
+
+    %% ── ToolResult / BaseTool 扩展 ──
+    class ToolResult {
+        <<existing dataclass>>
+        +bool success
+        +any data
+        +str error
+        +bool circuit_open = False
+        +int retries = 0
+    }
+    class BaseTool {
+        <<existing ABC>>
+        +str name
+        +str description
+        +dict args_schema
+        +bool requires_confirm
+        +bool retryable = True
+        +int max_retries = None
+        +bool circuit_breaker = True
+        +run(**kwargs) ToolResult
+    }
+    ToolResult .. ToolExecutor : produced
+
+    %% ── 熔断 + 重试（项2 新增） ──
+    class CircuitBreaker {
+        +str state
+        +int failure_count
+        +float opened_at
+        +float cooldown_sec
+        +int failure_threshold
+        +allow() tuple[bool,str]
+        +record_success()
+        +record_failure()
+    }
+    class ToolExecutor {
+        -dict~str,CircuitBreaker~ _breakers
+        -Settings _settings
+        -Callable _publish
+        +dispatch(tool, **kwargs) ToolResult
+    }
+    ToolExecutor --> CircuitBreaker : per tool name
+    ToolExecutor ..> BaseTool : wraps
+    ToolExecutor ..> ToolResult : returns
+
+    %% ── 上下文压缩（项1 新增） ──
+    class ContextModule {
+        <<module functions>>
+        +estimate_tokens(messages) int
+        +compress_messages(...) tuple[list,dict]
+        +summarize_messages(llm, messages, max_tokens) str
+    }
+
+    %% ── 插件注册（项3 扩展 registry） ──
+    class Registry {
+        <<existing module>>
+        +register(cls) cls
+        +discover_plugins(plugins_dir)
+        +_import_module_from_path(path) ModuleType
+        +make_openapi_tool(spec) Type
+        -_REGISTRY dict
+    }
+
+    %% ── Trace 落盘（项4 新增） ──
+    class TraceRecorder {
+        -Path _dir
+        -dict _files
+        -dict _cbs
+        +attach(event_bus, task_id)
+        +_on_event(task_id, ev)
+        +close(task_id)
+    }
+    TraceRecorder ..> EventBus : subscribes
+
+    %% ── AgentState 扩展 ──
+    class AgentState {
+        <<existing TypedDict>>
+        +bool compressed
+        +int context_tokens
+    }

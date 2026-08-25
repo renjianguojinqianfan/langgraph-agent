@@ -1,0 +1,93 @@
+classDiagram
+    class BaseTool {
+        <<abstract>>
+        +str name
+        +str description
+        +dict args_schema
+        +bool requires_confirm
+        +bool retryable
+        +int max_retries
+        +bool circuit_breaker
+        +run(**kwargs) ToolResult
+        +to_openai_schema() dict
+    }
+    class ToolResult {
+        +bool success
+        +any data
+        +str error
+        +bool circuit_open
+        +int retries
+    }
+
+    class McpServerConfig {
+        +str name
+        +str command
+        +list args
+        +dict env
+        +bool enabled
+        +str transport
+        +str url
+    }
+    class McpServerStatus {
+        +str name
+        +str transport
+        +str status
+        +int tools_count
+        +str error
+    }
+    class McpClientManager {
+        +__init__(settings)
+        +connect_all() list~McpTool~
+        +call_tool(server, tool, arguments, timeout) dict
+        +cleanup() None
+        +status_list() list~McpServerStatus~
+    }
+    class _McpSession {
+        +threading.Thread thread
+        +asyncio.AbstractEventLoop loop
+        +start(cfg) bool
+        +initialize_list_tools() list~dict~
+        +call_tool(name, args, timeout) dict
+        +close() None
+    }
+    class McpTool {
+        +str _server_name
+        +str _tool_name
+        +bool needs_per_call_confirm = True
+        +_needs_confirm(args) bool
+        +run(**kwargs) ToolResult
+    }
+
+    class GitToolRunner {
+        +Path repo
+        +float timeout
+        +_ensure_repo() None
+        +_resolve_path(path) Path
+        +run(verb, args, cwd) dict
+    }
+    class GitTool {
+        +str verb
+        +run(**kwargs) ToolResult
+    }
+    class GitStatusTool
+    class GitDiffTool
+    class GitCommitTool
+    class GitLogTool
+    class GitBranchTool
+    class GitCheckoutTool
+    class GitInitTool
+
+    BaseTool <|-- McpTool
+    BaseTool <|-- GitTool
+    GitTool <|-- GitStatusTool
+    GitTool <|-- GitDiffTool
+    GitTool <|-- GitCommitTool
+    GitTool <|-- GitLogTool
+    GitTool <|-- GitBranchTool
+    GitTool <|-- GitCheckoutTool
+    GitTool <|-- GitInitTool
+    BaseTool ..> ToolResult : produces
+    McpClientManager "1" *-- "1..*" _McpSession : manages
+    McpClientManager "1" o-- "0..*" McpTool : wraps tools
+    McpTool ..> McpClientManager : calls
+    GitToolRunner "1" o-- "0..*" GitTool : executes for

@@ -1,0 +1,78 @@
+sequenceDiagram
+    autonumber
+    participant M as main.py lifespan
+    participant TM as TaskManager.__init__
+    participant MGR as McpClientManager
+    participant S as _McpSession(线程+循环)
+    participant P as stdio 子进程(MCP server)
+
+    M->>TM: TaskManager(settings, ...)
+    TM->>TM: _load_mcp_tools(settings)  [mcp_enabled]
+    TM->>MGR: McpClientManager(settings).connect_all()
+    loop 每个 enabled server
+        MGR->>S: start(cfg)  (新线程 + 事件循环)
+        S->>P: stdio_client(StdioServerParameters) 启动子进程
+        S->>P: initialize()
+        S->>P: list_tools()
+        P-->>S: tools[{name, description, inputSchema}]
+        alt 成功
+            S-->>MGR: status=connected, tools[]
+            MGR->>MGR: 每工具 new McpTool(name=mcp__{server}__{tool}, args_schema=inputSchema)
+        else 失败/超时
+            S-->>MGR: status=error, error_msg (warning 不中断)
+        end
+    end
+    MGR-->>TM: list~McpTool~  (追加 _tools, 冲突保留先注册者+warning)
+    Note over TM: _tool_schemas = [t.to_openai_schema() for t in _tools]  (含 MCP 工具)
+
+    %% S2: LLM 调用 MCP 工具（复用 ToolExecutor）
+    participant E as executor
+    participant TN as tool_node
+    participant TE as ToolExecutor
+    participant MT as McpTool
+
+    E->>E: need_confirm = requires_confirm or http写 or MCP per-call(_needs_confirm(args)) or risk_blocked
+    alt need_confirm=True
+        E->>TN: 经 human_confirm 确认后放行
+    end
+    TN->>TE: dispatch(mcp__fs__read_text, path=...)
+    TE->>MT: run(**args)   [熔断 allow + 重试策略]
+    MT->>MGR: call_tool(server, tool, args, timeout)
+    MGR->>P: session.call_tool(name, arguments)
+    P-->>MGR: CallToolResult{content, isError}
+    MGR-->>MT: {content, text, structured, isError}
+    MT-->>TE: ToolResult(success=not isError, data={server, tool, text, structured})
+    TE-->>TN: ToolResult  (失败 -> 熔断计数; 连续失败 -> tool_circuit_open)
+    TN-->>TN: rec.status=success/failed, publish(tool_result)
+
+    %% S3: Git 工具调用（正交 runner）
+    participant GT as GitCommitTool (requires_confirm=True)
+    participant R as GitToolRunner
+    participant G as git 二进制
+
+    TN->>GT: dispatch(git_commit, message="feat: ...")
+    Note over GT: executor 已置 need_confirm=True（静态 requires_confirm）→ 先经 human_confirm
+    GT->>R: _ensure_repo()  (rev-parse --is-inside-work-tree)
+    R-->>GT: ok / not a git repository
+    GT->>R: run("commit", ["-m", message], cwd=repo)
+    R->>R: 校验 verb 白名单 / 黑名单 / 参数黑名单 / 路径越界
+    R->>G: subprocess.run(["git","-C",repo,"commit","-m",message], shell=False, timeout)
+    G-->>R: stdout/stderr/exit_code
+    R-->>GT: {exit_code, stdout, stderr}
+    GT->>GT: exit_code==0 → 再取 rev-parse HEAD
+    GT-->>TN: ToolResult(success=True, data={commit: "<hash>"})
+
+    %% S4: 优雅关闭（lifespan 退出）
+    participant U as uvicorn 关闭
+
+    U->>M: lifespan 退出阶段
+    M->>TM: shutdown()
+    TM->>MGR: cleanup()   [幂等]
+    loop 每个活跃 session
+        MGR->>S: close()
+        S->>S: loop 内关闭 ClientSession / stdio transport (SDK terminate)
+        S->>P: 终止子进程（SDK cleanup + 兜底 terminate/kill）
+        S->>S: join 线程
+        MGR->>MGR: status -> closed
+    end
+    Note over M: 退出后无残留 MCP 子进程（验收 1.7）

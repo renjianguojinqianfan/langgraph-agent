@@ -1,0 +1,87 @@
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户/前端
+    participant API as FastAPI routes
+    participant TM as TaskManager
+    participant G as LangGraph Graph(main)
+    participant R as risk_scan 节点
+    participant SE as SubAgentExecutor
+    participant SG as 子 Agent 简化图
+    participant KB as KnowledgeBase
+    participant AUTH as TokenIssuer
+    participant OT as OpenAPITool
+    participant EB as EventBus
+
+    %% ────────── S1 风险扫描 + 高危确认 ──────────
+    rect rgb(240,248,255)
+    Note over U,EB: S1 规划期风险扫描（risk_policy=confirm）
+    G->>R: planner 产出 plan 后进入 risk_scan
+    R->>R: scan_keywords(plan) [+scan_semantic(aux_llm)]
+    R->>EB: publish(risk_report, items)
+    alt 命中 high
+        R->>R: state._risk_blocked=True
+        R->>EB: publish(risk_found, item) 逐条
+    end
+    R->>G: subagent_split（场景不匹配 → executor）
+    G->>G: executor 决策 tool_call
+    G->>G: need_confirm |= _risk_blocked
+    G->>EB: publish(tool_call, need_confirm=True)
+    G->>G: human_confirm 节点阻塞等待
+    U->>API: POST /api/tasks/{id}/confirm {approved}
+    API->>TM: confirm(task_id, tool_call_id, approved)
+    TM-->>G: 唤醒 → _confirmed_ids / _rejected_ids
+    G->>EB: publish(tool_result, status=success|skipped)
+    end
+
+    %% ────────── S2 子 Agent 派生与隔离 ──────────
+    rect rgb(255,248,240)
+    Note over U,EB: S2 子 Agent 协作（spawn_subagent + 内置场景）
+    G->>G: executor 调 spawn_subagent（requires_confirm=True 经确认）
+    G->>SE: run_subtask(spec)
+    SE->>EB: publish(subtask_start, {subtask_id,...}) 主频道
+    SE->>SE: pool.submit(_exec_one)
+    SE->>SG: 独立 AgentState + 频道 subtask_id + 简化 graph
+    SG->>SG: planner/executor/tool 循环（内部事件发 subtask_id 频道）
+    SG-->>SE: final state
+    SE->>EB: publish(subtask_result, {summary, artifacts}) 主频道
+    SE-->>G: ToolResult(data=SubTaskResult)
+    G->>G: 折叠摘要追加主 state.messages
+    end
+
+    %% ────────── S3 RAG 检索 ──────────
+    rect rgb(240,255,240)
+    Note over U,EB: S3 RAG + 跨会话记忆
+    G->>KB: memory_search(query, top_k)
+    KB->>KB: retrieve() 关键词/结构化匹配（离线）
+    KB-->>G: ToolResult(hits, 未命中空列表)
+    G->>EB: publish(tool_result)
+    end
+
+    %% ────────── S4 鉴权 + SSE ──────────
+    rect rgb(245,245,245)
+    Note over U,EB: S4 基础鉴权（auth_enabled=true）
+    U->>API: POST /api/auth/token {token}
+    API->>AUTH: issue() → hmac 签名 + 登记
+    API-->>U: {token, expires_at}
+    U->>API: GET /api/tasks (Authorization: Bearer)
+    API->>AUTH: verify(token)
+    alt 有效
+        API-->>U: 200
+    else 无效/过期
+        API-->>U: 401
+    end
+    U->>API: GET /api/tasks/{id}/events?token=...
+    API->>AUTH: verify(query token)
+    API-->>U: SSE 200 / 401
+    end
+
+    %% ────────── S5 OpenAPI 工具调用 ──────────
+    rect rgb(255,240,255)
+    Note over U,EB: S5 OpenAPI 工具封装
+    TM->>OT: 启动加载 build_tools_from_spec(spec)
+    OT-->>TM: List[OpenAPITool] 追加注册
+    G->>OT: tool_call <operationId>
+    OT->>OT: httpx 请求（path/query/header/body/security）
+    OT-->>G: ToolResult(status_code <400 成功)
+    end

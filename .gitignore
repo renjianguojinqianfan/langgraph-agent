@@ -1,0 +1,45 @@
+# ── Secrets & local config ─────────────────────────────
+.env
+.env.local
+*.env
+!.env.example
+
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Virtual environments ───────────────────────────────
+.venv/
+.venv311/
+venv/
+env/
+
+# ── Node / frontend ────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist_*/
+frontend/dist_build/
+dist/
+*.tsbuildinfo
+
+# ── Runtime data (never commit) ────────────────────────
+data/
+!data/.gitkeep
+
+# ── OS / IDE ───────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ── Logs ───────────────────────────────────────────────
+*.log
+logs/

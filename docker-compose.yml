@@ -1,0 +1,22 @@
+# Optional containerised deployment. Build & run the backend; the frontend is
+# served as static files built into the backend container for simplicity.
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - llm_provider=${llm_provider:-openai}
+      - llm_base_url=${llm_base_url:-https://api.openai.com/v1}
+      - llm_api_key=${llm_api_key:-}
+      - llm_model=${llm_model:-gpt-4o-mini}
+      - use_mock_llm=${use_mock_llm:-false}
+      - max_steps=${max_steps:-15}
+      - search_provider=${search_provider:-duckduckgo}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -1,0 +1,197 @@
+```mermaid
+classDiagram
+    %% ══════════════ P1 增量类图（仅变更/新增类型）══════════════
+
+    %% ── Settings 扩展 ──
+    class Settings {
+        <<existing>>
+        +bool risk_scan_enabled = True
+        +bool risk_semantic_enabled = False
+        +str risk_policy = "confirm"
+        +str risk_danger_keywords = ""
+        +bool subagent_enabled = True
+        +int subagent_max_concurrency = 2
+        +int subagent_timeout_sec = 120
+        +bool kb_enabled = True
+        +str kb_dir = "data/kb"
+        +bool kb_auto_index_artifacts = True
+        +int kb_chunk_size = 2000
+        +bool kb_embedding_enabled = False
+        +int kb_top_k = 5
+        +bool aux_llm_enabled = False
+        +str aux_llm_provider = "openai"
+        +str aux_llm_base_url = ""
+        +str aux_llm_api_key = ""
+        +str aux_llm_model = ""
+        +bool aux_llm_use_mock = False
+        +int auth_token_ttl_sec = 86400
+        +bool openapi_enabled = False
+        +str openapi_spec_path = ""
+        +str openapi_spec_url = ""
+        +str openapi_api_key = ""
+        +str openapi_global_headers = "{}"
+        +kb_path Path
+    }
+
+    %% ── 项1 风险扫描 ──
+    class RiskItem {
+        +int step_index
+        +str level
+        +List~str~ matched_keywords
+        +str suggestion
+        +str action
+    }
+    class RiskScanner {
+        +dict DANGER_KEYWORDS
+        +scan_keywords(plan) List~RiskItem~
+        +scan_semantic(aux_llm, item, step) RiskItem
+        +scan_tool_output(output) List~RiskItem~
+        +scan(plan, aux_llm, semantic_enabled) List~RiskItem~
+    }
+    RiskScanner ..> RiskItem : produces
+
+    %% ── 项2 子 Agent ──
+    class SubTaskSpec {
+        +str name
+        +str instruction
+        +int max_steps
+    }
+    class SubTaskResult {
+        +str subtask_id
+        +str name
+        +str status
+        +str summary
+        +List~str~ artifacts
+        +int tool_calls_executed
+        +str error
+    }
+    class SubAgentExecutor {
+        -ThreadPoolExecutor _pool
+        -Settings _settings
+        -Any _tm
+        -LLMClient _llm
+        -List~BaseTool~ _tools
+        -List~dict~ _tool_schemas
+        -Callable _parent_publish
+        +run_subtask(spec) SubTaskResult
+        +run_plan_with_subtasks(specs, parent_id) List~SubTaskResult~
+        -_exec_one(spec) SubTaskResult
+    }
+    class SpawnSubagentTool {
+        <<BaseTool>>
+        +str name = "spawn_subagent"
+        +bool requires_confirm = True
+        +run(**kwargs) ToolResult
+    }
+    SubAgentExecutor ..> SubTaskResult : produces
+    SubAgentExecutor ..> AgentRuntime : creates isolated
+    SpawnSubagentTool ..> SubAgentExecutor : delegates
+
+    %% ── 项3 RAG / KB ──
+    class KnowledgeBase {
+        -Path _index_dir
+        -dict _docs
+        -dict _index
+        -int _chunk_size
+        -bool _embedding_enabled
+        +index_documents() int
+        +add_document(path) str
+        +retrieve(query, top_k) List~KbHit~
+        +list_docs() List~KbDoc~
+        +rebuild() int
+        +remove(doc_id) bool
+        +set_embedder(fn)
+        -_persist()
+        -_load()
+    }
+    class KbDoc {
+        +str doc_id
+        +str path
+        +int chunks
+        +int size
+        +str indexed_at
+    }
+    class KbChunk {
+        +str doc_id
+        +str path
+        +str content
+        +int index
+    }
+    class KbHit {
+        +str doc_id
+        +str path
+        +str chunk
+        +float score
+        +List~str~ matched_terms
+    }
+    class MemorySearchTool {
+        <<BaseTool>>
+        +str name = "memory_search"
+        +run(**kwargs) ToolResult
+    }
+    class KbQueryTool {
+        <<BaseTool>>
+        +str name = "kb_query"
+        +run(**kwargs) ToolResult
+    }
+    KnowledgeBase ..> KbChunk : chunks
+    KnowledgeBase ..> KbHit : returns
+    KnowledgeBase ..> KbDoc : lists
+    MemorySearchTool ..> KnowledgeBase : delegates
+    KbQueryTool --|> MemorySearchTool : alias impl
+
+    %% ── 项4 辅助模型 ──
+    class MockAuxLLMClient {
+        +str role
+        +str summary
+        +str risk
+        +int call_count
+        +complete(messages, tools) LLMResponse
+    }
+    LLMClient <|-- MockAuxLLMClient
+
+    %% ── 项5 鉴权 ──
+    class TokenIssuer {
+        -str _secret
+        -int _ttl_sec
+        -dict _store
+        +issue() str
+        +verify(token) bool
+        +revoke(token)
+        -_sign(expires_ts) str
+    }
+
+    %% ── 项6 OpenAPI ──
+    class OpenAPIToolFactory {
+        +load_openapi_spec(source) dict
+        +build_tools_from_spec(spec, settings) List~BaseTool~
+        +_parse_operation(method, path, op) Type~OpenAPITool~
+        +_resolve_security(op, settings) dict
+    }
+    class OpenAPITool {
+        <<BaseTool>>
+        +str method
+        +str url_template
+        +dict security
+        +run(**kwargs) ToolResult
+    }
+    OpenAPIToolFactory ..> OpenAPITool : generates
+    OpenAPITool --|> BaseTool : is
+
+    %% ── AgentState 扩展 ──
+    class AgentState {
+        <<existing TypedDict>>
+        +List~dict~ risk_report
+        +List~dict~ subtasks
+        +bool _risk_blocked
+        +bool _is_subtask
+    }
+
+    %% ── 关系（新增） ──
+    Settings ..> RiskScanner : configures
+    Settings ..> SubAgentExecutor : configures
+    Settings ..> KnowledgeBase : configures
+    Settings ..> TokenIssuer : configures
+    Settings ..> OpenAPIToolFactory : configures
+    AgentRuntime --> SubAgentExecutor : subagent_split node
+    AgentRuntime ..> RiskScanner : risk_scan node

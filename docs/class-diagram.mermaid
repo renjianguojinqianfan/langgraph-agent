@@ -1,0 +1,143 @@
+classDiagram
+    %% ── 配置与 LLM 抽象 ──
+    class Settings {
+        +str llm_base_url
+        +str llm_api_key
+        +str llm_model
+        +int max_steps
+        +int sandbox_timeout
+        +str search_provider
+        +str serpapi_key
+        +str artifacts_dir
+        +str data_dir
+        +bool auth_enabled
+        +get_settings() Settings
+    }
+    class LLMClient {
+        <<abstract>>
+        +complete(messages, tools, **kw) LLMResponse
+        +stream(messages, tools) Iterator~LLMResponse~
+    }
+    class OpenAICompatibleClient {
+        +str base_url
+        +str api_key
+        +str model
+        +complete(messages, tools) LLMResponse
+    }
+    LLMClient <|-- OpenAICompatibleClient
+
+    %% ── 工具层 ──
+    class ToolResult {
+        +bool success
+        +any data
+        +str error
+    }
+    class BaseTool {
+        <<abstract>>
+        +str name
+        +str description
+        +dict args_schema
+        +bool requires_confirm
+        +run(**kwargs) ToolResult
+    }
+    class WebSearchTool
+    class FileIOTool
+    class CodeExecTool
+    class HttpTool
+    BaseTool <|-- WebSearchTool
+    BaseTool <|-- FileIOTool
+    BaseTool <|-- CodeExecTool
+    BaseTool <|-- HttpTool
+    BaseTool ..> ToolResult : produces
+
+    %% ── 编排状态 ──
+    class AgentState {
+        +str task_id
+        +list messages
+        +list plan
+        +list steps
+        +list artifacts
+        +str status
+        +bool stop_requested
+        +dict pending_confirm
+    }
+
+    %% ── 持久化模型 ──
+    class TaskStatus {
+        <<enum>>
+        PENDING RUNNING COMPLETED FAILED INTERRUPTED
+    }
+    class ToolCallRecord {
+        +str id
+        +str tool_name
+        +dict input
+        +any output
+        +str status
+        +str error
+        +bool need_confirm
+        +bool confirmed
+    }
+    class PlanStep {
+        +int index
+        +str description
+        +str status
+    }
+    class StepRecord {
+        +int index
+        +str thought
+        +list tool_calls
+        +str status
+    }
+    class Artifact {
+        +str id
+        +str filename
+        +str path
+        +str mime
+        +int size
+        +str created_at
+    }
+    class Task {
+        +str id
+        +str title
+        +str user_input
+        +TaskStatus status
+        +list steps
+        +list plan
+        +list artifacts
+        +str final_answer
+        +str error
+        +str created_at
+        +str updated_at
+    }
+    Task "1" *-- "many" StepRecord
+    Task "1" *-- "many" PlanStep
+    Task "1" *-- "many" Artifact
+    StepRecord "1" *-- "many" ToolCallRecord
+
+    %% ── 服务层 ──
+    class EventBus {
+        +subscribe(task_id, cb)
+        +publish(task_id, event)
+        +unsubscribe(task_id, cb)
+    }
+    class Persistence {
+        +save_task(Task)
+        +load_task(id) Task
+        +list_tasks() list~Task~
+        +save_artifact(file, meta) Artifact
+    }
+    class TaskManager {
+        +create_task(title, input) str
+        +run(task_id)
+        +stop(task_id)
+        +get_task(task_id) Task
+        +get_artifact(task_id, art_id) bytes
+    }
+    TaskManager ..> EventBus : emits
+    TaskManager ..> Persistence : stores
+    TaskManager ..> AgentState : drives
+    TaskManager ..> LLMClient : uses
+    TaskManager ..> BaseTool : dispatches
+
+    Settings ..> LLMClient : configures
+    Settings ..> BaseTool : configures

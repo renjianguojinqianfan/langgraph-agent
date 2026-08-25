@@ -1,0 +1,16 @@
+..............................................................           [100%][safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "\\\\?\\C:\\Users\\DELL\\AppData\\Local\\Temp\\pytest-of-DELL\\garbage-f93b8228-dd53-4336-a32d-241bc150d8e7", "reason": "windows-sandbox-recycle-bin-unavailable"}
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "\\\\?\\C:\\Users\\DELL\\AppData\\Local\\Temp\\pytest-of-DELL\\garbage-7e627b08-0959-4e58-8f54-745d8658f2bd", "reason": "windows-sandbox-recycle-bin-unavailable"}
+
+============================== warnings summary ===============================
+.venv311\Lib\site-packages\_pytest\pathlib.py:95
+  E:\code\demo\langgraph-agent\.venv311\Lib\site-packages\_pytest\pathlib.py:95: PytestWarning: (rm_rf) error removing \\?\C:\Users\DELL\AppData\Local\Temp\pytest-of-DELL\garbage-f93b8228-dd53-4336-a32d-241bc150d8e7
+  <class 'OSError'>: [safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "\\\\?\\C:\\Users\\DELL\\AppData\\Local\\Temp\\pytest-of-DELL\\garbage-f93b8228-dd53-4336-a32d-241bc150d8e7", "reason": "windows-sandbox-recycle-bin-unavailable"}
+    warnings.warn(
+
+.venv311\Lib\site-packages\_pytest\pathlib.py:95
+  E:\code\demo\langgraph-agent\.venv311\Lib\site-packages\_pytest\pathlib.py:95: PytestWarning: (rm_rf) error removing \\?\C:\Users\DELL\AppData\Local\Temp\pytest-of-DELL\garbage-7e627b08-0959-4e58-8f54-745d8658f2bd
+  <class 'OSError'>: [safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "\\\\?\\C:\\Users\\DELL\\AppData\\Local\\Temp\\pytest-of-DELL\\garbage-7e627b08-0959-4e58-8f54-745d8658f2bd", "reason": "windows-sandbox-recycle-bin-unavailable"}
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+62 passed, 2 warnings in 6.64s

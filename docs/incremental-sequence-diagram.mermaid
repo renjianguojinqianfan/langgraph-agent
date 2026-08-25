@@ -1,0 +1,79 @@
+%% S1：上下文压缩接入 planner / executor
+sequenceDiagram
+    autonumber
+    participant N as nodes.AgentRuntime
+    participant C as context.compress_messages
+    participant L as LLMClient
+    participant EB as EventBus
+
+    N->>C: compress_messages(messages, budget, keep_recent, strategy, llm?)
+    alt 未超阈值
+        C-->>N: (messages, {compressed:False})
+    else 超阈值 (truncate)
+        C-->>N: (sys+占位+recent, {compressed:True, dropped:N})
+        N->>N: state["messages"]=压缩结果; state["compressed"]=True
+        N->>EB: publish(context_compressed, {step_index,dropped,...})  (可选)
+    else 超阈值 (summarize)
+        N->>L: summarize_messages(llm, early_msgs)
+        L-->>N: 摘要块
+        C-->>N: (sys+摘要+recent, {compressed:True})
+        N->>N: 写回 state
+    end
+    N->>L: complete(_build_messages(state, system))
+
+%% S2：工具熔断 + 指数退避重试（含 tool_circuit_open）
+sequenceDiagram
+    autonumber
+    participant TN as tool_node
+    participant TE as ToolExecutor
+    participant CB as CircuitBreaker
+    participant T as BaseTool.run
+    participant EB as EventBus
+
+    TN->>TE: dispatch(tool, **input)
+    TE->>CB: allow()
+    alt 熔断中 (open/half_open 冷却未到)
+        CB-->>TE: (False, "open")
+        TE-->>TN: ToolResult(success=False, circuit_open=True)
+        TE->>EB: publish(tool_circuit_open, {tool_name, cooldown_sec})
+    else 放行
+        loop 至多 1+max_retries 次
+            TE->>T: run(**input)
+            T-->>TE: ToolResult
+            opt 失败且 tool.retryable
+                TE->>TE: sleep(backoff_base*factor**attempt)
+            end
+        end
+        TE->>CB: record_success() / record_failure()
+        TE-->>TN: ToolResult(success, retries=k)
+    end
+    TN->>TN: rec["circuit_open"]=r.circuit_open; rec["retries"]=r.retries
+    TN->>EB: publish(tool_result, rec)
+
+%% S3：启动发现插件 + trace 常驻订阅 + 回放
+sequenceDiagram
+    autonumber
+    participant TM as TaskManager.__init__
+    participant R as registry.discover_plugins
+    participant P as plugins/*.py
+    participant TR as TraceRecorder
+    participant EB as EventBus
+    participant API as routes.GET /trace
+
+    TM->>R: discover_plugins(settings.plugins_path)  (若 plugins_autoload)
+    R->>P: importlib 导入 → @register 触发
+    P-->>R: 工具类注册进 _REGISTRY
+    TM->>TM: build_tools() 包含内置+插件
+
+    Note over TM,TR: 每次 create_task
+    TM->>TR: attach(event_bus, task_id)
+    TR->>EB: subscribe(task_id, _on_event)
+    loop 运行期每次 publish
+        EB-->>TR: event
+        TR->>TR: 追加写 <task_id>.jsonl + flush
+    end
+    TM->>TR: close(task_id)  (run finally)
+    TR->>TR: 写 trace_end + unsubscribe + 关文件
+
+    API->>TR: GET /api/tasks/{id}/trace
+    TR-->>API: 读 <id>.jsonl → x-ndjson / ?format=json
