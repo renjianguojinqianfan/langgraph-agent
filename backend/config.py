@@ -128,6 +128,10 @@ class Settings(BaseSettings):
     git_repo_dir: str = "data/repos"  # Git operations root (relative to PROJECT_ROOT)
     git_timeout_sec: float = 30.0  # single git call timeout
 
+    # ── Checkpoints (spec Issue #4: durable state for stop/resume) ──
+    checkpoint_enabled: bool = True  # master switch (false -> no saver mounted)
+    checkpoint_dir: str = ""  # "" -> <data_dir>/checkpoints
+
     # ── Server ──
     host: str = "0.0.0.0"
     port: int = 8000
@@ -167,6 +171,14 @@ class Settings(BaseSettings):
         p = Path(self.kb_dir)
         if not p.is_absolute():
             p = PROJECT_ROOT / p
+        return p
+
+    @property
+    def checkpoint_path(self) -> Path:
+        """Checkpoint store directory (defaults under ``data_path``)."""
+        p = Path(self.checkpoint_dir)
+        if not self.checkpoint_dir or not p.is_absolute():
+            p = self.data_path / "checkpoints"
         return p
 
     @property

@@ -99,6 +99,22 @@ def stop_task(
     return _envelope(data=result)
 
 
+@router.post("/tasks/{task_id}/resume")
+def resume_task(
+    task_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Continue an INTERRUPTED task from its last durable checkpoint (Issue #4)."""
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).resume(task_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
 @router.get("/tasks/{task_id}/events")
 def task_events(
     task_id: str,

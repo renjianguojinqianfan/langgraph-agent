@@ -292,7 +292,12 @@ class SubAgentExecutor:
             from .graph import build_graph
 
             graph = build_graph(runtime, mode="subtask")
-            final = graph.invoke(state)
+            # The subtask topology runs 4 nodes per cycle; lift the default
+            # recursion limit (25) so deep subtasks honor settings.max_steps.
+            final = graph.invoke(
+                state,
+                {"recursion_limit": self.settings.max_steps * 4 + 10},
+            )
 
             summary = final.get("final_answer", "") or "(no final answer)"
             # Collect artifact paths produced by subtask tool calls.

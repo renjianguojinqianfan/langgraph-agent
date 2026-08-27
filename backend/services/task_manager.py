@@ -10,6 +10,7 @@ interrupt requirement (P0-9).
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,6 +90,63 @@ class TaskManager:
         self._active_states: Dict[str, AgentState] = {}
         self._confirm_state: Dict[str, Dict[str, Any]] = {}
         self._threads: Dict[str, threading.Thread] = {}
+        # Issue #4: with a checkpointer mounted, langgraph hands nodes a
+        # per-superstep COPY of the state, so mutating ``_active_states``
+        # (legacy path) never reaches a running graph. This authoritative
+        # flag is what nodes poll instead; cleared when the run finishes.
+        self._stop_flags: Dict[str, bool] = {}
+        # Spec Issue #4 (D1/D2): durable checkpointer — one sqlite file per
+        # settings identity (checkpoint_path), not per manager instance: the
+        # resume contract requires a rebuilt TaskManager to see snapshots
+        # written by its predecessor. Within one process, concurrent managers
+        # on the same file rely on sqlite WAL locking.
+        self._checkpointer: Any = None
+        self._checkpoint_conn: Any = None
+        if settings.checkpoint_enabled:
+            import sqlite3
+
+            from langgraph.checkpoint.sqlite import SqliteSaver
+
+            ckpt_dir = settings.checkpoint_path
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            self._checkpoint_conn = sqlite3.connect(
+                str(ckpt_dir / "checkpoints.sqlite"),
+                check_same_thread=False,
+                timeout=10.0,  # tolerate the predecessor's in-flight writes
+            )
+            self._checkpointer = SqliteSaver(self._checkpoint_conn)
+        # Spec Issue #4 (D5): crash recovery reconciliation — a fresh process
+        # owns no execution threads, so persisted RUNNING tasks are orphans.
+        self._reconcile_orphans()
+
+    def _reconcile_orphans(self) -> None:
+        """Mark persisted RUNNING/PENDING tasks as INTERRUPTED on startup.
+
+        Runs exactly once per construction (the constructor), when no worker
+        threads exist yet, so every non-terminal record in tasks.json is by
+        definition an orphan of a previous process (PENDING covers the crash
+        window between create_task() persisting and the thread flipping the
+        status to RUNNING). Terminal statuses are left untouched.
+        """
+        reconciled = 0
+        for task in self.persistence.list_all():
+            if task.status not in (TaskStatus.RUNNING, TaskStatus.PENDING):
+                continue
+            try:
+                orphan_status = task.status.value
+                task.status = TaskStatus.INTERRUPTED
+                task.updated_at = _now()
+                self.persistence.save_task(task)
+                reconciled += 1
+                logger.warning(
+                    "Orphaned %s task %s reconciled to INTERRUPTED",
+                    orphan_status,
+                    task.id,
+                )
+            except Exception:  # per-task isolation: one bad record can't stall the sweep
+                logger.exception("Failed to reconcile orphan task %s", task.id)
+        if reconciled:
+            logger.info("Startup reconciliation completed: %d task(s).", reconciled)
 
     # ── P1 wiring of runtime-injected tools ──
     def _wire_injected_tools(self) -> None:
@@ -228,6 +286,20 @@ class TaskManager:
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("MCP cleanup failed: %s", exc)
             self._mcp = None
+        # Let in-flight workers finish committing their checkpoints BEFORE the
+        # sqlite connection goes away — closing under a writing thread is what
+        # corrupted the shared WAL file and crashed native sqlite3.
+        for th in list(getattr(self, "_threads", {}).values()):
+            if th is not threading.current_thread() and th.is_alive():
+                th.join(timeout=5.0)
+        conn = getattr(self, "_checkpoint_conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("checkpoint connection close failed: %s", exc)
+            self._checkpointer = None
+            self._checkpoint_conn = None
 
     # ── creation / query ──
     def create_task(self, title: Optional[str], user_input: str) -> str:
@@ -315,35 +387,11 @@ class TaskManager:
                 subagent_executor=self._subagent,
                 confirm_enabled=True,
             )
-            graph = build_graph(runtime, mode="main")
-            final = graph.invoke(state)
+            graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
+            final = graph.invoke(state, self._thread_config(task_id))
 
-            status = final.get("status") or "FAILED"
-            task.status = TaskStatus(status)
-            task.plan = [PlanStep(**p) for p in final.get("plan", [])]
-            task.steps = [StepRecord(**s) for s in final.get("steps", [])]
-            task.artifacts = [Artifact(**a) for a in final.get("artifacts", [])]
-            task.final_answer = final.get("final_answer", "")
-            task.error = final.get("error")
-            task.risk_report = [RiskItem(**it) for it in final.get("risk_report", [])]
-            task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
-            task.updated_at = _now()
-            # Publish the terminal event BEFORE persisting the terminal status.
-            # Otherwise an observer polling get_task() could see COMPLETED/FAILED
-            # and replay the event buffer in the (tiny) window before the event
-            # is published — a pre-existing race surfaced by the smoke test.
-            if status == "COMPLETED":
-                self.event_bus.publish(
-                    task_id, "task_completed", {"task_id": task_id, "status": status}
-                )
-            elif status == "FAILED":
-                self.event_bus.publish(
-                    task_id,
-                    "task_failed",
-                    {"task_id": task_id, "error": task.error or "unknown error"},
-                )
-            # INTERRUPTED already published by stop().
-            self.persistence.save_task(task)
+            task = self.persistence.load_task(task_id) or task
+            self._finalize_terminal(task, final)
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("run() crashed for task %s", task_id)
             task.status = TaskStatus.FAILED
@@ -356,6 +404,8 @@ class TaskManager:
         finally:
             self._active_states.pop(task_id, None)
             self._confirm_state.pop(task_id, None)
+            self._threads.pop(task_id, None)
+            self._stop_flags.pop(task_id, None)
             # P0 item 4: always close the trace (success / failure / interrupt)
             # so the JSONL terminates with a trace_end line.
             if self._trace is not None:
@@ -366,6 +416,9 @@ class TaskManager:
         st = self._active_states.get(task_id)
         if st is not None:
             st["stop_requested"] = True
+        # Issue #4: authoritative signal for checkpointer-backed runs — nodes
+        # poll this because their state dicts are per-superstep copies.
+        self._stop_flags[task_id] = True
         # Wake any pending confirmation wait so the loop can unwind promptly.
         cs = self._confirm_state.get(task_id)
         if cs is not None:
@@ -383,6 +436,245 @@ class TaskManager:
             )
             return {"ok": True, "status": TaskStatus.INTERRUPTED.value}
         return {"ok": True, "status": task.status.value if task else "UNKNOWN"}
+
+    def is_stop_flagged(self, task_id: str) -> bool:
+        """Peek (not consume) the authoritative stop signal — nodes poll this
+        every cycle / confirmation wait; the flag is popped in run teardown."""
+        return self._stop_flags.get(task_id, False)
+
+    # ── spec Issue #4: checkpoint-backed resume ──
+    def _thread_config(self, task_id: str) -> Dict[str, Any]:
+        """LangGraph runnable config under the thread_id == task_id convention.
+
+        Also lifts the default recursion limit (25). The P1 main topology runs
+        7 nodes per agent cycle (planner→risk_scan→subagent_split→executor→
+        [human_confirm]→tool→reflect), so the earlier ×4 estimate undershot and
+        long tasks crashed with GraphRecursionError; ×8 covers the full cycle
+        plus finish with headroom.
+        """
+        return {
+            "configurable": {"thread_id": task_id},
+            "recursion_limit": self.settings.max_steps * 8 + 20,
+        }
+
+    def _has_checkpoint(self, task_id: str) -> bool:
+        """True when a durable snapshot exists under thread_id == task_id.
+
+        Double-probes with a short grace pause: the first superstep's put can
+        land a few hundred ms after stop() flips the persisted status, so one
+        confirmation round avoids false "legacy / no checkpoint" errors.
+        """
+        if self._checkpointer is None:
+            return False
+        for attempt in range(2):
+            try:
+                if self._checkpointer.get_tuple(self._thread_config(task_id)) is not None:
+                    return True
+            except Exception:
+                logger.exception("checkpoint lookup failed for %s", task_id)
+                return False
+            if attempt == 0:
+                time.sleep(0.3)
+        return False
+
+    def _raise_if_parked_on_gate(self, task_id: str) -> None:
+        """Raise when the latest checkpoint is parked at the confirm gate.
+
+        A snapshot whose ``_current_tool_calls`` still contain a
+        ``need_confirm`` call with no recorded decision means the previous run
+        was interrupted while awaiting a human decision. Restoring would skip
+        the gate entirely, so resume is refused (caller maps to 409).
+        """
+        if self._checkpointer is None:
+            return
+        try:
+            snap = self._checkpointer.get_tuple(self._thread_config(task_id))
+            if snap is None:
+                return
+            vals = snap.checkpoint.get("channel_values", {}) or {}
+            # Channel 1: the confirm node recorded a stop-forced rejection —
+            # the most reliable "parked on gate" marker (Issue #4).
+            if vals.get("pending_confirm"):
+                raise RuntimeError(
+                    f"task {task_id} was stopped while awaiting human confirmation; "
+                    "this run cannot be resumed — create a new task instead"
+                )
+            # Channel 2: structural fallback for snapshots from older runs.
+            tcs = vals.get("_current_tool_calls") or []
+            confirmed = vals.get("_confirmed_ids") or []
+            rejected = vals.get("_rejected_ids") or []
+            parked = any(
+                tc.get("need_confirm")
+                and tc.get("id") not in confirmed
+                and tc.get("id") not in rejected
+                for tc in tcs
+            )
+            if parked:
+                raise RuntimeError(
+                    f"task {task_id} was stopped while awaiting human confirmation; "
+                    "this run cannot be resumed — create a new task instead"
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            logger.exception("confirm-gate inspection failed for %s", task_id)
+
+    def _finalize_terminal(self, task: Task, final: Dict[str, Any]) -> None:
+        """Map a finished graph state onto the persisted task record.
+
+        Shared by run() and resume(). Publishes the terminal event BEFORE
+        persisting the terminal status so an observer polling get_task()
+        never sees COMPLETED/FAILED ahead of the event.
+        """
+        status = final.get("status") or "FAILED"
+        task.status = TaskStatus(status)
+        task.plan = [PlanStep(**p) for p in final.get("plan", [])]
+        task.steps = [StepRecord(**s) for s in final.get("steps", [])]
+        task.artifacts = [Artifact(**a) for a in final.get("artifacts", [])]
+        task.final_answer = final.get("final_answer", "")
+        task.error = final.get("error")
+        task.risk_report = [RiskItem(**it) for it in final.get("risk_report", [])]
+        task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
+        task.updated_at = _now()
+        if status == "COMPLETED":
+            self.event_bus.publish(
+                task.id, "task_completed", {"task_id": task.id, "status": status}
+            )
+        elif status == "FAILED":
+            self.event_bus.publish(
+                task.id,
+                "task_failed",
+                {"task_id": task.id, "error": task.error or "unknown error"},
+            )
+        # INTERRUPTED already published by stop().
+        self.persistence.save_task(task)
+
+    def resume(self, task_id: str) -> Dict[str, Any]:
+        """Continue an INTERRUPTED task from its last durable checkpoint.
+
+        Validates synchronously (state + live-thread + checkpoint existence),
+        then hands execution to a worker thread mirroring create_task().
+        Raises RuntimeError with an actionable message when resuming is
+        impossible — callers map that to HTTP 409. The whole validate-and-
+        claim section runs under ``self._lock`` as a compare-and-set so two
+        concurrent resumes can never both spawn workers on one thread_id.
+        """
+        thread = self._threads.get(task_id)
+        if thread is not None and thread.is_alive():
+            # stop() persists INTERRUPTED while the worker is still unwinding
+            # through the finish node and committing its last checkpoints.
+            # Bounded join lets an instant resume never race those final
+            # writes (worst case the caller waits out a shutdown, reported 409).
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                raise RuntimeError(f"task {task_id} is still shutting down")
+
+        has_checkpoint = self._has_checkpoint(task_id)
+        # Safety default (spec D8 edge): a snapshot parked at the human-confirm
+        # gate (an unresolved requires_confirm call) cannot resume — the wait
+        # loop belonged to the dead thread and the gate must never be silently
+        # fast-tracked by a restore. Checked synchronously so callers get a
+        # clean 409 instead of a background task_failed.
+        if has_checkpoint:
+            self._raise_if_parked_on_gate(task_id)
+        # ── claim: single check-and-set under the manager lock ──
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            if task.status != TaskStatus.INTERRUPTED:
+                raise RuntimeError(
+                    f"task {task_id} is {task.status.value}, "
+                    "only INTERRUPTED tasks can be resumed"
+                )
+            live = self._threads.get(task_id)
+            if live is not None and live.is_alive():
+                raise RuntimeError(f"task {task_id} is already running")
+            if not has_checkpoint:
+                raise RuntimeError(
+                    f"no checkpoint found for task {task_id} "
+                    "(legacy run before checkpoint persistence or checkpoints disabled)"
+                )
+            # Flip to RUNNING inside the lock: any second resume() now sees
+            # RUNNING and is rejected; a concurrent stop() flips it back and
+            # _resume_run re-checks before proceeding.
+            task.status = TaskStatus.RUNNING
+            task.updated_at = _now()
+            self.persistence.save_task(task)
+            self.event_bus.publish(
+                task_id,
+                "task_resumed",
+                {"task_id": task_id, "status": TaskStatus.RUNNING.value},
+            )
+
+        # Reopen the audit trail for the continued era.
+        if self._trace is not None:
+            self._trace.attach(self.event_bus, task_id)
+
+        t = threading.Thread(target=self._resume_run, args=(task_id,), daemon=True)
+        self._threads[task_id] = t
+        t.start()
+        return {"ok": True, "status": TaskStatus.RUNNING.value}
+
+    def _resume_run(self, task_id: str) -> None:
+        try:
+            # A stop() between our RUNNING flip and this point would otherwise
+            # be swallowed by the restored control flags below — re-check the
+            # persisted status and yield to the (newer) interrupt instead.
+            current = self.persistence.load_task(task_id)
+            if current is None or current.status != TaskStatus.RUNNING:
+                logger.info("Resume of %s superseded by newer state; aborting.", task_id)
+                return
+
+            runtime = AgentRuntime(
+                task_id=task_id,
+                task_manager=self,
+                llm=self._llm,
+                tools=self._tools,
+                tool_schemas=self._tool_schemas,
+                max_steps=self.settings.max_steps,
+                aux_llm=self._aux_llm,
+                subagent_executor=self._subagent,
+                confirm_enabled=True,
+            )
+            graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
+
+            snap = graph.get_state(self._thread_config(task_id))
+            restored = dict(snap.values or {})
+            if not restored:
+                raise RuntimeError(f"empty checkpoint state for task {task_id}")
+            # Reset *control* flags only; plan / steps / confirmed-ids survive.
+            restored["status"] = "RUNNING"
+            restored["stop_requested"] = False
+            restored["pending_confirm"] = {}
+            restored["_needs_confirm"] = False
+            restored["_current_tool_calls"] = []
+            self._active_states[task_id] = restored
+
+            final = graph.invoke(restored, self._thread_config(task_id))
+
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} vanished during resume")
+            self._finalize_terminal(task, final)
+        except Exception as exc:
+            logger.exception("resume() crashed for task %s", task_id)
+            task = self.persistence.load_task(task_id)
+            if task is not None:
+                task.status = TaskStatus.FAILED
+                task.error = str(exc)
+                task.updated_at = _now()
+                self.persistence.save_task(task)
+            self.event_bus.publish(
+                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+            )
+        finally:
+            self._active_states.pop(task_id, None)
+            self._confirm_state.pop(task_id, None)
+            self._threads.pop(task_id, None)
+            self._stop_flags.pop(task_id, None)
+            if self._trace is not None:
+                self._trace.close(task_id)
 
     # ── human confirmation (P1-2) ──
     def request_confirm(self, task_id: str, tool_call_id: str):

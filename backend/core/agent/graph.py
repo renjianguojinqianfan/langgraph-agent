@@ -27,11 +27,15 @@ from .nodes import AgentRuntime
 from .state import AgentState
 
 
-def build_graph(runtime: AgentRuntime, mode: str = "main"):
+def build_graph(runtime: AgentRuntime, mode: str = "main", checkpointer: Any | None = None):
     """Compile and return the agent graph for ``runtime``.
 
     ``mode`` is ``"main"`` (default, full topology) or ``"subtask"``
     (simplified, no risk / confirm / subagent recursion).
+
+    ``checkpointer`` optionally mounts a LangGraph checkpointer so every step
+    of the loop is persisted under the caller's ``thread_id`` (spec Issue #4:
+    ``thread_id == task_id`` enables stop / crash resume).
     """
     g = StateGraph(AgentState)
 
@@ -114,4 +118,4 @@ def build_graph(runtime: AgentRuntime, mode: str = "main"):
     g.add_conditional_edges("reflect", _after_reflect)
 
     g.add_edge("finish", END)
-    return g.compile()
+    return g.compile(checkpointer=checkpointer) if checkpointer is not None else g.compile()

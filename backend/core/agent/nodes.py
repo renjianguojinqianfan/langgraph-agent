@@ -75,6 +75,24 @@ class AgentRuntime:
     def _publish(self, event_type: str, data: Dict[str, Any]) -> None:
         self.tm.event_bus.publish(self.task_id, event_type, data)
 
+    def _stopped(self, state: AgentState) -> bool:
+        """Authoritative stop check (Issue #4).
+
+        With a checkpointer mounted, langgraph hands each superstep a COPY of
+        the state, so a ``stop()`` that flips the manager's legacy
+        ``_active_states`` dict is invisible inside a running graph. Nodes
+        therefore also poll the manager-level flag; when it fires we write it
+        back into THIS run's copy so downstream conditional edges see it.
+        """
+        if state.get("stop_requested"):
+            return True
+        tm = getattr(self, "tm", None)
+        checker = getattr(tm, "is_stop_flagged", None)  # test fakes may not ship it
+        if callable(checker) and checker(self.task_id):
+            state["stop_requested"] = True
+            return True
+        return False
+
     @property
     def tool_executor(self) -> "Any":
         """Lazily constructed :class:`ToolExecutor` (robust to ``tm=None``).
@@ -167,7 +185,7 @@ class AgentRuntime:
 
     # ── nodes ──
     def planner(self, state: AgentState) -> AgentState:
-        if state.get("stop_requested"):
+        if self._stopped(state):
             state["_last_action"] = "stop"
             return state
 
@@ -210,7 +228,7 @@ class AgentRuntime:
 
         The P0 ``_needs_confirm`` recomputation is deliberately untouched.
         """
-        if state.get("stop_requested"):
+        if self._stopped(state):
             state["_last_action"] = "stop"
             return state
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
@@ -269,7 +287,7 @@ class AgentRuntime:
                 "input": {"items": items},
             },
         )
-        while not ev.is_set() and not state.get("stop_requested"):
+        while not ev.is_set() and not self._stopped(state):
             ev.wait(0.2)
         return bool(self.tm.consume_confirm(self.task_id, key))
 
@@ -298,7 +316,7 @@ class AgentRuntime:
         executor (zero regression). Sub-agent summary events are published on
         the main channel; subtask *internal* events stay on their own channel.
         """
-        if state.get("stop_requested"):
+        if self._stopped(state):
             state["_last_action"] = "stop"
             return state
         state["subtasks"] = state.get("subtasks", []) or []
@@ -334,7 +352,7 @@ class AgentRuntime:
         return state
 
     def executor(self, state: AgentState) -> AgentState:
-        if state.get("stop_requested"):
+        if self._stopped(state):
             state["_last_action"] = "stop"
             return state
 
@@ -423,7 +441,7 @@ class AgentRuntime:
         return state
 
     def tool_node(self, state: AgentState) -> AgentState:
-        if state.get("stop_requested"):
+        if self._stopped(state):
             state["_last_action"] = "stop"
             return state
 
@@ -496,13 +514,34 @@ class AgentRuntime:
             {"tool_call_id": target["id"], "tool_name": target["tool_name"], "input": target["input"]},
         )
         # Block until the user decides or the task is stopped (≤2s responsiveness).
+        # Issue #4: poll the manager-level flag as well — ``state`` is a
+        # per-superstep copy under a checkpointer, so a stop() that mutates the
+        # legacy dict is invisible here unless refreshed from the source.
         while not event.is_set() and not state.get("stop_requested"):
+            if self._stopped(state):
+                break
             event.wait(0.2)
         approved = self.tm.consume_confirm(self.task_id, target["id"])
         if approved:
             state.setdefault("_confirmed_ids", []).append(target["id"])
         else:
             state.setdefault("_rejected_ids", []).append(target["id"])
+            # Issue #4: record when the decision was forced by a stop (no
+            # human verdict). The event is shared between approvals and
+            # stop-wakeups and ``state`` may be a stale copy under a
+            # checkpointer, so the authoritative manager flag decides.
+            stop_checker = getattr(getattr(self, "tm", None), "is_stop_flagged", None)
+            stop_forced = state.get("stop_requested") or (
+                callable(stop_checker) and stop_checker(self.task_id)
+            )
+            if not approved and stop_forced:
+                state["pending_confirm"] = {
+                    "tool_call_id": target["id"],
+                    "tool_name": target.get("tool_name", ""),
+                    "input": target.get("input", {}),
+                }
+        # NOTE (red line): the `_needs_confirm` recomputation below is the P0
+        # dead-loop fix — DO NOT MODIFY this block.
 
         # Recompute whether any pending confirmation remains. Previously the
         # node only appended to _confirmed_ids/_rejected_ids but left
