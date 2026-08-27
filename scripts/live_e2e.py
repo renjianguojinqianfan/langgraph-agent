@@ -143,12 +143,18 @@ def main() -> int:
 
     # Stop as soon as it is RUNNING so an INTERRUPTED record exists.
     stopped = False
+    interrupted_observed = False
     deadline = time.time() + 60
     while time.time() < deadline:
         t = tm_stop.get_task(rid)
         if t and t.status.value == "RUNNING":
             tm_stop.stop(rid)
             stopped = True
+            # Sample IMMEDIATELY: stop() publishes INTERRUPTED synchronously,
+            # but later phases (resume) flip the shared record to RUNNING, so
+            # this is the only moment the interrupted state is observable.
+            tt = tm_stop.get_task(rid)
+            interrupted_observed = bool(tt) and tt.status.value == "INTERRUPTED"
             break
         if t and t.status.value not in ("PENDING", "RUNNING"):
             break
@@ -171,12 +177,20 @@ def main() -> int:
         print("resume rejected:", exc)
     print(f"resume accepted: {resumed}")
 
-    task_final = _wait_terminal(tm_resume, rid, timeout=120)
+    task_final = _wait_terminal(tm_resume, rid, timeout=180)
+    # In-process restart shares one Persistence instance, so tm_stop's
+    # finalization races are visible through the same object; the resumed
+    # worker may also legitimately still be RUNNING when the model is slow —
+    # poll via a fresh persistence read to avoid any cached-state artifact.
+    fresh = Persistence(settings).load_task(rid)
+    if (task_final is None or task_final.status.value == "RUNNING") and fresh:
+        task_final = fresh
     final_checks = {
-        "task was interrupted before stop": stopped and (task_r is not None and task_r.status.value == "INTERRUPTED"),
+        "task was interrupted before stop": stopped and interrupted_observed,
         "resume accepted": resumed,
-        "resumed run completed": task_final is not None and task_final.status.value == "COMPLETED",
-        "steps continued (not restarted)": task_final is not None and len(task_final.steps) >= max(steps_before, 1),
+        "resumed run reached terminal state": bool(task_final) and task_final.status.value in ("COMPLETED", "FAILED", "INTERRUPTED"),
+        "resumed run completed": bool(task_final) and task_final.status.value == "COMPLETED",
+        "steps continued (not restarted)": bool(task_final) and len(task_final.steps) >= max(steps_before, 1),
         "final answer present": bool(task_final and task_final.final_answer),
     }
     for name, passed in final_checks.items():
