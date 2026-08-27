@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import os
 import sys
+from contextvars import ContextVar
 from pathlib import Path
+from typing import Optional
 
 # ── Offline isolation (MUST run before any `backend.config` import) ──
 os.environ.setdefault("USE_MOCK_LLM", "true")
@@ -26,6 +28,9 @@ os.environ.setdefault("AUTH_ENABLED", "false")
 os.environ.setdefault("OPENAPI_ENABLED", "false")
 os.environ.setdefault("MCP_ENABLED", "false")  # P2: no MCP subprocesses by default
 os.environ.setdefault("GIT_ENABLED", "false")  # P2: no Git tools by default
+os.environ.setdefault(
+    "CHECKPOINT_ENABLED", "false"
+)  # Issue #4: no sqlite checkpoint store unless a test opts in
 
 # Ensure `import backend...` works regardless of the current working directory.
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +47,19 @@ from backend.services.persistence import Persistence  # noqa: E402
 from backend.services.task_manager import TaskManager  # noqa: E402
 
 
+_current_request: ContextVar[Optional["pytest.FixtureRequest"]] = ContextVar(
+    "_current_request", default=None
+)
+
+
+@pytest.fixture(autouse=True)
+def _capture_request(request):
+    """Expose the active pytest request to make_manager for finalizer wiring."""
+    token = _current_request.set(request)
+    yield
+    _current_request.reset(token)
+
+
 def make_settings(tmp_path: Path, **overrides) -> Settings:
     """Build an isolated :class:`Settings` rooted at ``tmp_path``.
 
@@ -49,6 +67,10 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
     any local ``.env`` (e.g. a live DashScope/OpenAI endpoint): with an empty
     value the provider factory falls back to its built-in preset, keeping the
     assertions deterministic regardless of the developer's local environment.
+
+    Checkpoint persistence defaults OFF (env setdefault above); pass
+    ``checkpoint_enabled=True`` to opt a test into the sqlite checkpoint
+    store — it then lives under ``tmp_path / "data" / "checkpoints"``.
     """
     base = dict(
         data_dir=str(tmp_path),
@@ -75,17 +97,28 @@ def make_manager(
     event_bus: EventBus | None = None,
     persistence: Persistence | None = None,
 ) -> TaskManager:
-    """Construct a :class:`TaskManager` wired with a scripted mock LLM."""
+    """Construct a :class:`TaskManager` wired with a scripted mock LLM.
+
+    Registers an autouse teardown so every manager built through this helper
+    releases its process-level resources (MCP children, checkpoint sqlite
+    connection) even when a test forgets to call ``shutdown()``.
+    """
     eb = event_bus or EventBus()
     persistence = persistence or Persistence(settings)
     tools = build_tools(settings)
-    return TaskManager(
+    tm = TaskManager(
         settings,
         eb,
         persistence,
         llm_client=mock,
         tools=tools,
     )
+    import pytest as _pytest
+
+    _request = _current_request.get()
+    if _request is not None:
+        _request.addfinalizer(tm.shutdown)
+    return tm
 
 
 @pytest.fixture
