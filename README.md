@@ -4,7 +4,7 @@
 Agent 自主规划、循环调用工具（联网检索 / 文件读写 / 代码执行 / HTTP API / Git / MCP 外部工具 / 知识库）
 完成多步任务，并通过前后端一体的可视化界面（三栏布局 + SSE 实时事件流 + Trace 回放）展示全程。
 
-**331 个离线测试全绿** · 真实 LLM（OpenAI 兼容，已验证千问 qwen3.6-plus）端到端跑通。
+**351 个离线测试全绿** · 真实 LLM（OpenAI 兼容，已验证千问 qwen3.6-plus）端到端跑通 + 断点续跑双场景验证。
 
 > 技术栈：Python 3.10+ · LangGraph · FastAPI · OpenAI 兼容 LLM 抽象层（可 Mock）·
 > React 18 · Vite · TypeScript · Tailwind CSS · Zustand · MCP SDK
@@ -18,6 +18,7 @@ Agent 自主规划、循环调用工具（联网检索 / 文件读写 / 代码�
 - **双模式图**：`mode="main"`（完整拓扑）/ `mode="subtask"`（简化图，子任务防递归）
 - **人工介入**：危险工具 / 高危计划执行前 `human_confirm` 中断，可批准或拒绝
 - **停止控制**：任意时刻停止任务，≤2s 生效
+- **断点续跑**：SqliteSaver 检查点持久化，INTERRUPTED 任务经 `POST /resume` 从断点复活；崩溃遗留孤儿任务启动时自动对账为可恢复
 - **上下文压缩**：历史超阈值（默认 8000 tokens）自动截断 / 可选 LLM 摘要，控制 Token 上限
 
 ### 安全与可靠性
@@ -61,7 +62,7 @@ langgraph-agent/
 │   │   └── mcp/              # McpClientManager（stdio，每 server 一线程）
 │   ├── services/             # event_bus / trace / persistence / task_manager / auth
 │   ├── plugins/              # 插件目录（example_tool.py）
-│   └── tests/                # 37 文件 / 331 用例（含 test_qa_* 独立补充）
+│   └── tests/                # 40 文件 / 351 用例（含 test_qa_* 独立补充）
 ├── frontend/                 # React 三栏 UI（14 组件：TaskPanel/TraceTab/RiskBanner/...）
 ├── docs/                     # PRD / 架构 / 增量设计（p0/p1/p2）
 ├── .agents/skills/           # 千问官方 skills（供知识入库 / 模型选型参考）
@@ -106,7 +107,7 @@ python start.py                    # 前后端 + 真实 Key（需 .env）
 ## 4. 测试与验证
 
 ```bash
-# 全量离线测试（331 用例，MockLLM，无需 Key/网络）
+# 全量离线测试（351 用例，MockLLM，无需 Key/网络）
 .venv\Scripts\python.exe -m pytest backend/tests/ -q
 
 # 真实 LLM 端到端（发布前 / 换供应商验证，需 .env 配置真实模型）

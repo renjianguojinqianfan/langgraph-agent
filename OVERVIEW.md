@@ -219,3 +219,36 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" .venv311/Scripts/python.exe scripts/live_e2e.py
 - `docs/incremental-prd-p2.md`、`docs/incremental-arch-p2.md`、`docs/incremental-class-diagram-p2.mermaid`、`docs/incremental-sequence-diagram-p2.mermaid`
 - `backend/tests/`：原 289 + test_p2_mcp(15) + test_p2_git(24) + test_qa_p2_mcp(16) + test_qa_p2_git(18) + test_qa_p2_integration(8)
 
+---
+
+# P3 增量（断点续跑 / LangGraph Checkpointer）— 交付概览
+
+## TL;DR
+给任务内核装上 LangGraph `SqliteSaver` 检查点：停止的任务可 `POST /resume` 从断点复活，崩溃遗留孤儿任务启动自动对账。QA 基线 **351/351 全绿**（331 零回归 + 20 新增）+ 真模型双场景 PASS（基础冒烟 + stop→重建→resume→完成）。Spec 与验收全程见 [Issue #4](https://github.com/renjianguojinqianfan/langgraph-agent/issues/4)。
+
+## 交付状态（2026-08-27）
+- TDD 四轮红绿循环 + 双验证员 review ×2 轮；离线/在线证据链完整
+- 新增依赖：`langgraph-checkpoint-sqlite==2.0.11`（钉版配套 langgraph-checkpoint 2.1.2）+ `aiosqlite`
+
+## 能力落点
+| 项 | 说明 | 落点 |
+|----|------|------|
+| 断点续跑 | `POST /api/tasks/{id}/resume`：join 收尾 worker → checkpoint 双探测 → 锁内 CAS claim → 恢复快照仅重置控制位 → 同 thread_id 重 invoke | `task_manager.py`(resume/_resume_run/_thread_config) |
+| 孤儿对账 | 启动时 RUNNING/PENDING 统一转 INTERRUPTED，逐条隔离 | `task_manager.py(_reconcile_orphans)` |
+| persistence 加固 | 全操作加锁、原子写(tmp+os.replace)、损坏文件归档不毁史、PermissionError 短重试、list_all() | `persistence.py` |
+
+## 实施中的重大发现
+1. **FATAL（已修复）**：挂载 checkpointer 后 langgraph 每 superstep 传 state 副本，旧 `stop()` 改 `_active_states` 的机制彻底失效（stop 信号永远到不了节点，实测挂死）。修复：TaskManager 权威 `_stop_flags` + AgentRuntime `_stopped()` helper 轮询并写回副本。
+2. **存量缺陷连带修复**：recursion_limit 默认 25 使 `max_steps>6` 从未真正生效（P1 主拓扑每循环 7 superstep）；现注入 `max_steps*8+20`（子图 ×4+10）。
+3. **安全默认**：停在人工确认闸口的任务同步拒绝续跑（pending_confirm 标记随快照落盘）——闸门永不被静默绕过。
+
+## 新增契约
+- Settings：`checkpoint_enabled=true` / `checkpoint_dir=""`（空 = <data_dir>/checkpoints）
+- REST：`POST /tasks/{id}/resume`（404 不存在 / 409 非 INTERRUPTED·无 checkpoint·已运行·停于闸口）
+- SSE：`task_resumed` 事件；trace JSONL append 连续跨 resume
+
+## 本轮文档与测试
+- `docs/incremental-arch-p3-resume.md`；README 功能段/API 表/配置表更新
+- `backend/tests/`：原 331 + test_checkpointer(6) + test_orphan_reconcile(6) + test_resume(8)
+- `.env.example` checkpoint 组；requirements 钉版 `langgraph-checkpoint-sqlite==2.0.11`
+
