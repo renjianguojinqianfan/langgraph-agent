@@ -16,3 +16,9 @@ httpx>=0.27.0,<0.29.0
 pytest>=8.0.0
 pyyaml>=6.0,<7.0
 mcp>=1.2,<2.0
+# mcp 由 --no-deps 安装（防其拉高 uvicorn/starlette），以下是其运行期必需的传递
+# 依赖；mcp 根包 __init__ 即导入 FastMCP，因此 sse-starlette/jsonschema 也必须显式列出。
+httpx-sse>=0.4,<1  # metadata dep of mcp (--no-deps install); ClientSession import chain
+sse-starlette>=1.8,<2  # metadata dep of mcp (--no-deps install); cap <2: 2.x/3.x 要求 starlette>fastapi 上限
+jsonschema>=4.20,<5  # metadata dep of mcp (--no-deps install); FastMCP schema 校验
+pywin32>=310; sys_platform == "win32"  # metadata dep of mcp stdio on Windows (--no-deps install)
