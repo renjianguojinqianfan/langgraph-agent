@@ -3,7 +3,7 @@
 #
 # 触发：push / PR 到 master（docs/ 与 *.md 变更不触发）；workflow_dispatch 手动
 # 内容：
-#   backend-test    Python 3.11 + pytest 离线全量回归（backend/tests/，331 用例）
+#   backend-test    Python 3.11 + pytest 离线全量回归（backend/tests/，351 用例）
 #   frontend-build  npm ci + tsc 类型检查 + vite 生产构建（产物上传为 artifact）
 #   docker-build    验证 backend/Dockerfile 可构建（不 push）
 #   live-e2e        真实 LLM 端到端验证（可选，需配置 LLM_API_KEY secret，默认仅手动触发）
@@ -121,7 +121,9 @@ jobs:
         run: docker build -f backend/Dockerfile -t langgraph-agent:ci .
 
   # ── 真实 LLM 端到端验证（可选）────────────────────────────────────────────
-  # 触发条件：手动触发且勾选 run_live_e2e，或 push master 且已配置 LLM_API_KEY
+  # 触发条件：手动触发且勾选 run_live_e2e，或 push master
+  # 注意：job 级 if 中禁止引用 secrets 上下文（会导致整个 workflow 解析失败、
+  #       所有 job 无法创建），因此密钥是否存在由 gate 步骤在运行期判断。
   live-e2e:
     name: Live E2E (real LLM)
     runs-on: ubuntu-latest
@@ -129,8 +131,7 @@ jobs:
     timeout-minutes: 15
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.run_live_e2e) ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/master' &&
-       (secrets.LLM_API_KEY != '' || secrets.DASHSCOPE_API_KEY != ''))
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
     env:
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
@@ -138,13 +139,25 @@ jobs:
       llm_model: ${{ secrets.LLM_MODEL || 'qwen3.6-plus' }}
       use_mock_llm: "false"
     steps:
+      - name: Gate on API key availability
+        id: gate
+        run: |
+          if [ -n "${LLM_API_KEY:-}${DASHSCOPE_API_KEY:-}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.11"
 
       - name: Install backend dependencies
+        if: steps.gate.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
           grep -vE '^mcp' requirements.txt > /tmp/requirements-ci.txt
@@ -152,6 +165,7 @@ jobs:
           pip install --no-deps "mcp>=1.2,<2.0"
 
       - name: Run live E2E
+        if: steps.gate.outputs.run == 'true'
         run: |
           export LLM_API_KEY="${LLM_API_KEY:-$DASHSCOPE_API_KEY}"
           if [ -z "$LLM_API_KEY" ]; then
@@ -159,3 +173,9 @@ jobs:
             exit 1
           fi
           python scripts/live_e2e.py
+
+      - name: Report missing key on explicit dispatch
+        if: steps.gate.outputs.run != 'true' && github.event_name == 'workflow_dispatch'
+        run: |
+          echo "::error::已勾选运行 live E2E，但 LLM_API_KEY / DASHSCOPE_API_KEY secret 均未配置。"
+          exit 1
