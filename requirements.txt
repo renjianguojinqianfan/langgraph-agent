@@ -1,5 +1,7 @@
 # Backend Python dependencies (LangGraph autonomous-task agent)
 langgraph>=0.2.0,<0.3.0
+langgraph-checkpoint-sqlite==2.0.11  # pinned: 3.x needs langgraph-checkpoint>=4; serde compat matters for resumed runs
+aiosqlite>=0.20,<2  # metadata dep of checkpoint-sqlite (--no-deps install); sqlite-vec not needed at runtime
 langchain>=0.2.0,<0.3.0
 langchain-openai>=0.1.0,<0.2.0
 langchain-core>=0.2.0,<0.3.0

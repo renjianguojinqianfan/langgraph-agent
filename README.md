@@ -126,6 +126,7 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" python scripts/live_skill_test.py
 | GET  | `/api/tasks` | 历史任务列表 |
 | GET  | `/api/tasks/{id}` | 任务完整状态 |
 | POST | `/api/tasks/{id}/stop` | 停止任务（≤2s） |
+| POST | `/api/tasks/{id}/resume` | 从断点续跑 INTERRUPTED 任务（Issue #4） |
 | GET  | `/api/tasks/{id}/events` | **SSE** 步骤事件流 |
 | GET  | `/api/tasks/{id}/trace` | Trace 回放（NDJSON / ?format=json）|
 | GET  | `/api/tasks/{id}/artifacts/{aid}` | 下载 / 预览产物 |
@@ -150,6 +151,7 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" python scripts/live_skill_test.py
 | `kb_*` | 知识库 | dir=data/kb / top_k=5 |
 | `mcp_*` | MCP 客户端 | servers=[] / timeout=30s |
 | `git_*` | Git 工具 | enabled=true / repo_dir=data/repos |
+| `checkpoint_*` | 断点续跑存储 | enabled=true / dir=data/checkpoints |
 | `openapi_*` | OpenAPI 工具 | enabled=false |
 | `auth_*` | 鉴权 | enabled=false / token_ttl=86400 |
 | `plugins_*` | 插件 | dir=backend/plugins / autoload=true |
@@ -181,6 +183,8 @@ class MyTool(BaseTool):
 
 **OpenAPI 一键成工具**：配置 `openapi_spec_path` / `openapi_spec_url`，每个 operation 自动生成一个 BaseTool。
 
+**断点续跑（Issue #4）**：任务执行内核挂载 LangGraph `SqliteSaver` 检查点，每次循环步落盘完整 AgentState。被停止（INTERRUPTED）的任务可经 `POST /api/tasks/{id}/resume` 从最近检查点继续执行——消息历史、计划、已批准/拒绝的确认记录全部保留；进程崩溃遗留的孤儿任务在启动时自动对账为可恢复。两个安全默认：停在人工确认闸口的任务不可续跑（闸门永不被静默绕过）；CONFIRMED/FAILED 终态拒绝恢复。详见 [Issue #4 spec](https://github.com/renjianguojinqianfan/langgraph-agent/issues/4) 与 [增量架构](docs/incremental-arch-p3-resume.md)。
+
 ---
 
 ## 8. Docker（可选）
@@ -198,6 +202,7 @@ docker compose up --build
 - [P0 增量（对齐 HelloAgents/DeepAgent 四件套）](docs/incremental-prd-p0.md) · [P0 架构](docs/incremental-arch-p0.md)
 - [P1 增量（风险扫描/子Agent/RAG/辅助模型/鉴权/OpenAPI）](docs/incremental-prd-p1.md) · [P1 架构](docs/incremental-arch-p1.md)
 - [P2 增量（MCP 客户端 / Git 工具）](docs/incremental-prd-p2.md) · [P2 架构](docs/incremental-arch-p2.md)
+- [P3 增量（断点续跑 / LangGraph checkpointer）](docs/incremental-arch-p3-resume.md)
 - [真实 LLM 接入指南](scripts/LIVE_E2E.md)
 - 项目 Agent 操作手册：[AGENTS.md](AGENTS.md)
 

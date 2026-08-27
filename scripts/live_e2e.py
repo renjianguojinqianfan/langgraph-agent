@@ -15,6 +15,10 @@ Requirements:
 This script drives the REAL LangGraph kernel end-to-end with a natural-language
 task, verifying planner -> executor -> tool -> reflect -> final_answer and that
 the file_io tool actually writes an artifact.
+
+It then exercises the Issue #4 resume path: a second task is stopped mid-run,
+the TaskManager is rebuilt (simulating a process restart), and the task is
+resumed from its durable checkpoint to completion.
 """
 
 from __future__ import annotations
@@ -36,6 +40,16 @@ from backend.core.tools.registry import build_tools  # noqa: E402
 from backend.services.event_bus import EventBus  # noqa: E402
 from backend.services.persistence import Persistence  # noqa: E402
 from backend.services.task_manager import TaskManager  # noqa: E402
+
+
+def _wait_terminal(tm, task_id, timeout=90):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        task = tm.get_task(task_id)
+        if task and task.status.value in ("COMPLETED", "FAILED", "INTERRUPTED"):
+            return task
+        time.sleep(0.1)
+    return tm.get_task(task_id)
 
 
 def main() -> int:
@@ -110,7 +124,68 @@ def main() -> int:
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
         ok = ok and passed
 
-    print("=== RESULT:", "PASS" if ok else "FAIL", "===\n")
+    print("=== SCENARIO 1 RESULT:", "PASS" if ok else "FAIL", "===\n")
+
+    # ── Scenario 2 (Issue #4): stop -> restart simulation -> resume ──
+    print("=== SCENARIO 2: stop / rebuild / resume ===")
+    if not settings.checkpoint_enabled:
+        print("SKIP: checkpoint_enabled=false; cannot exercise the resume path.")
+        return 0 if ok else 1
+
+    llm2 = create_llm_client(settings)
+    eb2 = EventBus()
+    tm_stop = TaskManager(settings, eb2, persistence, llm_client=llm2, tools=tools)
+    rid = tm_stop.create_task(
+        title="live-resume-e2e",
+        user_input="Create three text files r1.txt r2.txt r3.txt in artifacts, "
+        "each containing its own name, then summarize what you created.",
+    )
+
+    # Stop as soon as it is RUNNING so an INTERRUPTED record exists.
+    stopped = False
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        t = tm_stop.get_task(rid)
+        if t and t.status.value == "RUNNING":
+            tm_stop.stop(rid)
+            stopped = True
+            break
+        if t and t.status.value not in ("PENDING", "RUNNING"):
+            break
+        time.sleep(0.05)
+
+    task_r = _wait_terminal(tm_stop, rid)
+    steps_before = len(task_r.steps) if task_r else 0
+    print(f"stopped={stopped} status={task_r.status.value if task_r else '?'} steps_so_far={steps_before}")
+
+    # Simulate a process restart: brand-new manager over the same storage.
+    tm_resume = TaskManager(settings, EventBus(), persistence,
+                            llm_client=create_llm_client(settings), tools=build_tools(settings))
+    tm_stop.shutdown()
+
+    resumed = False
+    try:
+        res = tm_resume.resume(rid)
+        resumed = bool(res.get("ok"))
+    except RuntimeError as exc:
+        print("resume rejected:", exc)
+    print(f"resume accepted: {resumed}")
+
+    task_final = _wait_terminal(tm_resume, rid, timeout=120)
+    final_checks = {
+        "task was interrupted before stop": stopped and (task_r is not None and task_r.status.value == "INTERRUPTED"),
+        "resume accepted": resumed,
+        "resumed run completed": task_final is not None and task_final.status.value == "COMPLETED",
+        "steps continued (not restarted)": task_final is not None and len(task_final.steps) >= max(steps_before, 1),
+        "final answer present": bool(task_final and task_final.final_answer),
+    }
+    for name, passed in final_checks.items():
+        print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
+        ok = ok and passed
+
+    tm_resume.shutdown()
+    print("=== SCENARIO 2 RESULT:", "PASS" if all(final_checks.values()) else "FAIL", "===")
+    print("=== FINAL RESULT:", "PASS" if ok else "FAIL", "===\n")
     return 0 if ok else 1
 
 
