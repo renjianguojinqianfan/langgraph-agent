@@ -3,7 +3,9 @@
 #
 # 触发：push / PR 到 master（docs/ 与 *.md 变更不触发）；workflow_dispatch 手动
 # 内容：
+#   guard-protected-files  受保护文件守卫（resilience.py/registry.py，[OVERRIDE] 逃生舱）
 #   backend-test    Python 3.11 + pytest 离线全量回归（backend/tests/，351 用例）
+#                   + live_e2e.py --check 离线冒烟（无 Key/无网络）
 #   frontend-build  npm ci + tsc 类型检查 + vite 生产构建（产物上传为 artifact）
 #   docker-build    验证 backend/Dockerfile 可构建（不 push）
 #   live-e2e        真实 LLM 端到端验证（可选，需配置 LLM_API_KEY secret，默认仅手动触发）
@@ -38,6 +40,40 @@ permissions:
   contents: read
 
 jobs:
+  # ── 受保护文件守卫（AGENTS.md：熔断层零改动的 CI 机械化闸门）────────────
+  guard-protected-files:
+    name: Protected files guard (resilience/registry)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 保证 PR base sha 可 diff
+      - name: Detect changes to protected files
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -e
+          protected="backend/core/tools/resilience.py backend/core/tools/registry.py"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            changed=$(git diff --name-only "$base"...HEAD -- $protected)
+          elif [ -n "${{ github.event.before }}" ] && git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
+            changed=$(git diff --name-only "${{ github.event.before }}" HEAD -- $protected)
+          else
+            changed=""   # workflow_dispatch / 首次 push：无可比基线，放行
+          fi
+          if [ -z "$changed" ]; then
+            echo "No protected-file changes."; exit 0
+          fi
+          echo "Changed protected files:"; echo "$changed"
+          title="${PR_TITLE:-$(git log -1 --pretty=%s)}"
+          case "$title" in *"[OVERRIDE]"*)
+            echo "::warning::Protected files changed with [OVERRIDE] declared — allowing."; exit 0 ;;
+          esac
+          echo "::error::受保护文件被修改（AGENTS.md：熔断层零改动）。PR/commit 标题需包含 [OVERRIDE] 才能通过。"
+          exit 1
+
   # ── 后端：离线全量回归 ────────────────────────────────────────────────────
   backend-test:
     name: Backend tests (Python 3.11)
@@ -66,6 +102,11 @@ jobs:
             --junitxml=test-results/junit.xml
         # conftest.py 顶部已强制 USE_MOCK_LLM=true / LLM_BASE_URL="" 等隔离，
         # 本步骤不需要任何外部环境变量，保证确定性。
+
+      - name: Offline smoke of live_e2e wiring (--check)
+        run: python scripts/live_e2e.py --check
+        # 无网络、无 Key：只验证脚本依赖链可加载、配置可解析、内核可装配，
+        # 可写路径全部重定向到临时目录，不碰 data/。
 
       - name: Upload test report
         if: always()

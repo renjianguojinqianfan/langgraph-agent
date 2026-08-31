@@ -19,12 +19,20 @@ the file_io tool actually writes an artifact.
 It then exercises the Issue #4 resume path: a second task is stopped mid-run,
 the TaskManager is rebuilt (simulating a process restart), and the task is
 resumed from its durable checkpoint to completion.
+
+Offline smoke mode (no key, no network — safe for CI):
+    python scripts/live_e2e.py --check
+Forces USE_MOCK_LLM=true, redirects every writable path (data/artifacts/
+traces/repos/kb) into a throw-away temp dir, and verifies the dependency
+chain loads: settings -> tools -> mock LLM client -> TaskManager lifecycle.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -50,6 +58,77 @@ def _wait_terminal(tm, task_id, timeout=90):
             return task
         time.sleep(0.1)
     return tm.get_task(task_id)
+
+
+def run_check() -> int:
+    """Offline smoke of the live_e2e wiring: no LLM calls, no network, no key.
+
+    Forces the mock LLM and redirects ALL writable paths into a temp dir —
+    artifacts/trace/git/kb are independent settings fields that resolve
+    against PROJECT_ROOT and do NOT follow data_dir, so overriding DATA_DIR
+    alone would still let TaskManager construction touch data/.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="live_e2e_check_"))
+    # Override (not setdefault) so a local .env cannot leak in; note the
+    # module-level setdefault("USE_MOCK_LLM", "false") above is thus beaten.
+    os.environ["USE_MOCK_LLM"] = "true"
+    os.environ["DATA_DIR"] = str(tmp)
+    os.environ["ARTIFACTS_DIR"] = str(tmp / "artifacts")
+    os.environ["TRACE_DIR"] = str(tmp / "traces")
+    os.environ["GIT_REPO_DIR"] = str(tmp / "repos")
+    os.environ["KB_DIR"] = str(tmp / "kb")
+    get_settings.cache_clear()  # env must win over any cached Settings
+
+    print(f"=== OFFLINE SMOKE (--check) | temp root: {tmp} ===")
+    results: list[tuple[str, bool, str]] = []
+    settings = tools = llm = tm = None
+
+    def step(name, fn):
+        nonlocal settings, tools, llm, tm
+        try:
+            fn()
+            results.append((name, True, ""))
+        except Exception as exc:  # report-and-continue: print every failure
+            results.append((name, False, repr(exc)))
+
+    def _settings():
+        nonlocal settings
+        settings = get_settings()
+        assert settings.use_mock_llm, "USE_MOCK_LLM override did not take effect"
+        assert str(settings.data_path).startswith(str(tmp)), "DATA_DIR redirect did not take effect"
+
+    def _tools():
+        nonlocal tools
+        tools = build_tools(settings)
+        assert tools, "build_tools returned an empty tool set"
+
+    def _llm():
+        nonlocal llm
+        llm = create_llm_client(settings)
+        assert llm is not None
+
+    def _tm():
+        nonlocal tm
+        tm = TaskManager(settings, EventBus(), Persistence(settings),
+                         llm_client=llm, tools=tools)
+
+    def _shutdown():
+        if tm is None:
+            raise AssertionError("TaskManager never constructed")
+        tm.shutdown()
+
+    step("get_settings() resolves (mock forced, paths in tmp)", _settings)
+    step("build_tools() returns non-empty tool set", _tools)
+    step("create_llm_client() (mock path)", _llm)
+    step("TaskManager constructs over temp storage", _tm)
+    step("TaskManager.shutdown() completes", _shutdown)
+
+    ok = True
+    for name, passed, err in results:
+        print(f"  [{'PASS' if passed else 'FAIL'}] {name}" + (f" — {err}" if err else ""))
+        ok = ok and passed
+    print("=== RESULT:", "PASS" if ok else "FAIL", "===")
+    return 0 if ok else 1
 
 
 def main() -> int:
@@ -204,4 +283,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser(description="Live E2E against a real LLM host")
+    parser.add_argument("--check", action="store_true",
+                        help="offline smoke of the wiring only: no LLM/network/key needed")
+    args = parser.parse_args()
+    raise SystemExit(run_check() if args.check else main())
