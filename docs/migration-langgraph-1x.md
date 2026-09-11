@@ -8,8 +8,8 @@
 
 | 组件 | 迁移前 | 迁移后 |
 |---|---|---|
-| `langgraph` | 0.2.76 | **1.2.11**（1.2.x LTS 线） |
-| `langgraph-checkpoint` | 2.1.2（传递） | **4.2.0**（传递） |
+| `langgraph` | 0.2.76 | **1.2.11**（1.2.x LTS 线，钉 `>=1.2,<1.3`） |
+| `langgraph-checkpoint` | 2.1.2（传递） | **4.2.0**（显式钉死：serde 住在这个包里） |
 | `langgraph-checkpoint-sqlite` | 2.0.11（钉死） | **3.1.1** |
 | `langchain-core` | 0.2.43（显式钉死） | 1.6.2（**传递**，langgraph 1.x 要求 ≥1.0） |
 | `langchain` / `langchain-openai` | 0.2.17 / 0.1.25（显式钉死） | **删除** |
@@ -115,22 +115,44 @@ IF NOT EXISTS` 的假设共存，多一处耦合面）。
 
 判定规则（`CHECKPOINT_FORMAT_VERSION = 1`）：
 
-| 文件状态 | 判定 |
-|---|---|
-| 不存在 | 可用（新建并打标） |
-| 存在、`checkpoints` 表不存在或 0 行 | 可用（无可腐蚀数据，打标） |
-| 存在、有行、`user_version >= 1` | 可用（本代码库写的） |
-| 存在、有行、`user_version == 0` | **拒绝挂载**（升级前遗留） |
+| 文件状态 | 判定 | kind |
+|---|---|---|
+| 不存在 | 可用（新建并打标） | `new` |
+| 存在、`checkpoints` 与 `writes` 均 0 行、未打标 | 可用（无可腐蚀数据，打标） | `empty` |
+| 存在、`user_version == 1` | 可用（本代码库写的） | `stamped` |
+| 存在、有行、`user_version == 0` | **拒绝挂载**（升级前遗留） | `legacy` |
+| 存在、`user_version > 1` | **拒绝挂载**（更新的 build 写的，本 build 证明不了） | `newer` |
+| 读不出来（损坏 / 被锁 / 权限 / 不是 sqlite） | **拒绝挂载**（不带崩启动） | `unreadable` |
 
-拒绝挂载 = `self._checkpointer = None` + ERROR 级日志（含补救文案与本文档指针），
-**不是**拒绝启动：服务照常起，新任务照跑，只是 resume 走既有的
-「no checkpoint → 409」路径（`_has_checkpoint()` 返回 False）。副作用可控且可逆：
-运维把旧文件移走即可恢复 resume。
+两个细节是评审后加的：
+
+- 行数同时数 `checkpoints` 和 `writes`。§2.3 自己论证过 `writes` 决定未完成任务，
+  只数 `checkpoints` 会让判据比论证窄。
+- 版本判据是 `==` 而不是 `>=`。整个设计的立足点是「未证明即拒绝」，`>=` 会让回滚
+  之后的旧代码无条件信任未来版本的库，方向与其他三行相反。
+
+检测连接用 `mode=ro` 打开，这是硬要求而不是洁癖：对 WAL 库而言，**最后一个关闭的
+读写连接**会触发 sqlite 把 `-wal` 折回主库并删除 `-wal`/`-shm`——也就是说「决定拒绝它」
+这个动作本身会改写被拒文件，把运维事后拿旧栈取证的现场毁掉（而崩溃遗留 `-wal`
+恰好就是 P3 关心的场景）。§2.1 的 A/B 探测用的就是 `mode=ro`，生产代码必须同一标准。
+
+拒绝挂载 = `self._checkpointer = None` + ERROR 级日志，**不是**拒绝启动：服务照常起，
+新任务照跑，只是 resume 走既有的「no checkpoint → 409」路径（`_has_checkpoint()`
+返回 False）。日志文案按 kind 分支，因为两类原因需要**相反**的补救动作：
+
+- `legacy` / `newer`：格式不被本 build 背书 → 把文件移走就恢复 resume（指向本文档）；
+- `unreadable` / 打标写入失败：权限 / 完整性 / 锁 / 磁盘满 → 去修根因，**不要**删快照
+  （删了既修不好下次新建的库，又白白丢掉历史数据）。
+
+打标写入本身也包在 try/except 里：迁移前的构造函数不写盘，坏库只会让单个任务在
+`run()` 里失败；打标一旦被只读目录 / 属主不一致的容器挂载 / 磁盘满挡下又不接住，
+就会变成整个 FastAPI 起不来——那是比迁移前更差的降级。
 
 ## 3. API 面盘点与破坏面实测
 
-生产代码只有 **3 个文件** import langgraph（`nodes.py` / `config.py` 里的 "langgraph"
-只出现在注释中，不是耦合面）：
+生产代码的耦合面只有 **3 个文件**：`graph.py` 与 `task_manager.py` 直接 import langgraph，
+`subagent.py` 经 `build_graph` 间接耦合（`nodes.py` / `config.py` 里的 "langgraph" 只出现
+在注释中，不是耦合面）：
 
 | 文件 | 用到的 API |
 |---|---|
@@ -167,6 +189,28 @@ IF NOT EXISTS` 的假设共存，多一处耦合面）。
 
 **明确不动**：`nodes.py`（含 P0 `_needs_confirm` 重算死循环修复）、`resilience.py`、
 `registry.py`、`conftest.py` 隔离块、API 层、前端。工具层与熔断层不碰 langgraph。
+
+两个命名决定：
+
+- main 模式的路由保留 0.2 时代的名字（`_after_planner` / `_after_split` / `_after_executor`
+  / `_after_tool` / `_after_reflect`），subtask 变体加 `_subtask` 后缀。理由：`nodes.py` 里
+  的 P0 红线注释写着 `graph.py's _after_tool ...`，而 `nodes.py` 属于零改动保护范围，
+  改名会让那条交叉引用静默失效。
+- `_reflect_router(runtime)` 捕获 `runtime` 而不是 `runtime.max_steps`，保持 0.2 闭包的
+  晚绑定语义（路由时才读预算）。
+
+### 4.1 测试侧的刻意偏离（记在这里免得被当成先例）
+
+spec Testing Decisions 要求「只断言外部行为，不断言 langgraph 内部 API 调用形态」。
+本次有两类断言故意越了这条线：
+
+1. `test_graph.py` 断言 `graph.get_graph().edges`（拓扑声明）。因为**拓扑静态声明本身就是
+   这次重写的交付物**：`Literal` 注解丢了不会让任何运行测试变红（langgraph 只是退化成
+   “这条边可能去任何节点”），只能从声明面上看。行为等价性另由既有跑图用例保证。
+2. `test_checkpointer.py` 少量断言 `tm._checkpointer is None`。“拒绝挂载”的定义就是它，
+   且每一处都有行为侧兄弟用例兜底（resume 报 no checkpoint、新任务仍 COMPLETED）。
+
+两类都是例外，不是新模式；新增测试默认仍应只断言外部行为。
 
 ## 5. 1.x 新特性选择：durability mode（不选 typed streaming v2）
 
@@ -217,6 +261,37 @@ AttributeError 在第一个 superstep 就炸。
 3. `scripts/live_e2e.py` 真实模型双场景（冒烟 + 断点续跑）；
 4. CI 全绿（含 `guard-protected-files` 守卫）。
 
+实际结果：
+
+| 闸门 | 结果 |
+|---|---|
+| 离线套件 | 351 → **365 passed**（+6 旧库守卫、+3 拓扑声明、+2 durability、+3 评审后补的守卫：更高版本标记 / 损坏库 / 不可写库）|
+| `--check` 冒烟 | 5/5 PASS |
+| 真实模型（qwen3.6-plus） | 场景 1 冒烟 PASS、场景 2 stop→重建→resume→COMPLETED PASS |
+| 受保护文件 | `git diff master...HEAD -- conftest.py nodes.py resilience.py registry.py` 为空 |
+
+真实模型跑之前需先做一次运维动作：本地 `data/checkpoints/checkpoints.sqlite`（2.0.11 写的
+104 行）会被新守卫正当拒绝，按日志提示把它移走（重命名为 `*.pre-1x-legacy`）即可；
+新建的库会打上 `format v1` 并被正常挂载。
+
+一个观察（不属本次范围，不改）：`scripts/live_e2e.py` 场景 1 的终态预算是硬编码的
+~60s，而场景 2 用 180s。真实模型一次 planner 调用就花了 ~10s，两轮循环很容易超过 60s：
+首跑因此 FAIL（trace 显示无事件、循环正常推进，纯粹是模型延迟），重跑即 PASS。
+另外 `OpenAICompatibleClient` 未设请求 timeout（SDK 默认 600s），单次卡顿会吃掉整个预算。
+
 回滚：`requirements.txt` 恢复旧矩阵 + `pip install -r requirements.txt`。数据侧无需回滚
 （`data/` 不入库；打标只写 `PRAGMA user_version`，旧栈忽略该值，因此打标后的文件在
 回滚后仍可被 2.0.11 正常使用）。
+
+## 7. Phase 2 待办（本次交付刻意不含）
+
+按 grilling 总结的阶段划分，以下属于 Phase 2，不在迁移分支里做，记在这里免得被当成已交付：
+
+- **ruff + mypy 进 CI**（spec US11、Testing Decisions 的「强制缝」、US22 的「质量门禁配置」）：
+  `backend-test` job 内新增两步 + 入库最小配置，合入时基线必须全净。越晚接入要清的债越多，
+  而本次重写新增了大量 `Literal` / `tuple[bool, str]` 类型面，正是 mypy 能立即锁住的收益。
+- **README 重写为叙事型**（US3：迁移章节的动机/矩阵/代价/闸门/安全闭环）：当前只加了
+  顶部事实段 + 指向本文档的链接。
+- **与 `interview-agent-py` 互链并显式写分工**（US15）：本仓库单侧先写。
+- **OVERVIEW.md 补 Issue #7 章节**：既有章节是历史交付日志（里面的 351/2.0.11 是当时事实），
+  不改旧章节，只追加新一章。

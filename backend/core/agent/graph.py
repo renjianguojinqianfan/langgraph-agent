@@ -43,9 +43,14 @@ from .nodes import AgentRuntime
 from .state import AgentState
 
 # ── routers: main topology ───────────────────────────────────────────────────
+#
+# Unqualified names are the main topology (the default mode); ``_subtask``
+# suffixed ones are the simplified variant. The main-mode names are the ones the
+# 0.2 build used, so cross-references from elsewhere (e.g. the P0 note in
+# nodes.py pointing at ``_after_tool``) keep resolving.
 
 
-def _after_planner_main(s: AgentState) -> Literal["finish", "risk_scan"]:
+def _after_planner(s: AgentState) -> Literal["finish", "risk_scan"]:
     """Planner -> risk scan, unless a stop was requested (Issue #4)."""
     return "finish" if s.get("stop_requested") else "risk_scan"
 
@@ -64,7 +69,7 @@ def _after_split(s: AgentState) -> Literal["finish", "reflect", "executor"]:
     return "executor"
 
 
-def _after_executor_main(
+def _after_executor(
     s: AgentState,
 ) -> Literal["finish", "reflect", "human_confirm", "tool"]:
     """Executor -> reflect on a final answer, else the confirm gate or the tool."""
@@ -77,7 +82,7 @@ def _after_executor_main(
     return "tool"
 
 
-def _after_tool_main(s: AgentState) -> Literal["finish", "human_confirm", "reflect"]:
+def _after_tool(s: AgentState) -> Literal["finish", "human_confirm", "reflect"]:
     """Tool -> reflect, or back to the confirm gate while items stay pending.
 
     This re-check is the other half of the P0 dead-loop fix: the authoritative
@@ -119,13 +124,15 @@ def _after_tool_subtask(s: AgentState) -> Literal["finish", "reflect"]:
 
 
 def _reflect_router(
-    max_steps: int,
+    runtime: AgentRuntime,
 ) -> Callable[[AgentState], Literal["finish", "planner"]]:
-    """Bind this runtime's step budget into the reflect router.
+    """Bind the runtime into the reflect router.
 
     A factory rather than a closure inside :func:`build_graph`, so the router
     stays a named, ``Literal``-annotated function: 1.x reads the annotation off
     it to declare the branch statically (verified to work through a factory).
+    It captures ``runtime`` — not ``runtime.max_steps`` — so the budget is read
+    at routing time, exactly as the 0.2 closure did.
     """
 
     def _after_reflect(s: AgentState) -> Literal["finish", "planner"]:
@@ -133,7 +140,7 @@ def _reflect_router(
             return "finish"
         if s.get("_last_action") == "final_answer":
             return "finish"
-        if s.get("step_index", 0) >= max_steps:
+        if s.get("step_index", 0) >= runtime.max_steps:
             return "finish"
         return "planner"
 
@@ -168,15 +175,15 @@ def build_graph(runtime: AgentRuntime, mode: str = "main", checkpointer: Any | N
         g.add_node("subagent_split", runtime.subagent_split)
         g.add_node("human_confirm", runtime.human_confirm_node)
 
-        g.add_conditional_edges("planner", _after_planner_main)
+        g.add_conditional_edges("planner", _after_planner)
         g.add_conditional_edges("risk_scan", _after_risk_scan)
         g.add_conditional_edges("subagent_split", _after_split)
-        g.add_conditional_edges("executor", _after_executor_main)
-        g.add_conditional_edges("tool", _after_tool_main)
+        g.add_conditional_edges("executor", _after_executor)
+        g.add_conditional_edges("tool", _after_tool)
         # After a decision the gate always re-enters the tool node: whether the
         # call actually runs is the tool node's business (rejected calls are
         # skipped there), and whether the gate is entered *again* afterwards is
-        # decided by _after_tool_main.
+        # decided by _after_tool.
         g.add_edge("human_confirm", "tool")
     elif mode == "subtask":
         # Subtask topology: planner -> executor -> (tool | reflect) -> finish.
@@ -188,6 +195,6 @@ def build_graph(runtime: AgentRuntime, mode: str = "main", checkpointer: Any | N
             f"unknown graph mode {mode!r} (expected 'main' or 'subtask')"
         )
 
-    g.add_conditional_edges("reflect", _reflect_router(runtime.max_steps))
+    g.add_conditional_edges("reflect", _reflect_router(runtime))
     g.add_edge("finish", END)
     return g.compile(checkpointer=checkpointer)

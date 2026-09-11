@@ -2,10 +2,17 @@
 #
 # langgraph 1.2.x LTS 线。0.2.76 → 1.2.11 为原地迁移（2026-09，Issue #7）；
 # 评估、实测证据与重写面见 docs/migration-langgraph-1x.md。
-langgraph>=1.2,<2
+langgraph>=1.2,<1.3
+langgraph-checkpoint==4.2.0
 langgraph-checkpoint-sqlite==3.1.1
-# 钉死 3.1.1 而非开区间：checkpoint 的存储格式与 serde 直接决定 resume 契约，
-# 抬版本必须由人评估后放行。3.1.1 同时闭环了曾在 2.0.11 上被评估为 not_used 而
+# 三个包一起钉：它们是 resume 契约的完整存储面。
+# - langgraph 只放 1.2.x 补丁级（spec：1.2.x LTS 线），跨小版本重新走评估流程。
+# - langgraph-checkpoint 必须显式钉：serde（JsonPlusSerializer）住在这个包里，而它
+#   否则只被上游约束在 [4.1,5) 的浮动窗口里——一次普通 pip install 就能把它抬到
+#   4.5 并改掉快照语义，既过不了钉版也过不了 CHECKPOINT_FORMAT_VERSION（打标只
+#   区分迁移前/后，感知不到 4.x 内部漂移），而失败形态正是「静默腐蚀 resume」。
+# - langgraph-checkpoint-sqlite 钉死：存储格式直接决定 resume 契约。
+# 抬版必须由人评估后放行。3.1.1 同时闭环了曾在 2.0.11 上被评估为 not_used 而
 # dismiss 的两条公告（GHSA-9rwj-6rc7-p77c / CVE-2025-67644 与 GHSA-47pj-3jcm-6whg /
 # CVE-2026-71433），安全故事由「已接受」变「已修复」。
 # 旧钉版的理由「3.x 破坏 resume serde 兼容」已实测推翻（3.1.1 能无损读回 2.0.11

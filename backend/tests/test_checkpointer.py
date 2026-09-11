@@ -18,6 +18,7 @@ MemorySaver so the on-disk format and connection semantics are exercised.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -309,6 +310,16 @@ def _user_version(db_path: Path) -> int:
         conn.close()
 
 
+def _stamp(db_path: Path, version: int) -> None:
+    """伪造一个格式标记（模拟另一个版本的代码写过的库）。"""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(f"PRAGMA user_version = {int(version)}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _write_legacy_store(db_path: Path, rows: int = 1) -> Path:
     """造一个「迁移前写的」checkpoint 库：2.0.11 的两张表 + ``rows`` 行快照。
 
@@ -447,6 +458,21 @@ class TestPreMigrationStoreGuard:
 
         assert _user_version(db) == CHECKPOINT_FORMAT_VERSION
 
+    def test_store_stamped_by_a_newer_build_is_refused(self, tmp_path):
+        """格式版本更高 = 更新的代码写的库，本 build 同样证明不了它。
+
+        判据是 ``==`` 而不是 ``>=``：整个设计的立足点是「未证明即拒绝」，
+        回滚之后自动信任未来版本会把这条哲学破掉。
+        """
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        db = _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite")
+        _stamp(db, CHECKPOINT_FORMAT_VERSION + 1)
+
+        tm = make_manager(settings, MockLLMClient())
+
+        assert tm._checkpointer is None
+        assert _user_version(db) == CHECKPOINT_FORMAT_VERSION + 1, "被拒的库不该被改写"
+
     def test_own_writes_are_not_mistaken_for_legacy_on_restart(self, tmp_path, tm_logs):
         """假阳性会直接废掉 P3：本版本写的库，重启后必须仍被接受。"""
         settings = make_settings(tmp_path, checkpoint_enabled=True)
@@ -550,7 +576,7 @@ class TestDurabilitySync:
         app.invoke({"task_id": "t-dur"}, cfg, durability="sync")
         conn.close()
 
-        assert seen["durable"] is True
+        assert seen.get("durable") is True
 
     def test_run_path_persists_the_executor_write_before_the_tool_node(self, tmp_path):
         """生产路径（TaskManager.run）确实要了 sync。
@@ -584,3 +610,63 @@ class TestDurabilitySync:
         assert probe.observed.get("last_action") == "tool_call", probe.observed
         calls = probe.observed.get("pending_tool_calls") or []
         assert calls and calls[0].get("tool_name") == "store_probe", probe.observed
+
+
+class TestUnusableStoreDegradesGracefully:
+    """拒绝挂载必须永远是「降级」，不能变成「起不来」或「误诊」。
+
+    迁移前的构造函数不写盘（只有 connect + SqliteSaver），所以一个坏库只会
+    让单个任务在 run() 的 try/except 里失败；迁移引入了打标写入与格式检测，
+    两条新路径都必须保住“服务照常起”这个上界。
+    """
+
+    def test_corrupt_store_is_refused_without_crashing_startup(self, tmp_path, tm_logs):
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        db = settings.checkpoint_path / "checkpoints.sqlite"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        db.write_bytes(b"this is not a sqlite database at all")
+
+        tm = make_manager(settings, MockLLMClient(final_answer="still fine"))
+
+        assert tm._checkpointer is None
+        errors = tm_logs.messages(logging.ERROR)
+        assert any("unreadable" in m and str(db) in m for m in errors), errors
+        # 误诊守卫：这不是迁移遗留，不能叫人把快照移走了事（那既修不好根因，
+        # 又白白丢掉历史快照）。
+        assert not any("void by design" in m for m in errors), errors
+
+        task_id = tm.create_task(title="t", user_input="hello")
+        assert _wait_terminal(tm, task_id).status == TaskStatus.COMPLETED
+
+    def test_unwritable_store_degrades_to_no_checkpoint(self, tmp_path, tm_logs):
+        """打不了标就不能挂载，但异常绝不能逃到 FastAPI lifespan 里。
+
+        只读目录 / 属主不一致的容器挂载 / 磁盘满 / 陈旧锁 都会落到这条路径。
+        """
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        db = settings.checkpoint_path / "checkpoints.sqlite"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        sqlite3.connect(str(db)).close()  # 空库：本来会被放行并打标
+        os.chmod(db, 0o444)
+        try:
+            probe = sqlite3.connect(str(db))
+            try:
+                probe.execute("PRAGMA user_version = 1")
+                writable = True
+            except sqlite3.OperationalError:
+                writable = False
+            finally:
+                probe.close()
+            if writable:
+                pytest.skip("平台忽略只读位（root / 容器挂载），无法复现该场景")
+
+            tm = make_manager(settings, MockLLMClient(final_answer="still fine"))
+
+            assert tm._checkpointer is None
+            errors = tm_logs.messages(logging.ERROR)
+            assert any("not writable" in m and str(db) in m for m in errors), errors
+
+            task_id = tm.create_task(title="t", user_input="hello")
+            assert _wait_terminal(tm, task_id).status == TaskStatus.COMPLETED
+        finally:
+            os.chmod(db, 0o666)  # 让 pytest 清理 tmp_path 时删得掉

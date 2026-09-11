@@ -75,48 +75,75 @@ CHECKPOINT_FORMAT_VERSION = 1
 _CHECKPOINT_FORMAT_DOC = "docs/migration-langgraph-1x.md"
 
 
-def _inspect_checkpoint_store(db_path: Path) -> tuple[bool, str]:
+def _count_store_rows(conn) -> int:
+    """Rows across both checkpoint tables (either alone can pin a resume).
+
+    ``writes`` holds the pending-task records a resumed superstep replays, so a
+    store with only ``writes`` rows is not empty either. Table names come from a
+    fixed literal tuple, never from input — one of the CVEs closed by 3.1.1 was
+    exactly an injected filter key reaching SQL.
+    """
+    total = 0
+    for table in ("checkpoints", "writes"):
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if exists:
+            total += int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    return total
+
+
+def _inspect_checkpoint_store(db_path: Path) -> tuple[bool, str, str]:
     """Decide whether an existing checkpoint sqlite file may be mounted.
 
-    Returns ``(usable, reason)``. Exactly one combination is rejected: a file
-    that already holds snapshots but carries no format stamp — that can only
-    mean "written by a pre-migration stack", and resuming from it would bet the
-    P3 contract on cross-major execution-position equivalence that was never
-    proven. Everything else (missing file, empty store, stamped store) is
-    usable. Read-only: never creates tables, never writes, so a rejected file
-    is left exactly as it was found.
+    Returns ``(usable, kind, detail)``. ``kind`` is one of ``new`` / ``empty`` /
+    ``stamped`` (usable) or ``legacy`` / ``newer`` / ``unreadable`` (refused);
+    the caller picks the operator-facing text from ``kind``, because "this
+    predates the migration, move it away" and "this file is broken or locked, go
+    fix the cause" call for opposite remediation.
+
+    A store is usable only when it carries *exactly* this build's format stamp.
+    An unstamped store with rows can only predate the migration, and a higher
+    stamp means a newer build wrote it; either way resuming from it would bet
+    the P3 contract on execution-position equivalence that was never proven
+    (rationale + A/B measurement: docs/migration-langgraph-1x.md §2).
+
+    Opened ``mode=ro`` on purpose: the last read-write connection to close on a
+    WAL database makes sqlite fold ``-wal`` into the main file and drop the
+    ``-wal`` / ``-shm`` sidecars — i.e. the mere act of *deciding to refuse*
+    would rewrite the bytes an operator may still want to inspect with the old
+    stack. Read-only also means no tables are ever created here.
     """
     if not db_path.exists():
-        return True, "new store"
+        return True, "new", "no store yet"
     import sqlite3
 
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = sqlite3.connect(
+            f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=10.0
+        )
         try:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version >= CHECKPOINT_FORMAT_VERSION:
-                return True, f"format v{version}"
-            has_table = conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='checkpoints'"
-            ).fetchone()
-            rows = (
-                conn.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0]
-                if has_table
-                else 0
-            )
+            if version == CHECKPOINT_FORMAT_VERSION:
+                return True, "stamped", f"format v{version}"
+            if version > CHECKPOINT_FORMAT_VERSION:
+                return False, "newer", (
+                    f"stamped format v{version} by a newer build (this build "
+                    f"writes v{CHECKPOINT_FORMAT_VERSION})"
+                )
+            rows = _count_store_rows(conn)
             if rows == 0:
-                return True, "empty store"
-            return False, (
-                f"{rows} snapshot(s) written before the langgraph 1.x migration "
-                "(no format stamp)"
+                return True, "empty", "no snapshots to corrupt"
+            return False, "legacy", (
+                f"{rows} pre-migration row(s) in checkpoints/writes, no format "
+                f"stamp (this build writes v{CHECKPOINT_FORMAT_VERSION})"
             )
         finally:
             conn.close()
     except Exception as exc:  # corrupt / locked / not a sqlite file at all
         # Refuse rather than crash startup: an unreadable store must not take the
         # whole service down, and must not be mounted half-way either.
-        return False, f"unreadable store ({type(exc).__name__}: {exc})"
+        return False, "unreadable", f"{type(exc).__name__}: {exc}"
 
 
 def _now() -> str:
@@ -183,12 +210,12 @@ class TaskManager:
         self._reconcile_orphans()
 
     def _mount_checkpointer(self, settings: Settings) -> None:
-        """Mount the sqlite saver, or refuse a pre-migration store.
+        """Mount the sqlite saver, or refuse a store this build cannot vouch for.
 
         Refusing leaves ``_checkpointer`` as ``None``: the service still starts
         and new tasks still run, while resume falls through to the existing
         "no checkpoint" 409 (AGENTS.md: resume 拒绝语义不可放松). No automatic
-        migration and no partial mount — the rejected file is not touched, so
+        migration and no partial mount — a refused file is never written to, so
         moving it away is the whole remediation.
         """
         import sqlite3
@@ -198,19 +225,9 @@ class TaskManager:
         ckpt_dir = settings.checkpoint_path
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         db_path = ckpt_dir / "checkpoints.sqlite"
-        usable, reason = _inspect_checkpoint_store(db_path)
+        usable, kind, detail = _inspect_checkpoint_store(db_path)
         if not usable:
-            logger.error(
-                "Checkpoint store %s refused: %s. Snapshots from before the "
-                "langgraph 0.2->1.2.x migration are void by design — reading "
-                "them back works, but continuing a 0.2 pregel schedule under "
-                "the 1.x scheduler was never proven, and data/ is disposable "
-                "runtime state. Resume stays disabled until the file is moved "
-                "away; new tasks are unaffected. Rationale and measurement: %s.",
-                db_path,
-                reason,
-                _CHECKPOINT_FORMAT_DOC,
-            )
+            self._log_refused_store(db_path, kind, detail)
             return
         conn = sqlite3.connect(
             str(db_path),
@@ -218,12 +235,61 @@ class TaskManager:
             timeout=10.0,  # tolerate the predecessor's in-flight writes
         )
         # Stamp before the saver writes anything, so a store created by this
-        # version is never again mistaken for a pre-migration one.
-        conn.execute(f"PRAGMA user_version = {int(CHECKPOINT_FORMAT_VERSION)}")
-        conn.commit()
+        # version is never again mistaken for a pre-migration one. A failed
+        # stamp must degrade to "not mounted": letting it escape would turn a
+        # read-only / locked / full data dir into a FastAPI startup crash,
+        # strictly worse than pre-migration behavior (the old constructor never
+        # wrote, so a bad store only ever failed one task inside run()).
+        try:
+            conn.execute(f"PRAGMA user_version = {int(CHECKPOINT_FORMAT_VERSION)}")
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+            logger.error(
+                "Checkpoint store %s is not writable (%s: %s); refusing to mount. "
+                "Fix the cause (permissions / disk full / stale lock) — do NOT "
+                "delete snapshots for this. Resume stays disabled; new tasks are "
+                "unaffected.",
+                db_path,
+                type(exc).__name__,
+                exc,
+            )
+            return
         self._checkpoint_conn = conn
         self._checkpointer = SqliteSaver(conn)
-        logger.info("Checkpoint store mounted: %s (%s)", db_path, reason)
+        logger.info("Checkpoint store mounted: %s (%s)", db_path, detail)
+
+    def _log_refused_store(self, db_path: Path, kind: str, detail: str) -> None:
+        """Refusal text per cause — the causes need opposite remediation.
+
+        A pre-migration (or newer-format) store is void by design: move it away.
+        An unreadable one is a permissions / integrity / locking problem: moving
+        or deleting it destroys good snapshots and fixes nothing.
+        """
+        if kind == "unreadable":
+            logger.error(
+                "Checkpoint store %s is unreadable (%s); refusing to mount. This "
+                "is not a migration artifact — check permissions / integrity / "
+                "locks rather than deleting snapshots. Resume stays disabled "
+                "until it is readable; new tasks are unaffected.",
+                db_path,
+                detail,
+            )
+            return
+        logger.error(
+            "Checkpoint store %s refused: %s. Snapshots written under a different "
+            "checkpoint format are void by design — reading them back may well "
+            "work, but continuing that pregel schedule under this scheduler was "
+            "never proven, and data/ is disposable runtime state. Resume stays "
+            "disabled until the file is moved away; new tasks are unaffected. "
+            "Rationale and measurement: %s.",
+            db_path,
+            detail,
+            _CHECKPOINT_FORMAT_DOC,
+        )
 
     def _reconcile_orphans(self) -> None:
         """Mark persisted RUNNING/PENDING tasks as INTERRUPTED on startup.

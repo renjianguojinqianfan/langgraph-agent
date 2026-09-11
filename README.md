@@ -4,7 +4,7 @@
 Agent 自主规划、循环调用工具（联网检索 / 文件读写 / 代码执行 / HTTP API / Git / MCP 外部工具 / 知识库）
 完成多步任务，并通过前后端一体的可视化界面（三栏布局 + SSE 实时事件流 + Trace 回放）展示全程。
 
-**362 个离线测试全绿** · 真实 LLM（OpenAI 兼容，已验证千问 qwen3.6-plus）端到端跑通 + 断点续跑双场景验证。
+**365 个离线测试全绿** · 真实 LLM（OpenAI 兼容，已验证千问 qwen3.6-plus）端到端跑通 + 断点续跑双场景验证。
 
 > 2026-09：从 langgraph 0.2 **原地迁移**到 1.2.x LTS 线——编排层按 1.x idioms 重写、显式采用
 > `durability="sync"`、`langgraph-checkpoint-sqlite` 升到 3.1.1 闭环两条 CVE。为何迁、怎么迁、
@@ -66,7 +66,7 @@ langgraph-agent/
 │   │   └── mcp/              # McpClientManager（stdio，每 server 一线程）
 │   ├── services/             # event_bus / trace / persistence / task_manager / auth
 │   ├── plugins/              # 插件目录（example_tool.py）
-│   └── tests/                # 40 文件 / 362 用例（含 test_qa_* 独立补充）
+│   └── tests/                # 40 文件 / 365 用例（含 test_qa_* 独立补充）
 ├── frontend/                 # React 三栏 UI（14 组件：TaskPanel/TraceTab/RiskBanner/...）
 ├── docs/                     # PRD / 架构 / 增量设计（p0/p1/p2/p3-resume）/ langgraph 1.x 迁移评估
 ├── .agents/skills/           # 千问官方 skills（供知识入库 / 模型选型参考）
@@ -114,7 +114,7 @@ python start.py                    # 前后端 + 真实 Key（需 .env）
 ## 4. 测试与验证
 
 ```bash
-# 全量离线测试（362 用例，MockLLM，无需 Key/网络）
+# 全量离线测试（365 用例，MockLLM，无需 Key/网络）
 .venv311\Scripts\python.exe -m pytest backend/tests/ -q
 
 # 真实 LLM 端到端（发布前 / 换供应商验证，需 .env 配置真实模型）
