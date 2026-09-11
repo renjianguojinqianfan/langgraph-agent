@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>参考 01 · StateGraph 核心概念速查卡 — langgraph-agent 学习课程</title>
+<link rel="stylesheet" href="../assets/base.css">
+<style>
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #f4f1ea; font-family: "Source Han Serif SC", serif; }
+  td code { white-space: normal; }
+  .route td:first-child code { background: var(--accent-soft); border-color: #bfd3fa; }
+  .later { color: var(--ink-faint); }
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <div class="lesson-meta">
+      <span class="kicker">参考 01</span>
+      <span>StateGraph 核心概念速查卡</span>
+      <span>来源：<a href="https://docs.langchain.com/oss/python/langgraph/graph-api" target="_blank">官方 Graph API</a> + 项目 <code>graph.py</code></span>
+    </div>
+    <h1>StateGraph 核心概念速查</h1>
+  </header>
+
+  <h2>四要素</h2>
+  <table>
+    <tr><th style="width:14%">概念</th><th style="width:34%">一句话</th><th style="width:28%">项目落点</th><th>官方 API</th></tr>
+    <tr><td><b>State</b></td><td>共享黑板，节点间唯一的通信方式，用 <code>TypedDict</code> 声明</td><td><code>AgentState</code>（约 25 个字段）</td><td><code>StateGraph(AgentState)</code></td></tr>
+    <tr><td><b>Node</b></td><td>接收 state、干活、返回 state 更新的函数</td><td>8 个节点方法挂在 <code>AgentRuntime</code> 上</td><td><code>g.add_node(name, fn)</code></td></tr>
+    <tr><td><b>Edge</b></td><td>固定路线，无条件必走</td><td>全项目仅 1 条：<code>finish → END</code></td><td><code>g.add_edge(a, b)</code> / <code>set_entry_point</code></td></tr>
+    <tr><td><b>Conditional Edge</b></td><td>路由函数读 state、返回下一节点名</td><td>7 个出口全部是条件边</td><td><code>g.add_conditional_edges(a, router)</code></td></tr>
+  </table>
+
+  <h2>最小可运行示例（背下来，面试白板用）</h2>
+<pre><code><span class="kw">from</span> langgraph.graph <span class="kw">import</span> StateGraph, END
+<span class="kw">from</span> typing_extensions <span class="kw">import</span> TypedDict
+
+<span class="kw">class</span> <span class="fn">S</span>(TypedDict):
+    n: int
+
+<span class="kw">def</span> <span class="fn">step</span>(s: S) -> dict:            <span class="cm"># 节点：返回「更新」而非全量</span>
+    <span class="kw">return</span> {<span class="st">"n"</span>: s[<span class="st">"n"</span>] + 1}
+
+<span class="kw">def</span> <span class="fn">route</span>(s: S) -> str:            <span class="cm"># 路由：读 state，返回节点名</span>
+    <span class="kw">return</span> <span class="st">"step"</span> <span class="kw">if</span> s[<span class="st">"n"</span>] &lt; 3 <span class="kw">else</span> END
+
+g = StateGraph(S)
+g.add_node(<span class="st">"step"</span>, step)
+g.set_entry_point(<span class="st">"step"</span>)
+g.add_conditional_edges(<span class="st">"step"</span>, route)
+
+app = g.compile()                   <span class="cm"># 可选：compile(checkpointer=...)</span>
+<span class="kw">print</span>(app.invoke({<span class="st">"n"</span>: 0}))        <span class="cm"># {'n': 3}</span></code></pre>
+
+  <h2>main 拓扑 · 全图路由真值表</h2>
+  <p>所有判断按顺序短路求值（与 <code>graph.py</code> 逐行对应）。<b>这是本项目最重要的一张表。</b></p>
+  <table class="route">
+    <tr><th style="width:20%">出口节点</th><th>路由顺序（命中即走）</th></tr>
+    <tr><td><code>planner</code></td><td><code>stop_requested</code> → finish；否则 → risk_scan</td></tr>
+    <tr><td><code>risk_scan</code></td><td><code>stop_requested</code> → finish；否则 → subagent_split</td></tr>
+    <tr><td><code>subagent_split</code></td><td><code>stop_requested</code> → finish；<code>_last_action == "final_answer"</code> → reflect；否则 → executor</td></tr>
+    <tr><td><code>executor</code></td><td><code>stop_requested</code> → finish；<code>final_answer</code> → reflect；<code>_needs_confirm</code> → human_confirm；否则 → tool</td></tr>
+    <tr><td><code>human_confirm</code></td><td>恒 → tool（确认 = 放行，不是终点）</td></tr>
+    <tr><td><code>tool</code></td><td><code>stop_requested</code> → finish；<code>_needs_confirm</code> → human_confirm；否则 → reflect</td></tr>
+    <tr><td><code>reflect</code></td><td><code>stop_requested</code> → finish；<code>final_answer</code> → finish；<code>step_index ≥ max_steps</code> → finish；否则 → planner（循环！）</td></tr>
+    <tr><td><code>finish</code></td><td>→ END（唯一的普通边）</td></tr>
+  </table>
+  <p>设计规律：① <code>stop_requested</code> 在每个出口都是第一优先级——宁可少做，不可失控；
+  ② 防失控有三道独立保险：<code>stop_requested</code>（人）→ <code>max_steps</code>（预算）→ LangGraph <code>recursion_limit</code>（框架兜底）。</p>
+
+  <h2>术语表</h2>
+  <table>
+    <tr><th style="width:22%">术语</th><th>定义</th></tr>
+    <tr><td><b>State</b></td><td>图共享的状态对象；节点靠它通信</td></tr>
+    <tr><td><b>Node</b></td><td>改变状态的函数</td></tr>
+    <tr><td><b>Edge / Router</b></td><td>固定边 / 条件边的路由函数</td></tr>
+    <tr><td><b>Entry Point</b></td><td>图的入口节点（本项目：<code>planner</code>）</td></tr>
+    <tr><td><b>END</b></td><td>终结标记，走到即停止</td></tr>
+    <tr><td class="later"><b>Superstep</b> <span class="later">（课程 02）</span></td><td class="later">一轮「执行若干节点 + 广播状态更新」的批次单位；副本语义的根源</td></tr>
+    <tr><td class="later"><b>Reducer</b> <span class="later">（课程 02）</span></td><td class="later">声明某字段如何合并更新（如 <code>operator.add</code> 追加）</td></tr>
+    <tr><td class="later"><b>Checkpointer</b> <span class="later">（课程 04）</span></td><td class="later">每 superstep 落盘一次状态的持久化后端（项目用 <code>SqliteSaver</code>）</td></tr>
+    <tr><td class="later"><b>Thread</b> <span class="later">（课程 04）</span></td><td class="later">一个 checkpointer 下的会话线程，<code>thread_id</code> 定位（项目里 = task_id）</td></tr>
+    <tr><td class="later"><b>Interrupt</b> <span class="later">（课程 03）</span></td><td class="later">官方 human-in-the-loop 原语：节点内暂停图执行、持久化、等人</td></tr>
+  </table>
+
+  <footer class="lesson-footer">
+    <div class="lesson-nav">
+      <span>← 返回课程：<a href="../lessons/0001-langgraph-mental-model.html">课程 01 · LangGraph 心智模型</a></span>
+      <span>🖨 本页为打印优化，A4 竖版一页</span>
+    </div>
+  </footer>
+
+</main>
+</body>
+</html>

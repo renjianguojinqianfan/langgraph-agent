@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课程 01 · LangGraph 心智模型 — langgraph-agent 学习课程</title>
+<link rel="stylesheet" href="../assets/base.css">
+</head>
+<body>
+<main>
+
+  <header>
+    <div class="lesson-meta">
+      <span class="kicker">课程 01</span>
+      <span>主线 A · LangGraph 框架原理</span>
+      <span>预计 30 分钟</span>
+      <span>前置要求：无</span>
+    </div>
+    <h1>LangGraph 心智模型：你的项目就是一张图</h1>
+  </header>
+
+  <div class="mission-note">
+    <b>为什么学这个：</b>面试的第一个问题永远是「讲讲你的项目」。讲清这个项目的第一步，
+    是讲清它的骨架——一张 LangGraph 状态图。这节课结束时，你要能<strong>看懂、画出、并讲出</strong>
+    你项目里那张图。
+  </div>
+
+  <!-- ============ §1 ============ -->
+  <h2>一、为什么需要 LangGraph</h2>
+
+  <p>先想一个朴素的问题：让大模型自主完成多步任务，最直接的写法是什么？一个 <code>while</code> 循环——
+  每轮把当前情况喂给大模型，让它决定「调用哪个工具」或「任务完成」，执行后继续循环，直到结束。</p>
+
+  <p>这样写能跑，但控制流<strong>藏死在代码里</strong>：想在中间插一道「高危操作先问人」的闸门？
+  改循环体。想在任意一步支持「停止」并且之后从断点恢复？改循环体，而且越改越乱。
+  循环一复杂，没人能一眼说清「程序现在可能处于哪些状态」。</p>
+
+  <p>LangGraph 的选择是：<strong>把控制流显式建模成一张图</strong>。步骤是节点，走向是边，
+   共享数据是一个状态对象。图是声明式的——哪些路线存在一目了然；图是可执行——框架负责沿边调度；
+  图还是可持久化的锚点——后面课程会看到，断点续跑正是靠「图 + 检查点」实现的。</p>
+
+  <blockquote>
+    LangGraph 是一个用于构建 Agent 的底层编排框架（low-level orchestration framework），
+    以<strong>可控</strong>和<strong>可持久化</strong>为核心卖点：你可以精确定义控制流，也可以随时中断、恢复。
+    <span class="src">—— 摘译自 <a href="https://docs.langchain.com/oss/python/langgraph/graph-api" target="_blank">LangGraph 官方文档 · Graph API</a></span>
+  </blockquote>
+
+  <!-- ============ §2 ============ -->
+  <h2>二、StateGraph 四要素</h2>
+
+  <p>下面每个概念都配<strong>你项目里的真实代码</strong>。这不是教学玩具——你现在读的就是简历上那个项目的骨架。</p>
+
+  <h3>要素 1 · State：一块共享黑板</h3>
+  <p>整张图共享一个状态对象，类型用 <code>TypedDict</code> 声明。它是所有节点的唯一通信方式——节点之间不互相调用，只通过读写这块黑板协作。</p>
+
+<pre><code><span class="cm"># backend/core/agent/state.py（节选）</span>
+<span class="kw">class</span> <span class="fn">AgentState</span>(TypedDict, total=<span class="kw">False</span>):
+    <span class="cm">"""Mutable state passed between graph nodes."""</span>
+    task_id: str
+    messages: List[Dict[str, Any]]   <span class="cm"># 对话历史（OpenAI 风格）</span>
+    plan: List[Dict[str, Any]]       <span class="cm"># planner 产出的计划</span>
+    step_index: int                  <span class="cm"># 循环计数</span>
+    stop_requested: bool             <span class="cm"># 用户点了「停止」？</span>
+    _needs_confirm: bool             <span class="cm"># 本轮动作需要人工确认？</span>
+    final_answer: str</code></pre>
+  <div class="file-ref">📄 完整定义见 <code>backend/core/agent/state.py</code>（约 50 行，建议现在通读一遍，5 分钟）</div>
+
+  <h3>要素 2 · Node：改状态的函数</h3>
+  <p>每个节点就是一个函数：接收当前 state，干活（通常调一次大模型或执行工具），返回对 state 的更新。你的项目有 8 个节点：循环主体 <code>planner / executor / tool / reflect</code>，加 <code>risk_scan / subagent_split / human_confirm / finish</code>。</p>
+
+<pre><code><span class="cm"># backend/core/agent/graph.py（节选）</span>
+g = StateGraph(AgentState)
+g.add_node(<span class="st">"planner"</span>,  runtime.planner)   <span class="cm"># 拆解计划</span>
+g.add_node(<span class="st">"executor"</span>, runtime.executor)  <span class="cm"># 决定下一步动作</span>
+g.add_node(<span class="st">"tool"</span>,     runtime.tool_node)  <span class="cm"># 真正执行工具</span>
+g.add_node(<span class="st">"reflect"</span>,  runtime.reflect)   <span class="cm"># 反思、决定继续与否</span>
+g.set_entry_point(<span class="st">"planner"</span>)              <span class="cm"># 入口</span></code></pre>
+
+  <h3>要素 3 · Edge：固定路线</h3>
+  <p>确定无疑的走向用普通边。整个项目只有一条：<code>g.add_edge("finish", END)</code>——收尾节点之后必然结束。</p>
+
+  <h3>要素 4 · Conditional Edge：路由函数（精髓所在）</h3>
+  <p>有分支的走向用条件边：注册一个<strong>路由函数</strong>，它读当前 state，返回下一个节点的名字。循环、闸门、异常退出，全靠它。</p>
+
+<pre><code><span class="cm"># backend/core/agent/graph.py — executor 之后的路由（真实代码）</span>
+<span class="kw">def</span> <span class="fn">_after_executor</span>(s: AgentState) -&gt; str:
+    <span class="kw">if</span> s.get(<span class="st">"stop_requested"</span>):
+        <span class="kw">return</span> <span class="st">"finish"</span>          <span class="cm"># 用户叫停 → 收尾</span>
+    <span class="kw">if</span> s.get(<span class="st">"_last_action"</span>) == <span class="st">"final_answer"</span>:
+        <span class="kw">return</span> <span class="st">"reflect"</span>         <span class="cm"># 模型宣布完成 → 去反思</span>
+    <span class="kw">if</span> s.get(<span class="st">"_needs_confirm"</span>):
+        <span class="kw">return</span> <span class="st">"human_confirm"</span>   <span class="cm"># 高危动作 → 先过闸门</span>
+    <span class="kw">return</span> <span class="st">"tool"</span>                <span class="cm"># 默认 → 执行工具</span>
+
+g.add_conditional_edges(<span class="st">"executor"</span>, _after_executor)</code></pre>
+
+  <div class="card amber">
+    <strong>面试视角：</strong>这个 4 行路由函数就是「agent 的决策不是 if-else 写死、而是大模型现场决定」与
+    「<em>工程约束</em>（停止、确认、预算上限）由确定性代码强制执行」的分界线——大模型决定<em>想做什么</em>，
+    路由函数决定<em>允许走哪条路</em>。记住这句话，第 11 课的追问题库会用到。
+  </div>
+
+  <!-- ============ §3 ============ -->
+  <h2>三、把整张图画出来</h2>
+
+  <p>把 8 个节点和所有条件边拼起来，就是你项目的 <code>main</code> 拓扑——<strong>整个项目唯一的一张图</strong>，全部写在 <code>graph.py</code> 的 110 行里：</p>
+
+  <figure>
+  <svg viewBox="0 0 940 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="main 拓扑图">
+    <defs>
+      <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+      <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b45309"/></marker>
+      <marker id="arrS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+    </defs>
+
+    <!-- legend -->
+    <g font-size="12" fill="#4a5568">
+      <rect x="640" y="40" width="282" height="122" rx="10" fill="#f8f7f2" stroke="#e5e0d6"/>
+      <line x1="658" y1="64" x2="698" y2="64" stroke="#2563eb" stroke-width="2"/>
+      <text x="708" y="68">主路径（循环体）</text>
+      <line x1="658" y1="88" x2="698" y2="88" stroke="#b45309" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="708" y="92">人工确认闸门（课程 03）</text>
+      <line x1="658" y1="112" x2="698" y2="112" stroke="#64748b" stroke-width="2"/>
+      <text x="708" y="116">结束路径</text>
+      <text x="658" y="138">任意节点 stop_requested=true → finish</text>
+      <text x="658" y="154">（为保持图面简洁，省略未画）</text>
+    </g>
+
+    <!-- edges: main path -->
+    <g stroke="#2563eb" stroke-width="2" fill="none">
+      <path d="M 33 120 L 54 120" marker-end="url(#arrB)"/>
+      <path d="M 210 120 L 284 120" marker-end="url(#arrB)"/>
+      <path d="M 440 120 L 514 120" marker-end="url(#arrB)"/>
+      <path d="M 595 144 L 595 234" marker-end="url(#arrB)"/>
+      <path d="M 520 264 L 444 264" marker-end="url(#arrB)"/>
+      <path d="M 290 264 L 214 264" marker-end="url(#arrB)"/>
+      <path d="M 135 240 L 135 150" stroke-width="2.4" marker-end="url(#arrB)"/>
+    </g>
+    <!-- edges: confirm (amber dashed) -->
+    <g stroke="#b45309" stroke-width="1.8" stroke-dasharray="6 4" fill="none">
+      <path d="M 595 288 L 595 424 L 587 424" marker-end="url(#arrA)"/>
+      <path d="M 365 288 C 365 360, 385 405, 424 421" marker-end="url(#arrA)"/>
+    </g>
+    <!-- edges: finish (slate) -->
+    <g stroke="#64748b" stroke-width="1.8" fill="none">
+      <path d="M 135 288 L 135 394" marker-end="url(#arrS)"/>
+      <path d="M 135 448 L 135 488" marker-end="url(#arrS)"/>
+    </g>
+    <!-- edge: confirm -> tool -->
+    <path d="M 480 400 C 445 355, 420 320, 398 294" stroke="#b45309" stroke-width="1.8" fill="none" marker-end="url(#arrA)"/>
+
+    <!-- edge labels -->
+    <g font-size="11.5" fill="#8a94a6">
+      <text x="247" y="110" text-anchor="middle">stop→finish</text>
+      <text x="477" y="110" text-anchor="middle">stop→finish</text>
+      <text x="603" y="192">final_answer→reflect</text>
+      <text x="482" y="252" text-anchor="middle">默认</text>
+      <text x="252" y="252" text-anchor="middle">默认</text>
+      <text x="125" y="198" text-anchor="end">未完成 → 再规划</text>
+      <text x="143" y="345">完成 / 超步数 / stop</text>
+    </g>
+    <g font-size="11.5" fill="#b45309">
+      <text x="603" y="356">_needs_confirm</text>
+      <text x="350" y="372" text-anchor="end">_needs_confirm</text>
+      <text x="505" y="470" text-anchor="middle">确认后无条件回 tool 执行</text>
+    </g>
+
+    <!-- nodes -->
+    <g font-size="15" font-weight="600" text-anchor="middle">
+      <circle cx="28" cy="120" r="5" fill="#64748b"/>
+      <text x="28" y="140" font-size="11" fill="#8a94a6" font-weight="400">start</text>
+      <rect x="60" y="96" width="150" height="48" rx="10" fill="#eef4ff" stroke="#2563eb" stroke-width="2"/>
+      <text x="135" y="125" fill="#1a2332">planner</text>
+      <rect x="290" y="96" width="150" height="48" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="365" y="125" fill="#1a2332">risk_scan</text>
+      <rect x="520" y="96" width="150" height="48" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+      <text x="595" y="125" fill="#1a2332">subagent_split</text>
+      <rect x="520" y="240" width="150" height="48" rx="10" fill="#eef4ff" stroke="#2563eb" stroke-width="2"/>
+      <text x="595" y="269" fill="#1a2332">executor</text>
+      <rect x="290" y="240" width="150" height="48" rx="10" fill="#eef4ff" stroke="#2563eb" stroke-width="2"/>
+      <text x="365" y="269" fill="#1a2332">tool</text>
+      <rect x="60" y="240" width="150" height="48" rx="10" fill="#eef4ff" stroke="#2563eb" stroke-width="2"/>
+      <text x="135" y="269" fill="#1a2332">reflect</text>
+      <rect x="430" y="400" width="150" height="48" rx="10" fill="#fff8eb" stroke="#b45309" stroke-width="2"/>
+      <text x="505" y="429" fill="#1a2332">human_confirm</text>
+      <rect x="60" y="400" width="150" height="48" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+      <text x="135" y="429" fill="#1a2332">finish</text>
+      <circle cx="135" cy="500" r="6" fill="#64748b"/>
+      <text x="152" y="505" font-size="11" fill="#8a94a6" font-weight="400">END</text>
+    </g>
+  </svg>
+  <figcaption>main 拓扑（依据 <code>backend/core/agent/graph.py</code> 绘制）。蓝色节点是四步循环主体；灰色是 P1 增加的风险扫描与子任务拆分（课程 09）；琥珀色虚线是人工确认闸门（课程 03）。</figcaption>
+  </figure>
+
+  <p>怎么读这张图：从 <code>start</code> 进入 <code>planner</code>，沿着蓝色主路径顺时针走
+  planner → risk_scan → subagent_split → executor → tool → reflect，然后回到 planner——
+  <strong>这个大回环就是「自主 Agent」的本体</strong>：规划、执行、观察、反思，再规划，直到模型给出最终答案或触发上限。
+  每个节点出口处的分支由路由函数决定，判断条件就标在箭头旁边。</p>
+
+  <!-- ============ §4 ============ -->
+  <h2>四、像解释器一样走一遍图</h2>
+
+  <p>检验是否真懂的最好办法：给定 state，预测控制流的下一站。下面 5 道题全部来自真实路由逻辑：</p>
+
+  <div id="quiz1"></div>
+
+  <!-- ============ §5 ============ -->
+  <h2>五、检索练习（本课作业）</h2>
+
+  <div class="recall">
+    <h3>凭记忆完成，别翻讲义</h3>
+    <p><strong>练习 1 · 画图：</strong>拿一张纸，画出 main 拓扑：6 个循环相关节点 + finish + END，
+    并给每条分支箭头标注判断条件。</p>
+    <details>
+      <summary>画完后再展开对照</summary>
+      以上面的 SVG 图为准。自查三问：① reflect 回 planner 的箭头画了吗（很多人漏掉循环边）？
+      ② 确认后回的是 tool 而不是 executor，画对了吗？③ 每个节点出口的 stop→finish 虽然图上省略，你能说出来吗？
+    </details>
+    <p><strong>练习 2 · 路由顺序：</strong>不看代码，说出 <code>_after_executor</code> 的完整判断顺序（4 个分支）。</p>
+    <details>
+      <summary>展开答案</summary>
+      ① <code>stop_requested</code> → finish；② <code>_last_action == "final_answer"</code> → reflect；
+      ③ <code>_needs_confirm</code> → human_confirm；④ 默认 → tool。
+      顺序本身也有含义：停止优先级最高（宁可少做，不可失控），确认检查在执行之前。
+    </details>
+  </div>
+
+  <!-- ============ §6 ============ -->
+  <h2>六、面试弹药：60 秒项目讲述（v1）</h2>
+
+  <div class="card">
+    <p>「这是一个基于 <strong>LangGraph</strong> 的自主任务 Agent 平台。用户给一句自然语言任务，后端用
+    <strong>StateGraph 编排一条 planner → executor → tool → reflect 的循环</strong>：planner 让大模型拆解计划，
+    executor 决定下一步动作，tool 真正执行工具调用，reflect 反思结果并决定继续规划还是收尾。
+    <strong>危险操作会经过一个人工确认闸门节点</strong>，整个执行过程通过 SSE 实时推送到前端可视化。
+    目前 <strong>351 个离线测试全绿</strong>，并用真实大模型做过端到端验证。」</p>
+  </div>
+
+  <div class="interview-q">
+    <strong>面试官内心戏：</strong>这段话只回答了「是什么」，最多换来 30 秒兴趣。他接下来必然追问
+    「为什么这么设计」「遇到过什么坑」——那需要真正的机制理解，是课程 10–11 的内容。
+    现在的你先做到一件事：<strong>这 60 秒里的每个名词，你都知道它对应图上的哪个节点</strong>。
+  </div>
+
+  <!-- ============ resources ============ -->
+  <h2>本课主资源</h2>
+  <p><a href="https://docs.langchain.com/oss/python/langgraph/graph-api" target="_blank">LangGraph 官方文档 · Graph API overview</a>
+  ——只读「Nodes」和「Edges」两节，约 20 分钟。带着一个问题读：<em>官方推荐的 router 函数写法，和你项目里的
+  <code>lambda s: ...</code> 有什么异同？</em>（这个问题下节课开场对答案。）</p>
+  <p>速查卡：<a href="../reference/stategraph-cheatsheet.html">StateGraph 核心概念速查 · 参考 01</a>
+  （含全图路由真值表，打印贴墙效果最佳）。</p>
+
+  <footer class="lesson-footer">
+    <div class="ask">
+      💬 <strong>我是你的老师，不是文档。</strong>任何一处没看懂——哪怕是「TypedDict 是什么」这种基础问题——
+      随时回到对话里问我。问了不丢人，面试时答不上才丢人。
+    </div>
+    <div class="lesson-nav">
+      <span>📌 作业：完成检索练习 1 + 2，读官方文档 Nodes/Edges 两节</span>
+      <span>⏭ 下一课 · 课程 02：状态更新机制——为什么节点返回的是「一部分 state」？（这是理解断点续跑大坑的前置）</span>
+    </div>
+  </footer>
+
+</main>
+
+<script src="../assets/quiz.js"></script>
+<script>
+TeachQuiz.render("quiz1", {
+  title: "路由预测测验：给定 state，说出下一站",
+  questions: [
+    {
+      q: "任务正常进行中，executor 决定调用 <code>web_search</code> 工具，state 里没有任何特殊标记。executor 的路由函数会把控制流交给谁？",
+      opts: ["tool", "reflect", "planner", "finish"],
+      explain: "没停止、不是 final_answer、不需要确认 → 走默认分支进 tool 节点，真正执行工具调用。这正是 <code>_after_executor</code> 的最后一个 <code>return \"tool\"</code>。"
+    },
+    {
+      q: "executor 这一轮输出的是 <code>final_answer</code>（<code>_last_action == \"final_answer\"</code>）。下一个节点是？",
+      opts: ["reflect", "finish", "tool", "planner"],
+      explain: "反直觉点：模型宣布完成 ≠ 立刻结束。先去 reflect 做收尾反思，由 reflect 的路由决定是否进 finish。任务是「反思后确认答案质量」，不是「直接散场」。"
+    },
+    {
+      q: "executor 判定本轮动作是删除文件（高危），state 里 <code>_needs_confirm = true</code>。控制流去哪？",
+      opts: ["human_confirm", "tool", "finish", "risk_scan"],
+      explain: "路由函数第三个分支：<code>_needs_confirm</code> → human_confirm 闸门。注意此时工具<em>还没有执行</em>——闸门的意义就是在执行之前拦下来。"
+    },
+    {
+      q: "用户在确认弹窗里点了「允许」。human_confirm 节点之后，控制流去哪？",
+      opts: ["tool", "reflect", "executor", "finish"],
+      explain: "最反直觉的一题：确认后<em>无条件</em>回 tool 去真正执行——<code>g.add_conditional_edges(\"human_confirm\", lambda s: \"tool\")</code>。确认不是终点，是放行；被放行的动作仍然要走正常的工具执行链路（熔断、记录、SSE 推送一样不少）。"
+    },
+    {
+      q: "reflect 发现 <code>step_index</code> 已达到 <code>max_steps</code>（默认 15）。去哪？",
+      opts: ["finish", "planner", "tool", "human_confirm"],
+      explain: "reflect 的路由是三层检查：stop？final_answer？超步数？→ 任一命中进 finish。这是项目在 LangGraph 的 recursion_limit 之外自建的第二道防循环保险——课程 11 会讲到它与 recursion_limit 的关系（一个真实 bug 的故事）。"
+    }
+  ]
+});
+</script>
+</body>
+</html>
