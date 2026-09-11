@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from langgraph.types import Durability
+
 from ..api.schemas import (
     Artifact,
     PlanStep,
@@ -43,6 +45,19 @@ from .persistence import Persistence
 from .trace import TraceRecorder
 
 logger = get_logger("task_manager")
+
+# langgraph 1.x durability mode — the one 1.x feature this migration adopts
+# (Issue #7; selection rationale in docs/migration-langgraph-1x.md §5).
+#
+# "sync" completes the checkpoint write before the next superstep starts, which
+# is exactly what the resume contract needs: stop() -> INTERRUPTED has to leave
+# a snapshot on disk that a rebuilt process can continue from. The 1.x default
+# ("async") hands the write to a background executor — that is the race the
+# double-probe in _has_checkpoint() was written around — and "exit" writes
+# nothing until the run ends, which would break stop-resume outright.
+# Measured over 12 runs per mode: a node in superstep N+1 sees superstep N's
+# checkpoint 12/12 under "sync", 0/12 under "async"/default, 0/12 under "exit".
+_DURABILITY: Durability = "sync"
 
 # Checkpoint store format stamp owned by this codebase (Issue #7 migration).
 #
@@ -479,7 +494,9 @@ class TaskManager:
                 confirm_enabled=True,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
-            final = graph.invoke(state, self._thread_config(task_id))
+            final = graph.invoke(
+                state, self._thread_config(task_id), **self._invoke_kwargs()
+            )
 
             task = self.persistence.load_task(task_id) or task
             self._finalize_terminal(task, final)
@@ -534,6 +551,19 @@ class TaskManager:
         return self._stop_flags.get(task_id, False)
 
     # ── spec Issue #4: checkpoint-backed resume ──
+    def _invoke_kwargs(self) -> Dict[str, Any]:
+        """Extra ``invoke`` kwargs: durability is only asked for when mounted.
+
+        langgraph 1.2.11 warns that ``durability`` has no effect without a
+        checkpointer — and then trips over it anyway (``SyncPregelLoop`` has no
+        ``_put_checkpoint_fut``, so a ``"sync"`` run dies with AttributeError on
+        the first superstep). A refused pre-migration store leaves us in exactly
+        that no-checkpointer state, and it must degrade to "resume unavailable",
+        never to "tasks crash". Caught by
+        test_new_tasks_still_run_with_legacy_store_present.
+        """
+        return {"durability": _DURABILITY} if self._checkpointer is not None else {}
+
     def _thread_config(self, task_id: str) -> Dict[str, Any]:
         """LangGraph runnable config under the thread_id == task_id convention.
 
@@ -742,7 +772,9 @@ class TaskManager:
             restored["_current_tool_calls"] = []
             self._active_states[task_id] = restored
 
-            final = graph.invoke(restored, self._thread_config(task_id))
+            final = graph.invoke(
+                restored, self._thread_config(task_id), **self._invoke_kwargs()
+            )
 
             task = self.persistence.load_task(task_id)
             if task is None:

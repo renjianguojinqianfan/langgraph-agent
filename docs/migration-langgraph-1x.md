@@ -190,8 +190,23 @@ spec 的选择规则：优先 durability；仅当 spike 证明 typed streaming v
 宽限双探**保留**不删：AGENTS.md 规定 resume 拒绝语义不可放松，`sync` 只是让它从
 "必需的补丁"降级为"纵深防御"。这是有意的冗余，不是忘删。
 
-`subagent.py` 的子任务图**不传** durability：子任务图不挂 checkpointer，1.x 在
-`checkpointer is None and durability is not None` 时会告警"durability has no effect"。
+`subagent.py` 的子任务图**不传** durability：子任务图不挂 checkpointer。
+
+### 5.1 踩到的上游边界（1.2.11）
+
+不挂 checkpointer 时传 `durability="sync"` 不是「无效」而是「崩」：
+`pregel/main.py` 先 `warnings.warn("durability has no effect when no checkpointer is
+present")`，接着 `if durability_ == "sync": loop._put_checkpoint_fut.result()`——而
+`SyncPregelLoop` 在没有 checkpointer 时根本没有 `_put_checkpoint_fut` 属性，
+AttributeError 在第一个 superstep 就炸。
+
+这个状态恰好就是「旧库被拒绝挂载」之后的状态（见 §2.4），所以两个决策会相互撞上。
+修法：durability 只在 `self._checkpointer is not None` 时才传（`TaskManager._invoke_kwargs()`）。
+拒绝挂载必须降级成「resume 不可用」，绝不能降级成「任务全崩」。
+
+这不是推理出来的，是被测试抓住的：`test_new_tasks_still_run_with_legacy_store_present`
+（旧库在场时新任务仍须跑完）在加上 durability 后立刻变红。先写行为测试、后接新特性，
+刚好把这个交互逼出来。
 
 ## 6. 闸门与回滚
 

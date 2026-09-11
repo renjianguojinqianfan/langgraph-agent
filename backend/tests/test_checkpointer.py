@@ -30,8 +30,10 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from backend.api.schemas import Task, TaskStatus
 from backend.core.agent.state import AgentState
 from backend.core.llm.client import MockLLMClient
+from backend.core.tools.base import BaseTool, ToolResult
+from backend.services.event_bus import EventBus
 from backend.services.persistence import Persistence
-from backend.services.task_manager import CHECKPOINT_FORMAT_VERSION
+from backend.services.task_manager import CHECKPOINT_FORMAT_VERSION, TaskManager
 from backend.tests.conftest import make_manager, make_settings
 
 
@@ -460,3 +462,125 @@ class TestPreMigrationStoreGuard:
 
         assert tm2._checkpointer is not None
         assert not [m for m in tm_logs.messages(logging.ERROR) if str(db) in m]
+
+
+# ── Issue #7：durability="sync"（本次迁移显式采用的 1.x 新特性）───────────
+
+
+class _StoreProbeTool(BaseTool):
+    """在 tool 节点里像 crash-rescue 进程那样直接读 checkpoint 库。
+
+    不复用 TaskManager 的连接，而是自己开一个：这就是“另一个进程能不能接着
+    跑”的真实读法。读到的东西存在 ``observed`` 里给测试断言。
+    """
+
+    name = "store_probe"
+    description = "probe the checkpoint store from inside a running graph"
+    args_schema: Dict[str, Any] = {"type": "object", "properties": {}}
+    requires_confirm = False
+    retryable = False
+    circuit_breaker = False
+
+    def __init__(self, db_path: Path) -> None:
+        super().__init__(None)
+        self.db_path = db_path
+        self.observed: Dict[str, Any] = {}
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        conn = sqlite3.connect(str(self.db_path), timeout=5.0)
+        try:
+            threads = [
+                r[0] for r in conn.execute("SELECT DISTINCT thread_id FROM checkpoints")
+            ]
+            latest: Dict[str, Any] = {}
+            saver = SqliteSaver(conn)
+            for tid in threads:
+                tup = saver.get_tuple({"configurable": {"thread_id": tid}})
+                if tup is not None:
+                    latest = (tup.checkpoint or {}).get("channel_values", {}) or {}
+            self.observed = {
+                "threads": threads,
+                "last_action": latest.get("_last_action"),
+                "pending_tool_calls": list(latest.get("_current_tool_calls") or []),
+            }
+        finally:
+            conn.close()
+        return ToolResult(success=True, data=dict(self.observed))
+
+
+class TestDurabilitySync:
+    """``durability="sync"`` 是 resume 契约的地基。
+
+    实测（每种模式 12 次重复，详见 docs/migration-langgraph-1x.md §5）：
+    ``sync`` → 后一个 superstep 12/12 读得到前一个 superstep 的快照；
+    ``async``（= 1.x 默认）→ 0/12；``exit`` → 0/12（运行中一行都不写）。
+    两个方向都是确定的，所以下面两条断言不是 flaky：把 task_manager 的
+    ``_DURABILITY`` 改回默认值，它们必红。
+    """
+
+    def test_sync_makes_the_previous_superstep_durable(self, tmp_path):
+        """框架层保证：sync 下上一个 superstep 的写入已落盘。"""
+        from langgraph.graph import END, START, StateGraph
+
+        conn = sqlite3.connect(str(tmp_path / "dur.sqlite"), check_same_thread=False)
+        saver = SqliteSaver(conn)
+        cfg = _config("t-dur")
+        seen: Dict[str, Any] = {}
+
+        class _S(AgentState):
+            pass
+
+        def first(state: AgentState) -> dict:
+            return {"_last_action": "tool_call"}
+
+        def second(state: AgentState) -> dict:
+            tup = saver.get_tuple(cfg)
+            vals = (tup.checkpoint or {}).get("channel_values", {}) if tup else {}
+            seen["durable"] = vals.get("_last_action") == "tool_call"
+            return {}
+
+        g = StateGraph(_S)
+        g.add_node("first", first)
+        g.add_node("second", second)
+        g.add_edge(START, "first")
+        g.add_edge("first", "second")
+        g.add_edge("second", END)
+        app = g.compile(checkpointer=saver)
+
+        app.invoke({"task_id": "t-dur"}, cfg, durability="sync")
+        conn.close()
+
+        assert seen["durable"] is True
+
+    def test_run_path_persists_the_executor_write_before_the_tool_node(self, tmp_path):
+        """生产路径（TaskManager.run）确实要了 sync。
+
+        探针工具在 tool 节点里读库，断言 executor 那个 superstep 的写入
+        （``_last_action`` / ``_current_tool_calls``）已经在磁盘上——这正是
+        stop() 之后另一个进程能不能续跑的前提。
+        """
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        probe = _StoreProbeTool(settings.checkpoint_path / "checkpoints.sqlite")
+        mock = MockLLMClient(
+            plan=["probe the store"],
+            tool_calls=[{"id": "c1", "name": "store_probe", "arguments": {}}],
+            final_answer="probed",
+        )
+        tm = TaskManager(
+            settings,
+            EventBus(),
+            Persistence(settings),
+            llm_client=mock,
+            tools=[probe],
+        )
+        try:
+            task_id = tm.create_task(title="probe", user_input="hello")
+            task = _wait_terminal(tm, task_id)
+        finally:
+            tm.shutdown()
+
+        assert task.status == TaskStatus.COMPLETED, task.error
+        assert probe.observed.get("threads"), "tool 节点执行时库里应已有本任务的 thread"
+        assert probe.observed.get("last_action") == "tool_call", probe.observed
+        calls = probe.observed.get("pending_tool_calls") or []
+        assert calls and calls[0].get("tool_name") == "store_probe", probe.observed
