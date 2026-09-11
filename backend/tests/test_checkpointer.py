@@ -1,12 +1,15 @@
 """Checkpoint persistence spot-checks (spec Issue #4, testing layer 2).
 
-These tests pin down the two fragile links of the checkpoint wiring without
+These tests pin down the fragile links of the checkpoint wiring without
 going through the full graph:
 
 1. The saver round-trip under the project's ``thread_id = task_id``
    convention, including cross-thread isolation.
 2. The serialization round-trip of a fully-populated :class:`AgentState`
    (sentinel against future non-serializable state fields).
+3. The pre-migration store guard (Issue #7): a checkpoint file written before
+   the langgraph 0.2 -> 1.2.x migration must be detected, warned about and
+   refused at mount time instead of being silently trusted.
 
 They deliberately use the real SqliteSaver (temp file) rather than
 MemorySaver so the on-disk format and connection semantics are exercised.
@@ -14,12 +17,22 @@ MemorySaver so the on-disk format and connection semantics are exercised.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import logging
+import sqlite3
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
 
 import pytest
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from backend.api.schemas import Task, TaskStatus
 from backend.core.agent.state import AgentState
+from backend.core.llm.client import MockLLMClient
+from backend.services.persistence import Persistence
+from backend.services.task_manager import CHECKPOINT_FORMAT_VERSION
+from backend.tests.conftest import make_manager, make_settings
 
 
 @pytest.fixture
@@ -250,3 +263,200 @@ class TestAgentStateSerde:
         # object it started as — never a corrupted re-hydrated copy.
         stored = snap.values.get("_secret_lock")
         assert stored is None or stored is lock
+
+
+# ── Issue #7：迁移前遗留 checkpoint 库的启动检测 ─────────────────────
+#
+# 上游 sqlite saver 不带 schema 版本表（2.0.11 与 3.1.1 的建表 SQL 逐字符相同），
+# 所以「这个库是升级前写的」只能靠本仓库自己打的标记识别：
+# ``PRAGMA user_version == CHECKPOINT_FORMAT_VERSION``。判定规则与理由见
+# docs/migration-langgraph-1x.md §2.4。
+
+#: langgraph-checkpoint-sqlite 2.0.11 ``SqliteSaver.setup()`` 的建表 SQL 原文。
+_LEGACY_SCHEMA = """
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS checkpoints (
+    thread_id TEXT NOT NULL,
+    checkpoint_ns TEXT NOT NULL DEFAULT '',
+    checkpoint_id TEXT NOT NULL,
+    parent_checkpoint_id TEXT,
+    type TEXT,
+    checkpoint BLOB,
+    metadata BLOB,
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+);
+CREATE TABLE IF NOT EXISTS writes (
+    thread_id TEXT NOT NULL,
+    checkpoint_ns TEXT NOT NULL DEFAULT '',
+    checkpoint_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    channel TEXT NOT NULL,
+    type TEXT,
+    value BLOB,
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+);
+"""
+
+
+def _user_version(db_path: Path) -> int:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _write_legacy_store(db_path: Path, rows: int = 1) -> Path:
+    """造一个「迁移前写的」checkpoint 库：2.0.11 的两张表 + ``rows`` 行快照。
+
+    ``PRAGMA user_version`` 保持 sqlite 默认的 0 —— 这正是检测的判据：本仓库
+    挂载成功后会把它打成 ``CHECKPOINT_FORMAT_VERSION``，而迁移前的文件不可能有。
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(_LEGACY_SCHEMA)
+        for i in range(rows):
+            conn.execute(
+                "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id,"
+                " parent_checkpoint_id, type, checkpoint, metadata)"
+                " VALUES (?, '', ?, NULL, 'msgpack', NULL, NULL)",
+                (f"legacy-{i}", f"1ef00000-0000-0000-0000-{i:012d}"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    assert _user_version(db_path) == 0, "fixture 必须造出未打标的库"
+    return db_path
+
+
+class _LogCollector(logging.Handler):
+    """``get_logger()`` 把 propagate 关掉了，pytest 的 caplog 收不到这些记录，
+    因此直接把 handler 挂在目标 logger 上。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: List[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+    def messages(self, min_level: int = logging.ERROR) -> List[str]:
+        return [r.getMessage() for r in self.records if r.levelno >= min_level]
+
+
+@pytest.fixture
+def tm_logs():
+    """Collect TaskManager log records for the duration of one test."""
+    logger = logging.getLogger("agent.task_manager")
+    collector = _LogCollector()
+    logger.addHandler(collector)
+    try:
+        yield collector
+    finally:
+        logger.removeHandler(collector)
+
+
+def _interrupted_task(settings, task_id: str) -> None:
+    """直接落一条 INTERRUPTED 记录（resume 的入口条件），不跑任何图。"""
+    now = datetime.now(timezone.utc).isoformat()
+    Persistence(settings).save_task(
+        Task(
+            id=task_id,
+            title=f"interrupted {task_id}",
+            user_input="demo input",
+            status=TaskStatus.INTERRUPTED,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _wait_terminal(tm, task_id: str, timeout: float = 15.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        task = tm.get_task(task_id)
+        if task is not None and task.status.value in (
+            "COMPLETED",
+            "FAILED",
+            "INTERRUPTED",
+        ):
+            return task
+        time.sleep(0.05)
+    return tm.get_task(task_id)
+
+
+class TestPreMigrationStoreGuard:
+    """旧格式快照：检测 → 告警 → 拒绝挂载（迁移 spec 用户故事 8）。"""
+
+    def test_legacy_store_is_refused_with_actionable_error(self, tmp_path, tm_logs):
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        db = _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite")
+
+        # 拒绝挂载 ≠ 拒绝启动：构造过程必须不抛。
+        tm = make_manager(settings, MockLLMClient())
+
+        assert tm._checkpointer is None
+        errors = tm_logs.messages(logging.ERROR)
+        assert errors, "旧格式库必须被 ERROR 级告警，不能静默"
+        assert any(str(db) in m for m in errors), errors
+        # 提示文案要把人指向文档，而不是只说“坏了”。
+        assert any("docs/migration-langgraph-1x.md" in m for m in errors), errors
+
+    def test_resume_over_legacy_store_is_refused_as_no_checkpoint(self, tmp_path):
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite")
+        _interrupted_task(settings, "t-legacy")
+        tm = make_manager(settings, MockLLMClient())
+
+        # 拒绝挂载后走既有的「no checkpoint → 409」路径，闸门不被静默绕过。
+        with pytest.raises(RuntimeError) as excinfo:
+            tm.resume("t-legacy")
+        assert "no checkpoint" in str(excinfo.value)
+
+    def test_new_tasks_still_run_with_legacy_store_present(self, tmp_path):
+        """拒绝挂载只影响 resume：服务照常起、新任务照常跑完。"""
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite")
+        tm = make_manager(settings, MockLLMClient(final_answer="done anyway"))
+
+        task_id = tm.create_task(title="fresh", user_input="hello")
+        task = _wait_terminal(tm, task_id)
+
+        assert task.status == TaskStatus.COMPLETED
+        assert task.final_answer == "done anyway"
+
+    def test_empty_legacy_store_is_accepted(self, tmp_path):
+        """0 行的旧库无可腐蚀数据，放行（否则全新环境会被自己的空文件挡住）。"""
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite", rows=0)
+
+        tm = make_manager(settings, MockLLMClient())
+
+        assert tm._checkpointer is not None
+
+    def test_fresh_store_is_stamped_on_mount(self, tmp_path):
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        db = settings.checkpoint_path / "checkpoints.sqlite"
+        assert not db.exists()
+
+        make_manager(settings, MockLLMClient())
+
+        assert _user_version(db) == CHECKPOINT_FORMAT_VERSION
+
+    def test_own_writes_are_not_mistaken_for_legacy_on_restart(self, tmp_path, tm_logs):
+        """假阳性会直接废掉 P3：本版本写的库，重启后必须仍被接受。"""
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        tm1 = make_manager(settings, MockLLMClient(final_answer="first era"))
+        task_id = tm1.create_task(title="ckpt", user_input="hello")
+        assert _wait_terminal(tm1, task_id).status == TaskStatus.COMPLETED
+        tm1.shutdown()
+
+        db = settings.checkpoint_path / "checkpoints.sqlite"
+        assert _user_version(db) == CHECKPOINT_FORMAT_VERSION
+
+        tm2 = make_manager(settings, MockLLMClient())
+
+        assert tm2._checkpointer is not None
+        assert not [m for m in tm_logs.messages(logging.ERROR) if str(db) in m]

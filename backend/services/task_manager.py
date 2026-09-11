@@ -44,6 +44,65 @@ from .trace import TraceRecorder
 
 logger = get_logger("task_manager")
 
+# Checkpoint store format stamp owned by this codebase (Issue #7 migration).
+#
+# langgraph's sqlite saver keeps no schema-version table of its own — 2.0.11
+# and 3.1.1 run the very same ``CREATE TABLE IF NOT EXISTS`` script — so an
+# upgraded stack cannot tell "written before the 0.2→1.2.x migration" from
+# "written by it" without a marker we write ourselves. ``PRAGMA user_version``
+# is an integer in the sqlite header that ``SqliteSaver`` never reads and never
+# resets, which makes it the cheapest honest home. The A/B measurement behind
+# this (3.1.1 *can* read 2.0.11 snapshots losslessly, and why we refuse anyway)
+# is recorded in docs/migration-langgraph-1x.md §2.
+CHECKPOINT_FORMAT_VERSION = 1
+
+# Where the refusal message sends the operator.
+_CHECKPOINT_FORMAT_DOC = "docs/migration-langgraph-1x.md"
+
+
+def _inspect_checkpoint_store(db_path: Path) -> tuple[bool, str]:
+    """Decide whether an existing checkpoint sqlite file may be mounted.
+
+    Returns ``(usable, reason)``. Exactly one combination is rejected: a file
+    that already holds snapshots but carries no format stamp — that can only
+    mean "written by a pre-migration stack", and resuming from it would bet the
+    P3 contract on cross-major execution-position equivalence that was never
+    proven. Everything else (missing file, empty store, stamped store) is
+    usable. Read-only: never creates tables, never writes, so a rejected file
+    is left exactly as it was found.
+    """
+    if not db_path.exists():
+        return True, "new store"
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        try:
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if version >= CHECKPOINT_FORMAT_VERSION:
+                return True, f"format v{version}"
+            has_table = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='checkpoints'"
+            ).fetchone()
+            rows = (
+                conn.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0]
+                if has_table
+                else 0
+            )
+            if rows == 0:
+                return True, "empty store"
+            return False, (
+                f"{rows} snapshot(s) written before the langgraph 1.x migration "
+                "(no format stamp)"
+            )
+        finally:
+            conn.close()
+    except Exception as exc:  # corrupt / locked / not a sqlite file at all
+        # Refuse rather than crash startup: an unreadable store must not take the
+        # whole service down, and must not be mounted half-way either.
+        return False, f"unreadable store ({type(exc).__name__}: {exc})"
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -103,21 +162,53 @@ class TaskManager:
         self._checkpointer: Any = None
         self._checkpoint_conn: Any = None
         if settings.checkpoint_enabled:
-            import sqlite3
-
-            from langgraph.checkpoint.sqlite import SqliteSaver
-
-            ckpt_dir = settings.checkpoint_path
-            ckpt_dir.mkdir(parents=True, exist_ok=True)
-            self._checkpoint_conn = sqlite3.connect(
-                str(ckpt_dir / "checkpoints.sqlite"),
-                check_same_thread=False,
-                timeout=10.0,  # tolerate the predecessor's in-flight writes
-            )
-            self._checkpointer = SqliteSaver(self._checkpoint_conn)
+            self._mount_checkpointer(settings)
         # Spec Issue #4 (D5): crash recovery reconciliation — a fresh process
         # owns no execution threads, so persisted RUNNING tasks are orphans.
         self._reconcile_orphans()
+
+    def _mount_checkpointer(self, settings: Settings) -> None:
+        """Mount the sqlite saver, or refuse a pre-migration store.
+
+        Refusing leaves ``_checkpointer`` as ``None``: the service still starts
+        and new tasks still run, while resume falls through to the existing
+        "no checkpoint" 409 (AGENTS.md: resume 拒绝语义不可放松). No automatic
+        migration and no partial mount — the rejected file is not touched, so
+        moving it away is the whole remediation.
+        """
+        import sqlite3
+
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        ckpt_dir = settings.checkpoint_path
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        db_path = ckpt_dir / "checkpoints.sqlite"
+        usable, reason = _inspect_checkpoint_store(db_path)
+        if not usable:
+            logger.error(
+                "Checkpoint store %s refused: %s. Snapshots from before the "
+                "langgraph 0.2->1.2.x migration are void by design — reading "
+                "them back works, but continuing a 0.2 pregel schedule under "
+                "the 1.x scheduler was never proven, and data/ is disposable "
+                "runtime state. Resume stays disabled until the file is moved "
+                "away; new tasks are unaffected. Rationale and measurement: %s.",
+                db_path,
+                reason,
+                _CHECKPOINT_FORMAT_DOC,
+            )
+            return
+        conn = sqlite3.connect(
+            str(db_path),
+            check_same_thread=False,
+            timeout=10.0,  # tolerate the predecessor's in-flight writes
+        )
+        # Stamp before the saver writes anything, so a store created by this
+        # version is never again mistaken for a pre-migration one.
+        conn.execute(f"PRAGMA user_version = {int(CHECKPOINT_FORMAT_VERSION)}")
+        conn.commit()
+        self._checkpoint_conn = conn
+        self._checkpointer = SqliteSaver(conn)
+        logger.info("Checkpoint store mounted: %s (%s)", db_path, reason)
 
     def _reconcile_orphans(self) -> None:
         """Mark persisted RUNNING/PENDING tasks as INTERRUPTED on startup.
