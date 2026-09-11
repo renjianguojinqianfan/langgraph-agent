@@ -22,12 +22,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
+def _check_interpreter() -> None:
+    """Block the known-bad root ``.venv`` (Python 3.13 without dependencies).
+
+    AGENTS.md mandates ``.venv311`` for this project; the root ``.venv`` has no
+    dependencies installed and would fail with ImportError. Other interpreters
+    (system Python, CI, containers) pass through untouched.
+    """
+    exe = Path(sys.executable).resolve()
+    for parent in exe.parents:
+        if parent.name == ".venv" and parent.parent == ROOT:
+            print("[start] 错误：当前使用根目录 .venv（Python 3.13，未装依赖），无法运行本项目。", flush=True)
+            print("[start] 请改用 .venv311，例如：.\\.venv311\\Scripts\\python.exe start.py", flush=True)
+            raise SystemExit(1)
+
+
 def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> subprocess.Popen:
     print(f"[start] {' '.join(cmd)}", flush=True)
     return subprocess.Popen(cmd, cwd=str(cwd or ROOT), env=env, shell=False)
 
 
 def main() -> int:
+    _check_interpreter()
     parser = argparse.ArgumentParser(description="Launch the autonomous agent stack")
     parser.add_argument("--backend-only", action="store_true")
     parser.add_argument("--frontend-only", action="store_true")
