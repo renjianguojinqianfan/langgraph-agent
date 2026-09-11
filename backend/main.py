@@ -20,6 +20,14 @@ from .services.task_manager import TaskManager
 
 settings = get_settings()
 
+# Security guard: refuse to silently serve with the publicly known placeholder
+# token (e.g. when auth is enabled in a container without overriding the default).
+if settings.auth_enabled and settings.auth_token == "changeme":
+    raise RuntimeError(
+        "auth_enabled=true but auth_token is still the placeholder 'changeme'. "
+        "Set a strong auth_token via environment variable before enabling auth."
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
