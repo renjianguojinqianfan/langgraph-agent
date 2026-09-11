@@ -4,10 +4,14 @@
 Agent 自主规划、循环调用工具（联网检索 / 文件读写 / 代码执行 / HTTP API / Git / MCP 外部工具 / 知识库）
 完成多步任务，并通过前后端一体的可视化界面（三栏布局 + SSE 实时事件流 + Trace 回放）展示全程。
 
-**351 个离线测试全绿** · 真实 LLM（OpenAI 兼容，已验证千问 qwen3.6-plus）端到端跑通 + 断点续跑双场景验证。
+**365 个离线测试全绿** · 真实 LLM（OpenAI 兼容，已验证千问 qwen3.6-plus）端到端跑通 + 断点续跑双场景验证。
 
-> 技术栈：Python 3.10+ · LangGraph · FastAPI · OpenAI 兼容 LLM 抽象层（可 Mock）·
-> React 18 · Vite · TypeScript · Tailwind CSS · Zustand · MCP SDK
+> 2026-09：从 langgraph 0.2 **原地迁移**到 1.2.x LTS 线——编排层按 1.x idioms 重写、显式采用
+> `durability="sync"`、`langgraph-checkpoint-sqlite` 升到 3.1.1 闭环两条 CVE。为何迁、怎么迁、
+> 代价与闸门（含旧快照兼容性的 A/B 实测）：[`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md)。
+
+> 技术栈：Python 3.11（`.python-version` 钉住；上游要求 ≥3.10）· LangGraph 1.2.x · FastAPI ·
+> OpenAI 兼容 LLM 抽象层（可 Mock）· React 18 · Vite · TypeScript · Tailwind CSS · Zustand · MCP SDK
 
 ---
 
@@ -18,7 +22,7 @@ Agent 自主规划、循环调用工具（联网检索 / 文件读写 / 代码�
 - **双模式图**：`mode="main"`（完整拓扑）/ `mode="subtask"`（简化图，子任务防递归）
 - **人工介入**：危险工具 / 高危计划执行前 `human_confirm` 中断，可批准或拒绝
 - **停止控制**：任意时刻停止任务，≤2s 生效
-- **断点续跑**：SqliteSaver 检查点持久化，INTERRUPTED 任务经 `POST /resume` 从断点复活；崩溃遗留孤儿任务启动时自动对账为可恢复
+- **断点续跑**：SqliteSaver 检查点持久化（langgraph 1.x `durability="sync"`：stop() 后快照必已落盘），INTERRUPTED 任务经 `POST /resume` 从断点复活；崩溃遗留孤儿任务启动时自动对账为可恢复。迁移前写的旧快照作废，启动时被检测并拒绝挂载（详见迁移档）
 - **上下文压缩**：历史超阈值（默认 8000 tokens）自动截断 / 可选 LLM 摘要，控制 Token 上限
 
 ### 安全与可靠性
@@ -40,7 +44,7 @@ Agent 自主规划、循环调用工具（联网检索 / 文件读写 / 代码�
 - **SSE 实时事件流**：15+ 种事件（plan_update / tool_call / tool_result / risk_report / subtask_* / tool_circuit_open / context_compressed ...）
 - **Trace 回放**：EventBus 事件落盘 JSONL，前端 Trace Tab 时间线 + 导出 `.jsonl`
 - **辅助模型分工**：可选 `aux_llm`（风险语义分析 / 摘要降本），默认关闭零额外调用
-- **统一响应信封** `{code, data, message}`；配置全部走 `.env`（14 组前缀）
+- **统一响应信封** `{code, data, message}`；配置全部走 `.env`（15 组前缀）
 
 ---
 
@@ -62,9 +66,9 @@ langgraph-agent/
 │   │   └── mcp/              # McpClientManager（stdio，每 server 一线程）
 │   ├── services/             # event_bus / trace / persistence / task_manager / auth
 │   ├── plugins/              # 插件目录（example_tool.py）
-│   └── tests/                # 40 文件 / 351 用例（含 test_qa_* 独立补充）
+│   └── tests/                # 40 文件 / 365 用例（含 test_qa_* 独立补充）
 ├── frontend/                 # React 三栏 UI（14 组件：TaskPanel/TraceTab/RiskBanner/...）
-├── docs/                     # PRD / 架构 / 增量设计（p0/p1/p2）
+├── docs/                     # PRD / 架构 / 增量设计（p0/p1/p2/p3-resume）/ langgraph 1.x 迁移评估
 ├── .agents/skills/           # 千问官方 skills（供知识入库 / 模型选型参考）
 └── scripts/                  # live_e2e.py（真实 LLM 验证）/ live_skill_test.py
 ```
@@ -77,12 +81,15 @@ langgraph-agent/
 
 ```bash
 cd langgraph-agent
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m venv .venv311              # Python 3.11（.python-version）
+source .venv311/bin/activate         # Windows: .venv311\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env               # 填 llm_api_key，或设 use_mock_llm=true 离线跑
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+> 虚拟环境请叫 `.venv311`：`start.py` 会拦住仓库根目录的 `.venv`（本地那个是 3.13 且未装依赖，
+> 误用只会得到一堆与真因无关的 ImportError）。
 
 > 不填 Key 也能跑：`use_mock_llm=true` 启用离线 Mock LLM（无需网络/Key）。
 > 真实模型示例（千问 DashScope）：`llm_base_url=https://dashscope.aliyuncs.com/compatible-mode/v1` + `llm_model=qwen3.6-plus`。
@@ -107,8 +114,8 @@ python start.py                    # 前后端 + 真实 Key（需 .env）
 ## 4. 测试与验证
 
 ```bash
-# 全量离线测试（351 用例，MockLLM，无需 Key/网络）
-.venv\Scripts\python.exe -m pytest backend/tests/ -q
+# 全量离线测试（365 用例，MockLLM，无需 Key/网络）
+.venv311\Scripts\python.exe -m pytest backend/tests/ -q
 
 # 真实 LLM 端到端（发布前 / 换供应商验证，需 .env 配置真实模型）
 LLM_API_KEY="$DASHSCOPE_API_KEY" python scripts/live_e2e.py
@@ -139,7 +146,7 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" python scripts/live_skill_test.py
 
 ---
 
-## 6. 配置（`.env`，14 组前缀）
+## 6. 配置（`.env`，15 组前缀）
 
 | 前缀 | 用途 | 示例默认 |
 |------|------|---------|
@@ -184,7 +191,7 @@ class MyTool(BaseTool):
 
 **OpenAPI 一键成工具**：配置 `openapi_spec_path` / `openapi_spec_url`，每个 operation 自动生成一个 BaseTool。
 
-**断点续跑（Issue #4）**：任务执行内核挂载 LangGraph `SqliteSaver` 检查点，每次循环步落盘完整 AgentState。被停止（INTERRUPTED）的任务可经 `POST /api/tasks/{id}/resume` 从最近检查点继续执行——消息历史、计划、已批准/拒绝的确认记录全部保留；进程崩溃遗留的孤儿任务在启动时自动对账为可恢复。两个安全默认：停在人工确认闸口的任务不可续跑（闸门永不被静默绕过）；CONFIRMED/FAILED 终态拒绝恢复。详见 [Issue #4 spec](https://github.com/renjianguojinqianfan/langgraph-agent/issues/4) 与 [增量架构](docs/incremental-arch-p3-resume.md)。
+**断点续跑（Issue #4）**：任务执行内核挂载 LangGraph `SqliteSaver` 检查点，每次循环步落盘完整 AgentState。被停止（INTERRUPTED）的任务可经 `POST /api/tasks/{id}/resume` 从最近检查点继续执行——消息历史、计划、已批准/拒绝的确认记录全部保留；进程崩溃遗留的孤儿任务在启动时自动对账为可恢复。两个安全默认：停在人工确认闸口的任务不可续跑（闸门永不被静默绕过）；CONFIRMED/FAILED 终态拒绝恢复。迁到 langgraph 1.x 后又多两个：执行用 `durability="sync"`（写入在下一个 superstep 前完成，stop() 后快照必已落盘）；迁移前写的旧快照启动时被检测并拒绝挂载（不做自动迁移，服务照常起、仅 resume 不可用）。详见 [Issue #4 spec](https://github.com/renjianguojinqianfan/langgraph-agent/issues/4)、[增量架构](docs/incremental-arch-p3-resume.md) 与 [迁移评估](docs/migration-langgraph-1x.md)。
 
 ---
 
@@ -204,6 +211,7 @@ docker compose up --build
 - [P1 增量（风险扫描/子Agent/RAG/辅助模型/鉴权/OpenAPI）](docs/incremental-prd-p1.md) · [P1 架构](docs/incremental-arch-p1.md)
 - [P2 增量（MCP 客户端 / Git 工具）](docs/incremental-prd-p2.md) · [P2 架构](docs/incremental-arch-p2.md)
 - [P3 增量（断点续跑 / LangGraph checkpointer）](docs/incremental-arch-p3-resume.md)
+- [langgraph 0.2 → 1.2.x 原地迁移：评估与实测记录](docs/migration-langgraph-1x.md)
 - [真实 LLM 接入指南](scripts/LIVE_E2E.md)
 - 项目 Agent 操作手册：[AGENTS.md](AGENTS.md)
 

@@ -3,7 +3,7 @@
 > 本文件是 `E:\code\demo\langgraph-agent` 的 Agent 操作手册 / 核心指令集。不重复全局 `~/.agents/AGENTS.md` 的工作循环纪律，只写本目录特有的东西。
 
 ## 1. 快照
-基于 **LangGraph（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）多轮迭代，**351 个离线测试全绿** + 真实 LLM（qwen3.6-plus）端到端与断点续跑双场景验证通过。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）+ langgraph 0.2→1.2.x 原地迁移（Issue #7）多轮迭代，**365 个离线测试全绿** + 真实 LLM（qwen3.6-plus）端到端与断点续跑双场景验证通过。
 
 ## 2. 硬规则（改前必读）
 - **测试环境隔离**：离线测试必须不受本地 `.env` 影响——`backend/tests/conftest.py` 顶部用环境变量覆盖（`LLM_BASE_URL=""` / `USE_MOCK_LLM=true` / `AUX_LLM_ENABLED=false` / `AUTH_ENABLED=false` / `OPENAPI_ENABLED=false` / `CHECKPOINT_ENABLED=false`）。**改 conftest 时勿破坏这段隔离**，否则本地 live 配置会污染全部离线用例。
@@ -13,10 +13,12 @@
 - **解释器**：pytest 一律用 `.venv311/Scripts/python.exe`（Python 3.11.15，已装依赖；根目录 `.venv` 是 3.13 无依赖，不要用）。
 - **端口**：后端 8000、前端 dev 5173。勿与 `trae` 项目同时跑（同端口冲突）。
 
-### P3 断点续跑专项约束（Issue #4）
+### P3 断点续跑专项约束（Issue #4 + Issue #7 迁移）
 - **checkpoint 副本语义**：挂载 checkpointer 后 langgraph 每 superstep 向节点传 state **副本**——任何跨节点通信不得再依赖共享字典引用，必须走 TaskManager 权威信号（`_stop_flags` / `is_stop_flagged()`），nodes 侧统一经 `_stopped(state)` helper 轮询并写回副本。
 - **resume 拒绝语义不可放松**：非 INTERRUPTED、无 checkpoint、停在确认闸口（pending_confirm 标记）三类一律 409 同步拒绝——闸门永不被静默绕过。
-- **依赖矩阵**：`langgraph-checkpoint-sqlite==2.0.11` 钉死配套 langgraph-checkpoint 2.1.2；Dependabot 的 3.x 升级 PR 已知不兼容，勿合并。
+- **依赖矩阵**：`langgraph>=1.2,<1.3`（1.2.x LTS 线）+ `langgraph-checkpoint==4.2.0` + `langgraph-checkpoint-sqlite==3.1.1`——三个包一起钉，因为它们合起来就是 resume 契约的存储面（serde `JsonPlusSerializer` 住在 `langgraph-checkpoint` 里，不钉它就只是一个 [4.1,5) 的浮动窗口，一次普通 `pip install` 就能抬走它且打标感知不到）。抬版需人评估放行，Dependabot 自动抬版勿直接合。`langchain*` 不得重新加回显式钉版（全仓 0 import，且 `langchain-core<0.3` 与 langgraph 1.x 直接冲突）；uvicorn/starlette 区间不动。
+- **旧快照作废 + 启动检测**（Issue #7）：上游没留版本痕迹（2.0.11 与 3.1.1 建表 SQL 逐字符相同），所以标记由本仓库自己打：挂载成功即 `PRAGMA user_version = CHECKPOINT_FORMAT_VERSION`。判定只认 `==`（不认 `>=`：更新的 build 写的库本 build 同样证明不了）；行数同时数 `checkpoints` 与 `writes`。拒绝时 `_checkpointer` 留 None + ERROR 告警，服务照常起、新任务照常跑，resume 落回「no checkpoint → 409」；不做自动迁移。两条红线：检测连接必须 `mode=ro`（读写连接关闭时会把 WAL 折回主库并删掉 `-wal`/`-shm`，“决定拒绝”就会改写被拒文件）；打标写入必须 try/except 降级为拒绝挂载（否则只读目录/磁盘满会从“单任务失败”变成“FastAPI 起不来”）。日志文案按 kind 分支：`legacy`/`newer` 叫人把文件移走，`unreadable`/不可写 叫人去修权限与完整性、**不要**删快照。逻辑在 `task_manager._inspect_checkpoint_store` / `_mount_checkpointer`，实测依据见 `docs/migration-langgraph-1x.md` §2。
+- **durability 只在挂了 checkpointer 时传**：`_DURABILITY = "sync"`（1.x 新特性，保证 stop() 后快照已落盘），但 langgraph 1.2.11 在**无 checkpointer** 时传 `durability="sync"` 会 `AttributeError: 'SyncPregelLoop' object has no attribute '_put_checkpoint_fut'` —— 恰好就是拒绝挂载后的状态。因此 invoke 一律经 `TaskManager._invoke_kwargs()` 取参数，**不要**直接写 `durability=`；子任务图（无 checkpointer）同理不传。
 
 ## 3. 目录结构
 | 路径 | 内容 |
@@ -30,9 +32,9 @@
 | `backend/services/` | event_bus / trace(JSONL) / persistence / task_manager / auth(hmac) |
 | `backend/api/` | routes（14 REST）/ sse / schemas |
 | `backend/plugins/` | 插件目录（自动发现 BaseTool，example_tool.py）|
-| `backend/tests/` | **40 文件 / 351 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3）|
+| `backend/tests/` | **40 文件 / 365 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3）|
 | `frontend/` | React 三栏 UI：TaskPanel/TraceTab/RiskBanner/SubtaskList/KbPanel/LoginPage 等 14 组件 |
-| `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）|
+| `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）/ migration-langgraph-1x（0.2→1.2.x 迁移评估与实测）|
 | `.agents/skills/` | 千问官方 skills（model-selector/ops-auth/usage）。集成路径：references 由 `scripts/live_skill_test.py` 复制到 `data/kb/qianwen-skills/` 并重建索引 → 真实模型任务中经 `kb_query`/`memory_search` 工具检索；该脚本同时验证"KB 命中 + 答案给出具体模型"全链路 |
 | `scripts/` | live_e2e.py（真实 LLM 验证，`--check` 为无 Key 离线冒烟）/ live_skill_test.py（skills→KB→真实模型）|
 | `data/` | 运行时生成（tasks.json/traces/kb/artifacts），不入库 |
@@ -60,7 +62,7 @@ npx tsc --noEmit     # 类型检查 0 错误
 ```
 
 ## 5. 完成定义
-- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（351）；改前端时 `npx tsc --noEmit` 0 错误。
+- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（365）；改前端时 `npx tsc --noEmit` 0 错误。
 - 改动跑通真实模型冒烟（有 Key 时）：`scripts/live_e2e.py` PASS。
 - 改接口/配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
 - 新依赖需说明理由；**避免升级 uvicorn/starlette**（mcp 依赖冲突教训：用 `--no-deps` 装 mcp）。

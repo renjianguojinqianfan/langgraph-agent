@@ -1,16 +1,29 @@
 # Backend Python dependencies (LangGraph autonomous-task agent)
-langgraph>=0.2.0,<0.3.0
-langgraph-checkpoint-sqlite==2.0.11  # pinned: 3.x needs langgraph-checkpoint>=4; serde compat matters for resumed runs
-# Known advisories on 2.0.11 (assessed 2026-09, dismissed on GitHub as not_used):
-#   GHSA-9rwj-6rc7-p77c / CVE-2025-67644 (SQL injection via list() metadata filter key)
-#   GHSA-47pj-3jcm-6whg / CVE-2026-71433 (namespace prefix crossing segment boundaries)
-# Zero exposure today: no code path calls the checkpointer list/metadata-filter API.
-# RE-EVALUATE if: any code starts calling checkpointer list/filter, or langgraph-checkpoint
-# 4.x serde compat for resume is proven and the pin can be lifted.
-aiosqlite>=0.20,<2  # metadata dep of checkpoint-sqlite (--no-deps install); sqlite-vec not needed at runtime
-langchain>=0.2.0,<0.3.0
-langchain-openai>=0.1.0,<0.2.0
-langchain-core>=0.2.0,<0.3.0
+#
+# langgraph 1.2.x LTS 线。0.2.76 → 1.2.11 为原地迁移（2026-09，Issue #7）；
+# 评估、实测证据与重写面见 docs/migration-langgraph-1x.md。
+langgraph>=1.2,<1.3
+langgraph-checkpoint==4.2.0
+langgraph-checkpoint-sqlite==3.1.1
+# 三个包一起钉：它们是 resume 契约的完整存储面。
+# - langgraph 只放 1.2.x 补丁级（spec：1.2.x LTS 线），跨小版本重新走评估流程。
+# - langgraph-checkpoint 必须显式钉：serde（JsonPlusSerializer）住在这个包里，而它
+#   否则只被上游约束在 [4.1,5) 的浮动窗口里——一次普通 pip install 就能把它抬到
+#   4.5 并改掉快照语义，既过不了钉版也过不了 CHECKPOINT_FORMAT_VERSION（打标只
+#   区分迁移前/后，感知不到 4.x 内部漂移），而失败形态正是「静默腐蚀 resume」。
+# - langgraph-checkpoint-sqlite 钉死：存储格式直接决定 resume 契约。
+# 抬版必须由人评估后放行。3.1.1 同时闭环了曾在 2.0.11 上被评估为 not_used 而
+# dismiss 的两条公告（GHSA-9rwj-6rc7-p77c / CVE-2025-67644 与 GHSA-47pj-3jcm-6whg /
+# CVE-2026-71433），安全故事由「已接受」变「已修复」。
+# 旧钉版的理由「3.x 破坏 resume serde 兼容」已实测推翻（3.1.1 能无损读回 2.0.11
+# 写的快照）；旧快照仍然作废，但理由换成「跨大版本的执行位置等价性未证明，
+# 而 data/ 可弃」，并在启动时检测 + 拒绝挂载（task_manager.CHECKPOINT_FORMAT_VERSION）。
+#
+# langchain-core 1.x 由 langgraph 传递引入；本仓库 0 处 import langchain*，故不再显式
+# 钉 langchain / langchain-openai / langchain-core（旧钉 langchain-core<0.3 与 langgraph
+# 1.x 要求的 >=1.0 直接冲突，删除是升级的前置条件）。
+# aiosqlite / sqlite-vec / ormsgpack 同为 checkpoint(-sqlite) 自己声明的硬依赖，随正常
+# 安装到位；只有 mcp 需要 --no-deps（见文件末尾）。
 fastapi>=0.111.0,<0.113.0
 uvicorn[standard]>=0.30.0,<0.31.0
 pydantic>=2.7.0,<3.0.0
