@@ -4,6 +4,8 @@ Exercises ``build_graph`` + :class:`AgentRuntime` end-to-end with a scripted
 :class:`MockLLMClient` (no LLM key, no network):
 
 * the graph compiles;
+* the compiled graph *declares* its topology (langgraph 1.x derives each
+  branch's ``path_map`` from the router's ``Literal`` return annotation);
 * a full task produces a ``final_answer`` and a persisted artifact;
 * ``stop`` interrupts the loop within 2 seconds (P0-9);
 * the ``human_confirm`` node pauses *before* a dangerous (requires_confirm) tool
@@ -17,11 +19,30 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from backend.core.agent.graph import build_graph
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import MockLLMClient
 from backend.tests.conftest import make_manager
 from backend.tests.test_smoke import main as smoke_main
+
+
+def _runtime(max_steps: int = 5) -> AgentRuntime:
+    """A runtime good enough to compile a graph (no LLM, no tools)."""
+    return AgentRuntime(
+        task_id="t",
+        task_manager=None,
+        llm=None,
+        tools=[],
+        tool_schemas=[],
+        max_steps=max_steps,
+    )
+
+
+def _declared_edges(graph) -> set:
+    """The topology the compiled graph *declares* (source, target) pairs."""
+    return {(e.source, e.target) for e in graph.get_graph().edges}
 
 
 def _run_until_done(tm, task_id, timeout=15):
@@ -53,11 +74,50 @@ def _auto_confirm_in_background(tm, event_bus, task_id, approved, timeout=10):
 
 # ── build / compile ──
 def test_build_graph_compiles(settings):
-    runtime = AgentRuntime(
-        task_id="t", task_manager=None, llm=None, tools=[], tool_schemas=[], max_steps=5
-    )
-    graph = build_graph(runtime)
+    graph = build_graph(_runtime())
     assert graph is not None
+
+
+# ── langgraph 1.x: 拓扑静态声明（Issue #7 迁移）──
+def test_main_topology_is_statically_declared(settings):
+    """1.x 从路由函数的 ``Literal`` 返回注解推导 path_map。
+
+    推导失败（lambda / 漏注解）时 langgraph 不知道条件边去哪，编译出的图就
+    声明不出真实分支：运行照跑，但拓扑不再可读，可视化与静态校验全部失效。
+    这条测试把“声明出来了”钉住，免得日后改回 lambda 静默退化。
+    """
+    edges = _declared_edges(build_graph(_runtime()))
+
+    assert ("planner", "risk_scan") in edges
+    assert ("planner", "finish") in edges
+    assert ("risk_scan", "subagent_split") in edges
+    assert ("executor", "human_confirm") in edges
+    assert ("executor", "tool") in edges
+    assert ("tool", "reflect") in edges
+    assert ("reflect", "planner") in edges
+    # 确认闸门之后是静态边（总是去 tool），不是条件边。
+    assert ("human_confirm", "tool") in edges
+    # planner 不可能直达 tool：这条边一旦出现，就说明 path_map 退化成了
+    # “可能指向任何节点”。
+    assert ("planner", "tool") not in edges
+
+
+def test_subtask_topology_declares_no_gate_and_no_risk(settings):
+    """子任务图的存在意义就是“不可能递归拆分、不可能卡在确认闸”。"""
+    edges = _declared_edges(build_graph(_runtime(), mode="subtask"))
+
+    assert ("planner", "executor") in edges
+    assert ("executor", "tool") in edges
+    assert ("tool", "reflect") in edges
+    for src, dst in edges:
+        assert src not in ("human_confirm", "risk_scan", "subagent_split")
+        assert dst not in ("human_confirm", "risk_scan", "subagent_split")
+
+
+def test_unknown_mode_is_rejected(settings):
+    """静默退回 subtask 拓扑会丢掉风险扫描与确认闸门，必须响亮报错。"""
+    with pytest.raises(ValueError):
+        build_graph(_runtime(), mode="nonsense")
 
 
 def test_build_graph_runs_and_produces_final_answer(settings, event_bus):
