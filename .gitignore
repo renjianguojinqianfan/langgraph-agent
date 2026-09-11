@@ -47,4 +47,10 @@ logs/
 # ── AI agent local state ───────────────────────────────
 .workbuddy/
 .trae/
+.mimosa/
+_write_bh_report.py
+# .qoder/ holds both tool output (better-harness reports, quest state) and the
+# human-authored spec archive; keep the specs, ignore everything else.
+.qoder/*
+!.qoder/specs/
 
