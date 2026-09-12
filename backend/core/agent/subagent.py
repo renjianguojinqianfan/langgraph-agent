@@ -27,7 +27,6 @@ Two entry points:
 
 from __future__ import annotations
 
-import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field

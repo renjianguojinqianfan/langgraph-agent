@@ -12,13 +12,12 @@ Proves:
 from __future__ import annotations
 
 from backend.config import Settings
+from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import MockAuxLLMClient, MockLLMClient
 from backend.core.llm.openai_compat import (
     create_aux_llm_client,
-    create_llm_client,
     get_aux_llm,
 )
-from backend.core.agent.nodes import AgentRuntime
 from backend.tests.conftest import make_manager
 from backend.tests.test_graph import _run_until_done
 
@@ -102,7 +101,8 @@ def test_summary_uses_aux_when_configured(tmp_path):
     # > keep_recent(default 10) messages guarantee the summarize path runs.
     messages = [{"role": "user", "content": f"message number {i} for aux summary"} for i in range(12)]
     state: dict = {"messages": messages}
-    built = runtime._build_messages(state, "system")
+    # 断言对象是 aux 被调用与 state 被压缩，返回值本身不参与断言。
+    runtime._build_messages(state, "system")
 
     assert aux.call_count > 0
     assert "summary" in aux.roles_called

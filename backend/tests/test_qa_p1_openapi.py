@@ -14,12 +14,13 @@ Covers gaps in the engineer's suite:
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
 import backend.core.tools.openapi_tool as ot
-from backend.core.tools.openapi_tool import OpenAPITool, build_tools_from_spec, load_openapi_spec
 from backend.core.llm.client import MockLLMClient
+from backend.core.tools.openapi_tool import OpenAPITool, build_tools_from_spec, load_openapi_spec
 from backend.tests.conftest import make_manager, make_settings
 
 
@@ -57,7 +58,7 @@ class _FakeHttpxClient:
 
 
 def _make_tool(**overrides) -> OpenAPITool:
-    base = dict(
+    base: dict[str, Any] = dict(
         name="getPet",
         description="Get a pet",
         args_schema={"type": "object", "properties": {}, "required": []},

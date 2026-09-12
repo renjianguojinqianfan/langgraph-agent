@@ -15,7 +15,7 @@ clear error instead of raising.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict
+from typing import Any
 
 from ...config import Settings
 from ...utils.logging import get_logger

@@ -10,12 +10,12 @@ Everything is offline: network calls are replaced with mocks.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from backend.config import Settings
 from backend.core.tools.code_exec import CodeExecTool
 from backend.core.tools.file_io import FileIOTool
-from backend.core.tools.http_api import HttpTool, WRITE_METHODS
+from backend.core.tools.http_api import WRITE_METHODS, HttpTool
 from backend.core.tools.web_search import WebSearchTool
 
 

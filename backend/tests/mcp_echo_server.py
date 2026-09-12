@@ -16,11 +16,10 @@ import os
 from pathlib import Path
 
 import anyio
-
 from mcp.server.lowlevel import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.types import ServerCapabilities, TextContent, Tool
+from mcp.types import ServerCapabilities, TextContent, Tool, ToolsCapability
 
 server = Server("echo-server")
 
@@ -79,7 +78,9 @@ async def main() -> None:
             InitializationOptions(
                 server_name="echo-server",
                 server_version="0.1.0",
-                capabilities=ServerCapabilities(tools={}),
+                # ToolsCapability() 而不是旧写法的 tools={}：pydantic 本来就会把 {}
+                # 强制成同一个对象（已实测相等），但声明类型要的是前者。
+                capabilities=ServerCapabilities(tools=ToolsCapability()),
             ),
         )
 

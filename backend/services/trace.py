@@ -26,7 +26,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import IO, Callable, Dict
 
 from ..config import Settings
 from ..utils.logging import get_logger
@@ -41,7 +41,7 @@ class TraceRecorder:
     def __init__(self, settings: Settings) -> None:
         self._dir: Path = settings.trace_path
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._files: Dict[str, object] = {}  # task_id -> open file handle
+        self._files: Dict[str, IO[str]] = {}  # task_id -> open file handle
         self._cbs: Dict[str, Callable[[Event], None]] = {}
         self._buses: Dict[str, EventBus] = {}
         self._lock = threading.Lock()

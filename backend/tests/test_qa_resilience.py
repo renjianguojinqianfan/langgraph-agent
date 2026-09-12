@@ -11,18 +11,19 @@ All offline (tiny backoff / monkeypatched sleep, deterministic failure paths).
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from backend.config import Settings
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.core.tools.code_exec import CodeExecTool
 from backend.core.tools.file_io import FileIOTool
 from backend.core.tools.http_api import HttpTool
-from backend.core.tools.resilience import CircuitBreaker, ToolExecutor, with_retry
+from backend.core.tools.resilience import ToolExecutor, with_retry
 from backend.core.tools.web_search import WebSearchTool
 
 
 def _settings(**overrides) -> Settings:
-    base = {
+    base: dict[str, Any] = {
         "tool_failure_threshold": 3,
         "tool_cooldown_sec": 30,
         "tool_backoff_base": 0.01,

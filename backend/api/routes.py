@@ -126,18 +126,24 @@ def task_events(
     return sse_response(task_id, _eb(request), request)
 
 
-@router.get("/tasks/{task_id}/trace")
+@router.get("/tasks/{task_id}/trace", response_model=None)
 def task_trace(
     task_id: str,
     request: Request,
     format: str = "ndjson",
     _auth: str = Depends(verify_token),
-) -> Response:
+) -> ApiResponse | Response:
     """Return the persisted JSONL trace for a task.
 
     Default: raw NDJSON (``application/x-ndjson``) so the frontend can replay
     it line by line. ``?format=json`` returns the unified envelope
     ``{code, data:[Event,...], message}``. Missing file / disabled trace -> 404.
+
+    The real return type is the union below (envelope for ``?format=json``, raw
+    NDJSON ``Response`` otherwise). ``response_model=None`` is stated explicitly
+    so FastAPI keeps skipping model inference exactly as it did when the
+    annotation was the bare ``Response`` subclass — the OpenAPI document and both
+    branches' serialisation are unchanged.
     """
     settings = request.app.state.settings
     if not settings.trace_enabled:
@@ -222,7 +228,7 @@ def auth_token(payload: AuthTokenRequest, request: Request) -> ApiResponse:
         return _envelope(data={"ok": True, "note": "auth disabled"})
     if payload.token != settings.auth_token:
         raise HTTPException(status_code=401, detail="invalid token")
-    issuer: TokenIssuer = getattr(request.app.state, "auth", None)
+    issuer: TokenIssuer | None = getattr(request.app.state, "auth", None)
     if issuer is None:
         raise HTTPException(status_code=500, detail="auth not configured")
     token, expires_at = issuer.issue()

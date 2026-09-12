@@ -29,7 +29,7 @@ from backend.services.persistence import Persistence  # noqa: E402
 from backend.services.task_manager import TaskManager  # noqa: E402
 
 
-def build_manager() -> TaskManager:
+def build_manager() -> tuple[TaskManager, EventBus]:
     settings = get_settings()
     eb = EventBus()
     persistence = Persistence(settings)

@@ -53,7 +53,8 @@ def ingest_skills_into_kb() -> tuple[int, Path]:
             copied += 1
     kb = KnowledgeBase(settings)
     kb.rebuild()  # rescan the whole kb dir and rebuild .index.json
-    docs = kb.retrieve("qwen text chat model recommendation", top_k=5)
+    # 只验“重建后的索引可查”（不抛异常即通过）；命中数由 main() 里的真实模型环节验。
+    kb.retrieve("qwen text chat model recommendation", top_k=5)
     return copied, dest
 
 

@@ -17,7 +17,7 @@ import os
 import sys
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # ── Offline isolation (MUST run before any `backend.config` import) ──
 os.environ.setdefault("USE_MOCK_LLM", "true")
@@ -58,7 +58,6 @@ from backend.services.event_bus import EventBus  # noqa: E402
 from backend.services.persistence import Persistence  # noqa: E402
 from backend.services.task_manager import TaskManager  # noqa: E402
 
-
 _current_request: ContextVar[Optional["pytest.FixtureRequest"]] = ContextVar(
     "_current_request", default=None
 )
@@ -84,7 +83,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
     ``checkpoint_enabled=True`` to opt a test into the sqlite checkpoint
     store — it then lives under ``tmp_path / "data" / "checkpoints"``.
     """
-    base = dict(
+    base: dict[str, Any] = dict(
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         trace_dir=str(tmp_path / "traces"),
@@ -125,7 +124,6 @@ def make_manager(
         llm_client=mock,
         tools=tools,
     )
-    import pytest as _pytest
 
     _request = _current_request.get()
     if _request is not None:

@@ -11,6 +11,7 @@ first-registered class.
 from __future__ import annotations
 
 import importlib.util
+from typing import Any
 
 import pytest
 
@@ -48,7 +49,7 @@ _SIMPLE_BODY = (
 
 
 def _manager_settings(tmp_path, **overrides) -> Settings:
-    base = {
+    base: dict[str, Any] = {
         "data_dir": str(tmp_path / "data"),
         "artifacts_dir": str(tmp_path / "artifacts"),
         "trace_dir": str(tmp_path / "traces"),

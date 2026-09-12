@@ -132,7 +132,6 @@ def test_register_keeps_first_on_conflict(clean_registry, caplog):
 
 def test_make_openapi_tool_returns_tools_for_valid_spec():
     """P1 item 6: the placeholder is replaced by a real generator."""
-    from backend.core.tools.openapi_tool import OpenAPISpecError
 
     spec = {
         "openapi": "3.0.0",

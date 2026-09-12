@@ -9,9 +9,8 @@ declared in :mod:`backend.core.agent.graph`.
 from __future__ import annotations
 
 import json
-import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 from ...config import get_settings
 from ...utils.logging import get_logger
@@ -199,6 +198,9 @@ class AgentRuntime:
         }
         state.setdefault("steps", []).append(step)
 
+        # 异常分支把错误文本降级成一条纯字符串项（正常分支是 PlanStep dict），
+        # 两种形态都要能塞进 state["plan"]，所以注解放宽为 Any 而不是改行为。
+        plan: List[Any]
         try:
             resp = self.llm.complete(self._build_messages(state, PLANNER_SYSTEM))
             plan = self._parse_plan(resp.content)
@@ -389,7 +391,10 @@ class AgentRuntime:
                     # A judgement failure only warns — it never blocks execution.
                     if tool and getattr(tool, "needs_per_call_confirm", False):
                         try:
-                            if tool._needs_confirm(args):
+                            # cast 在运行时是恒等函数：BaseTool 不声明 _needs_confirm
+                            # （McpTool 才有），这里只把鸭子类型交代给 mypy，
+                            # 判定逻辑与异常降级路径未动。
+                            if cast(Any, tool)._needs_confirm(args):
                                 need_confirm = True
                         except Exception:
                             logger.warning(

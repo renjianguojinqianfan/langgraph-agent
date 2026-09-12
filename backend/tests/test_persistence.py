@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from backend.api.schemas import Artifact, PlanStep, StepRecord, Task, TaskStatus
 from backend.services.persistence import Persistence
-from backend.tests.conftest import make_settings
 
 
 def _sample_task(task_id="abc") -> Task:

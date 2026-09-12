@@ -27,16 +27,14 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from pathlib import Path
+from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
-from backend.core.mcp.client import McpClientManager, McpServerConfig
-from backend.core.tools.base import ToolResult
+from backend.core.mcp.client import McpClientManager
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
 from backend.core.tools.registry import build_tools
 from backend.main import app
@@ -49,7 +47,7 @@ ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
 
 
 def _echo_settings(tmp_path: Path, **overrides) -> Settings:
-    base = dict(
+    base: dict[str, Any] = dict(
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         mcp_enabled=True,
