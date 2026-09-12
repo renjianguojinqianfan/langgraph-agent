@@ -400,9 +400,15 @@ README 新增第 4 节，与 [`interview-agent-py`](https://github.com/renjiangu
    修它要把这个 smoke 改成基于 `make_settings(tmp_path)`，属测试行为变更，单独开票。
 
 ## 本轮文档
-- `README.md`：重写为叙事型（定位与亮点 → 架构图 → 迁移章节：动机/矩阵/实测/代价/闸门/安全闭环 →
-  组合分工互链 → 运行与质量门禁）；顺手校正了几处继承自旧 README 的过期数字
+- `README.md`：重写为叙事型（定位与亮点 → 能力 → 编排拓扑 → 迁移章节：动机/矩阵/实测/代价/闸门/安全闭环 →
+  组合分工互链 → 质量门禁 → 文档）；顺手校正了几处继承自旧 README 的过期数字
   （REST 14→15、补上遗漏的 artifacts preview 端点、SSE 事件数改为可数的 21、前端组件数按目录写清）。
+  **又按“不要一股脑把所有信息写上去”收敛了一轮**：参照 codex（81 行）/ opencode（129）/ pi-mono（115）/
+  kimi-cli（177）的体量，从 401 行压到 **160 行 / 9 个标题 / 1 张图**（与 pi-mono 的 115 行/6787 字符
+  几乎同一量级）。移出 README 的四块内容都有确定去处，无信息丢失：目录树 → `AGENTS.md` §3；
+  REST 表 → `docs/architecture.md` §3.3 + 运行时 Swagger（P2/P3 新端点在各自增量档）；
+  15 组配置表 → `.env.example`（逐项带注释）；插件代码示例 → `backend/plugins/example_tool.py`（它本身就是模板）。
+  分层图换成一段文字，只留编排拓扑一张 mermaid；迁移章节压成六段摘要（每段一个维度）+ 外链完整实测档。
 - `docs/migration-langgraph-1x.md`：§7 「Phase 2 待办」逐条补记已交付（保留原文，因为「当时为什么
   不在迁移分支里做」本身就是阶段划分的一部分）。
 - `AGENTS.md`：新增「质量门禁基线全净」硬规则（含两条红线：不准用 `# type: ignore` / `# noqa` 消错、
