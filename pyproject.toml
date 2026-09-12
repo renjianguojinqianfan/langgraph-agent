@@ -59,14 +59,10 @@ show_error_codes = true
 # （docs/migration-langgraph-1x.md §4/§5）。把未注解函数体一起拉进来会新增一批
 # 「测试 fixture 无返回注解」类的噪音，与「基线全净」目标相反。
 #
-# 唯一的 override：AGENTS.md「熔断层零改动」把 registry.py / resilience.py 交给
-# CI guard-protected-files 机械化拦截（逃生舱仅 PR/commit 标题带 [OVERRIDE]）。
-# registry.py 现有 2 处 return-value 不精确（build_tools_from_spec 声明
-# list[BaseTool] 实返 list[OpenAPITool]；get_tool 声明 BaseTool | None 实返
-# type[BaseTool] | None）——修它必须改冻结文件的签名，所以这里显式排除，而不是
-# 用 [OVERRIDE] 破门。ignore_errors 只压制「在该模块内报错」，其它模块引用
-# registry 时仍按它的注解检查，闸没有整体让位。
-# resilience.py 当前 0 错，**不列入**：列入只会掩盖它将来的真错误。
-[[tool.mypy.overrides]]
-module = ["backend.core.tools.registry"]
-ignore_errors = true
+# 零 mypy override：registry.py 曾有 2 处 return-value 不精确（get_tool 声明
+# BaseTool | None 实返 Type[BaseTool] | None；make_openapi_tool 声明 List[BaseTool]
+# 实返 List[OpenAPITool]）。因 registry.py 是 CI guard-protected-files 冻结文件、
+# 修签名需 [OVERRIDE] 破门，Phase 2 曾用唯一一条 [[tool.mypy.overrides]] 接住它。
+# 现已走解冻窗口修正两处签名（见 backend/core/tools/registry.py）并撤除该 override：
+# mypy 现零 override、零 ignore。红线不变——不准新增任何 override，也不准用
+# # type: ignore / # noqa 消错。resilience.py 始终 0 错，从未列入。

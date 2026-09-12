@@ -384,6 +384,9 @@ README 新增第 4 节，与 [`interview-agent-py`](https://github.com/renjiangu
    `type[BaseTool] | None`（类而不是实例），调用方按实例用会炸。文件被 CI 冻结，本轮用唯一一条
    mypy override 接住并在配置里写明理由 —— 但 override 注释不该成为它的**唯一**记录：
    建议开一张跟踪票，在下一次解冻窗口期修签名并撤掉这条 override。
+   **【已解决 · 走 [OVERRIDE] 解冻窗口】** 两处签名均已修正（`get_tool` → `Type[BaseTool] | None`、
+   `make_openapi_tool` → `List[OpenAPITool]`；纯注解、零生产调用方、零行为变更），`pyproject.toml`
+   里那条唯一 mypy override 已撤除，现零 override 全绿。
 2. **`nodes.py:207` planner 异常分支的 `plan` 形态**：降级时赋的是 `["Planner error: ..."]`（纯字符串），
    而正常分支是 `List[Dict]`，下游 `_plan_confirm` 按 dict 用。本轮只加注解不改行为（defensive 分支、
    无测试覆盖）；修它得先决定“计划失败”的形态（改成 dict 计划项，还是让 planner 失败直接走 finish），

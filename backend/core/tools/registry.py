@@ -18,11 +18,14 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 from ...config import Settings
 from ...utils.logging import get_logger
 from .base import BaseTool
+
+if TYPE_CHECKING:
+    from .openapi_tool import OpenAPITool
 
 logger = get_logger("tool.registry")
 
@@ -109,7 +112,7 @@ def discover_plugins(plugins_dir) -> int:
 def make_openapi_tool(
     spec: Dict[str, Any],
     settings: Optional[Settings] = None,
-) -> List[BaseTool]:
+) -> List[OpenAPITool]:
     """P1 item 6: generate one :class:`BaseTool` per OpenAPI operation.
 
     Delegates to :func:`backend.core.tools.openapi_tool.build_tools_from_spec`
@@ -122,7 +125,7 @@ def make_openapi_tool(
     return build_tools_from_spec(spec, settings=settings)
 
 
-def get_tool(name: str) -> BaseTool | None:
+def get_tool(name: str) -> Type[BaseTool] | None:
     cls = _REGISTRY.get(name)
     return cls
 
