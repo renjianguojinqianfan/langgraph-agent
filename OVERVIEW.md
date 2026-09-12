@@ -252,3 +252,168 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" .venv311/Scripts/python.exe scripts/live_e2e.py
 - `backend/tests/`：原 331 + test_checkpointer(6) + test_orphan_reconcile(6) + test_resume(8)
 - `.env.example` checkpoint 组；requirements 钉版 `langgraph-checkpoint-sqlite==2.0.11`
 
+---
+
+# Issue #7（langgraph 0.2 → 1.2.x 原地迁移 + 简历化包装）— 交付概览
+
+> 本章追加于 2026-09-12。上面各章是历史交付日志，其中的 351 用例 / `checkpoint-sqlite 2.0.11`
+> 都是当时的事实，**不回改**；迁移后的现状以本章为准。
+
+## TL;DR
+把整个仓库从 langgraph **0.2.76 原地迁移到 1.2.11**（1.2.x LTS 线）：编排层按 1.x idioms 重写、
+显式采用 `durability="sync"`、`checkpoint-sqlite` 升到 3.1.1 闭环两条 CVE、旧 checkpoint 快照声明作废
+并有启动检测；随后把 **ruff + mypy 质量门禁入库并进 CI**、README 重写为叙事型。离线基线
+**351 → 365 全绿**，真实模型双场景 PASS。迁移的每一步都有实测依据，全部记在
+[`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md)。
+
+## 交付状态
+- **Phase 0 + Phase 1**：2026-09-11 合入 master（PR #8，merge commit `849f81e`，11 个分阶段 commit
+  **未 squash** —— 评估 → 依赖矩阵 → 编排重写 → 新特性 → 评审修复，历史本身是叙事资产）。
+- **Phase 2**（本轮）：ruff + mypy 进 CI 并入库最小配置、README 叙事化重写、与 `interview-agent-py`
+  互链写分工、本章追加。
+- 离线基线：**365 passed**（Phase 1 从 351 加了 14 个用例：+6 旧库守卫、+3 拓扑声明、+2 durability、
+  +3 评审后补的守卫）；Phase 2 **用例数不变**（门禁接入不改行为）。
+- 关键约束：`resilience.py` / `registry.py` / `nodes.py` 的 `_needs_confirm` 重算逻辑 /
+  `conftest.py` 隔离块 **零改动**（Phase 2 的 diff 可逐行验证）。
+
+## 三个阶段落点
+| 阶段 | 内容 | 落点 |
+|----|------|------|
+| Phase 0 | 未跟踪杂物 triage（学习痕迹入库 + 工具态产物 ignore）、`.python-version` 钉解释器、`start.py` 拦截误用根目录 `.venv`、容器不再内置 `.env`、公开仓库描述修正 | `.gitignore` / `learning-records/README.md` / `start.py` / `backend/Dockerfile` |
+| Phase 1 | 依赖矩阵迁移、旧快照启动检测与拒绝挂载、编排层 1.x 重写、`durability="sync"` 采用与它撞出的上游崩溃修复 | `requirements.txt` / `task_manager.py` / `graph.py` / `docs/migration-langgraph-1x.md` |
+| Phase 2 | ruff + mypy 门禁入库进 CI、README 叙事化、组合分工互链、本章 | `pyproject.toml` / `requirements-dev.txt` / `.github/workflows/ci.yml` / `README.md` / `OVERVIEW.md` |
+
+## Phase 1 的实测结论（推翻了一条继承来的假设）
+1. **旧钉版理由是错的**：`checkpoint-sqlite 2.0.11` 的钉版注释写着「3.x 破坏 resume serde 兼容」，
+   这条从未被实测。用 `mode=ro` 只读探针对 2.0.11 真实写入的快照（104 行 / 7 thread）做旧栈 vs 新栈
+   A/B，结构化 diff 的**全部**差异只有三行版本号 —— 3.1.1 + checkpoint 4.2.0 能无损读回。
+2. **旧快照仍然作废，但理由换了**：**读得回 ≠ 跑得续**。resume 要恢复的是 pregel 循环的执行位置
+   （`channel_versions` / `versions_seen` / `writes` / 0.2 时代的 `branch:*` 通道），1.x 重写了调度与
+   分支语义；跨大版本的执行位置等价性未证明，而 `data/` 是纯运行时数据、可弃。赌错的失败模式是
+   静默腐蚀 resume 状态。
+3. **破坏面 = 0**：装上新栈、一行生产代码未改即 351 passed。所以「重写」是 idiom 现代化，
+   不是兼容性修复。
+4. **1.x 新特性选 durability，不选 typed streaming v2**：本项目事件由节点内部 publish 到自建 EventBus，
+   与 langgraph 流式输出解耦；改 stream 循环会动 SSE 事件时序与类型，违反「零前端契约变更」。
+
+## 新增硬规则（已写进 AGENTS.md，本轮起长期生效）
+1. **依赖矩阵三包同钉**：`langgraph>=1.2,<1.3` + `langgraph-checkpoint==4.2.0` +
+   `langgraph-checkpoint-sqlite==3.1.1`。serde（`JsonPlusSerializer`）住在 `langgraph-checkpoint` 里，
+   不显式钉它就只是一个 `[4.1,5)` 的浮动窗口 —— 一次普通 `pip install` 就能抬走它，而打标
+   （只区分迁移前/后）感知不到 4.x 内部漂移。`langchain*` 不得重新加回显式钉版（全仓 0 import，
+   且 `langchain-core<0.3` 与 langgraph 1.x 直接冲突）。
+2. **旧快照检测连接必须 `mode=ro`**：对 WAL 库而言，最后一个关闭的**读写**连接会把 `-wal` 折回主库
+   并删掉 `-wal`/`-shm` —— 「决定拒绝它」这个动作本身会改写被拒文件，毁掉事后用旧栈取证的现场。
+   判定只认 `==`（不认 `>=`）；行数同时数 `checkpoints` 与 `writes`；打标写入必须 try/except 降级为
+   拒绝挂载（否则只读目录 / 磁盘满会从「单任务失败」变成「FastAPI 起不来」）。
+3. **`durability` 只在挂了 checkpointer 时传，且只经 `TaskManager._invoke_kwargs()` 取参数**：
+   langgraph 1.2.11 在**无** checkpointer 时传 `durability="sync"` 会
+   `AttributeError: 'SyncPregelLoop' object has no attribute '_put_checkpoint_fut'` —— 恰好就是
+   「旧库被拒绝挂载」之后的状态，两个决策会相互撞上。这条不是推理出来的，是被
+   `test_new_tasks_still_run_with_legacy_store_present` 抓出来的。
+
+## Phase 2：质量门禁落地（本轮）
+### 接入方式
+- **`pyproject.toml`（新增）**：ruff `select = ["E4","E7","E9","F","I"]`、`line-length = 120`、
+  `target-version = "py311"`；mypy `files = ["backend"]`（生产 + 测试同一把闸）、`python_version = 3.11`、
+  `ignore_missing_imports`、**`warn_unused_ignores = true`**、默认档（不加 `--strict` /
+  `check_untyped_defs`）。刻意不放 `[build-system]`（本仓库不是可安装包，镜像只 COPY requirements.txt），
+  也不放 `[tool.pytest.ini_options]`（隔离靠 conftest 环境变量块；pytest 只在含该 table 时才把
+  pyproject 当 inifile —— 已用「加文件前后均 365 passed」验证收集行为未变）。
+- **`requirements-dev.txt`（新增）**：`ruff==0.16.7` + `mypy==2.3.1`，**钉死**。linter 的规则集与默认值
+  本身会漂移 —— 抬一个小版本就能在零代码改动的前提下把 CI 变红；与 langgraph 三包同钉是同一条理由。
+  不并进 `requirements.txt`：运行期镜像不该为 linter 变大。
+- **CI `backend-test` job**：新增 `Install quality-gate toolchain` / `Lint (ruff)` / `Typecheck (mypy)`
+  三步（放在 pytest 之前，快速失败），`cache-dependency-path` 补上 dev 文件。
+  **`guard-protected-files` job 与 `conftest.py` 隔离块一字未动**。
+
+### 基线清理（spec 要求「合入时全净，不留 ignore 债」）
+| 工具 | 实测基线 | 处置 | 结果 |
+|---|---|---|---|
+| ruff（默认全规则集） | 638 处 | **不用默认集**：`UP006/UP035/UP045` 424 处 pep585/604 改写会落到 `resilience.py` / `registry.py`（冻结文件）；`BLE001/S110/S112` 64 处与「失败只降级不中断」语义冲突；`RUF012` 31 处对类级 JSON schema 常量是纯噪音；`RUF100` 与 select 集合耦合，会误删 load-bearing 的 `noqa: E402` | 每条取舍连同数字写进 `pyproject.toml` 注释 |
+| ruff（选定 select） | 55 处（36 死 import / 15 import 排序 / 2 重定义 / 2 未用局部变量） | 全部修掉，**零 `per-file-ignores`** | `All checks passed!` |
+| mypy（默认档）| 59 处 / 18 文件（87 文件被检查）；开启 `warn_unused_ignores` 后再暴露 2 处陈旧 `type: ignore`，共 61 处 | 修掉 59 处；`registry.py` 的 2 处走**唯一一条 override**（CI 冻结文件，修它必须改冻结签名）| `Success: no issues found in 87 source files` |
+
+### 门禁抓到的真东西（不是纯格式）
+1. `services/trace.py`：`_files: Dict[str, object]` 把文件句柄的类型抹平了，`write/flush/close`
+   五处全靠运气 —— 改为 `Dict[str, IO[str]]`。
+2. `api/routes.py`：`task_trace` 声明 `-> Response` 却会返回 `ApiResponse`（`?format=json` 分支）。
+   改成真实类型 `ApiResponse | Response` + **显式 `response_model=None`**：已实测新旧两种写法生成的
+   OpenAPI 文档逐字节相同、两个分支的响应也完全相同（FastAPI 原本就因为 `Response` 子类而跳过
+   模型推断，显式写出来只是把这份行为钉住）。
+3. `core/mcp/client.py`：`_submit` 先调 `_ensure_loop_running()` 再**第二次**读 `self.loop`，
+   两次读之间并发 close 能把 loop 换掉。改为由 `_ensure_loop_running()` 单次读并返回校验过的对象。
+4. `core/agent/nodes.py:207`：planner 异常分支把 `plan` 赋成 `["Planner error: ..."]`（纯字符串），
+   而正常分支是 `List[Dict]` —— 下游 `_plan_confirm` 按 dict 用。**本轮只加注解不改行为**
+   （`plan: List[Any]` + 注释说明两种形态），因为那是 `# pragma: no cover - defensive` 分支、
+   无测试覆盖，改它属于行为变更，记为后续候选。
+5. `tests/test_p2_mcp.py`：`signal.SIGKILL` 在 Windows 上不存在 —— mypy 按当前平台解析，
+   本地红、CI（ubuntu）绿。改为 `getattr(signal, "SIGKILL", signal.SIGTERM)`，两个平台运行时语义相同，
+   让门禁在 Windows 与 Linux 上**同一个答案**（比在配置里钉 `platform` 更好：后者会掩盖真实的可移植性问题）。
+6. 两处陈旧 `type: ignore`（`web_search.py` 的 duckduckgo 导入、`test_p2_mcp.py` 的 method-assign）
+   在 `warn_unused_ignores` 下暴露并删除 —— 这个开关的意义就是不让 ignore 沉淀成新债。
+7. `nodes.py` 的 `tool._needs_confirm(args)`（MCP per-call 鸭子类型判定）用 `typing.cast` 显式交代给
+   mypy：`cast` 在运行时是恒等函数，判定逻辑与异常降级路径未动。**本轮 `nodes.py` 共三处改动**
+   （另两处：删一个死 `import uuid`、上面第 4 条的纯注解），`_needs_confirm` 重算块与 `human_confirm_node` 零改动。
+
+## 组合分工（简历化包装，US15）
+README 新增第 4 节，与 [`interview-agent-py`](https://github.com/renjianguojinqianfan/interview-agent-py)
+显式互链并写分工：本仓库扛 **agent 运行时深度**（图编排 / 断点续跑与检查点语义 / 风险确认闸门 /
+熔断重试 / MCP·OpenAPI·Git·插件工具链 / SSE 可观测），数据面刻意轻（sqlite + JSON + 标准库索引，
+零外部服务）；对方扛 **业务工程落地**（PostgreSQL + pgvector / Redis / MinIO / async SQLAlchemy /
+多阶段 uv 构建 / ADR 序列 / `make verify` 全栈门禁）。两边现在说同一套门禁语言（ruff + mypy + pytest）。
+按 spec，对方仓库内的改动不在本次范围（单侧先写）。
+
+## 闸门结果（本轮）
+| 闸门 | 结果 |
+|---|---|
+| `ruff check backend scripts` | `All checks passed!`（零排除） |
+| `mypy`（files=backend，生产+测试） | `Success: no issues found in 87 source files` |
+| `pytest backend/tests/ -q` | **365 passed**（与接入前逐项相同，用例数不变） |
+| `scripts/live_e2e.py --check` | 5/5 PASS（无 Key / 无网络，可写路径全重定向到临时目录） |
+| 受保护文件 | `git diff -- backend/core/tools/resilience.py backend/core/tools/registry.py backend/tests/conftest.py` 中，前两者为空、conftest 只有隔离块以下的改动 |
+| `guard-protected-files` job | 未触发（本轮未改这两个文件） |
+
+## 新增契约
+- **无** API / SSE 事件 / 配置前缀变更；`task_trace` 的 OpenAPI 文档已实测逐字节不变。
+- 新增文件：`pyproject.toml`（门禁配置）、`requirements-dev.txt`（门禁工具链）。
+- 本地开发多一步：`pip install -r requirements-dev.txt`（README §6 与 AGENTS.md 常用命令已同步）。
+
+## 后续候选（本轮刻意不做，记在这里免得丢）
+1. **`registry.py` 的 `get_tool` 返回类型是个谎言**：声明 `-> BaseTool | None`，实返
+   `type[BaseTool] | None`（类而不是实例），调用方按实例用会炸。文件被 CI 冻结，本轮用唯一一条
+   mypy override 接住并在配置里写明理由 —— 但 override 注释不该成为它的**唯一**记录：
+   建议开一张跟踪票，在下一次解冻窗口期修签名并撤掉这条 override。
+2. **`nodes.py:207` planner 异常分支的 `plan` 形态**：降级时赋的是 `["Planner error: ..."]`（纯字符串），
+   而正常分支是 `List[Dict]`，下游 `_plan_confirm` 按 dict 用。本轮只加注解不改行为（defensive 分支、
+   无测试覆盖）；修它得先决定“计划失败”的形态（改成 dict 计划项，还是让 planner 失败直接走 finish），
+   属行为变更，单独开票。
+3. **`scripts/live_e2e.py` 的预算与超时**（迁移档 §6 已记，仍未动）：场景 1 的终态预算硬编码 ~60s，
+   而真实模型一轮 planner 就要 ~10s；`OpenAICompatibleClient` 未设请求 timeout（SDK 默认 600s），
+   单次卡顿会吃掉整个预算。
+4. **离线套件会写真实 `data/`**（本轮跑闸门时观察到，非本轮引入）：
+   `test_graph.py::test_engineer_smoke_passes` 调 `test_smoke.main()`，而它用的是进程级
+   `get_settings()` 单例（指向真实 `data/`）而不是 `tmp_path` —— 每跑一次全量套件就往
+   `data/tasks.json` 追加一条 `smoke` 任务（当前已累积 136 条）并重写 `data/artifacts/hello.txt`。
+   `data/` 已 gitignore，所以不会污染仓库，但与「离线测试不碰本地状态」的初衷不一致
+   （对比：`live_e2e.py --check` 就把可写路径全重定向到临时目录）。本轮四次跑闸门共追加了 4 条。
+   修它要把这个 smoke 改成基于 `make_settings(tmp_path)`，属测试行为变更，单独开票。
+
+## 本轮文档
+- `README.md`：重写为叙事型（定位与亮点 → 能力 → 编排拓扑 → 迁移章节：动机/矩阵/实测/代价/闸门/安全闭环 →
+  组合分工互链 → 质量门禁 → 文档）；顺手校正了几处继承自旧 README 的过期数字
+  （REST 14→15、补上遗漏的 artifacts preview 端点、SSE 事件数改为可数的 21、前端组件数按目录写清）。
+  **又按“不要一股脑把所有信息写上去”收敛了一轮**：参照 codex（81 行）/ opencode（129）/ pi-mono（115）/
+  kimi-cli（177）的体量，从 401 行压到 **160 行 / 9 个标题 / 1 张图**（与 pi-mono 的 115 行/6787 字符
+  几乎同一量级）。移出 README 的四块内容都有确定去处，无信息丢失：目录树 → `AGENTS.md` §3；
+  REST 表 → `docs/architecture.md` §3.3 + 运行时 Swagger（P2/P3 新端点在各自增量档）；
+  15 组配置表 → `.env.example`（逐项带注释）；插件代码示例 → `backend/plugins/example_tool.py`（它本身就是模板）。
+  分层图换成一段文字，只留编排拓扑一张 mermaid；迁移章节压成六段摘要（每段一个维度）+ 外链完整实测档。
+- `docs/migration-langgraph-1x.md`：§7 「Phase 2 待办」逐条补记已交付（保留原文，因为「当时为什么
+  不在迁移分支里做」本身就是阶段划分的一部分）。
+- `AGENTS.md`：新增「质量门禁基线全净」硬规则（含两条红线：不准用 `# type: ignore` / `# noqa` 消错、
+  `registry` 是唯一 mypy override 且不准再加）；目录表补 `pyproject.toml` / `requirements-dev.txt`；
+  常用命令补 lint + typecheck；完成定义与行为边界同步（放宽门禁列入⚠需确认）。
+  注：§2 里那三条迁移硬规则（依赖三包同钉 / `mode=ro` 检测 / `durability` 只经 `_invoke_kwargs`）
+  是 Phase 1 就已写入的，本轮未动。
+

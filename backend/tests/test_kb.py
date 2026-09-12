@@ -7,18 +7,16 @@ and the KB management REST endpoints.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 from backend.config import Settings
 from backend.core.kb.knowledge_base import (
     KbHit,
     KnowledgeBase,
-    get_kb_instance,
     set_kb_instance,
 )
 from backend.core.llm.client import MockLLMClient
-from backend.core.tools.kb_tools import MemorySearchTool, KbQueryTool
+from backend.core.tools.kb_tools import KbQueryTool, MemorySearchTool
 from backend.tests.conftest import make_manager
 from backend.tests.test_graph import _run_until_done
 
@@ -188,9 +186,9 @@ def test_kb_tools_without_instance_return_empty():
 def test_kb_rest_endpoints(tmp_path):
     from fastapi.testclient import TestClient
 
+    from backend.main import app
     from backend.services.event_bus import EventBus
     from backend.services.persistence import Persistence
-    from backend.main import app
 
     settings = _kb_settings(tmp_path)
     eb = EventBus()

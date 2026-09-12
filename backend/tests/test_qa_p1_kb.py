@@ -17,7 +17,7 @@ from pathlib import Path
 from backend.config import Settings
 from backend.core.kb.knowledge_base import INDEX_FILENAME, KnowledgeBase
 from backend.core.llm.client import MockLLMClient
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_manager
 from backend.tests.test_graph import _run_until_done
 
 

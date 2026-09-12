@@ -1,0 +1,16 @@
+# 质量门禁工具链（CI backend-test job 与本地同一套版本）
+#
+# 为什么不并进 requirements.txt：backend/Dockerfile 只 COPY requirements.txt，
+# 运行期不需要 linter；并进去等于让每个镜像都多装两把工具。
+#
+# 为什么钉死而不是给区间：ruff/mypy 的规则集与默认值本身会随版本漂移——抬一个小
+# 版本就能在**零代码改动**的前提下把 CI 变红（新规则、新默认 select、新类型推断）。
+# 与 requirements.txt 里 langgraph 三包同钉是同一条理由：闸门的判据必须稳定，
+# 抬版走人评估（本地跑一遍、清完新违规、再改这里）。
+#
+# 本地用法：
+#   .venv311\Scripts\python.exe -m pip install -r requirements-dev.txt
+#   .venv311\Scripts\python.exe -m ruff check backend scripts
+#   .venv311\Scripts\python.exe -m mypy
+ruff==0.16.7
+mypy==2.3.1

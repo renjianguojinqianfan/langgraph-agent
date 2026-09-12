@@ -9,7 +9,7 @@ an :class:`~backend.services.persistence.Artifact`.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from ...config import Settings
 from ...utils.logging import get_logger

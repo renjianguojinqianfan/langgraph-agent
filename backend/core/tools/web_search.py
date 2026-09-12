@@ -49,7 +49,7 @@ class WebSearchTool(BaseTool):
 
     def _search_duckduckgo(self, query: str, max_results: int) -> list[Dict[str, Any]]:
         try:
-            from duckduckgo_search import DDGS  # type: ignore
+            from duckduckgo_search import DDGS
         except ImportError:
             return [{
                 "title": "DuckDuckGo unavailable",
@@ -70,8 +70,6 @@ class WebSearchTool(BaseTool):
         if not self._serpapi_key:
             return [{"title": "SerpAPI unavailable", "snippet": "serpapi_key not set.", "url": ""}]
         try:
-            import urllib.parse
-
             import httpx
 
             resp = httpx.get(

@@ -16,11 +16,11 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
+from ..api.schemas import Artifact, Task
 from ..config import Settings
 from ..utils.logging import get_logger
-from ..api.schemas import Artifact, Task
 
 logger = get_logger("persistence")
 

@@ -22,12 +22,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from backend.config import Settings
 from backend.core.mcp.client import McpClientManager, McpServerConfig
-from backend.core.tools.base import ToolResult
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
 from backend.core.tools.resilience import ToolExecutor
 
@@ -36,7 +36,7 @@ ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
 
 def _echo_settings(tmp_path: Path, **overrides) -> Settings:
     """Settings wired to the local echo MCP server."""
-    base = dict(
+    base: dict[str, Any] = dict(
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         mcp_enabled=True,
@@ -65,7 +65,10 @@ def _kill_pid(pid: int) -> None:
             timeout=10,
         )
     else:  # pragma: no cover - POSIX
-        os.kill(pid, signal.SIGKILL)
+        # getattr 而不是直接 signal.SIGKILL：mypy 按当前平台解析 signal 常量，
+        # 在 Windows 上 SIGKILL 不存在会让类型闸变红（而这条分支只在 POSIX 跑）。
+        # 两个平台上运行时语义完全相同。
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
 
 
 # ─────────────────── zero regression ───────────────────
@@ -347,7 +350,7 @@ def test_mcp_confirm_judgement_never_blocks(tmp_path):
     def boom(_args):
         raise RuntimeError("judgement exploded")
 
-    tool._needs_confirm = boom  # type: ignore[method-assign]
+    tool._needs_confirm = boom
 
     mock = MockLLMClient(
         tool_calls=[{"id": "c1", "name": tool.name, "arguments": {"text": "x"}}]

@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
-from ..services.event_bus import EventBus, Event
+from ..services.event_bus import Event, EventBus
 
 
 def sse_format(event: Event) -> str:

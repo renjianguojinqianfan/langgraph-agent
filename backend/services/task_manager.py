@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from langgraph.types import Durability
 
@@ -43,6 +43,9 @@ from ..utils.logging import get_logger
 from .event_bus import EventBus
 from .persistence import Persistence
 from .trace import TraceRecorder
+
+if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
+    from ..core.mcp.client import McpClientManager
 
 logger = get_logger("task_manager")
 
@@ -178,7 +181,7 @@ class TaskManager:
         # (first-registered-wins conflict semantics, invalid spec -> warning only).
         self._load_openapi_tools(settings)
         # P2 item 1: connect MCP servers and append their tools (startup once).
-        self._mcp = None
+        self._mcp: Optional[McpClientManager] = None
         self._load_mcp_tools(settings)
         # P2 item 2: append Git tools (git_enabled switch, no @register).
         self._load_git_tools(settings)
@@ -827,7 +830,9 @@ class TaskManager:
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
 
             snap = graph.get_state(self._thread_config(task_id))
-            restored = dict(snap.values or {})
+            # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
+            # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
+            restored = cast(AgentState, dict(snap.values or {}))
             if not restored:
                 raise RuntimeError(f"empty checkpoint state for task {task_id}")
             # Reset *control* flags only; plan / steps / confirmed-ids survive.

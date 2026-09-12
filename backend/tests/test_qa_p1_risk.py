@@ -15,7 +15,6 @@ edge cases / payload contracts that the engineer's tests only touch lightly:
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 

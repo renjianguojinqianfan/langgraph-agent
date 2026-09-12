@@ -11,6 +11,7 @@ no-breaker passthrough).
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from backend.config import Settings
 from backend.core.tools.base import BaseTool, ToolResult
@@ -19,7 +20,7 @@ from backend.core.tools.resilience import CircuitBreaker, ToolExecutor, with_ret
 
 def _settings(**overrides) -> Settings:
     """Settings with tiny backoff so retry tests stay fast."""
-    base = {
+    base: dict[str, Any] = {
         "tool_failure_threshold": 3,
         "tool_cooldown_sec": 30,
         "tool_backoff_base": 0.01,
@@ -37,7 +38,7 @@ class _FlakyTool(BaseTool):
     description = "flaky test tool"
     args_schema = {}
     retryable = True
-    max_retries = None
+    max_retries: int | None = None  # 与 BaseTool.max_retries 同型（下方 _NoBreakerTool 要覆盖为 0）
     circuit_breaker = True
 
     def __init__(self, fail_times: int = 0, settings: Settings | None = None) -> None:

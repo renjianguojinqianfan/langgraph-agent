@@ -189,7 +189,6 @@ class _McpSession:
     async def _connect(self) -> None:
         import asyncio
 
-        import mcp
         from mcp.client.stdio import StdioServerParameters, stdio_client
 
         # Merge the process environment so commands like `npx` / `node` resolve.
@@ -219,18 +218,26 @@ class _McpSession:
             getattr(init, "protocolVersion", "?"),
         )
 
-    def _ensure_loop_running(self) -> None:
-        """Raise when the session loop is not ready to accept work."""
-        if self.loop is None or not self.loop.is_running():
+    def _ensure_loop_running(self) -> Any:
+        """Raise when the session loop is not ready to accept work.
+
+        Returns the loop on success so callers pass the *same* object they just
+        validated to ``run_coroutine_threadsafe`` (single read: no window where a
+        concurrent close could swap ``self.loop`` between check and use). The
+        return type stays ``Any`` because ``asyncio`` is imported lazily inside
+        the call sites, so ``AbstractEventLoop`` is not a module-level name here.
+        """
+        loop = self.loop
+        if loop is None or not loop.is_running():
             raise RuntimeError(f"MCP session {self.cfg.name} is not running")
+        return loop
 
     def _submit(self, coro_factory, timeout: float):
         """Run a coroutine (built by ``coro_factory``) on the session loop."""
         import asyncio
         import concurrent.futures
 
-        self._ensure_loop_running()
-        fut = asyncio.run_coroutine_threadsafe(coro_factory(), self.loop)
+        fut = asyncio.run_coroutine_threadsafe(coro_factory(), self._ensure_loop_running())
         try:
             return fut.result(timeout=timeout)
         except concurrent.futures.TimeoutError:

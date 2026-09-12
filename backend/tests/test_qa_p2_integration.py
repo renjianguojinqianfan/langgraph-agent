@@ -23,14 +23,12 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
-
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.mcp.client import McpClientManager
 from backend.core.tools.mcp_tool import McpTool
-from backend.core.tools.resilience import ToolExecutor
 from backend.core.tools.registry import build_tools
+from backend.core.tools.resilience import ToolExecutor
 from backend.services.event_bus import EventBus
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
@@ -47,7 +45,7 @@ def test_import_backend_main_succeeds():
     assert backend.main.app.title == "LangGraph Autonomous Task Agent"
 
 
-def _run_task_once(tmp_path, index: int) -> tuple[str, list]:
+def _run_task_once(tmp_path, index: int) -> tuple[str, set[str]]:
     """Run one full mock task and return (final_status, event_types)."""
     settings = make_settings(tmp_path)
     eb = EventBus()

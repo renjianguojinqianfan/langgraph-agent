@@ -96,7 +96,6 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
 
 def test_p1_openapi_registration_does_not_break_startup(tmp_path, event_bus):
     """openapi_enabled with an invalid spec must warn and continue."""
-    import logging
 
     settings = make_settings(
         tmp_path,

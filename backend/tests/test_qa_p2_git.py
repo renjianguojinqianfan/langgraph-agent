@@ -30,9 +30,9 @@ import pytest
 
 from backend.config import Settings
 from backend.core.agent.nodes import AgentRuntime
+from backend.core.agent.state import AgentState
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.git_tools import (
-    GitBranchTool,
     GitCheckoutTool,
     GitCommandError,
     GitCommitTool,
@@ -280,7 +280,7 @@ def test_build_git_tools_creates_missing_root(tmp_path):
 
 
 # ─────────────────── end-to-end executor confirmation ───────────────────
-def _base_state() -> dict:
+def _base_state() -> AgentState:
     return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
@@ -293,9 +293,8 @@ def _base_state() -> dict:
     }
 
 
-def _run_confirm_flow(repo, settings, tool, approved: bool) -> dict:
+def _run_confirm_flow(repo, settings, tool, approved: bool) -> AgentState:
     """Run executor -> human_confirm -> tool_node with a fake TaskManager."""
-    from backend.core.agent.nodes import AgentRuntime
 
     mock = MockLLMClient(
         tool_calls=[{"id": "c1", "name": tool.name, "arguments": {"message": "qa commit"}}]
@@ -373,8 +372,6 @@ def test_git_read_tools_do_not_confirm(repo, settings):
 
         def add_artifact(self, *a, **kw):
             return None
-
-    from backend.core.agent.nodes import AgentRuntime
 
     rt = AgentRuntime(
         "t_qa_git_read", _FakeTM(settings, bus), llm=mock, tools=[tool],
