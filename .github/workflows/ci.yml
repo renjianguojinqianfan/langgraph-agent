@@ -4,7 +4,8 @@
 # 触发：push / PR 到 master（docs/ 与 *.md 变更不触发）；workflow_dispatch 手动
 # 内容：
 #   guard-protected-files  受保护文件守卫（resilience.py/registry.py，[OVERRIDE] 逃生舱）
-#   backend-test    Python 3.11 + pytest 离线全量回归（backend/tests/，351 用例）
+#   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
+#                   + pytest 离线全量回归（backend/tests/，365 用例）
 #                   + live_e2e.py --check 离线冒烟（无 Key/无网络）
 #   frontend-build  npm ci + tsc 类型检查 + vite 生产构建（产物上传为 artifact）
 #   docker-build    验证 backend/Dockerfile 可构建（不 push）
@@ -86,7 +87,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install backend dependencies
         run: |
@@ -95,6 +98,20 @@ jobs:
           grep -vE '^mcp' requirements.txt > /tmp/requirements-ci.txt
           pip install -r /tmp/requirements-ci.txt
           pip install --no-deps "mcp>=1.2,<2.0"
+
+      # 质量门禁工具链单独一份 requirements-dev.txt：运行期镜像（backend/Dockerfile）
+      # 只 COPY requirements.txt，不该为 linter 变大。版本钉死，理由见该文件。
+      - name: Install quality-gate toolchain
+        run: pip install -r requirements-dev.txt
+
+      # ruff / mypy 的规则集与排除面全部写在 pyproject.toml（含每条「刻意不启用」
+      # 的理由）。基线要求全净：这两步一旦变红，就是新代码带进来的，不是历史债。
+      # mypy 不传路径：files=["backend"] 由配置文件给出，生产与测试同一把闸。
+      - name: Lint (ruff)
+        run: python -m ruff check backend scripts
+
+      - name: Typecheck (mypy)
+        run: python -m mypy
 
       - name: Run offline test suite
         run: |

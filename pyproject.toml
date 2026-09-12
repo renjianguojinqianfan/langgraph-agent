@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 质量门禁配置（Issue #7 Phase 2 / spec US11 + US22）
+#
+# 本文件只承载 ruff 与 mypy 两个闸门，**不放 [build-system]**：本仓库不是可安装
+# 包（后端由 uvicorn 直接跑源码，镜像只 COPY requirements.txt），加 build 段会让
+# 人误以为能 `pip install .`。同理不放 [tool.pytest.ini_options]——离线套件的
+# 环境隔离靠 backend/tests/conftest.py 顶部的环境变量块，不靠 ini（pytest 只在
+# 本文件含该 table 时才把它当 inifile，因此加这个文件不改 rootdir/收集行为，
+# 已用「加文件前后均 365 passed」验证）。
+#
+# 选取原则：合入时基线全净、不留 ignore 债——下面没有任何 per-file-ignores，
+# 唯一的 mypy override 是 CI 冻结文件（理由写在该段）。每条「刻意不启用」都附了
+# 量过的数字，免得后人把它当成漏配。
+# ─────────────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py311"   # 与 .python-version、CI setup-python 一致
+line-length = 120          # 只影响 isort 折行判定（E501 未启用，见下）
+extend-exclude = [
+    ".venv",
+    ".venv311",  # 本地解释器，不是本仓库代码
+    "frontend",  # 前端另有闸：CI frontend-build 跑 tsc --noEmit
+    "data",      # 运行时产物，不入库
+]
+
+[tool.ruff.lint]
+# 最小高信号集：pyflakes（死 import / 未用变量 / 重定义）+ import 与语句误用 +
+# 语法级错误 + isort。接入时实测 55 处违规，全部已修，零排除。
+select = ["E4", "E7", "E9", "F", "I"]
+
+# 刻意不启用的规则族（不是欠债，是量过之后的取舍）：
+#   UP（pyupgrade）        —— 424 处 pep585/pep604 注解改写（UP006/UP035/UP045）会
+#                             落到 resilience.py 与 registry.py：两者是 AGENTS.md
+#                             「熔断层零改动」对象，且被 CI guard-protected-files
+#                             机械化拦截。为 linter 破门不值当。
+#   BLE001 / S110 / S112   —— 64 处宽捕获。本项目大量「工具失败只降级、不中断循环」
+#                             的刻意 except Exception（熔断层与 MCP 会话尤其如此），
+#                             逐处收窄等于改行为语义。
+#   RUF012                 —— 31 处 BaseTool.args_schema：类级 JSON schema 常量，
+#                             加 ClassVar 只为让 linter 满意，噪音大于收益。
+#   E501                   —— 仓库既有长行（最长 172 字符，多在测试）不属本次范围。
+# RUF100（unused-noqa）不启用是因为它与 select 集合耦合：现有 29 处 noqa 全部是
+# E402/F401/S310，其中 E402 在本 select 下是**load-bearing** 的（conftest.py 与
+# scripts/ 刻意把 import 放在环境隔离/路径引导之后）。启用 RUF100 会在有人调整
+# select 时把这批 noqa 判成死注释并自动删掉，进而炸出 E402——是陷阱不是护栏。
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["backend"]            # 生产 + 测试全覆盖（spec US11：合入时基线全净）
+ignore_missing_imports = true  # 无 stub 的三方库（mcp / duckduckgo_search 等）不报噪音
+warn_unused_ignores = true     # 防止 `# type: ignore` 沉淀成新的债
+show_error_codes = true
+
+# 默认档：不加 --strict、不加 check_untyped_defs。闸的是**已注解面**——正是 1.x
+# 重写新增的 Literal 路由返回类型、tuple[bool, str] 判定面与 checkpoint 挂载签名
+# （docs/migration-langgraph-1x.md §4/§5）。把未注解函数体一起拉进来会新增一批
+# 「测试 fixture 无返回注解」类的噪音，与「基线全净」目标相反。
+#
+# 唯一的 override：AGENTS.md「熔断层零改动」把 registry.py / resilience.py 交给
+# CI guard-protected-files 机械化拦截（逃生舱仅 PR/commit 标题带 [OVERRIDE]）。
+# registry.py 现有 2 处 return-value 不精确（build_tools_from_spec 声明
+# list[BaseTool] 实返 list[OpenAPITool]；get_tool 声明 BaseTool | None 实返
+# type[BaseTool] | None）——修它必须改冻结文件的签名，所以这里显式排除，而不是
+# 用 [OVERRIDE] 破门。ignore_errors 只压制「在该模块内报错」，其它模块引用
+# registry 时仍按它的注解检查，闸没有整体让位。
+# resilience.py 当前 0 错，**不列入**：列入只会掩盖它将来的真错误。
+[[tool.mypy.overrides]]
+module = ["backend.core.tools.registry"]
+ignore_errors = true
