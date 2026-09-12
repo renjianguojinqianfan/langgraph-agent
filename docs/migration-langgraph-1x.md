@@ -285,13 +285,26 @@ AttributeError 在第一个 superstep 就炸。
 
 ## 7. Phase 2 待办（本次交付刻意不含）
 
+> **2026-09-12 补记：下列四项已全部交付**（Issue #7 Phase 2）。交付摘要见 `OVERVIEW.md` 的
+> Issue #7 章节，门禁配置与每条取舍理由见仓库根 `pyproject.toml`。保留下文原样，
+> 因为「当时为什么不在迁移分支里做」本身就是阶段划分的一部分。
+
 按 grilling 总结的阶段划分，以下属于 Phase 2，不在迁移分支里做，记在这里免得被当成已交付：
 
 - **ruff + mypy 进 CI**（spec US11、Testing Decisions 的「强制缝」、US22 的「质量门禁配置」）：
   `backend-test` job 内新增两步 + 入库最小配置，合入时基线必须全净。越晚接入要清的债越多，
   而本次重写新增了大量 `Literal` / `tuple[bool, str]` 类型面，正是 mypy 能立即锁住的收益。
+  → **已交付**：`pyproject.toml`（ruff select=`E4,E7,E9,F,I`、mypy `files=["backend"]`）+
+  `requirements-dev.txt`（钉死）+ CI 三步。实测基线：ruff 55 处全修（零 `per-file-ignores`），
+  mypy 59 处修完 + `registry.py` 2 处走唯一一条 override（冻结文件）。mypy 额外抓出五处真缺陷：
+  `trace.py` 把文件句柄抹平成 `object`、`task_trace` 的返回注解与真实返回不符、
+  `_submit` 对 `self.loop` 的 TOCTOU 双读、planner 异常分支的 `plan` 形态不一致（只加注解未改行为）、
+  `signal.SIGKILL` 在 Windows 上不存在（mypy 按当前平台解析，会让本地红而 CI 绿）。
 - **README 重写为叙事型**（US3：迁移章节的动机/矩阵/代价/闸门/安全闭环）：当前只加了
   顶部事实段 + 指向本文档的链接。
+  → **已交付**：定位与亮点 → 架构图（mermaid 拓扑 + 分层）→ 迁移章节 → 组合分工互链 → 运行与门禁。
 - **与 `interview-agent-py` 互链并显式写分工**（US15）：本仓库单侧先写。
+  → **已交付**：README §4（分工对照表 + 一句话分工）。
 - **OVERVIEW.md 补 Issue #7 章节**：既有章节是历史交付日志（里面的 351/2.0.11 是当时事实），
   不改旧章节，只追加新一章。
+  → **已交付**：旧章节逐字未动，末尾追加 Issue #7 一章。
