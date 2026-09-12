@@ -308,3 +308,7 @@ AttributeError 在第一个 superstep 就炸。
 - **OVERVIEW.md 补 Issue #7 章节**：既有章节是历史交付日志（里面的 351/2.0.11 是当时事实），
   不改旧章节，只追加新一章。
   → **已交付**：旧章节逐字未动，末尾追加 Issue #7 一章。
+
+> **2026-09-12 后续注记**：上文「`registry.py` 2 处走唯一一条 override」已在解冻窗口修正——
+> `get_tool` / `make_openapi_tool` 两处签名改正、`pyproject.toml` 那条唯一 mypy override 已撤除，
+> mypy 现零 override。详见 `OVERVIEW.md` Issue #7 后续候选 #1。
