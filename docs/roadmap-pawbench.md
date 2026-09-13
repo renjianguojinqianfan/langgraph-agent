@@ -104,9 +104,13 @@
 3. **注意力保护**：验收测试与失败案例复盘必须亲手做——PawBench 全量轨迹回放
    是现成的复盘教材，也是「学习资产」落袋之处。警惕「读过了但没写进手感」。
 4. 评测代码不进 pytest（天然 live），但 ruff/mypy 同闸。
-5. **分支策略**：永远在 feature 分支做，master 只接 PR 合入（master 的
-   「全绿」简历主张不可拆）。沙箱环境 git push 无凭据，落盘走 GitHub API
-   通道；每段工作 = commit + 立即 push，本地 commit ≠ 持久化。
+5. **分支策略（分级）**：功能/依赖/代码改动永远在 feature 分支做、master 只接
+   PR 合入（护「全绿」简历主张）；docs/收尾小修因 `ci.yml` 的 `paths-ignore:
+   docs/**、*.md` 不进 CI、不影响全绿，单人自用可直接 commit+push master、免 PR
+   仪式（2026-09-14 architecture.md 依赖同步实例：push 时 admin bypass 了 guard
+   required check）。沙箱 git push 走 OAuth 回落（清空 `GITHUB_TOKEN` +
+   per-command `credential.helper='!gh auth git-credential'`）；每段工作 =
+   commit + 立即 push，本地 commit ≠ 持久化。
 
 ### 建议分支拓扑
 
