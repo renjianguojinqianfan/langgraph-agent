@@ -24,13 +24,13 @@
 | 层 | 选型 | 版本区间 | 理由 |
 |----|------|----------|------|
 | 后端语言 | Python | ≥3.10 | LangGraph 生态要求 |
-| 编排内核 | `langgraph` + `langchain` + `langchain-openai` | langgraph ^0.2、langchain ^0.2 | 状态图、节点、中断、流式回调 |
-| Web 框架 | `fastapi` + `uvicorn` | fastapi ^0..111、uvicorn ^0.30 | 异步、原生 SSE、自动 OpenAPI |
+| 编排内核 | `langgraph`（+ checkpoint / checkpoint-sqlite） | langgraph ^1.2、checkpoint 4.2.0、checkpoint-sqlite 3.1.1 | 状态图、节点、中断、流式回调 |
+| Web 框架 | `fastapi` + `uvicorn` | fastapi ^0.111、uvicorn ^0.30 | 异步、原生 SSE、自动 OpenAPI |
 | 配置 | `pydantic-settings` | ^2.3 | `.env` → 强类型配置 |
 | LLM 调用 | `openai` SDK（兼容模式） | ^1.30 | 通过 `base_url` 适配 DeepSeek/Ollama |
 | Web 检索 | `duckduckgo-search`（默认免费）/ 预留 SerpAPI | ddgs ^4.0 | 不强制付费 Key |
 | 数据校验 | `pydantic` | ^2.7 | 模型与 API schema |
-| 前端框架 | React + Vite + TypeScript | react ^18.3、vite ^5.3 | 快速、类型安全 |
+| 前端框架 | React + Vite + TypeScript | react ^18.3、vite ^8.2 | 快速、类型安全 |
 | 前端样式 | Tailwind CSS | ^3.4 | 三栏布局、响应式 |
 | 状态管理 | Zustand | ^4.5 | 轻量、适合 SSE 事件累积 |
 | 图表/时间线 | 原生 DOM + Tailwind（不引入重型库） | — | 步骤时间线用列表即可 |
@@ -422,11 +422,12 @@ sequenceDiagram
 
 ### 6.1 Python（`requirements.txt`）
 
+> 完整依赖、钉版区间与理由以仓库根 `requirements.txt` 为准；本节只列核心，避免逐行复制再次滞后。
+
 ```
-langgraph>=0.2.0,<0.3.0
-langchain>=0.2.0,<0.3.0
-langchain-openai>=0.1.0,<0.2.0
-langchain-core>=0.2.0,<0.3.0
+langgraph>=1.2,<1.3
+langgraph-checkpoint==4.2.0
+langgraph-checkpoint-sqlite==3.1.1
 fastapi>=0.111.0,<0.113.0
 uvicorn[standard]>=0.30.0,<0.31.0
 pydantic>=2.7.0,<3.0.0
@@ -449,9 +450,9 @@ httpx>=0.27.0          # 供 http_api 工具使用
   "devDependencies": {
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.0",
+    "@vitejs/plugin-react": "^6.1.0",
     "typescript": "^5.5.0",
-    "vite": "^5.3.0",
+    "vite": "^8.2.2",
     "tailwindcss": "^3.4.0",
     "postcss": "^8.4.0",
     "autoprefixer": "^10.4.0"
