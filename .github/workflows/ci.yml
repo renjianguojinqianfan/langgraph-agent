@@ -125,6 +125,11 @@ jobs:
         # 无网络、无 Key：只验证脚本依赖链可加载、配置可解析、内核可装配，
         # 可写路径全部重定向到临时目录，不碰 data/。
 
+      - name: Offline smoke of headless entry (--check)
+        run: python -m backend.headless --check
+        # P0-C：无网络、无 Key，验证 headless 单发入口能跑到 COMPLETED、产物落
+        # --dir、JSON 结果契约完整、trace 非空、--auto-approve 确实旁路确认闸门。
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4

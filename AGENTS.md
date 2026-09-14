@@ -3,7 +3,7 @@
 > 本文件是 `E:\code\demo\langgraph-agent` 的 Agent 操作手册 / 核心指令集。不重复全局 `~/.agents/AGENTS.md` 的工作循环纪律，只写本目录特有的东西。
 
 ## 1. 快照
-基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）+ langgraph 0.2→1.2.x 原地迁移（Issue #7）+ P0-A（文件精读编辑工具 read/edit/glob/grep，roadmap-pawbench）多轮迭代，**414 个离线测试全绿 + ruff/mypy 基线全净** + 真实 LLM（qwen3.6-plus）端到端与断点续跑双场景验证通过。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）+ langgraph 0.2→1.2.x 原地迁移（Issue #7）+ P0-A（文件精读编辑工具 read/edit/glob/grep，roadmap-pawbench）+ P0-C（headless 无人值守入口，backend/headless.py）多轮迭代，**426 个离线测试全绿 + ruff/mypy 基线全净** + 真实 LLM（qwen3.6-plus）端到端与断点续跑双场景验证通过。
 
 ## 2. 硬规则（改前必读）
 - **测试环境隔离**：离线测试必须不受本地 `.env` 影响——`backend/tests/conftest.py` 顶部用环境变量覆盖（`LLM_BASE_URL=""` / `USE_MOCK_LLM=true` / `AUX_LLM_ENABLED=false` / `AUTH_ENABLED=false` / `OPENAPI_ENABLED=false` / `CHECKPOINT_ENABLED=false`）。**改 conftest 时勿破坏这段隔离**，否则本地 live 配置会污染全部离线用例。
@@ -35,8 +35,9 @@
 | `backend/core/mcp/` | McpClientManager（stdio 传输，每 server 一线程+事件循环）|
 | `backend/services/` | event_bus / trace(JSONL) / persistence / task_manager / auth(hmac) |
 | `backend/api/` | routes（15 REST）/ sse / schemas（`/health` 另在 `main.py`）|
+| `backend/headless.py` | P0-C 无人值守单发入口（`python -m backend.headless -p "<题>" --dir <工作目录> --auto-approve --output json`）：复用 TaskManager 跑一题、产物落 --dir、trace 落盘、JSON 结果+退出码；评测台驱动本 agent 的统一命令；`--check` 为离线冒烟 |
 | `backend/plugins/` | 插件目录（自动发现 BaseTool，example_tool.py）|
-| `backend/tests/` | **41 文件 / 414 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A）|
+| `backend/tests/` | **42 文件 / 426 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A；test_headless 为 P0-C）|
 | `frontend/` | React 三栏 UI：`components/` 14 组件（TaskPanel/TraceTab/RiskBanner/SubtaskList/KbPanel …）+ `pages/` 2 页面（LoginPage/TaskView）|
 | `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）/ migration-langgraph-1x（0.2→1.2.x 迁移评估与实测）|
 | `.agents/skills/` | 千问官方 skills（model-selector/ops-auth/usage）。集成路径：references 由 `scripts/live_skill_test.py` 复制到 `data/kb/qianwen-skills/` 并重建索引 → 真实模型任务中经 `kb_query`/`memory_search` 工具检索；该脚本同时验证"KB 命中 + 答案给出具体模型"全链路 |
@@ -61,6 +62,10 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_e2e.
 # 离线冒烟（无 Key/无网络，验证脚本依赖链可装配；已接入 CI）
 .\.venv311\Scripts\python.exe scripts/live_e2e.py --check
 
+# P0-C headless 单发（无人值守跑一题；--auto-approve 旁路确认闸门=评测态）
+.\.venv311\Scripts\python.exe -m backend.headless -p "<任务>" --dir ./out --auto-approve --output json
+.\.venv311\Scripts\python.exe -m backend.headless --check   # headless 入口离线冒烟（已接入 CI）
+
 # skills 知识库联测（skills references → KB → 真实模型）
 LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_skill_test.py
 
@@ -71,7 +76,7 @@ npx tsc --noEmit     # 类型检查 0 错误
 
 ## 5. 完成定义
 - `ruff check backend scripts` 与 `mypy` 均 0 错（基线全净，不许靠 ignore/override 绕过）。
-- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（414）；改前端时 `npx tsc --noEmit` 0 错误。
+- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（426）；改前端时 `npx tsc --noEmit` 0 错误。
 - 改动跑通真实模型冒烟（有 Key 时）：`scripts/live_e2e.py` PASS。
 - 改接口/配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
 - 新依赖需说明理由；**避免升级 uvicorn/starlette**（mcp 依赖冲突教训：用 `--no-deps` 装 mcp）。
@@ -81,3 +86,4 @@ npx tsc --noEmit     # 类型检查 0 错误
 - ✅ 允：改 `backend/`、`frontend/`、`tests/`、`docs/`、`scripts/`；修 bug 不加多余特性。
 - ⚠️ 需确认：改 `_needs_confirm` 重算、改 `resilience.py`/`registry.py`、改 conftest 隔离、加第三方依赖、动端口、放宽质量门禁（加 ignore / 扩 mypy override / 改 ruff select / 抬 linter 版本）。
 - ⛔ 禁止：提交 `.env`/`data/`/`frontend/dist` 里的密钥或生成物；绕过确认直接执行危险工具（code_exec/git_commit/http 写类/MCP 写类）；硬编码密钥；`git push --force` 类危险命令（黑名单默认拒绝）。
+- 📌 P0-C 例外说明：`backend/headless.py --auto-approve` 经 `TaskManager(auto_approve=True)` **实例级**置 `confirm_enabled=False` 旁路确认闸门——**仅 headless 入口设置、FastAPI 服务端路径（`main.py` lifespan）永不传该参**，故非「全局关闸」开关；这是评测态刻意降级（≠生产态），`nodes.py` 的 `_needs_confirm` 重算块一字未动。
