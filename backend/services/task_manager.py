@@ -161,10 +161,19 @@ class TaskManager:
         persistence: Persistence,
         llm_client: Optional[LLMClient] = None,
         tools: Optional[List[BaseTool]] = None,
+        auto_approve: bool = False,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
         self.persistence = persistence
+        # P0-C headless: instance-scoped confirmation-gate bypass. Only the
+        # headless entry (backend/headless.py) passes auto_approve=True; the
+        # FastAPI service path (main.py lifespan) never does, so there is no
+        # global "disable the gate" switch (roadmap v2 / AGENTS.md §6: 评测态
+        # ≠ 生产态). When True, AgentRuntime is built with confirm_enabled=False
+        # — a branch nodes.py already honours for subtask graphs, so the
+        # protected _needs_confirm logic is untouched.
+        self._auto_approve = auto_approve
         # P0 item 3: auto-discover plugin tools before building the tool list.
         if settings.plugins_autoload:
             discover_plugins(settings.plugins_path)
@@ -560,7 +569,7 @@ class TaskManager:
                 max_steps=self.settings.max_steps,
                 aux_llm=self._aux_llm,
                 subagent_executor=self._subagent,
-                confirm_enabled=True,
+                confirm_enabled=not self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -825,7 +834,7 @@ class TaskManager:
                 max_steps=self.settings.max_steps,
                 aux_llm=self._aux_llm,
                 subagent_executor=self._subagent,
-                confirm_enabled=True,
+                confirm_enabled=not self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
 
