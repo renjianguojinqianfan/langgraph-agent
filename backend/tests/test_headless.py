@@ -221,6 +221,13 @@ def test_parser_defaults() -> None:
     assert args.check is False
 
 
+def test_yolo_alias_maps_to_auto_approve() -> None:
+    # roadmap-pawbench §四: harness feeds every contestant the unified form
+    # `-p "<prompt>" --dir <workdir> --yolo --output json`.
+    args = build_parser().parse_args(["-p", "hi", "--yolo"])
+    assert args.auto_approve is True
+
+
 def test_main_missing_prompt_returns_usage() -> None:
     assert main(["--output", "json"]) == EXIT_USAGE
 
