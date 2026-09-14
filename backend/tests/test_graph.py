@@ -24,7 +24,7 @@ import pytest
 from backend.core.agent.graph import build_graph
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import MockLLMClient
-from backend.tests.conftest import make_manager
+from backend.tests.conftest import make_manager, make_settings
 from backend.tests.test_smoke import main as smoke_main
 
 
@@ -256,5 +256,7 @@ def test_human_confirm_skips_tool_on_rejection(settings, event_bus):
 
 
 # ── engineer smoke (offline) included in the unified run ──
-def test_engineer_smoke_passes():
-    assert smoke_main() == 0
+def test_engineer_smoke_passes(tmp_path):
+    # Issue #11: inject an isolated make_settings(tmp_path) so the smoke run
+    # writes tasks.json / artifacts under pytest's temp dir, never real data/.
+    assert smoke_main(make_settings(tmp_path)) == 0

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -21,16 +22,16 @@ if str(ROOT) not in sys.path:
 # Ensure we never accidentally hit a real LLM during the test.
 os.environ.setdefault("USE_MOCK_LLM", "false")
 
-from backend.config import get_settings  # noqa: E402
+from backend.config import Settings  # noqa: E402
 from backend.core.llm.client import MockLLMClient  # noqa: E402
 from backend.core.tools.registry import build_tools  # noqa: E402
 from backend.services.event_bus import EventBus  # noqa: E402
 from backend.services.persistence import Persistence  # noqa: E402
 from backend.services.task_manager import TaskManager  # noqa: E402
+from backend.tests.conftest import make_settings  # noqa: E402
 
 
-def build_manager() -> tuple[TaskManager, EventBus]:
-    settings = get_settings()
+def build_manager(settings: Settings) -> tuple[TaskManager, EventBus]:
     eb = EventBus()
     persistence = Persistence(settings)
 
@@ -53,8 +54,22 @@ def build_manager() -> tuple[TaskManager, EventBus]:
     return TaskManager(settings, eb, persistence, llm_client=mock, tools=tools), eb
 
 
-def main() -> int:
-    tm, eb = build_manager()
+def main(settings: Settings | None = None) -> int:
+    """Run the offline smoke check.
+
+    ``settings`` lets the pytest caller inject an isolated
+    ``make_settings(tmp_path)`` so the run never touches the real ``data/``
+    directory (Issue #11). Standalone (``python backend/tests/test_smoke.py``)
+    falls back to a throwaway temp dir that is cleaned up on exit.
+    """
+    if settings is not None:
+        return _run(settings)
+    with tempfile.TemporaryDirectory() as td:
+        return _run(make_settings(Path(td)))
+
+
+def _run(settings: Settings) -> int:
+    tm, eb = build_manager(settings)
 
     task_id = tm.create_task(
         title="smoke", user_input="create a text file and write content"
@@ -77,7 +92,7 @@ def main() -> int:
     print("event types :", sorted(event_types))
     print("artifacts   :", [a.filename for a in (task.artifacts if task else [])])
 
-    hello = get_settings().artifacts_path / "hello.txt"
+    hello = settings.artifacts_path / "hello.txt"
     file_ok = hello.exists() and "autonomous agent" in hello.read_text(encoding="utf-8")
 
     checks = {
