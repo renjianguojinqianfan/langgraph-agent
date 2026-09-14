@@ -10,7 +10,9 @@ building; the arg parser; and the ``--check`` offline smoke.
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -24,7 +26,9 @@ from backend.headless import (
     EXIT_INTERRUPTED,
     EXIT_USAGE,
     _build_settings,
+    _emit,
     _exit_code_for,
+    _force_utf8_stdio,
     _run_once,
     build_parser,
     main,
@@ -239,3 +243,88 @@ def test_run_check_offline_passes() -> None:
 
 def test_main_check_dispatch() -> None:
     assert main(["--check"]) == 0
+
+
+# ── Issue #21: UTF-8 stdio so Windows (GBK) consoles don't crash _emit ───────
+def _sample_result(final_answer: str) -> Dict[str, Any]:
+    """A minimal, contract-complete result dict for the ``_emit`` tests."""
+    return {
+        "task_id": "t1",
+        "status": "COMPLETED",
+        "exit_code": EXIT_COMPLETED,
+        "workdir": "C:/wd",
+        "model": "deepseek-v4.1-flash",
+        "final_answer": final_answer,
+        "artifacts": [{"filename": "a.txt", "path": "C:/wd/a.txt"}],
+        "trace_path": "C:/tr/t1.jsonl",
+        "trace_exists": True,
+        "steps": 2,
+        "timed_out": False,
+        "error": "",
+    }
+
+
+def _gbk_stdout(monkeypatch: Any) -> io.BytesIO:
+    """Swap stdout/stderr for GBK wrappers over BytesIO (a Windows console).
+
+    Both streams are patched so ``_force_utf8_stdio`` only ever touches these
+    fakes — never pytest's own capture objects.
+    """
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="gbk"))
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(io.BytesIO(), encoding="gbk"))
+    return buf
+
+
+def test_force_utf8_stdio_lets_json_emit_survive_emoji(monkeypatch: Any) -> None:
+    """Issue #21: GBK stdout + emoji in final_answer must not crash ``_emit``."""
+    buf = _gbk_stdout(monkeypatch)
+    _force_utf8_stdio()
+    _emit(_sample_result("Task done \u2705"), "json")  # raises UnicodeEncodeError pre-fix
+    sys.stdout.flush()
+    parsed = json.loads(buf.getvalue().decode("utf-8"))
+    assert parsed["final_answer"] == "Task done \u2705"
+
+
+def test_force_utf8_stdio_lets_text_emit_survive_emoji(monkeypatch: Any) -> None:
+    """Same guard for ``--output text`` (prints final_answer raw)."""
+    buf = _gbk_stdout(monkeypatch)
+    _force_utf8_stdio()
+    _emit(_sample_result("\u5b8c\u6210 \u2705"), "text")  # raises UnicodeEncodeError pre-fix
+    sys.stdout.flush()
+    assert "\u5b8c\u6210 \u2705".encode("utf-8") in buf.getvalue()
+
+
+def test_force_utf8_stdio_tolerates_stream_without_reconfigure(monkeypatch: Any) -> None:
+    """Guard: a replaced stream lacking ``reconfigure()`` must not crash."""
+
+    class _NoReconf:
+        def write(self, s: str) -> int:
+            return len(s)
+
+        def flush(self) -> None:
+            pass
+
+    fake = _NoReconf()
+    monkeypatch.setattr(sys, "stdout", fake)
+    monkeypatch.setattr(sys, "stderr", fake)
+    _force_utf8_stdio()  # must not raise
+
+
+def test_force_utf8_stdio_swallows_reconfigure_error(monkeypatch: Any) -> None:
+    """Guard: a failing ``reconfigure()`` (detached stream) degrades, never raises."""
+
+    class _Boom:
+        def reconfigure(self, **kwargs: Any) -> None:
+            raise ValueError("stream detached")
+
+        def write(self, s: str) -> int:
+            return len(s)
+
+        def flush(self) -> None:
+            pass
+
+    boom = _Boom()
+    monkeypatch.setattr(sys, "stdout", boom)
+    monkeypatch.setattr(sys, "stderr", boom)
+    _force_utf8_stdio()  # must not raise
