@@ -3,7 +3,7 @@
 自然语言下发任务 → Agent 自主规划（planner → executor → tool → reflect 循环）→ 调用工具完成多步任务，
 全程 SSE 实时可视化 + Trace 回放。基于 **LangGraph 1.2.x（StateGraph）**，FastAPI + React 前后端一体。
 
-**365 个离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 双场景 PASS（千问 `qwen3.6-plus`：冒烟 + 断点续跑）· CI 五 job 全绿。
+**426 个离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 双场景 PASS（千问 `qwen3.6-plus`：冒烟 + 断点续跑）· CI 五 job 全绿。
 
 这个仓库想证明的不是"能跑通一个 agent demo"，而是 agent 运行时里那几件难做的事被工程化地解决了：
 任务被中途停止后能从检查点续跑、危险操作在执行前被闸门拦住、工具连续失败时熔断降级而不是把循环拖死、
@@ -25,6 +25,20 @@ cd frontend && npm install && npm run dev                 # http://localhost:517
 
 > 虚拟环境请叫 `.venv311`：`start.py` 会拦住仓库根目录的 `.venv`（本地那个是 3.13 且未装依赖，
 > 误用只会得到一堆与真因无关的 ImportError）。
+
+---
+
+## 无人值守执行（P0-C headless）
+
+```bash
+python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --auto-approve --output json
+```
+
+单发、非交互、跑完即退：产物落 `--dir`、trace 落盘、结果 JSON 打到 stdout（日志走 stderr），退出码
+`0` 完成 / `1` 失败 / `2` 中断或超时 / `3` 用法或配置错误；LLM 配置全走 `LLM_*` 环境变量（env 优先于
+.env）。`--auto-approve` 旁路确认闸门，是**评测态**开关（TaskManager 实例级，服务端 API 路径永不触发）；
+离线冒烟 `python -m backend.headless --check`。它是自建 agent 评测台驱动本 agent 的统一入口，路线见
+[`docs/roadmap-pawbench.md`](docs/roadmap-pawbench.md)。
 
 ---
 
@@ -116,8 +130,9 @@ checkpointer 时传（1.2.11 在无 checkpointer 时传 `sync` 会 `AttributeErr
 pip install -r requirements-dev.txt      # ruff + mypy（钉死版本，不进运行期镜像）
 python -m ruff check backend scripts     # 基线全净，零 per-file-ignores
 python -m mypy                           # files=backend，生产与测试同一把闸
-python -m pytest backend/tests/ -q       # 365 用例，唯一权威回归
+python -m pytest backend/tests/ -q       # 426 用例，唯一权威回归
 python scripts/live_e2e.py --check       # 无 Key / 无网络的接线冒烟
+python -m backend.headless --check       # P0-C headless 入口离线冒烟
 ```
 
 配置与每条「刻意不启用」的规则族（附实测数字与理由）在 [`pyproject.toml`](pyproject.toml)；
