@@ -13,7 +13,7 @@ from __future__ import annotations
 # (pyproject.toml) and deliberately carries no grouping narrative.
 from .base import BaseTool, ToolResult
 from .code_exec import CodeExecTool
-from .file_io import FileIOTool
+from .file_io import EditTool, FileIOTool, GlobTool, GrepTool, ReadTool
 
 # P2 item 2: Git tools are NOT @register'd — TaskManager instantiates them via
 # build_git_tools(settings) so the git_enabled switch can filter them out.
@@ -43,6 +43,10 @@ __all__ = [
     "list_tools",
     "WebSearchTool",
     "FileIOTool",
+    "ReadTool",
+    "EditTool",
+    "GlobTool",
+    "GrepTool",
     "CodeExecTool",
     "HttpTool",
     "SpawnSubagentTool",
