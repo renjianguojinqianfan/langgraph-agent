@@ -815,6 +815,40 @@ class TaskManager:
         t.start()
         return {"ok": True, "status": TaskStatus.RUNNING.value}
 
+    def _read_restorable_state(
+        self,
+        graph: Any,
+        task_id: str,
+        attempts: int = 5,
+        pause: float = 0.2,
+    ) -> Dict[str, Any]:
+        """Read the checkpoint channel values to resume from, tolerating a
+        transient empty read.
+
+        ``resume()`` admits a task only after ``_has_checkpoint`` saw a durable
+        snapshot (``get_tuple(...) is not None``), but the execution-side read
+        here uses a stricter criterion -- non-empty ``channel_values``. Under CI
+        / IO load the freshly mounted store can expose the checkpoint tuple a
+        beat before its values are readable, so a single read can come back
+        empty for a checkpoint that genuinely exists (Issue #23). Re-read a
+        bounded number of times before giving up, mirroring ``_has_checkpoint``'s
+        double-probe, so a legitimately-admitted resume never spuriously FAILEDs.
+
+        This retries ONLY the read. Every reject semantic (non-INTERRUPTED, no
+        checkpoint, parked-on-gate) is enforced earlier in ``resume()`` and is
+        untouched here; a state still empty after the budget raises the original
+        ``empty checkpoint state`` error.
+        """
+        values: Dict[str, Any] = {}
+        for attempt in range(max(1, attempts)):
+            snap = graph.get_state(self._thread_config(task_id))
+            values = dict(snap.values or {})
+            if values:
+                return values
+            if attempt < attempts - 1:
+                time.sleep(pause)
+        raise RuntimeError(f"empty checkpoint state for task {task_id}")
+
     def _resume_run(self, task_id: str) -> None:
         try:
             # A stop() between our RUNNING flip and this point would otherwise
@@ -838,12 +872,15 @@ class TaskManager:
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
 
-            snap = graph.get_state(self._thread_config(task_id))
+            # Bounded re-read (Issue #23): resume() already proved a durable
+            # checkpoint exists, but under load the freshly mounted store can
+            # expose the tuple a beat before its channel values are readable.
+            # Retrying the read keeps a legitimately-admitted resume from
+            # spuriously FAILEDing; reject semantics are untouched.
+            values = self._read_restorable_state(graph, task_id)
             # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
             # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
-            restored = cast(AgentState, dict(snap.values or {}))
-            if not restored:
-                raise RuntimeError(f"empty checkpoint state for task {task_id}")
+            restored = cast(AgentState, values)
             # Reset *control* flags only; plan / steps / confirmed-ids survive.
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False

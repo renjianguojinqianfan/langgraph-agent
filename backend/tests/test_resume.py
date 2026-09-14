@@ -344,3 +344,51 @@ class TestResumeAPI:
             time.sleep(0.05)
         r = client.post(f"/api/tasks/{task_id}/resume")  # COMPLETED -> conflict
         assert r.status_code == 409
+
+
+class _FakeSnap:
+    """Stand-in for a langgraph StateSnapshot (only ``.values`` is read)."""
+
+    def __init__(self, values):
+        self.values = values
+
+
+class _FakeGraph:
+    """``get_state()`` returns queued snapshots; the last one repeats after."""
+
+    def __init__(self, snaps):
+        self._snaps = list(snaps)
+        self.calls = 0
+
+    def get_state(self, config):
+        snap = self._snaps[min(self.calls, len(self._snaps) - 1)]
+        self.calls += 1
+        return snap
+
+
+class TestResumeStateRead:
+    """Unit tests for ``_read_restorable_state`` (Issue #23 flake hardening).
+
+    The resume flake is a read-visibility race that is hard to reproduce on
+    demand, so these drive the retry seam deterministically with a fake graph:
+    a transient empty read must be retried until values appear, and a
+    permanently empty one must still raise the original error (proving no
+    reject semantic was relaxed -- only the read is retried).
+    """
+
+    def test_retries_transient_empty_then_returns_values(self, tmp_path):
+        settings = make_settings(tmp_path)
+        tm = make_manager(settings, MockLLMClient(), event_bus=EventBus())
+        good = {"status": "RUNNING", "plan": [], "steps": []}
+        graph = _FakeGraph([_FakeSnap({}), _FakeSnap(None), _FakeSnap(good)])
+        vals = tm._read_restorable_state(graph, "t1", attempts=5, pause=0.0)
+        assert vals == good
+        assert graph.calls == 3  # empty, None, then good
+
+    def test_raises_when_always_empty(self, tmp_path):
+        settings = make_settings(tmp_path)
+        tm = make_manager(settings, MockLLMClient(), event_bus=EventBus())
+        graph = _FakeGraph([_FakeSnap({})])
+        with pytest.raises(RuntimeError, match="empty checkpoint state"):
+            tm._read_restorable_state(graph, "t1", attempts=3, pause=0.0)
+        assert graph.calls == 3  # budget exhausted, never yielded a value
