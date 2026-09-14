@@ -78,6 +78,35 @@ _RESULT_KEYS: Tuple[str, ...] = (
 )
 
 
+def _force_utf8_stdio() -> None:
+    """Emit UTF-8 on stdout/stderr regardless of the platform console codepage.
+
+    On Windows the console defaults to a locale codepage (e.g. GBK/cp936);
+    ``print()``-ing a result whose text holds characters outside that codepage
+    (emoji such as U+2705, some CJK) raises ``UnicodeEncodeError`` and flips a
+    COMPLETED run to exit code 1 (Issue #21) — the eval harness then misreads a
+    success as a failure. The harness captures stdout as UTF-8, so reconfiguring
+    the streams is both crash-free and correct.
+
+    Called only at the real CLI entry (``__main__``), never inside ``main()`` /
+    ``run_check()`` — mirroring :func:`_redirect_agent_logs_to_stderr`, so
+    importing and calling those under a test runner never mutates global stdio
+    (which would trip over pytest's capture teardown). Guarded by ``getattr``
+    because a replaced stream (e.g. a test double) may lack ``reconfigure``; a
+    failure to reconfigure degrades silently rather than crashing a good run.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            # Detached/closed stream or unsupported reconfiguration: nothing we
+            # can do, and a broken console must not turn success into failure.
+            pass
+
+
 def _redirect_agent_logs_to_stderr() -> None:
     """Keep stdout clean for the machine-readable result.
 
@@ -476,6 +505,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 if __name__ == "__main__":
     # Process-level, done once at the real CLI entry (not inside main(), so
     # importing and calling main()/run_check() under a test runner never mutates
-    # global logging handlers). Keeps stdout clean for --output json.
+    # global logging handlers or stdio). Keeps stdout clean for --output json.
+    _force_utf8_stdio()
     _redirect_agent_logs_to_stderr()
     raise SystemExit(main())
