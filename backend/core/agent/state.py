@@ -30,11 +30,15 @@ class AgentState(TypedDict, total=False):
     error: str
     compressed: bool  # P0: whether messages were compressed before the last LLM call
     context_tokens: int  # P0: estimated token count of the (possibly compressed) messages
-    _last_action: str                       # plan | tool_call | tool_done | final_answer | stop
+    _last_action: str                       # plan | tool_call | tool_done | final_answer | verify_failed | stop
     _current_tool_calls: List[Dict[str, Any]]
     _confirmed_ids: List[str]
     _rejected_ids: List[str]
     _needs_confirm: bool
+
+    # ── P0-B: completion verification ──
+    _verification: Dict[str, Any]           # {passed, failures, attempts, degraded}
+    _verify_attempts: int                   # bounded verify-fail loop-back counter
 
     # ── P1 item 1: risk scan ──
     risk_report: List[Dict[str, Any]]       # latest round of RiskItem dicts

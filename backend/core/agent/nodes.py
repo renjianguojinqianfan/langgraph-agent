@@ -563,8 +563,112 @@ class AgentRuntime:
         return state
 
     def reflect(self, state: AgentState) -> AgentState:
-        # Pure routing decision; actual branching handled by after_reflect().
+        """P0-B completion verification (Issue #25).
+
+        A model's "I'm done" claim (``_last_action == "final_answer"``) is not
+        trusted blindly: re-check the concrete deliverables with deterministic
+        code — the strongest independence, since ``Path.exists()`` cannot be
+        argued with the way an LLM self-critique can ("structural hallucination").
+        On failure, inject the evidence and loop back to the planner by flipping
+        ``_last_action`` to ``verify_failed`` (the existing ``_after_reflect``
+        router already sends any non-``final_answer`` to ``planner``); after
+        ``verify_max_retries`` degrade to COMPLETED with a ``degraded`` marker
+        rather than failing a possibly-genuinely-done task.
+
+        Reject semantics, the ``_needs_confirm`` recompute block, and the graph
+        topology are untouched. Error paths are skipped (``finish`` maps them to
+        FAILED). With ``verify_enabled`` false this is the original no-op shell.
+        """
+        if self._stopped(state):
+            return state
+        if state.get("error"):
+            # Executor LLM errors also set final_answer; finish judges them FAILED.
+            # Verifying an erroring task would only churn the loop and change the
+            # error semantics (review 漏洞1).
+            return state
+        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        if not getattr(settings, "verify_enabled", True):
+            return state  # gate off == original empty-shell behaviour (zero regression)
+        if state.get("_last_action") != "final_answer":
+            return state  # only verify a claimed completion
+
+        failures = self._verify_completion(state)
+        attempts = int(state.get("_verify_attempts", 0) or 0)
+        max_retries = int(getattr(settings, "verify_max_retries", 2))
+
+        if not failures:
+            state["_verification"] = {
+                "passed": True, "failures": [], "attempts": attempts, "degraded": False,
+            }
+            self._publish("verification", dict(state["_verification"], task_id=self.task_id))
+            return state  # _last_action stays final_answer -> _after_reflect -> finish
+
+        if attempts >= max_retries:
+            # Q4: degrade, never FAIL — a false negative must not kill a real task.
+            state["_verification"] = {
+                "passed": False, "failures": failures, "attempts": attempts, "degraded": True,
+            }
+            self._publish("verification", dict(state["_verification"], task_id=self.task_id))
+            return state  # keep final_answer -> finish -> COMPLETED (degraded)
+
+        # Loop back with evidence: flip _last_action so the existing router sends
+        # the flow to planner; the injected message tells the model what to fix.
+        state["_verify_attempts"] = attempts + 1
+        state["_verification"] = {
+            "passed": False, "failures": failures, "attempts": attempts + 1, "degraded": False,
+        }
+        feedback = (
+            "完成验证未通过：" + "；".join(failures) +
+            "。任务尚未可验证地完成，请据此修正后继续；在真正满足前不要重复声称完成。"
+        )
+        state.setdefault("messages", []).append({"role": "system", "content": feedback})
+        self._publish(
+            "verification", dict(state["_verification"], task_id=self.task_id, loop_back=True)
+        )
+        state["_last_action"] = "verify_failed"
         return state
+
+    def _verify_completion(self, state: AgentState) -> List[str]:
+        """Deterministic completion checks; returns failure reasons ([] == verified).
+
+        S1 — every artifact registered this run must still exist and be non-empty.
+        S2 (triple-narrowed) — zero successful product AND zero successful tool
+        call AND >=1 failed tool call: "everything failed yet claims done". The
+        narrowing keeps a pure-Q&A task with one flaky search failure from being
+        flagged. Artifacts are read from the manager's authoritative side (P3
+        copy semantics) with a getattr guard for SimpleNamespace test fakes.
+
+        Deliberately NOT checked here (P1): completeness — a deliverable that was
+        required but never produced (needs declared expectations, spec §八).
+        """
+        failures: List[str] = []
+        tm_states = getattr(self.tm, "_active_states", None) or {}
+        run_state = tm_states.get(self.task_id, {}) or {}
+        artifacts = run_state.get("artifacts", []) or []
+        ok_artifacts = 0
+        for art in artifacts:
+            path = art.get("path") if isinstance(art, dict) else getattr(art, "path", None)
+            if not path:
+                continue
+            p = Path(path)
+            if not p.exists():
+                failures.append(f"产物缺失：{p.name}")
+            elif p.stat().st_size == 0:
+                failures.append(f"产物为空：{p.name}")
+            else:
+                ok_artifacts += 1
+        statuses = [
+            tc.get("status")
+            for st in (state.get("steps") or [])
+            for tc in (st.get("tool_calls") or [])
+        ]
+        n_success = sum(1 for s in statuses if s == "success")
+        n_failed = sum(1 for s in statuses if s == "failed")
+        if ok_artifacts == 0 and n_success == 0 and n_failed >= 1:
+            failures.append(
+                f"全程 {n_failed} 个工具调用失败且无任何成功产物，却声称完成"
+            )
+        return failures
 
     def finish(self, state: AgentState) -> AgentState:
         if state.get("stop_requested"):

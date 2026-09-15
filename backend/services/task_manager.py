@@ -734,6 +734,13 @@ class TaskManager:
         task.error = final.get("error")
         task.risk_report = [RiskItem(**it) for it in final.get("risk_report", [])]
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
+        verification = final.get("_verification")
+        if isinstance(verification, dict):
+            # P0-B §4.3 edge: a COMPLETED finish carrying a failed verification
+            # (e.g. max_steps preempted the retry budget) is a degraded completion.
+            if status == "COMPLETED" and verification.get("passed") is False:
+                verification = dict(verification, degraded=True)
+            task.verification = verification
         task.updated_at = _now()
         if status == "COMPLETED":
             self.event_bus.publish(

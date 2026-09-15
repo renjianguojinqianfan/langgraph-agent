@@ -113,6 +113,7 @@ class Task(BaseModel):
     updated_at: str = ""
     risk_report: List[RiskItem] = Field(default_factory=list)  # P1 item 1
     subtasks: List[SubTask] = Field(default_factory=list)  # P1 item 2
+    verification: Optional[Dict[str, Any]] = None  # P0-B: {passed, failures, attempts, degraded}
 
 
 # ── Request bodies ──
