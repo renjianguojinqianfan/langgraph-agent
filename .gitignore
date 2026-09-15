@@ -45,12 +45,12 @@ Thumbs.db
 logs/
 
 # ── AI agent local state ───────────────────────────────
+# 各家 agent 专用目录一律整体不入库（.qoder/.trae/.mimosa/.workbuddy）。
+# 决策类 / spec / 计划类文档归 docs/（见 AGENTS.md §3「文档归属」）；
+# 记忆类与工具态产物留原地、不跟踪。
 .workbuddy/
 .trae/
 .trae-html-share-packages/
 .mimosa/
+.qoder/
 _write_bh_report.py
-# .qoder/ holds both tool output (better-harness reports, quest state) and the
-# human-authored spec archive; keep the specs, ignore everything else.
-.qoder/*
-!.qoder/specs/

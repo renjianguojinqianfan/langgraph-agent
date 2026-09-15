@@ -37,12 +37,29 @@
 | `backend/api/` | routes（15 REST）/ sse / schemas（`/health` 另在 `main.py`）|
 | `backend/headless.py` | P0-C 无人值守单发入口（`python -m backend.headless -p "<题>" --dir <工作目录> --auto-approve --output json`）：复用 TaskManager 跑一题、产物落 --dir、trace 落盘、JSON 结果+退出码；评测台驱动本 agent 的统一命令；`--check` 为离线冒烟 |
 | `backend/plugins/` | 插件目录（自动发现 BaseTool，example_tool.py）|
-| `backend/tests/` | **43 文件 / 444 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A；test_headless 为 P0-C；test_verify 为 P0-B）|
+| `backend/tests/` | **40 个 `test_*.py`（+ conftest / mcp_echo_server / __init__ 共 43 个 .py）/ 444 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A；test_headless 为 P0-C；test_verify 为 P0-B）|
 | `frontend/` | React 三栏 UI：`components/` 14 组件（TaskPanel/TraceTab/RiskBanner/SubtaskList/KbPanel …）+ `pages/` 2 页面（LoginPage/TaskView）|
-| `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）/ migration-langgraph-1x（0.2→1.2.x 迁移评估与实测）|
+| `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）/ migration-langgraph-1x（0.2→1.2.x 迁移评估与实测）/ capability-first-principles / agent-comparison-report / roadmap-pawbench / pawbench-harness-interface |
+| `docs/adr/` | **决策记录**（`NNNN-英文-kebab-case.md`）。现有 0001 = 简历项目定位与 langgraph 原地迁移决策（grilling D1–D9，原 `.qoder/specs/…_grilling总结.md`）|
+| `docs/specs/` | **spec / 实施计划档案**。现有 langgraph-1x-migration / p0-b-completion-verification / second-tier-ci-guard-and-smoke（均自 `.qoder/specs/` 迁入）|
+| `docs/agents/` | mattpocock 技能组配置：issue-tracker / triage-labels / domain（由 `setup-matt-pocock-skills` 生成，本文件末尾 `## Agent skills` 段是其入口）|
 | `.agents/skills/` | 千问官方 skills（model-selector/ops-auth/usage）。集成路径：references 由 `scripts/live_skill_test.py` 复制到 `data/kb/qianwen-skills/` 并重建索引 → 真实模型任务中经 `kb_query`/`memory_search` 工具检索；该脚本同时验证"KB 命中 + 答案给出具体模型"全链路 |
 | `scripts/` | live_e2e.py（真实 LLM 验证，`--check` 为无 Key 离线冒烟）/ live_skill_test.py（skills→KB→真实模型）|
 | `data/` | 运行时生成（tasks.json/traces/kb/artifacts），不入库 |
+
+### 文档归属（2026-09-15 起，硬约定）
+
+决策类 / 计划类 / spec 类文档**一律落 `docs/`**，禁写 `.qoder/`、`.trae/`、`.mimosa/` 等各家 agent 专用目录——那些目录整体不入库（见 `.gitignore`），换机器或换家 agent 就丢，无法当跳会话交接的权威来源。
+
+| 类型 | 去处 | 命名 |
+|---|---|---|
+| 决策记录（grilling 定居、定位/选型结论）| `docs/adr/` | `NNNN-英文-kebab-case.md`（4 位递增编号）|
+| spec / 实施方案 / 任务计划 | `docs/specs/` | `英文-kebab-case.md` |
+| 调研 / 对标 / 路线图 / 迁移评估 | `docs/` 根 | 同上（沿用既有惯例）|
+| 技能组配置 | `docs/agents/` | 由 setup 技能生成 |
+| **记忆类（不迁）** | 留原地：`.workbuddy/memory/`、teach 的 `MISSION.md`/`NOTES.md`/`RESOURCES.md`/`learning-records/`/`lessons/` | 各家 agent 自己消费；已入库的学习痕迹类保持入库，未入库的保持 ignore |
+
+文件名用英文 kebab-case（与 `docs/` 现有全部文件一致），内容中文照旧。迁移时用 `git mv` 保历史（`git log --follow` 可追），并顺手改掉旧路径引用。
 
 ## 4. 常用命令
 ```bash
@@ -87,3 +104,21 @@ npx tsc --noEmit     # 类型检查 0 错误
 - ⚠️ 需确认：改 `_needs_confirm` 重算、改 `resilience.py`/`registry.py`、改 conftest 隔离、加第三方依赖、动端口、放宽质量门禁（加 ignore / 扩 mypy override / 改 ruff select / 抬 linter 版本）。
 - ⛔ 禁止：提交 `.env`/`data/`/`frontend/dist` 里的密钥或生成物；绕过确认直接执行危险工具（code_exec/git_commit/http 写类/MCP 写类）；硬编码密钥；`git push --force` 类危险命令（黑名单默认拒绝）。
 - 📌 P0-C 例外说明：`backend/headless.py --auto-approve` 经 `TaskManager(auto_approve=True)` **实例级**置 `confirm_enabled=False` 旁路确认闸门——**仅 headless 入口设置、FastAPI 服务端路径（`main.py` lifespan）永不传该参**，故非「全局关闸」开关；这是评测态刻意降级（≠生产态），`nodes.py` 的 `_needs_confirm` 重算块一字未动。
+
+## Agent skills
+
+> 本节由 `setup-matt-pocock-skills` 技能生成（2026-09-15），供 mattpocock 工程技能组
+> （`triage` / `to-spec` / `to-tickets` / `wayfinder` / `domain-modeling` / `implement` …）读取。
+> 细节改 `docs/agents/*.md` 即可，不必重跑技能——只有换 issue tracker 或推倒重来才需要重跑。
+
+### Issue tracker
+
+GitHub Issues（`renjianguojinqianfan/langgraph-agent`），一律走 `gh` CLI；Windows PowerShell 下多行 body 用 `--body-file`，不用 heredoc。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+沿用五个规范角色的默认标签字符串（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`），无改名映射；其中 `ready-for-agent` 与 `wontfix` 仓库里早已在用。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context：根目录一份 `CONTEXT.md` + 一份 `docs/adr/`（两者目前都还没建，由 `/domain-modeling` 惰性创建）；在其就位前，事实词汇表是本文 §2–§3 与 `backend/core/agent/state.py`，冻结决策等价物是本文 §2 硬规则。See `docs/agents/domain.md`.

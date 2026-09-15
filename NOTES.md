@@ -23,7 +23,7 @@
 
 **主线 C+D · 面试冲刺**
 10. STAR 项目叙事：两个核心故事（P0 死循环修复 / P3 副本语义发现）+ 简历表述打磨
-11. 高频追问题库：为什么 LangGraph、351 测试与 Mock LLM 离线隔离、并发模型、recursion_limit 修复
+11. 高频追问题库：为什么 LangGraph、444 测试与 Mock LLM 离线隔离、并发模型、recursion_limit 修复
 12. 手写代码实战：徒手写纯 Python Agent 循环 + mini StateGraph
 
 节奏：每周 2-3 课，穿插「前课混测」（interleaving）。每课结束留下检索练习作业。
@@ -33,5 +33,5 @@
 
 ## 工作区说明
 - teach 状态文件位于仓库根目录（MISSION.md / lessons/ / reference/ / assets/ / learning-records/ / NOTES.md / RESOURCES.md），**已入库**（2026-09-12 杂物 triage 决定：学习痕迹是加分项，前提是索引可读）；入口索引见 `learning-records/README.md`
-- 工具态产物不入库：`.mimosa/`、`.qoder/better-harness/`、`_write_bh_report.py` 已在 .gitignore
+- 工具态产物不入库：`.mimosa/`、`.qoder/`（2026-09-15 起整体 ignore；原 `.qoder/specs/` 已迁 `docs/specs/` + `docs/adr/`）、`_write_bh_report.py` 已在 .gitignore；文档归属约定见 `AGENTS.md` §3
 - 项目硬规则照常生效：不碰 conftest 隔离、`_needs_confirm` 重算逻辑、resilience/registry（教学只读不写）

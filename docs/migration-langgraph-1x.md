@@ -1,6 +1,6 @@
 # langgraph 0.2 → 1.2.x 原地迁移：评估与执行记录
 
-> Issue #7 / spec `.qoder/specs/langgraph-1x迁移与简历化包装_spec.md` 的 Phase 1 评估档。
+> Issue #7 / spec `docs/specs/langgraph-1x-migration.md` 的 Phase 1 评估档。
 > 本文只记**实测结果**与由它推出的决策；未实测的猜测一律标注为推测。
 > 复现环境：Python 3.11.15（`.venv311`），Windows / Ubuntu(CI) 双跑。
 

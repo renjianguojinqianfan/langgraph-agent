@@ -1,6 +1,6 @@
 # Spec：langgraph 0.2 → 1.2.x 原地迁移与简历化包装（Phase 0–2）
 
-> 决策来源：`.qoder/specs/简历项目定位与langgraph迁移决策_grilling总结.md`（D1–D9，2026-09-12 grilling 定居）。本 spec 决策完整，执行时不做二次决策。
+> 决策来源：`docs/adr/0001-in-place-migration-and-resume-positioning.md`（D1–D9，2026-09-12 grilling 定居）。本 spec 决策完整，执行时不做二次决策。
 
 ## Problem Statement
 
@@ -45,6 +45,7 @@
 - **CI 补强**：backend-test job 内新增 ruff check + mypy 步骤（合入时基线必须全净，不留 ignore 债）；guard-protected-files job 与 conftest 隔离块一字不动。
 - **commit 分阶段**：Phase 0 遗留提交 → 依赖矩阵 → 编排层 1.x 重写 → 回归差异修复 → 新特性采用 → 包装/文档，每阶段独立 commit。
 - **杂物 triage 规则**：入库 = `.python-version`、学习性文档（MISSION/NOTES/RESOURCES/learning-records/lessons/assets）、`.qoder/specs/`；ignore = `.mimosa/`、`_write_bh_report.py` 等工具态产物；learning-records 加索引 README。
+  （**2026-09-15 已被超越**：本行是 Phase 0 当时的决定，保留作历史记录。spec/决策档现已从 `.qoder/specs/` 迁至 `docs/specs/` 与 `docs/adr/`，`.qoder/` 整体不入库；现行约定见 `AGENTS.md` §3「文档归属」。）
 - **README 叙事结构**：定位与亮点 → 架构图 → 迁移章节（动机/矩阵/代价/闸门/安全闭环）→ 组合分工互链（interview-agent-py）→ 运行与质量门禁说明。
 - **公开描述修正**：经 repo 编辑接口更新 description（测试数与能力概述以迁移后实况为准）。
 - **硬规则不变**：P0 死循环修复逻辑、resume 拒绝语义、熔断层零改动、测试环境隔离块全部保留。
