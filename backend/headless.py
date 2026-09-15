@@ -75,6 +75,7 @@ _RESULT_KEYS: Tuple[str, ...] = (
     "steps",
     "timed_out",
     "error",
+    "verification",
 )
 
 
@@ -212,6 +213,7 @@ def _collect(
         "steps": len(task.steps) if task is not None else 0,
         "timed_out": timed_out,
         "error": task.error if task is not None else None,
+        "verification": task.verification if task is not None else None,
     }
 
 

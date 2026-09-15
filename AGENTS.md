@@ -1,9 +1,9 @@
 # AGENTS.md - langgraph-agent
 
-> 本文件是 `E:\code\demo\langgraph-agent` 的 Agent 操作手册 / 核心指令集。不重复全局 `~/.agents/AGENTS.md` 的工作循环纪律，只写本目录特有的东西。
+> 本文件是 `langgraph-agent` 项目根目录的 Agent 操作手册 / 核心指令集。不重复全局 `~/.agents/AGENTS.md` 的工作循环纪律，只写本目录特有的东西。
 
 ## 1. 快照
-基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）+ langgraph 0.2→1.2.x 原地迁移（Issue #7）+ P0-A（文件精读编辑工具 read/edit/glob/grep，roadmap-pawbench）+ P0-C（headless 无人值守入口，backend/headless.py）多轮迭代，**426 个离线测试全绿 + ruff/mypy 基线全净** + 真实 LLM（qwen3.6-plus）端到端与断点续跑双场景验证通过。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）+ langgraph 0.2→1.2.x 原地迁移（Issue #7）+ P0-A（文件精读编辑工具 read/edit/glob/grep，roadmap-pawbench）+ P0-C（headless 无人值守入口，backend/headless.py）+ P0-B（完成验证：reflect 落地确定性自检——S1 产物完整性 + S2 全程失败闸 + 有界回环降级，Issue #25）多轮迭代，**444 个离线测试全绿 + ruff/mypy 基线全净** + 真实 LLM（qwen3.6-plus）端到端与断点续跑双场景验证通过。
 
 ## 2. 硬规则（改前必读）
 - **测试环境隔离**：离线测试必须不受本地 `.env` 影响——`backend/tests/conftest.py` 顶部用环境变量覆盖（`LLM_BASE_URL=""` / `USE_MOCK_LLM=true` / `AUX_LLM_ENABLED=false` / `AUTH_ENABLED=false` / `OPENAPI_ENABLED=false` / `CHECKPOINT_ENABLED=false`）。**改 conftest 时勿破坏这段隔离**，否则本地 live 配置会污染全部离线用例。
@@ -27,7 +27,7 @@
 |---|---|
 | `pyproject.toml` | 质量门禁配置（ruff + mypy），含每条「刻意不启用」的理由与实测数字。**不放** `[build-system]`（本仓库不是可安装包）也不放 `[tool.pytest.ini_options]`（隔离靠 conftest 环境变量块）|
 | `requirements.txt` / `requirements-dev.txt` | 运行期依赖（langgraph 三包同钉，理由在文件注释）/ 门禁工具链（ruff+mypy 钉死；不进镜像，Dockerfile 只 COPY 前者）|
-| `backend/config.py` | Settings（15 组配置前缀：llm/context/tool/plugins/trace/risk/subagent/kb/aux_llm/auth/openapi/mcp/git/checkpoint/sandbox）|
+| `backend/config.py` | Settings（16 组配置前缀：llm/context/tool/plugins/trace/risk/subagent/kb/aux_llm/auth/openapi/mcp/git/checkpoint/sandbox/verify）|
 | `backend/core/agent/` | 编排：state / nodes（planner/executor/tool/reflect/risk_scan/subagent_split/human_confirm）/ graph（mode=main\|subtask）/ context（压缩）/ risk（EHRB）/ subagent |
 | `backend/core/tools/` | BaseTool 规范 + 18+ 工具：web_search/file_io/read/edit/glob/grep/code_exec/http_request/memory_search/kb_query/spawn_subagent/git_*(7)/McpTool/OpenAPITool + resilience(熔断) + registry(插件发现)。P0-A 新增 read/edit/glob/grep 四个六件套式独立文件工具（沙箱内精读/精确编辑/递归匹配/内容检索），file_io 暂留待退役 |
 | `backend/core/llm/` | LLMClient 抽象 + OpenAI 兼容工厂 + Mock/Aux |
@@ -37,7 +37,7 @@
 | `backend/api/` | routes（15 REST）/ sse / schemas（`/health` 另在 `main.py`）|
 | `backend/headless.py` | P0-C 无人值守单发入口（`python -m backend.headless -p "<题>" --dir <工作目录> --auto-approve --output json`）：复用 TaskManager 跑一题、产物落 --dir、trace 落盘、JSON 结果+退出码；评测台驱动本 agent 的统一命令；`--check` 为离线冒烟 |
 | `backend/plugins/` | 插件目录（自动发现 BaseTool，example_tool.py）|
-| `backend/tests/` | **42 文件 / 426 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A；test_headless 为 P0-C）|
+| `backend/tests/` | **43 文件 / 444 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A；test_headless 为 P0-C；test_verify 为 P0-B）|
 | `frontend/` | React 三栏 UI：`components/` 14 组件（TaskPanel/TraceTab/RiskBanner/SubtaskList/KbPanel …）+ `pages/` 2 页面（LoginPage/TaskView）|
 | `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）/ migration-langgraph-1x（0.2→1.2.x 迁移评估与实测）|
 | `.agents/skills/` | 千问官方 skills（model-selector/ops-auth/usage）。集成路径：references 由 `scripts/live_skill_test.py` 复制到 `data/kb/qianwen-skills/` 并重建索引 → 真实模型任务中经 `kb_query`/`memory_search` 工具检索；该脚本同时验证"KB 命中 + 答案给出具体模型"全链路 |
@@ -76,7 +76,7 @@ npx tsc --noEmit     # 类型检查 0 错误
 
 ## 5. 完成定义
 - `ruff check backend scripts` 与 `mypy` 均 0 错（基线全净，不许靠 ignore/override 绕过）。
-- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（426）；改前端时 `npx tsc --noEmit` 0 错误。
+- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（444）；改前端时 `npx tsc --noEmit` 0 错误。
 - 改动跑通真实模型冒烟（有 Key 时）：`scripts/live_e2e.py` PASS。
 - 改接口/配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
 - 新依赖需说明理由；**避免升级 uvicorn/starlette**（mcp 依赖冲突教训：用 `--no-deps` 装 mcp）。

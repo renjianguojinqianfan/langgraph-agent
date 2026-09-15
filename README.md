@@ -166,7 +166,7 @@ CI 五 job 在 [`ci.yml`](.github/workflows/ci.yml)：受保护文件守卫 · �
 - **迁移**：[`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md) ·
   [Issue #7](https://github.com/renjianguojinqianfan/langgraph-agent/issues/7) ·
   [Issue #4（断点续跑）](https://github.com/renjianguojinqianfan/langgraph-agent/issues/4)
-- **配置**：[`.env.example`](.env.example)（15 组前缀，逐项带注释）
+- **配置**：[`.env.example`](.env.example)（16 组前缀，逐项带注释）
 - **工程约定**：[`AGENTS.md`](AGENTS.md)（硬规则 / 目录结构 / 常用命令 / 完成定义）·
   [`OVERVIEW.md`](OVERVIEW.md)（历次交付日志，含 Issue #7 一章）
 
