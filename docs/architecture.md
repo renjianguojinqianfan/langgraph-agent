@@ -1,8 +1,24 @@
 # 系统架构设计文档：基于 LangGraph 的自主任务 Agent 平台
 
 > 架构师：高见远（Gao）　|　版本：v0.1　|　日期：2025-08-24
-> 关联文档：PRD（`E:\code\demo\docs\prd.md`）
+> 关联文档：PRD（[`docs/prd.md`](prd.md)）
 > 项目根目录：`E:\code\demo\langgraph-agent\`
+
+> ⚠️ **状态：v0.1 原始设计档（历史记录），不是现役架构的权威来源。**
+>
+> 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、REST
+> 端点表、SSE 事件表、类图与时序图均为**当时的计划态**，与现状差两代（本文：4 个工具 /
+> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 15 个端点 / 21 种事件 / 14 个组件）。
+>
+> **现役事实请查这里**：
+> - 目录结构与能力清单 → [`AGENTS.md`](../AGENTS.md) §1–§3
+> - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「编排拓扑」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
+> - 各轮增量设计 → `docs/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `-p3-resume.md`
+> - 接口契约 → 运行时 Swagger `http://localhost:8000/docs`（权威）+ [`backend/api/routes.py`](../backend/api/routes.py)
+> - 能力边界的第一性原理推导 → [`capability-first-principles.md`](capability-first-principles.md)
+>
+> **本文的保留价值**（这些不随实现漂移）：§1 初始技术难点与选型理由、§5 跨文件共享约定
+> （其中多数已升格为 `AGENTS.md` §2 硬规则）、§7 T01–T09 的原始实施顺序、§8 Q1–Q8 的初始决策。
 
 ---
 
@@ -44,6 +60,10 @@
 ---
 
 ## 2. 文件列表及相对路径
+
+> ⚠️ **v0.1 计划态**，保留作原始设计意图记录。现役目录结构（含 `core/agent/` 的
+> context/risk/subagent/prompts、`core/kb/`、`core/mcp/`、`backend/headless.py`、
+> 40 个测试文件、14 个前端组件、`docs/adr|specs|agents/`）见 [`AGENTS.md`](../AGENTS.md) §3。
 
 项目根：`E:\code\demo\langgraph-agent\`
 
@@ -291,6 +311,11 @@ classDiagram
 
 ### 3.3 REST + SSE 接口定义
 
+> ⚠️ **v0.1：9 个端点。现役 15 个**（权威：`backend/api/routes.py` + Swagger）。
+> 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、`GET /kb` +
+> `POST /kb/rebuild` + `DELETE /kb/{doc_id}`（P1）、`GET /mcp/servers`（P2）；
+> `/health` 另在 `backend/main.py`。下表其余 9 条契约仍现役。
+
 **基础路径**：`/api`　**内容类型**：`application/json`
 
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 |
@@ -308,6 +333,12 @@ classDiagram
 **统一响应信封**：`{code:int, data:any, message:str}`（错误时 `code≠0`）。
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
+
+> ⚠️ **v0.1：12 种。现役 21 种**（已核：20 个经 EventBus publish + `heartbeat` 由
+> `api/sse.py` 直发）。新增 9 种：`risk_report` / `risk_found`（P1 风险扫描）、
+> `subtask_start` / `subtask_result` / `subtask_failed`（P1 子 agent）、
+> `context_compressed` / `tool_circuit_open`（P0 压缩与熔断）、`task_resumed`（P3）、
+> `verification`（P0-B 完成验证）。前端联合类型见 `frontend/src/types/index.ts`。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
@@ -329,6 +360,11 @@ classDiagram
 ---
 
 ## 4. 程序调用流程（mermaid `sequenceDiagram`）
+
+> ⚠️ **v0.1 时序图**：缺 `risk_scan` / `subagent_split` / `human_confirm` 重算 / 完成验证
+> 四个环节，也没有 checkpointer 挂载与 `durability` 传参。现役拓扑（与 `graph.py` 逐边
+> 一致，含全部 8 个节点与 5 个具名 router）见 [`README.md`](../README.md)「编排拓扑」。
+> 下图保留作初始循环设计的讲解版本。
 
 > 详见 `docs/sequence-diagram.mermaid`。
 
@@ -464,6 +500,10 @@ httpx>=0.27.0          # 供 http_api 工具使用
 
 ## 7. 有序任务列表（工程师编码依据）
 
+> ⚠️ **历史**：T01–T09 是 v0.1 首轮实施顺序，均已交付。后续七轮的任务拆分见
+> `docs/incremental-prd-p{0,1,2}.md`；当前待做清单见
+> [`roadmap-pawbench.md`](roadmap-pawbench.md) §三 与 GitHub Issues。
+
 > 说明：任务按**实现依赖顺序**排列，每个任务含 ≥3 个文件。`T01` 为项目基础设施（必为首个任务）。优先级：`P0`=MVP，`P1`=重要。任务粒度到"可独立编码"。
 
 | ID | 任务名 | 源文件（核心） | 依赖 | 优先级 |
@@ -491,6 +531,11 @@ T01(基建) → T02(LLM) ┐
 ---
 
 ## 8. 待明确事项与已确认技术决策
+
+> ⚠️ **Q1–Q8 大体仍现役**，两处已被超越：**Q3 持久化**——任务记录仍走 JSON，但
+> P3 已把 sqlite 真正用起来（`langgraph-checkpoint-sqlite` 存对话快照，含格式守卫）；
+> **Q7 人工介入**——已实现并扩展为 EHRB 五类风险扫描 + 图内 `human_confirm` 节点。
+> §8.2 的 4 项待定均已落定（测试数/能力概述以 `AGENTS.md` §1 为准）。
 
 ### 8.1 已确认技术决策（面向本地 demo，可后续调整）
 

@@ -23,7 +23,7 @@
 
 反面教训（Goodhart 定律）：为 26 道多模态题补一套视觉管线是应试；
 护城河能力（checkpoint/resume 语义、确认闸门、熔断）PawBench 一分不测，
-它们的验收走 365 测试 + live 双场景，不走评测分。
+它们的验收走 444 测试 + live 双场景，不走评测分。
 瀑布式「先做好再评测」同样不成立——没有外部锚点的「好」会无限漂移。
 
 ---
@@ -75,11 +75,12 @@
 
 | 能力 | 第一性原理依据 | PawBench 佐证 | 优先级 |
 |---|---|---|---|
-| 文件精读编辑 read(分页/行号)/edit/glob/grep | P1+P3：read 全量塞爆上下文；整写贵且易错 | tool use 题型直接依赖产物落盘 | **P0-A** |
-| 完成验证（reflect 落地自检） | P7：模型「做完了」的声明不可信 | self-verification 是五维原子能力之一；「虚假完工」是明示掉分点 | **P0-B** |
-| headless 执行入口 | P12：用户不在场也要能用 | 跑 150 题必须无人值守批量执行（**评测前置依赖**） | **P0-C** |
-| skills 运行时 | P4+收敛证据（Hermes/dsh 双收敛） | Skill use 是五维原子能力之一 | P1-A |
-| 回滚（写前快照） | P8 补救半边（Hermes `/rollback` 收敛） | 间接（修复失败任务时缩短重跑成本） | P1-B |
+| 文件精读编辑 read(分页/行号)/edit/glob/grep | P1+P3：read 全量塞爆上下文；整写贵且易错 | tool use 题型直接依赖产物落盘 | ✅ **P0-A 已交付**（PR #18）|
+| 完成验证（reflect 落地自检）| P7：模型「做完了」的声明不可信 | self-verification 是五维原子能力之一；「虚假完工」是明示掉分点 | ✅ **P0-B 已交付**（PR #26）|
+| headless 执行入口 | P12：用户不在场也要能用 | 跑 150 题必须无人值守批量执行（**评测前置依赖**）| ✅ **P0-C 已交付**（PR #19）|
+| **上下文注入层**（AGENTS.md 分层加载 + skills 清单渐进披露 + 环境事实）| **P13**：agent 冷启动失忆，约定只存在于文件系统里——不注入就等于不存在（**四重收敛**：Codex/Claude Code/Qoder/Hermes+dsh）| 间接但是 Skill_Use 的前置（没有「清单注入」就没有按需加载）| **P1-A′**（新增，建议先于 P1-A）|
+| skills 运行时 | P4+收敛证据（Hermes/dsh 双收敛）| Skill use 是五维原子能力之一（qwen3.6-plus 实测 **0.3562**，全表最低切片之一）| P1-A（依赖 P1-A′）|
+| 回滚（写前快照）| P8 补救半边（Hermes `/rollback` 收敛）| 间接（修复失败任务时缩短重跑成本）| **P1-B**（Tier 1 唯一未闭合硬缺口）|
 | web fetch/extract | P5（snippets 不够回答事实题） | 开放环境题型（需 web 检索） | P1-C |
 | 多模态 | 不通过第一性原理检验（A 线场景不需要） | 榜上 26 题 | **降级二期**（防应试） |
 
@@ -106,7 +107,7 @@
 
 ### M2 — 扩规模 + 失败归因
 
-- 前置：P0-C / P0-A（已合并）/ P0-B（完成验证）到位。
+- 前置：P0-C（已合入，PR #19）/ P0-A（已合入，PR #18）/ P0-B（已合入，PR #26）——**三项均已到位**。
 - 任务：切片扩到全部「可单借」的题（~100+ 道，排除 skillsbench 重依赖题与 open/external-dep 题）；
   按 PawBench 五维/七能力标签做**失败切片分析**。
 - **验收**：一张跨-agent 对比表（同模型 deepseek-flash 口径）+ 失败归因报告（本 agent 掉分在哪类
@@ -140,9 +141,10 @@
 
 ```
 docs/roadmap-pawbench     ← 本文档 + 对比报告 + 第一性原理推导 + harness 接口分析
-feat/file-tools           ← P0-A read/edit/grep/glob（已合并，PR #18）
-feat/headless-runner      ← P0-C headless 入口（本仓库，M1 前置依赖，v2 瘦身后）
-feat/reflect-verification ← P0-B 动 nodes.py（review 最严，单独走）
+feat/file-tools           ← P0-A read/edit/grep/glob（已合入，PR #18）
+feat/headless-runner      ← P0-C headless 入口（已合入，PR #19；含 UTF-8 stdio 修复 #22）
+feat/reflect-verification ← P0-B 动 nodes.py（已合入，PR #26；review 最严，单独走）
+feat/context-injection    ← P1-A′ 上下文注入层（待开；单一注入点 _build_messages，零碰保护文件）
 <新仓库> eval-harness      ← v2 评测台：借题目+grade、驱动选手、qwen3.8-max 打分（不在本仓库）
 ```
 

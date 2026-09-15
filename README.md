@@ -3,11 +3,11 @@
 自然语言下发任务 → Agent 自主规划（planner → executor → tool → reflect 循环）→ 调用工具完成多步任务，
 全程 SSE 实时可视化 + Trace 回放。基于 **LangGraph 1.2.x（StateGraph）**，FastAPI + React 前后端一体。
 
-**426 个离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 双场景 PASS（千问 `qwen3.6-plus`：冒烟 + 断点续跑）· CI 五 job 全绿。
+**444 个离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 双场景 PASS（千问 `qwen3.6-plus`：冒烟 + 断点续跑）· CI 五 job 全绿。
 
 这个仓库想证明的不是"能跑通一个 agent demo"，而是 agent 运行时里那几件难做的事被工程化地解决了：
 任务被中途停止后能从检查点续跑、危险操作在执行前被闸门拦住、工具连续失败时熔断降级而不是把循环拖死、
-外部工具生态（MCP / OpenAPI）能动态接进来而不改内核。
+外部工具生态（MCP / OpenAPI）能动态接进来而不改内核、模型自称「做完了」时被确定性自检拦回来。
 
 ---
 
@@ -46,8 +46,10 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 
 - **断点续跑** —— `SqliteSaver` 检查点（`thread_id == task_id`）+ 1.x `durability="sync"`（stop() 后快照必已落盘），`POST /api/tasks/{id}/resume` 从断点复活，消息/计划/确认记录全保留。非 INTERRUPTED、无 checkpoint、停在确认闸口三类一律 409 —— 闸门永不被静默绕过；崩溃遗留的孤儿任务启动时自动对账。→ [P3 架构](docs/incremental-arch-p3-resume.md)
 - **危险操作闸门** —— 规划期 EHRB 五类风险扫描（删除/破坏/财务/隐私/通信）+ `human_confirm` 图内中断节点；批准/拒绝写回 `_confirmed_ids` / `_rejected_ids` 后**重算**是否仍有待确认项（P0 修掉的死循环根因）；写类工具（HTTP 写方法 / `git_commit` / MCP 写类）额外走 per-call 判定
+- **完成验证（P0-B）** —— reflect 不再单信模型的「我做完了」：S1 校验已注册产物存在且非空，S2 拦「全程工具失败却宣称完成」；不达标就带着证据回环 planner（`verify_max_retries` 有界），超限**降级为 COMPLETED + `degraded` 标记**而不是误杀一个可能真完成的任务；`verify_enabled=false` 即回到原空壳行为（零回归）
 - **工具层韧性** —— 熔断（连续失败 3 次短路 / 冷却 30s / half-open 试探）+ 指数退避重试，跳闸发 `tool_circuit_open` 事件；写类工具 `retryable=False`（重试一个已副作用过的调用比重试失败更糟）；MCP 子进程失败隔离
 - **外部工具生态** —— MCP 客户端（stdio，每 server 一线程 + 独立事件循环，工具动态注册成 `mcp__{server}__{tool}`）· OpenAPI spec 一键成工具 · `backend/plugins/` 自动发现（模板见 [`example_tool.py`](backend/plugins/example_tool.py)）· Git 7 工具（参数化无 shell + 危险命令黑名单）。接入方式全是配置项，不改内核：见 [`.env.example`](.env.example) 的 `mcp_*` / `openapi_*` / `plugins_*`
+- **文件精读编辑（P0-A）** —— `read`（行号 + 分页，不一次拉爆上下文）/ `edit`（精确 `str_replace`，不整文件重写）/ `glob`（递归名匹配）/ `grep`（内容检索）四个沙箱内独立工具，各有自己的 function schema 与韧性/确认策略；旧 `file_io` 待退役（[#17](https://github.com/renjianguojinqianfan/langgraph-agent/issues/17)）
 - **子 Agent 协作** —— 隔离子任务图（`mode="subtask"`，无风险/确认节点、防递归），线程池并行，主消息只留折叠摘要
 - **上下文压缩 + 知识库** —— 超阈值（默认 8000 tokens）自动截断 / 可选 LLM 摘要；标准库关键词索引的 KB（离线可用），任务中经 `kb_query` / `memory_search` 检索
 - **可观测** —— SSE 21 种事件 + JSONL Trace 落盘（顺序与 SSE 一致），前端时间线回放 + 导出原始字节
@@ -117,7 +119,7 @@ checkpointer 时传（1.2.11 在无 checkpointer 时传 `sync` 会 `AttributeErr
 
 **安全闭环**：两条曾被 dismiss 的公告（CVE-2025-67644 / CVE-2026-71433）随 3.1.1 从「已接受」变「已修复」。
 
-**闸门**：351 → **365 passed** · `--check` 5/5 · 真实模型双场景 PASS · 受保护文件 diff 为空 · CI 全绿。
+**闸门**（迁移当时口径）：351 → **365 passed**（现役基线 **444**）· `--check` 5/5 · 真实模型双场景 PASS · 受保护文件 diff 为空 · CI 全绿。
 
 → 完整评估、A/B 实测证据（旧钉版理由是怎么被推翻的、为什么"读得回 ≠ 跑得续"）与逐条决策：
 [`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md)
@@ -130,7 +132,7 @@ checkpointer 时传（1.2.11 在无 checkpointer 时传 `sync` 会 `AttributeErr
 pip install -r requirements-dev.txt      # ruff + mypy（钉死版本，不进运行期镜像）
 python -m ruff check backend scripts     # 基线全净，零 per-file-ignores
 python -m mypy                           # files=backend，生产与测试同一把闸
-python -m pytest backend/tests/ -q       # 426 用例，唯一权威回归
+python -m pytest backend/tests/ -q       # 444 用例，唯一权威回归
 python scripts/live_e2e.py --check       # 无 Key / 无网络的接线冒烟
 python -m backend.headless --check       # P0-C headless 入口离线冒烟
 ```
@@ -158,14 +160,23 @@ CI 五 job 在 [`ci.yml`](.github/workflows/ci.yml)：受保护文件守卫 · �
 
 ## 文档
 
-- **架构与契约**：[`docs/architecture.md`](docs/architecture.md)（REST + SSE 事件协议 + 类图 / 时序图）；
-  运行时 Swagger 在 `http://localhost:8000/docs`；P2 的 `/api/mcp/servers`、P3 的 `/resume` 见各自增量档
+- **架构与契约**：现役拓扑看上文「编排拓扑」+ [`graph.py`](backend/core/agent/graph.py)；接口契约以运行时
+  Swagger（`http://localhost:8000/docs`）与 [`routes.py`](backend/api/routes.py)（15 REST）为准。
+  [`docs/architecture.md`](docs/architecture.md) 是 **v0.1 原始设计档（历史）**：选型理由与共享约定仍有效，
+  但工具/端点/事件的数量信息已过期两代（文内逐节标了现役指针）
 - **增量设计**：[P0](docs/incremental-arch-p0.md)（上下文压缩 / 熔断 / 插件 / trace）·
   [P1](docs/incremental-prd-p1.md)（风险扫描 / 子 Agent / RAG / 辅助模型 / 鉴权 / OpenAPI）·
   [P2](docs/incremental-prd-p2.md)（MCP / Git）· [P3](docs/incremental-arch-p3-resume.md)（断点续跑）
 - **迁移**：[`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md) ·
   [Issue #7](https://github.com/renjianguojinqianfan/langgraph-agent/issues/7) ·
   [Issue #4（断点续跑）](https://github.com/renjianguojinqianfan/langgraph-agent/issues/4)
+- **能力推导与对标**：[`docs/capability-first-principles.md`](docs/capability-first-principles.md)（从 12+1 条
+  物理约束推导必需能力，含 2026-09-15 复核）·
+  [`docs/agent-comparison-report.md`](docs/agent-comparison-report.md)（Codex / Qoder / Hermes / dsh 横向对标）·
+  [`docs/roadmap-pawbench.md`](docs/roadmap-pawbench.md)（落地路线 v2）
+- **决策与规范**：[`docs/adr/`](docs/adr/)（ADR；0001 = 原地迁移而非重写 + 简历定位，D1–D9）·
+  [`docs/specs/`](docs/specs/)（spec / 实施计划档案）· [`docs/agents/`](docs/agents/)（技能组配置：
+  issue tracker / triage 标签 / domain 约定）——文档归属约定见 [`AGENTS.md`](AGENTS.md) §3
 - **配置**：[`.env.example`](.env.example)（16 组前缀，逐项带注释）
 - **工程约定**：[`AGENTS.md`](AGENTS.md)（硬规则 / 目录结构 / 常用命令 / 完成定义）·
   [`OVERVIEW.md`](OVERVIEW.md)（历次交付日志，含 Issue #7 一章）
