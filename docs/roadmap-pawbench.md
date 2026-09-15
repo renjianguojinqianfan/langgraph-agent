@@ -24,6 +24,7 @@
 反面教训（Goodhart 定律）：为 26 道多模态题补一套视觉管线是应试；
 护城河能力（checkpoint/resume 语义、确认闸门、熔断）PawBench 一分不测，
 它们的验收走 444 测试 + live 双场景，不走评测分。
+（护城河纪律的决策级冻结见 [ADR-0002](adr/0002-moat-discipline-no-attention-reallocation.md)）
 瀑布式「先做好再评测」同样不成立——没有外部锚点的「好」会无限漂移。
 
 ---
