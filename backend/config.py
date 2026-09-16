@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     context_compress_strategy: str = "truncate"  # truncate | summarize (default: zero extra LLM calls)
     context_summary_max_tokens: int = 300  # only used by the `summarize` strategy
 
+    # ── Context injection (P1-A′, context family sub-prefix) ──
+    context_inject_enabled: bool = True  # master switch: AGENTS.md + skills + env facts into system
+    context_inject_skills_budget: int = 4000  # chars; drop whole cards from the tail when over
+
     # ── Tool resilience (P0 item 2) ──
     tool_failure_threshold: int = 3  # consecutive failures before the circuit opens
     tool_cooldown_sec: int = 30  # seconds the circuit stays open before half-open probe
