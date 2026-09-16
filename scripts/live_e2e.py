@@ -1,5 +1,5 @@
 """Live end-to-end verification against a real OpenAI-compatible LLM host
-(validated with the QianWen / DashScope qwen3.6-plus model).
+(validated with the QianWen / DashScope qwen3.7-flash-2026-07-15 model).
 
 Run (Linux/macOS bash or Git Bash):
     LLM_API_KEY="$DASHSCOPE_API_KEY" python scripts/live_e2e.py
@@ -9,7 +9,7 @@ or, after putting llm_api_key into .env:
 Requirements:
   - An OpenAI-compatible endpoint + API key (env LLM_API_KEY or .env llm_api_key)
   - .env configured with llm_base_url (e.g. https://dashscope.aliyuncs.com/compatible-mode/v1)
-    and llm_model (e.g. qwen3.6-plus), use_mock_llm=false
+    and llm_model (e.g. qwen3.7-flash-2026-07-15), use_mock_llm=false
   - The chosen model must have quota on the account
 
 This script drives the REAL LangGraph kernel end-to-end with a natural-language

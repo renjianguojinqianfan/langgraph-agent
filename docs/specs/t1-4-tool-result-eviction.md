@@ -122,7 +122,7 @@ runtime 层（仿 `test_context_injection.py` 的 fake tm）：
 ## 五、验收标准
 
 - `pytest backend/tests/ -q` 全绿（480 + 新增）；`ruff check backend scripts` 与 `mypy` 0 错。
-- `scripts/live_e2e.py`（qwen3.6-plus）双场景 PASS。
+- `scripts/live_e2e.py`（qwen3.7-flash-2026-07-15）双场景 PASS。
 - 同步 `.env.example`（`context_evict_*` 段）与 README（能力条目 + 事件计数若变）。
 - 不碰保护文件（`resilience.py` / `registry.py` / `_needs_confirm` 重算块）；改动集中 `context.py` / `nodes.py` / `config.py` / conftest / 新测试文件。
 
@@ -136,7 +136,7 @@ runtime 层（仿 `test_context_injection.py` 的 fake tm）：
 - ✅ `backend/tests/test_eviction.py` 13 用例（§四 逐条对应）
 - ✅ 文档同步：README 能力条目 + 事件计数 21→22、`.env.example` 的 `context_evict_*` 段、`docs/architecture.md` §3.4 事件表与「已核」计数、AGENTS.md 快照（493 计数 / 隔离清单 / 目录表 / spec 档案）
 - ✅ 门禁全量：`pytest backend/tests/ -q` = **493 passed**；`ruff check backend scripts` 与 `mypy` 0 错
-- ✅ live：`LLM_MODEL=qwen3.6-plus` 跑 `scripts/live_e2e.py`，场景 1（冒烟）/ 场景 2（stop→resume）双 PASS
+- ✅ live：`LLM_MODEL=qwen3.7-flash-2026-07-15` 连通性探测 OK + `scripts/live_e2e.py` 场景 1（冒烟）/ 场景 2（stop→resume）双 PASS；期间该模型一次调用挂起（>180s 轮询窗口）致场景 2 单次失败，A/B 复跑通过（该场景消息数 < 保护带，eviction 实为 no-op），判定模型侧偶发、非回归。模型口径与免费额度核实（qwen3.6-plus 已 expire）见 AGENTS.md §2「真实 LLM 验证」
 -  提交 / PR / CI 全绿合并 / 关闭 issue #38（resolution comment 引本 spec）
 
 实现期一处对测试设计的偏离（如实记录）：§四 #11 对照组与 #12 显式传 `context_token_budget`——本地 `.env` 的 `context_token_budget=8000` 会经 pydantic-settings 泄漏进 `make_settings`（conftest 只中和 provider 键），属 §二「与默认值解耦」同一问题，未被本 spec 修复（存量行为，另行评估）。
