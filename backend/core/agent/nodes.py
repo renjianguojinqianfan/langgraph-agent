@@ -16,6 +16,7 @@ from ...config import get_settings
 from ...utils.logging import get_logger
 from ..tools.base import BaseTool, ToolResult
 from ..tools.http_api import WRITE_METHODS
+from . import inject
 from .context import compress_messages
 from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
 from .state import AgentState
@@ -69,6 +70,15 @@ class AgentRuntime:
         self._aux = aux_llm  # injected aux client (may be None)
         self._aux_computed = aux_llm is not None
         self.subagent_executor = subagent_executor  # SubAgentExecutor (main mode only)
+        # P1-A′: discover + merge once per task (task-level cache); mid-task edits
+        # to AGENTS.md intentionally do not take effect. Subtask graphs share this
+        # __init__, so they receive the same block with no extra code.
+        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        self._inject_block: str = (
+            inject.build_inject_block(settings)
+            if getattr(settings, "context_inject_enabled", True)
+            else ""
+        )
 
     # ── helpers ──
     def _publish(self, event_type: str, data: Dict[str, Any]) -> None:
@@ -130,7 +140,8 @@ class AgentRuntime:
 
         Compression happens exactly here (shared by planner and executor) so
         every LLM call sees an up-to-date, bounded context. Under the budget
-        the messages are returned untouched.
+        the messages are returned untouched. The P1-A′ injection block rides on
+        the *system* message and is deliberately outside the compression budget.
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
         messages = state.get("messages", []) or []
@@ -162,7 +173,7 @@ class AgentRuntime:
                 )
             except Exception:  # pragma: no cover - event is optional
                 logger.warning("failed to publish context_compressed event", exc_info=True)
-        return [{"role": "system", "content": system}, *compressed]
+        return [{"role": "system", "content": system + self._inject_block}, *compressed]
 
     def _parse_plan(self, content: str) -> List[Dict[str, Any]]:
         content = (content or "").strip()
