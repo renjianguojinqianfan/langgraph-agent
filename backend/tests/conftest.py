@@ -32,6 +32,7 @@ os.environ.setdefault(
     "CHECKPOINT_ENABLED", "false"
 )  # Issue #4: no sqlite checkpoint store unless a test opts in
 os.environ.setdefault("CONTEXT_INJECT_ENABLED", "false")  # P1-A′: isolate the injection chain
+os.environ.setdefault("CONTEXT_EVICT_ENABLED", "false")  # T1.4: isolate tool-result eviction
 
 # ── Git identity for test repos ──────────────────────────────────────────────
 # git_commit 类测试在临时仓库里真实执行 git commit：CI runner 与部分全新环境没有
