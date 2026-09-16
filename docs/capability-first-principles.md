@@ -130,6 +130,10 @@
 ⬜ 债务清理：file_io 退役（#17）、planner 降级分支形态（#12）、live_e2e 超时（#13）
 ```
 
+**执行序**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)，2026-09-16，
+agent-first）：P1-A′ → P1-B → P1-A → T1.4 → 评测台（M1/M2）；P1-C 与调度排在评测之后
+（fetch 划出基础能力边界——M2 切片排除 external-dep 题，这场考试不考它）。
+
 每项的第一性原理依据与验收路径见上表；落地排期与里程碑见
 [`roadmap-pawbench.md`](roadmap-pawbench.md)。
 

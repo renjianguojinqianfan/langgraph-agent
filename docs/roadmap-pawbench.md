@@ -98,6 +98,10 @@
   「无人值守跑一道题、产物落盘、退出码有意义」。P0-C 因不接 harness 而**大幅瘦身**：不需
   OpenClaw transcript / 胖镜像 / ContainerAgent，只需 CLI 单发 + 闸门旁路开关 + 模型可配 +
   自己的 trace JSONL 落盘。
+- **执行序**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)，2026-09-16
+  agent-first）：评测台搭建（含 M1）在**必修四项**（P1-A′ / P1-B / P1-A / T1.4）全闭合后启动，
+  替代「M1 基线先行」旧序；基线改由 checkout 回 #37 定案 commit `44e74df` 复跑同切片获取
+  （只看聚合 Δ，逐能力拆分放弃、归因靠 M2 失败切片定性补）。
 - **评测台**（新仓库）：借 PawBench 的**题目 + `grade()`**，写一个轻量 runner：解析题目 md →
   给各选手喂 prompt（统一 `-p "<prompt>" --dir <workdir> --yolo --output json` 形态）→ 收产物 →
   跑 `grade()` 硬分 → 调 qwen3.8-max-0902 软分 → 合成报告。
@@ -108,7 +112,9 @@
 
 ### M2 — 扩规模 + 失败归因
 
-- 前置：P0-C（已合入，PR #19）/ P0-A（已合入，PR #18）/ P0-B（已合入，PR #26）——**三项均已到位**。
+- 前置：P0-C（已合入，PR #19）/ P0-A（已合入，PR #18）/ P0-B（已合入，PR #26）——三项均已到位；
+  **＋ 必修四项 P1-A′ / P1-B / P1-A / T1.4**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)
+  agent-first 序，评测台殿后）。
 - 任务：切片扩到全部「可单借」的题（~100+ 道，排除 skillsbench 重依赖题与 open/external-dep 题）；
   按 PawBench 五维/七能力标签做**失败切片分析**。
 - **验收**：一张跨-agent 对比表（同模型 deepseek-v4.1-flash 口径）+ 失败归因报告（本 agent 掉分在哪类
