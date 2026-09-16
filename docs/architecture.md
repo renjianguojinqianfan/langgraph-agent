@@ -334,11 +334,12 @@ classDiagram
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 
-> ⚠️ **v0.1：12 种。现役 21 种**（已核：20 个经 EventBus publish + `heartbeat` 由
-> `api/sse.py` 直发）。新增 9 种：`risk_report` / `risk_found`（P1 风险扫描）、
+> ⚠️ **v0.1：12 种。现役 22 种**（已核：21 个经 EventBus publish + `heartbeat` 由
+> `api/sse.py` 直发）。新增 10 种：`risk_report` / `risk_found`（P1 风险扫描）、
 > `subtask_start` / `subtask_result` / `subtask_failed`（P1 子 agent）、
 > `context_compressed` / `tool_circuit_open`（P0 压缩与熔断）、`task_resumed`（P3）、
-> `verification`（P0-B 完成验证）。前端联合类型见 `frontend/src/types/index.ts`。
+> `verification`（P0-B 完成验证）、`tool_result_evicted`（T1.4 工具结果逐出）。
+> 前端联合类型见 `frontend/src/types/index.ts`（未知类型自然忽略）。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
@@ -355,6 +356,7 @@ classDiagram
 | `task_completed` | `{task_id, status}` | 完成 |
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 被停止 |
+| `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `heartbeat` | `{}` | 保活（每 15s） |
 
 ---
