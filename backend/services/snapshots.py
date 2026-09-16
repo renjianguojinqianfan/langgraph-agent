@@ -82,13 +82,21 @@ def _task_dir(settings: Settings, task_id: str) -> Path:
     return settings.snapshots_path / task_id
 
 
+def _under_root(candidate: Path, root: Path) -> bool:
+    """The one containment predicate both path helpers below share."""
+    return candidate == root or root in candidate.parents
+
+
 def _relative_in_sandbox(path: Path, settings: Settings) -> Optional[str]:
     """Return the POSIX sandbox-relative path, or None when outside the root."""
     try:
         root = settings.artifacts_path.resolve()
         candidate = Path(path).resolve()
-        if candidate != root and root not in candidate.parents:
-            return None
+    except Exception:
+        return None
+    if not _under_root(candidate, root):
+        return None
+    try:
         return candidate.relative_to(root).as_posix()
     except Exception:
         return None
@@ -100,9 +108,7 @@ def _confined(root: Path, rel: str) -> Optional[Path]:
         candidate = (root / rel).resolve()
     except Exception:
         return None
-    if candidate != root and root not in candidate.parents:
-        return None
-    return candidate
+    return candidate if _under_root(candidate, root) else None
 
 
 def _next_seq(ledger: Path) -> int:
@@ -190,7 +196,7 @@ def capture_before_image(path: Path, *, settings: Settings | None = None) -> boo
         return False
 
 
-def _capture_retention(task_dir: Path, root: Path, unique: List[str]) -> None:
+def _capture_retention(task_dir: Path, targets: Dict[str, Path]) -> None:
     """Photograph the current state of every touched file before restoring.
 
     拍板 12② (data half): the rollback itself stays undoable in data — the v2
@@ -203,29 +209,28 @@ def _capture_retention(task_dir: Path, root: Path, unique: List[str]) -> None:
         ledger = retention / RETENTION_LEDGER
         seq = _next_seq(ledger)
         with ledger.open("a", encoding="utf-8") as fh:
-            for rel in unique:
-                source = _confined(root, rel)
-                if source is None or not source.is_file():
+            for rel, source in targets.items():
+                if not source.is_file():
                     continue
                 name = f"{seq:04d}.bak"
-                seq += 1
                 shutil.copyfile(source, retention / name)
                 fh.write(
                     json.dumps(
-                        {"seq": seq - 1, "path": rel, "backup": name, "ts": _now()},
+                        {"seq": seq, "path": rel, "backup": name, "ts": _now()},
                         ensure_ascii=False,
                     )
                     + "\n"
                 )
+                seq += 1
     except Exception as exc:
         logger.warning("retention capture failed (%s: %s) — rollback proceeds", type(exc).__name__, exc)
 
 
-def _replay_entry(root: Path, task_dir: Path, entry: Dict[str, Any]) -> None:
+def _replay_entry(target: Optional[Path], task_dir: Path, entry: Dict[str, Any]) -> None:
     """Apply one ledger entry backwards: restore the before-image, or delete a
-    file the task created. Skips entries that escape either boundary."""
+    file the task created. ``target`` is None for entries that escape either
+    boundary — those are skipped, never written."""
     rel = str(entry.get("path", ""))
-    target = _confined(root, rel)
     if target is None:
         logger.warning("snapshot ledger entry escapes the sandbox; skipped: %r", rel)
         return
@@ -264,23 +269,43 @@ def restore_task(task_id: str, *, settings: Settings) -> Dict[str, Any]:
         return result
 
     root = settings.artifacts_path.resolve()
-    # De-duplicate by path in first-write order: retention and the before/after
-    # comparison are per unique file, not per write.
-    unique: List[str] = []
+    # De-duplicate by path in first-write order and confine ONCE: retention,
+    # the before/after digests and the replay all use the same resolved target,
+    # and an entry that escapes the sandbox is dropped here — before anything
+    # (even a read) touches it.
+    targets: Dict[str, Path] = {}
     for entry in entries:
         rel = str(entry["path"])
-        if rel not in unique:
-            unique.append(rel)
+        if rel in targets:
+            continue
+        target = _confined(root, rel)
+        if target is None:
+            logger.warning("snapshot ledger entry escapes the sandbox; skipped: %r", rel)
+            continue
+        targets[rel] = target
 
-    _capture_retention(task_dir, root, unique)
-    before = {rel: _digest(root / rel) for rel in unique}
+    _capture_retention(task_dir, targets)
+    before = {rel: _digest(target) for rel, target in targets.items()}
 
     for entry in reversed(entries):
-        _replay_entry(root, task_dir, entry)
+        _replay_entry(targets.get(str(entry.get("path", ""))), task_dir, entry)
 
-    after = {rel: _digest(root / rel) for rel in unique}
-    changed = [rel for rel in unique if before[rel] != after[rel]]
+    after = {rel: _digest(target) for rel, target in targets.items()}
+    changed = [rel for rel in targets if before[rel] != after[rel]]
     return {"ok": True, "files": changed, "already_original": not changed}
+
+
+def _age_ref(child: Path) -> float:
+    """Newest mtime of a task dir and its ledger — the honest "last used" clock.
+
+    Appending to ``ledger.jsonl`` does not bump the *directory* mtime, so a
+    long-lived task that only ever appended would otherwise look expired.
+    """
+    newest = child.stat().st_mtime
+    ledger = child / LEDGER_NAME
+    if ledger.exists():
+        newest = max(newest, ledger.stat().st_mtime)
+    return newest
 
 
 def cleanup_expired(*, settings: Settings) -> int:
@@ -288,10 +313,11 @@ def cleanup_expired(*, settings: Settings) -> int:
 
     Runs once per TaskManager construction — there is no scheduler host yet, so
     the sweep rides the startup hook that already exists for orphan
-    reconciliation. A failed sweep is a warning, never a startup blocker.
+    reconciliation. Gated on the master switch (a disabled feature must not
+    delete data), and a failed sweep is a warning, never a startup blocker.
     """
     days = int(settings.snapshot_retention_days)
-    if days <= 0:
+    if days <= 0 or not settings.snapshot_enabled:
         return 0
     root = settings.snapshots_path
     if not root.is_dir():
@@ -300,7 +326,7 @@ def cleanup_expired(*, settings: Settings) -> int:
     removed = 0
     for child in root.iterdir():
         try:
-            if not child.is_dir() or child.stat().st_mtime >= cutoff:
+            if not child.is_dir() or _age_ref(child) >= cutoff:
                 continue
             shutil.rmtree(child)
             removed += 1

@@ -49,7 +49,10 @@ export function TaskHeader({ task }: { task: Task }) {
             : `已回滚 ${data.files.length} 个文件`
         );
       } else {
-        setRollbackNote("回滚失败（任务可能仍在运行）");
+        // FastAPI error bodies carry {detail} instead of the envelope: a 409
+        // (task still active) is the rejection the user can act on.
+        const detail = (r as unknown as { detail?: string }).detail;
+        setRollbackNote(detail ? "回滚被拒绝（任务尚未收尾）" : "回滚请求失败");
       }
     } catch {
       setRollbackNote("回滚请求失败");
