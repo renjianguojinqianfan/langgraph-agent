@@ -199,7 +199,10 @@ jobs:
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       llm_base_url: ${{ secrets.LLM_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1' }}
-      llm_model: ${{ secrets.LLM_MODEL || 'qwen3.6-plus' }}
+      # 默认模型 = 有有效免费额度的 flash 快照（2026-09-16 经 qianwen usage free-tier 核实：
+      # qwen3.6-plus 额度已 expire、qwen3.7-flash 已 exhaust，仅 qwen3.7-flash-2026-07-15
+      # status=valid，resetDate 2026-10-23）。换模型前先查额度，别让 CI 悄悄走按量付费。
+      llm_model: ${{ secrets.LLM_MODEL || 'qwen3.7-flash-2026-07-15' }}
       use_mock_llm: "false"
     steps:
       - name: Gate on API key availability

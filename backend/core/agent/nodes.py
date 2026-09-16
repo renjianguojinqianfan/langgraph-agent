@@ -17,7 +17,7 @@ from ...utils.logging import get_logger
 from ..tools.base import BaseTool, ToolResult
 from ..tools.http_api import WRITE_METHODS
 from . import inject
-from .context import compress_messages
+from .context import compress_messages, evict_tool_results
 from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
 from .state import AgentState
 
@@ -145,6 +145,33 @@ class AgentRuntime:
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
         messages = state.get("messages", []) or []
+        # T1.4: move the bulky stuff out first (mechanical, zero LLM calls), then
+        # decide whether compression is still needed — evict → compress is a
+        # fixed order. Failures degrade to "no eviction" and never block the run.
+        if settings.context_evict_enabled:
+            try:
+                trace_ref = (
+                    str(settings.trace_path / f"{self.task_id}.jsonl")
+                    if settings.trace_enabled
+                    else ""
+                )
+                messages, evictions = evict_tool_results(
+                    messages,
+                    threshold_chars=settings.context_evict_threshold_chars,
+                    protect_recent=settings.context_evict_protect_recent,
+                    head_chars=settings.context_evict_head_chars,
+                    tail_chars=settings.context_evict_tail_chars,
+                    trace_ref=trace_ref,
+                )
+                if evictions:
+                    state["messages"] = messages
+                    for ev in evictions:
+                        self._publish(
+                            "tool_result_evicted",
+                            {"step_index": state.get("step_index", 0), **ev},
+                        )
+            except Exception:  # pragma: no cover - defensive
+                logger.warning("tool-result eviction failed; continuing without it", exc_info=True)
         # P1 item 4: summarisation prefers the aux model; without aux it falls
         # back to the main model (the pre-P1 behaviour) — never an extra call.
         llm_for_summary = self.aux_llm or self.llm

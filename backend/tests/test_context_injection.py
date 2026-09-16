@@ -115,7 +115,8 @@ def _system_of(rt: AgentRuntime, state: AgentState, system: str) -> str:
 
 
 def _big_messages() -> List[Dict[str, Any]]:
-    """A > 8K-token history (default budget) with room to drop."""
+    """A > 8K-estimated-token history; tests pass ``context_token_budget=8000``
+    explicitly so they never depend on the production default."""
     return [
         {"role": "user", "content": "x" * 40000},
         {"role": "assistant", "content": "y" * 1000},
@@ -504,7 +505,7 @@ def test_cache_planner_executor_share(tmp_path: Path, tmp_home: Path) -> None:
 
 # ── 4.7 coexistence with compression ─────────────────────────────────────────
 def test_compress_keeps_inject_block(tmp_path: Path, tmp_home: Path) -> None:
-    settings = _settings(tmp_path, context_keep_recent=2)
+    settings = _settings(tmp_path, context_keep_recent=2, context_token_budget=8000)
     _write(_sandbox(settings) / "AGENTS.md", "ORIGINAL-SANDBOX")
     rt = _runtime(settings)
     state = _state(_big_messages())
@@ -522,12 +523,14 @@ def test_compress_keeps_inject_block(tmp_path: Path, tmp_home: Path) -> None:
 
 
 def test_compress_budget_excludes_inject(tmp_path: Path, tmp_home: Path) -> None:
-    on = _settings(tmp_path, context_keep_recent=2)
+    on = _settings(tmp_path, context_keep_recent=2, context_token_budget=8000)
     _write(_sandbox(on) / "AGENTS.md", "ORIGINAL-SANDBOX")
     state_on = _state(_big_messages())
     _system_of(_runtime(on), state_on, PLANNER_SYSTEM)
 
-    off = make_settings(tmp_path, context_inject_enabled=False, context_keep_recent=2)
+    off = make_settings(
+        tmp_path, context_inject_enabled=False, context_keep_recent=2, context_token_budget=8000
+    )
     state_off = _state(_big_messages())
     _system_of(_runtime(off), state_off, PLANNER_SYSTEM)
 
@@ -551,7 +554,8 @@ def test_subtask_runtime_shares(tmp_path: Path, tmp_home: Path) -> None:
 
 def test_aux_llm_not_injected(tmp_path: Path, tmp_home: Path) -> None:
     settings = _settings(
-        tmp_path, context_keep_recent=2, context_compress_strategy="summarize"
+        tmp_path, context_keep_recent=2, context_compress_strategy="summarize",
+        context_token_budget=8000,
     )
     _write(_sandbox(settings) / "AGENTS.md", "ORIGINAL-SANDBOX")
     aux = _RecordingLLM()

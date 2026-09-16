@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     artifacts_dir: str = "data/artifacts"
 
     # ── Context compression (P0 item 1) ──
-    context_token_budget: int = 8000  # estimated tokens above this triggers compression
+    context_token_budget: int = 32000  # estimated tokens (chars/4) above this triggers compression; 对标 dsh ratio 制（0.8×窗口）按 128K 窗口保守折算——chars/4 对中文低估真实 token 2~3 倍，故不直接抄 ~105K
     context_keep_recent: int = 10  # keep the most recent N raw messages when compressing
     context_max_messages: int = 0  # 0 = only token-triggered; >0 also triggers by message count
     context_compress_strategy: str = "truncate"  # truncate | summarize (default: zero extra LLM calls)
@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # ── Context injection (P1-A′, context family sub-prefix) ──
     context_inject_enabled: bool = True  # master switch: AGENTS.md + skills + env facts into system
     context_inject_skills_budget: int = 4000  # chars; drop whole cards from the tail when over
+
+    # ── Tool-result eviction (T1.4, context family sub-prefix) ──
+    context_evict_enabled: bool = True  # false = pre-T1.4 behaviour (no eviction)
+    context_evict_threshold_chars: int = 4000  # evict a single tool message longer than this
+    context_evict_protect_recent: int = 10  # never evict the most recent N messages (positional)
+    context_evict_head_chars: int = 800  # head preview kept inside the placeholder
+    context_evict_tail_chars: int = 400  # tail preview kept inside the placeholder
 
     # ── Tool resilience (P0 item 2) ──
     tool_failure_threshold: int = 3  # consecutive failures before the circuit opens
