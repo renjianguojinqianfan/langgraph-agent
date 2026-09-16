@@ -53,7 +53,8 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 - **子 Agent 协作** —— 隔离子任务图（`mode="subtask"`，无风险/确认节点、防递归），线程池并行，主消息只留折叠摘要
 - **上下文注入（P1-A′）** —— planner/executor 每次 LLM 调用前，system 侧注入三段块：两层 `AGENTS.md`（`~/.agents/AGENTS.md` → 工作区根，根→子全量追加、**永不裁**）+ skills 清单（frontmatter 只取 `name`/`description`，卡片粒度 4000 字符预算，超限从末尾丢整卡）+ 环境事实（沙箱根绝对路径 / OS / 日期）。任务级缓存（任务中途改文件下个任务生效）、不计入压缩预算、`context_inject_enabled=false` 一键回到旧行为（零回归锚：system 与改造前逐字节相同）→ [`.env.example`](.env.example) 的 `context_inject_*` 段
 - **工具结果逐出（T1.4）+ 上下文压缩 + 知识库** —— 压缩**之前**先搬大件：保护带（最近 10 条）外、单条超 4000 字符的 tool 结果原地换成占位（工具名 + 原文字符数 + 留痕指针 + 头 800/尾 400 预览），纯机械零 LLM 调用、全文留 trace、搬完不超预算则压缩与 LLM 摘要都不触发；超阈值（默认 32000 est. tokens）仍自动截断 / 可选 LLM 摘要；标准库关键词索引的 KB（离线可用），任务中经 `kb_query` / `memory_search` 检索 → [`context.py`](backend/core/agent/context.py)
-- **可观测** —— SSE 22 种事件 + JSONL Trace 落盘（顺序与 SSE 一致），前端时间线回放 + 导出原始字节
+- **回滚（P1-B）** —— 每次沙箱内文件写**之前**先把旧版本拍进沙箱外的账本（`data/snapshots/<task_id>/`：`ledger.jsonl` + `NNNN.bak`，文件级 before-image，写多少记多少）；`POST /api/tasks/{id}/rollback` 逆序重放账本，整任务回到起点——只动文件、**不动断点**（与 resume 完全解耦），恢复前先把当前版本拍进 `retention/`（撤销入口 v2）、重复调用返回「已是原样」；活跃任务 409、快照失败 fail-open 不阻塞工具、30 天启动清扫。前端任务头「回滚」按钮 + 行内确认。→ [spec](docs/specs/p1-b-rollback.md)
+- **可观测** —— SSE 23 种事件 + JSONL Trace 落盘（顺序与 SSE 一致），前端时间线回放 + 导出原始字节
 - **沙箱与鉴权** —— 文件白名单防逃逸、代码执行受限 subprocess；hmac token 签发（默认关闭，本地 demo 便利）
 
 ---
@@ -162,7 +163,7 @@ CI 五 job 在 [`ci.yml`](.github/workflows/ci.yml)：受保护文件守卫 · �
 ## 文档
 
 - **架构与契约**：现役拓扑看上文「编排拓扑」+ [`graph.py`](backend/core/agent/graph.py)；接口契约以运行时
-  Swagger（`http://localhost:8000/docs`）与 [`routes.py`](backend/api/routes.py)（15 REST）为准。
+  Swagger（`http://localhost:8000/docs`）与 [`routes.py`](backend/api/routes.py)（16 REST）为准。
   [`docs/architecture.md`](docs/architecture.md) 是 **v0.1 原始设计档（历史）**：选型理由与共享约定仍有效，
   但工具/端点/事件的数量信息已过期两代（文内逐节标了现役指针）
 - **增量设计**：[P0](docs/incremental-arch-p0.md)（上下文压缩 / 熔断 / 插件 / trace）·

@@ -8,7 +8,7 @@
 >
 > 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、REST
 > 端点表、SSE 事件表、类图与时序图均为**当时的计划态**，与现状差两代（本文：4 个工具 /
-> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 15 个端点 / 21 种事件 / 14 个组件）。
+> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 16 个端点 / 23 种事件 / 14 个组件）。
 >
 > **现役事实请查这里**：
 > - 目录结构与能力清单 → [`AGENTS.md`](../AGENTS.md) §1–§3
@@ -311,9 +311,10 @@ classDiagram
 
 ### 3.3 REST + SSE 接口定义
 
-> ⚠️ **v0.1：9 个端点。现役 15 个**（权威：`backend/api/routes.py` + Swagger）。
+> ⚠️ **v0.1：9 个端点。现役 16 个**（权威：`backend/api/routes.py` + Swagger）。
 > 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、`GET /kb` +
-> `POST /kb/rebuild` + `DELETE /kb/{doc_id}`（P1）、`GET /mcp/servers`（P2）；
+> `POST /kb/rebuild` + `DELETE /kb/{doc_id}`（P1）、`GET /mcp/servers`（P2）、
+> `POST /tasks/{id}/rollback`（P1-B）；
 > `/health` 另在 `backend/main.py`。下表其余 9 条契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`
@@ -334,11 +335,12 @@ classDiagram
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 
-> ⚠️ **v0.1：12 种。现役 22 种**（已核：21 个经 EventBus publish + `heartbeat` 由
-> `api/sse.py` 直发）。新增 10 种：`risk_report` / `risk_found`（P1 风险扫描）、
+> ⚠️ **v0.1：12 种。现役 23 种**（已核：22 个经 EventBus publish + `heartbeat` 由
+> `api/sse.py` 直发）。新增 11 种：`risk_report` / `risk_found`（P1 风险扫描）、
 > `subtask_start` / `subtask_result` / `subtask_failed`（P1 子 agent）、
 > `context_compressed` / `tool_circuit_open`（P0 压缩与熔断）、`task_resumed`（P3）、
-> `verification`（P0-B 完成验证）、`tool_result_evicted`（T1.4 工具结果逐出）。
+> `verification`（P0-B 完成验证）、`tool_result_evicted`（T1.4 工具结果逐出）、
+> `task_rollback`（P1-B 工作区回滚）。
 > 前端联合类型见 `frontend/src/types/index.ts`（未知类型自然忽略）。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
@@ -357,6 +359,7 @@ classDiagram
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 被停止 |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
+| `task_rollback` | `{task_id, ok, files, already_original}` | 工作区回滚完成（P1-B，`files` = 实际变动的沙箱内路径） |
 | `heartbeat` | `{}` | 保活（每 15s） |
 
 ---

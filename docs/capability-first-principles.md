@@ -72,17 +72,17 @@
 
 ---
 
-## 四、本仓库对照（代码实证，2026-09-15 复核）
+## 四、本仓库对照（代码实证，2026-09-17 复核）
 
 | 能力 | 现状 | 判定 |
 |---|---|---|
 | T1.1 文件操作 | **P0-A 已交付（PR #18）**：`read`（分页/行号）、`edit`（精确 str_replace）、`glob`（递归名匹配）、`grep`（内容检索）四个独立沙箱工具；旧 `file_io` 待退役（Issue #17）| ✅ **已闭合**（原硬缺口：read 全量撞 P1）|
 | T1.2 代码执行 | `code_exec` subprocess + 超时 + 确认 | ✓ 有（隔离弱） |
 | T1.3 循环控制 | max_steps 正确派生；熔断 + 退避**反超两个标杆**；**P0-B 已交付（PR #26）**：reflect 落地确定性自检（S1 产物完整性 + S2 全程失败闸 + 有界回环降级），finish 不再单信模型的 final_answer 声明 | ✅ **已闭合**（P7）|
-| T1.4 上下文管理 | compress truncate / summarize | ✓ 基础有（无 eviction） |
-| T1.5 安全 | EHRB + 确认闸门 + git 黑名单 + 路径白名单（**预防面反超**）| **半缺口：无回滚**（P8 的补救半边）——**复核后这是 Tier 1 唯一未闭合项** |
+| T1.4 上下文管理 | **T1.4 已交付（PR #40）**：evict→compress 固定序（保护带外超 4000 字符的 tool 结果原地换占位——头/尾预览 + trace 回读指针，全文不丢）+ compress truncate / summarize | ✅ **已闭合**（原半缺口：无 eviction）|
+| T1.5 安全 | EHRB + 确认闸门 + git 黑名单 + 路径白名单（**预防面反超**）+ **P1-B 已交付（PR #41）**：每写一次文件级 before-image 账本 + 独立端点 `POST /tasks/{id}/rollback`（整任务逆序重放、与 resume 解耦、活跃任务 409、fail-open、30 天启动清扫）——P8 补救半边补齐 | ✅ **已闭合**（Tier 1 已无未闭合项）|
 | T1.6 持久化恢复 | checkpoint 格式守卫 + resume 拒绝语义 + 孤儿对账 | ✓✓ **三者中最深** |
-| T1.7 可观测 | SSE 21 事件 + JSONL trace | ✓ 有 |
+| T1.7 可观测 | SSE 23 事件 + JSONL trace | ✓ 有 |
 | T1.8 扩展 | plugins + MCP + OpenAPI，全配置化不碰内核 | ✓ 有 |
 | T2.1 web | search 仅返回 snippets；fetch 靠 `http_request` 原始响应；无 extract / 浏览器 | 半缺口 |
 | T2.2 skills | 仅 KB 检索，无运行时加载 | 缺口 |
@@ -96,9 +96,9 @@
 
 ## 五、结论
 
-1. **Tier 1 硬缺口从 2.5 个降到 0.5 个**（2026-09-15 复核）：文件精读编辑（T1.1，
-   P0-A / PR #18）与完成验证（T1.3 后半，P0-B / PR #26）已闭合，只剩
-   **回滚**（T1.5 后半，P8 的补救半边）。其余必需项本仓库都有，其中两项
+1. **Tier 1 硬缺口从 2.5 个降到 0 个**（2026-09-17 复核）：文件精读编辑（T1.1，
+   P0-A / PR #18）与完成验证（T1.3 后半，P0-B / PR #26）→ 2026-09-17 再闭合
+   **回滚**（T1.5 后半，P8 的补救半边，P1-B / PR #41）——Tier 1 已无未闭合项。其余必需项本仓库都有，其中两项
    （持久化恢复、韧性）深度**超过**两个开源标杆。
 2. **Tier 2 是定位题**：已选定 A 线（通用任务 agent）→ T2.4 headless 已由
    P0-C / PR #19 闭合（调度仍缺）；剩 **T2.1 fetch、T2.2 skills** 进必修，
@@ -121,10 +121,10 @@
 ✅ P0-A 文件精读编辑：read(分页/行号) + edit(str_replace) + glob + grep —— 已交付 PR #18
 ✅ P0-B 完成验证：reflect 落地真实自检（产物存在性/断言），不达标继续循环 —— 已交付 PR #26
 ✅ P0-C headless 执行入口：CLI 单发批量提交（评测前置依赖）—— 已交付 PR #19
-⬜ P1-A′ 上下文注入层：AGENTS.md 分层加载 + skills 清单渐进披露 + 环境事实（§七 新增）
-⬜ P1-B 回滚：每写一次文件级 before-image + 独立端点显式触发回滚（决策见 [#33](https://github.com/renjianguojinqianfan/langgraph-agent/issues/33) / [#34](https://github.com/renjianguojinqianfan/langgraph-agent/issues/34)；原推导「接确认闸口同一路径」被代码实证否决——闸口上无沙箱文件写，2026-09-17 记录修正）
+✅ P1-A′ 上下文注入层：AGENTS.md 分层加载 + skills 清单渐进披露 + 环境事实（§七 新增）—— 已交付 PR #39
+✅ P1-B 回滚：每写一次文件级 before-image + 独立端点显式触发回滚 —— 已交付 PR #41（spec `docs/specs/p1-b-rollback.md`；决策见 [#33](https://github.com/renjianguojinqianfan/langgraph-agent/issues/33) / [#34](https://github.com/renjianguojinqianfan/langgraph-agent/issues/34)；原推导「接确认闸口同一路径」被代码实证否决——闸口上无沙箱文件写，2026-09-17 记录修正）
 ⬜ P1-A skills 运行时：SKILL.md 按需加载进上下文（依赖 P1-A′）
-⬜ T1.4 tool-result eviction：大结果落盘换引用（与现有 compress 同层）
+✅ T1.4 tool-result eviction：大结果落盘换引用（与现有 compress 同层）—— 已交付 PR #40
 ⬜ P1-C web fetch/extract：搜索之外补页面获取
 ⬜ 调度（cron）/ 交互式终端入口（Issue #20）
 ⬜ 债务清理：file_io 退役（#17）、planner 降级分支形态（#12）、live_e2e 超时（#13）
