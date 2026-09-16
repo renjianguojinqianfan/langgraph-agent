@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from ...config import Settings
+from ...services.snapshots import set_current_task_id
 from ...utils.logging import get_logger
 from .state import AgentState
 
@@ -246,6 +247,13 @@ class SubAgentExecutor:
         Internal events are published on the subtask's own EventBus channel
         (``spec.subtask_id``) — they never reach the parent channel.
         """
+        # P1-B: pool threads start with a *fresh* context, so a subtask that
+        # came through run_plan_with_subtasks must re-seat the parent task id or
+        # its file writes would miss the parent's rollback ledger (Issue #33
+        # 拍板 5: 子代理写归主任务账本). The spawn_subagent path already
+        # inherits the id on the main thread and passes an empty parent id.
+        if spec.parent_task_id:
+            set_current_task_id(spec.parent_task_id)
         try:
             state: AgentState = {
                 "task_id": spec.subtask_id,

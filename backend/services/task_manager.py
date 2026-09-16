@@ -42,6 +42,7 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from .event_bus import EventBus
 from .persistence import Persistence
+from .snapshots import cleanup_expired, restore_task, set_current_task_id
 from .trace import TraceRecorder
 
 if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
@@ -220,6 +221,9 @@ class TaskManager:
         # Spec Issue #4 (D5): crash recovery reconciliation — a fresh process
         # owns no execution threads, so persisted RUNNING tasks are orphans.
         self._reconcile_orphans()
+        # P1-B (拍板 11): the start-up sweep — no scheduler host yet, so expired
+        # task snapshot dirs are dropped by the process that starts next.
+        cleanup_expired(settings=settings)
 
     def _mount_checkpointer(self, settings: Settings) -> None:
         """Mount the sqlite saver, or refuse a store this build cannot vouch for.
@@ -526,6 +530,9 @@ class TaskManager:
         t.start()
 
     def run(self, task_id: str) -> None:
+        # P1-B: account every sandbox write on this worker thread to this task
+        # (the contextvar dies with the thread; sub-agents inherit it).
+        set_current_task_id(task_id)
         task = self.persistence.load_task(task_id)
         if task is None:
             logger.warning("run: unknown task %s", task_id)
@@ -857,6 +864,8 @@ class TaskManager:
         raise RuntimeError(f"empty checkpoint state for task {task_id}")
 
     def _resume_run(self, task_id: str) -> None:
+        # P1-B: this worker thread accounts its writes to the same task.
+        set_current_task_id(task_id)
         try:
             # A stop() between our RUNNING flip and this point would otherwise
             # be swallowed by the restored control flags below — re-check the
@@ -922,6 +931,43 @@ class TaskManager:
             self._stop_flags.pop(task_id, None)
             if self._trace is not None:
                 self._trace.close(task_id)
+
+    # ── P1-B: workspace rollback (docs/specs/p1-b-rollback.md) ──
+    def rollback(self, task_id: str) -> Dict[str, Any]:
+        """Restore the sandbox to its pre-task state from the before-image ledger.
+
+        File-only by design (拍板 9): the task record and the graph checkpoints
+        are never touched, so rollback stays fully decoupled from resume.
+        Refuses active tasks (拍板 12③) — RUNNING/PENDING by status, plus the
+        stop() window where the record already settled but the worker is still
+        unwinding its final writes. Raises RuntimeError; the route maps it to
+        409, the same synchronous style as resume.
+        """
+        task = self.persistence.load_task(task_id)
+        if task is None:
+            raise RuntimeError(f"task {task_id} not found")
+        live = self._threads.get(task_id)
+        if task.status in (TaskStatus.RUNNING, TaskStatus.PENDING) or (
+            live is not None and live.is_alive()
+        ):
+            raise RuntimeError(
+                f"task {task_id} is {task.status.value}; "
+                "rollback requires a settled task (stop it first)"
+            )
+        # Reopen the audit trail for the rollback era (same pattern as resume):
+        # the trace recorder detached when the run finished, so the event would
+        # otherwise reach SSE subscribers but never the JSONL.
+        if self._trace is not None:
+            self._trace.attach(self.event_bus, task_id)
+        try:
+            result = restore_task(task_id, settings=self.settings)
+            self.event_bus.publish(
+                task_id, "task_rollback", {"task_id": task_id, **result}
+            )
+        finally:
+            if self._trace is not None:
+                self._trace.close(task_id)
+        return result
 
     # ── human confirmation (P1-2) ──
     def request_confirm(self, task_id: str, tool_call_id: str):

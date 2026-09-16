@@ -115,6 +115,28 @@ def resume_task(
     return _envelope(data=result)
 
 
+@router.post("/tasks/{task_id}/rollback")
+def rollback_task(
+    task_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Restore the sandbox to its pre-task state from the before-image ledger.
+
+    P1-B (docs/specs/p1-b-rollback.md): file-only — checkpoints and the task
+    record are untouched, so this is decoupled from resume. A task still active
+    (RUNNING/PENDING/unwinding worker) is refused synchronously with 409, the
+    same style as resume; an unknown task is 404.
+    """
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).rollback(task_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
 @router.get("/tasks/{task_id}/events")
 def task_events(
     task_id: str,

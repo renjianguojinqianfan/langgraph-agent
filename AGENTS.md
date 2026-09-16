@@ -3,10 +3,10 @@
 > 本文件是 `langgraph-agent` 项目根目录的 Agent 操作手册 / 核心指令集。不重复全局 `~/.agents/AGENTS.md` 的工作循环纪律，只写本目录特有的东西。
 
 ## 1. 快照
-基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）+ langgraph 0.2→1.2.x 原地迁移（Issue #7）+ P0-A（文件精读编辑工具 read/edit/glob/grep，roadmap-pawbench）+ P0-C（headless 无人值守入口，backend/headless.py）+ P0-B（完成验证：reflect 落地确定性自检——S1 产物完整性 + S2 全程失败闸 + 有界回环降级，Issue #25）+ P1-A′（上下文注入层：两层 AGENTS.md + skills 清单 + 环境事实进 system，任务级缓存、永不裁、不计入压缩预算，spec `docs/specs/p1-a-prime-context-injection.md`）+ T1.4（工具结果逐出：保护带外超 4000 字符的 tool 结果原地换占位——头 800/尾 400 预览 + trace 留痕指针，evict→compress 固定序；压缩预算默认 8000→32000，Issue #38，spec `docs/specs/t1-4-tool-result-eviction.md`）多轮迭代，**493 个离线测试全绿 + ruff/mypy 基线全净** + 真实 LLM（qwen3.7-flash-2026-07-15）端到端与断点续跑双场景验证通过。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台，前后端一体：自然语言下发任务 → Agent 自主规划（planner→executor→tool→reflect 循环）→ 调用工具完成多步任务 → SSE 实时可视化。经 v1 + P0（对齐 HelloAgents/DeepAgent）+ P1（六项能力）+ P2（MCP/Git）+ P3（断点续跑，Issue #4）+ langgraph 0.2→1.2.x 原地迁移（Issue #7）+ P0-A（文件精读编辑工具 read/edit/glob/grep，roadmap-pawbench）+ P0-C（headless 无人值守入口，backend/headless.py）+ P0-B（完成验证：reflect 落地确定性自检——S1 产物完整性 + S2 全程失败闸 + 有界回环降级，Issue #25）+ P1-A′（上下文注入层：两层 AGENTS.md + skills 清单 + 环境事实进 system，任务级缓存、永不裁、不计入压缩预算，spec `docs/specs/p1-a-prime-context-injection.md`）+ T1.4（工具结果逐出：保护带外超 4000 字符的 tool 结果原地换占位——头 800/尾 400 预览 + trace 留痕指针，evict→compress 固定序；压缩预算默认 8000→32000，Issue #38，spec `docs/specs/t1-4-tool-result-eviction.md`）+ P1-B（工作区回滚：每次沙箱内文件写前拍文件级 before-image 到沙箱外账本 `data/snapshots/<task_id>/`，`POST /tasks/{id}/rollback` 逆序重放整任务回到起点、与 resume 完全解耦、活跃任务 409、fail-open、30 天启动清扫、前端回滚按钮；Tier 1 硬缺口归零，Issue #33/#34，spec `docs/specs/p1-b-rollback.md`）多轮迭代，**525 个离线测试全绿 + ruff/mypy 基线全净** + 真实 LLM（qwen3.7-flash-2026-07-15）端到端与断点续跑双场景验证通过。
 
 ## 2. 硬规则（改前必读）
-- **测试环境隔离**：离线测试必须不受本地 `.env` 影响——`backend/tests/conftest.py` 顶部用环境变量覆盖（`LLM_BASE_URL=""` / `USE_MOCK_LLM=true` / `AUX_LLM_ENABLED=false` / `AUTH_ENABLED=false` / `OPENAPI_ENABLED=false` / `CHECKPOINT_ENABLED=false` / `CONTEXT_INJECT_ENABLED=false` / `CONTEXT_EVICT_ENABLED=false`）。**改 conftest 时勿破坏这段隔离**，否则本地 live 配置会污染全部离线用例。
+- **测试环境隔离**：离线测试必须不受本地 `.env` 影响——`backend/tests/conftest.py` 顶部用环境变量覆盖（`LLM_BASE_URL=""` / `USE_MOCK_LLM=true` / `AUX_LLM_ENABLED=false` / `AUTH_ENABLED=false` / `OPENAPI_ENABLED=false` / `CHECKPOINT_ENABLED=false` / `CONTEXT_INJECT_ENABLED=false` / `CONTEXT_EVICT_ENABLED=false` / `SNAPSHOT_ENABLED=false`）。**改 conftest 时勿破坏这段隔离**，否则本地 live 配置会污染全部离线用例。
 - **P0 死循环修复勿动**：`backend/core/agent/nodes.py` 的 `human_confirm_node` 中 `_needs_confirm` 重算逻辑（确认/拒绝后重算是否仍有待确认项）是 P0 修复的死循环根因，**一字不动**；风险确认复用该机制，新增确认逻辑必须走 `_confirmed_ids/_rejected_ids` 流程。（P3 在该节点 else 分支追加了 stop-forced 的 `pending_confirm` 标记，位于重算块之前，属于 Issue #4 行为，保留。）
 - **熔断层零改动**：`backend/core/tools/resilience.py`（CircuitBreaker/with_retry/ToolExecutor）与 `backend/core/tools/registry.py` 是 P0/P2 的多轮约束对象，改动需极谨慎——MCP/Git/OpenAPI 工具一律由 `task_manager.py` 显式追加（`_load_mcp_tools`/`_load_git_tools`），**不经 @register**。（CI 已由 `guard-protected-files` job 机械化拦截这两个文件的改动，逃生舱：PR/commit 标题含 `[OVERRIDE]`。）
 - **真实 LLM 验证**：离线测试只证明确定性；发布前/换供应商用 `scripts/live_e2e.py` 跑真实模型（`LLM_API_KEY="$DASHSCOPE_API_KEY" LLM_MODEL=qwen3.7-flash-2026-07-15 python scripts/live_e2e.py`，含场景 1 冒烟 + 场景 2 断点续跑）。默认模型口径 = `qwen3.7-flash-2026-07-15`（CI live job 同口径）；**换模型前先 `qianwen usage free-tier` 核免费额度**——2026-09-16 实测 qwen3.6-plus 额度已 expire（继续用会悄悄走按量付费）、qwen3.7-flash（无日期）已 exhaust。注意 **CI 的 live job 有 key gate**：仓库 secrets（`LLM_API_KEY`/`DASHSCOPE_API_KEY`）为空时判 `run=false`、步骤全跳过但 job 仍是绿的（2026-09-16 实测为空）——**绿 ≠ 真实模型跑过**，看结论前先看 gate 输出。Key 只走环境变量，**绝不硬编码、绝不打印明文**；`.env` 的 `llm_api_key` 留空靠环境变量注入。
@@ -27,25 +27,25 @@
 |---|---|
 | `pyproject.toml` | 质量门禁配置（ruff + mypy），含每条「刻意不启用」的理由与实测数字。**不放** `[build-system]`（本仓库不是可安装包）也不放 `[tool.pytest.ini_options]`（隔离靠 conftest 环境变量块）|
 | `requirements.txt` / `requirements-dev.txt` | 运行期依赖（langgraph 三包同钉，理由在文件注释）/ 门禁工具链（ruff+mypy 钉死；不进镜像，Dockerfile 只 COPY 前者）|
-| `backend/config.py` | Settings（17 组配置前缀：llm/context/context_inject/context_evict/tool/plugins/trace/risk/subagent/kb/aux_llm/auth/openapi/mcp/git/checkpoint/sandbox/verify）|
+| `backend/config.py` | Settings（18 组配置前缀：llm/context/context_inject/context_evict/tool/plugins/trace/risk/subagent/kb/aux_llm/auth/openapi/mcp/git/checkpoint/snapshot/sandbox/verify）|
 | `backend/core/agent/` | 编排：state / nodes（planner/executor/tool/reflect/risk_scan/subagent_split/human_confirm）/ graph（mode=main\|subtask）/ context（压缩 + T1.4 工具结果逐出 evict_tool_results）/ inject（P1-A′ 上下文注入：两层 AGENTS.md + skills 清单 + 环境事实，纯函数组）/ risk（EHRB）/ subagent |
 | `backend/core/tools/` | BaseTool 规范 + 18+ 工具：web_search/file_io/read/edit/glob/grep/code_exec/http_request/memory_search/kb_query/spawn_subagent/git_*(7)/McpTool/OpenAPITool + resilience(熔断) + registry(插件发现)。P0-A 新增 read/edit/glob/grep 四个六件套式独立文件工具（沙箱内精读/精确编辑/递归匹配/内容检索），file_io 暂留待退役 |
 | `backend/core/llm/` | LLMClient 抽象 + OpenAI 兼容工厂 + Mock/Aux |
 | `backend/core/kb/` | KnowledgeBase（标准库关键词索引，离线可用）|
 | `backend/core/mcp/` | McpClientManager（stdio 传输，每 server 一线程+事件循环）|
-| `backend/services/` | event_bus / trace(JSONL) / persistence / task_manager / auth(hmac) |
-| `backend/api/` | routes（15 REST）/ sse / schemas（`/health` 另在 `main.py`）|
+| `backend/services/` | event_bus / trace(JSONL) / persistence / task_manager / snapshots(P1-B 回滚账本：capture/restore/cleanup + contextvar 任务归属) / auth(hmac) |
+| `backend/api/` | routes（16 REST）/ sse / schemas（`/health` 另在 `main.py`）|
 | `backend/headless.py` | P0-C 无人值守单发入口（`python -m backend.headless -p "<题>" --dir <工作目录> --auto-approve --output json`）：复用 TaskManager 跑一题、产物落 --dir、trace 落盘、JSON 结果+退出码；评测台驱动本 agent 的统一命令；`--check` 为离线冒烟 |
 | `backend/plugins/` | 插件目录（自动发现 BaseTool，example_tool.py）|
-| `backend/tests/` | **42 个 `test_*.py`（+ conftest / mcp_echo_server / __init__ 共 45 个 .py）/ 493 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A；test_headless 为 P0-C；test_verify 为 P0-B；test_context_injection 为 P1-A′；test_eviction 为 T1.4）|
+| `backend/tests/` | **43 个 `test_*.py`（+ conftest / mcp_echo_server / __init__ 共 46 个 .py）/ 525 用例**（含 test_qa_* 独立补充；test_checkpointer/test_resume/test_orphan_reconcile 为 P3；test_file_tools 为 P0-A；test_headless 为 P0-C；test_verify 为 P0-B；test_context_injection 为 P1-A′；test_eviction 为 T1.4；test_rollback 为 P1-B）|
 | `frontend/` | React 三栏 UI：`components/` 14 组件（TaskPanel/TraceTab/RiskBanner/SubtaskList/KbPanel …）+ `pages/` 2 页面（LoginPage/TaskView）|
 | `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）/ migration-langgraph-1x（0.2→1.2.x 迁移评估与实测）/ capability-first-principles / agent-comparison-report / roadmap-pawbench / pawbench-harness-interface |
 | `docs/adr/` | **决策记录**（`NNNN-英文-kebab-case.md`）。现有 0001 = 简历项目定位与 langgraph 原地迁移决策（grilling D1–D9，原 `.qoder/specs/…_grilling总结.md`）|
-| `docs/specs/` | **spec / 实施计划档案**。现有 langgraph-1x-migration / p0-b-completion-verification / second-tier-ci-guard-and-smoke（前三份自 `.qoder/specs/` 迁入）+ p1-a-prime-context-injection（上一轮）+ t1-4-tool-result-eviction（本轮）|
+| `docs/specs/` | **spec / 实施计划档案**。现有 langgraph-1x-migration / p0-b-completion-verification / second-tier-ci-guard-and-smoke（前三份自 `.qoder/specs/` 迁入）+ p1-a-prime-context-injection + t1-4-tool-result-eviction（上一轮）+ p1-b-rollback（本轮）|
 | `docs/agents/` | mattpocock 技能组配置：issue-tracker / triage-labels / domain（由 `setup-matt-pocock-skills` 生成，本文件末尾 `## Agent skills` 段是其入口）|
 | `.agents/skills/` | 千问官方 skills（model-selector/ops-auth/usage）。集成路径：references 由 `scripts/live_skill_test.py` 复制到 `data/kb/qianwen-skills/` 并重建索引 → 真实模型任务中经 `kb_query`/`memory_search` 工具检索；该脚本同时验证"KB 命中 + 答案给出具体模型"全链路 |
 | `scripts/` | live_e2e.py（真实 LLM 验证，`--check` 为无 Key 离线冒烟）/ live_skill_test.py（skills→KB→真实模型）|
-| `data/` | 运行时生成（tasks.json/traces/kb/artifacts），不入库 |
+| `data/` | 运行时生成（tasks.json/traces/kb/artifacts/snapshots），不入库 |
 
 ### 文档归属（2026-09-15 起，硬约定）
 
@@ -93,7 +93,7 @@ npx tsc --noEmit     # 类型检查 0 错误
 
 ## 5. 完成定义
 - `ruff check backend scripts` 与 `mypy` 均 0 错（基线全净，不许靠 ignore/override 绕过）。
-- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（493）；改前端时 `npx tsc --noEmit` 0 错误。
+- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（525）；改前端时 `npx tsc --noEmit` 0 错误。
 - 改动跑通真实模型冒烟（有 Key 时）：`scripts/live_e2e.py` PASS。
 - 改接口/配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
 - 新依赖需说明理由；**避免升级 uvicorn/starlette**（mcp 依赖冲突教训：用 `--no-deps` 装 mcp）。
