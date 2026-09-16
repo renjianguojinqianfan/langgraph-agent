@@ -40,7 +40,7 @@
 | 首个基准 | **PawBench**（GAIA 留二期） |
 | **v2 接入形态** | **只借题目 + `grade()` 自动检查，不接 PawBench harness**；自建轻量跨-agent 对比评测（详见 §四） |
 | **v2 选手与对照** | 本 agent（大脑换 **deepseek-v4.1-flash**）+ pi + opencode + qoder；**尽量统一到 deepseek-v4.1-flash**（同一大脑、不同壳，比纯 harness 差距）；换不了模型的选手单列并标注「不可比」 |
-| **v2 评分** | 硬分 = 借来的 `grade()`（宿主机 exec 看产物）；软分 = 脚本直调**阿里云 `qwen3.8-max-0902`**（温度0、固定 prompt）；trae 桌面版仅作人工复核。沿用 hybrid 0.75 闸门（硬分<0.75 则软分归零，plan 阶段再最终确认） |
+| **v2 评分** | 硬分 = 借来的 `grade()`（宿主机 exec 看产物）；软分 = 脚本直调**阿里云 `qwen3.8-max-0902`**（温度0、固定 prompt）；trae 桌面版仅作人工复核。沿用 hybrid 0.75 闸门（硬分<0.75 则软分贡献置 0——[#36](https://github.com/renjianguojinqianfan/langgraph-agent/issues/36) 已最终确认，双记 soft_raw/soft_gated） |
 | **v2 代码归属** | P0-C headless 入口留 **本仓库**；评测台（驱动选手+打分+报告）**单开新仓库** |
 | 评测形态 | live_e2e 模式：`scripts/` 评测脚本 + `--check` 离线冒烟进 CI + 真跑靠环境变量注入 Key；过 ruff/mypy 不进 pytest |
 | 验收机制 | 三里程碑制（见 §四 v2 重写） |
@@ -99,7 +99,8 @@
   OpenClaw transcript / 胖镜像 / ContainerAgent，只需 CLI 单发 + 闸门旁路开关 + 模型可配 +
   自己的 trace JSONL 落盘。
 - **执行序**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)，2026-09-16
-  agent-first）：评测台搭建（含 M1）在**必修四项**（P1-A′ / P1-B / P1-A / T1.4）全闭合后启动，
+  agent-first；同日记录修正：T1.4 提前到第二位）：评测台搭建（含 M1）在**必修四项**
+  （P1-A′ / T1.4 / P1-B / P1-A）全闭合后启动，
   替代「M1 基线先行」旧序；基线改由 checkout 回 #37 定案 commit `44e74df` 复跑同切片获取
   （只看聚合 Δ，逐能力拆分放弃、归因靠 M2 失败切片定性补）。
 - **评测台**（新仓库）：借 PawBench 的**题目 + `grade()`**，写一个轻量 runner：解析题目 md →
@@ -113,10 +114,15 @@
 ### M2 — 扩规模 + 失败归因
 
 - 前置：P0-C（已合入，PR #19）/ P0-A（已合入，PR #18）/ P0-B（已合入，PR #26）——三项均已到位；
-  **＋ 必修四项 P1-A′ / P1-B / P1-A / T1.4**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)
-  agent-first 序，评测台殿后）。
+  **＋ 必修四项 P1-A′ / T1.4 / P1-B / P1-A**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)
+  agent-first 序 + 同日记录修正，评测台殿后）。
 - 任务：切片扩到全部「可单借」的题（~100+ 道，排除 skillsbench 重依赖题与 open/external-dep 题）；
   按 PawBench 五维/七能力标签做**失败切片分析**。
+- **切片口径**（[#36](https://github.com/renjianguojinqianfan/langgraph-agent/issues/36)，2026-09-16）：
+  单维切片，Top-3 候选池 = 7 能力切片（复杂度只作副视图）；Top-3 = 覆盖题数 ×（逐切片最强可比赛手 −
+  本 agent）降序取前三 + 人工定性确认，n<10 切片只进附录；每题总分沿用题带 grading_weights
+  （缺省 0.5/0.5），软分归一 0-1 + 一句话理由（模板 = 题面+产物+trace 摘要）；degraded 独立三态打标
+  （分数照算 + 每切片 degraded 率列）；M1 即用同一切片管道出报告（标「链路验证样本、不作归因解读」）。
 - **验收**：一张跨-agent 对比表（同模型 deepseek-v4.1-flash 口径）+ 失败归因报告（本 agent 掉分在哪类
   原子能力/复杂度，Top 3 缺陷维度）。
 
