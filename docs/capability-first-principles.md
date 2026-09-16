@@ -122,7 +122,7 @@
 ✅ P0-B 完成验证：reflect 落地真实自检（产物存在性/断言），不达标继续循环 —— 已交付 PR #26
 ✅ P0-C headless 执行入口：CLI 单发批量提交（评测前置依赖）—— 已交付 PR #19
 ⬜ P1-A′ 上下文注入层：AGENTS.md 分层加载 + skills 清单渐进披露 + 环境事实（§七 新增）
-⬜ P1-B 回滚：写操作前工作区快照（复用 git 或文件副本，接确认闸口同一路径）
+⬜ P1-B 回滚：每写一次文件级 before-image + 独立端点显式触发回滚（决策见 [#33](https://github.com/renjianguojinqianfan/langgraph-agent/issues/33) / [#34](https://github.com/renjianguojinqianfan/langgraph-agent/issues/34)；原推导「接确认闸口同一路径」被代码实证否决——闸口上无沙箱文件写，2026-09-17 记录修正）
 ⬜ P1-A skills 运行时：SKILL.md 按需加载进上下文（依赖 P1-A′）
 ⬜ T1.4 tool-result eviction：大结果落盘换引用（与现有 compress 同层）
 ⬜ P1-C web fetch/extract：搜索之外补页面获取
