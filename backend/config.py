@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     checkpoint_enabled: bool = True  # master switch (false -> no saver mounted)
     checkpoint_dir: str = ""  # "" -> <data_dir>/checkpoints
 
+    # ── Snapshots (P1-B: workspace file rollback, docs/specs/p1-b-rollback.md) ──
+    snapshot_enabled: bool = True  # master switch: per-write before-image capture + /rollback
+    snapshot_dir: str = ""  # "" -> <data_dir>/snapshots (outside the sandbox root)
+    snapshot_retention_days: int = 30  # startup sweep drops task dirs older than this (<=0 = keep)
+
     # ── Server ──
     host: str = "0.0.0.0"
     port: int = 8000
@@ -201,6 +206,19 @@ class Settings(BaseSettings):
         p = Path(self.git_repo_dir)
         if not p.is_absolute():
             p = PROJECT_ROOT / p
+        return p
+
+    @property
+    def snapshots_path(self) -> Path:
+        """P1-B snapshot store root (defaults under ``data_path``).
+
+        Outside the sandbox on purpose: snapshots must not be visible to
+        ``glob`` / ``grep`` / ``read`` nor auto-indexed into the KB, and the
+        headless run root takes them with it when the temp dir goes away.
+        """
+        p = Path(self.snapshot_dir)
+        if not self.snapshot_dir or not p.is_absolute():
+            p = self.data_path / "snapshots"
         return p
 
     @staticmethod

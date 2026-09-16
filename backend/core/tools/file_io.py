@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from ...config import Settings
+from ...services.snapshots import capture_before_image
 from ...utils.logging import get_logger
 from .base import BaseTool, ToolResult
 from .registry import register
@@ -106,6 +107,9 @@ class FileIOTool(BaseTool):
             if action == "write":
                 content = str(kwargs.get("content", ""))
                 target.parent.mkdir(parents=True, exist_ok=True)
+                # P1-B: photograph the previous version before it is overwritten
+                # (fail-open — a broken snapshot store never blocks the write).
+                capture_before_image(target, settings=self.settings)
                 target.write_text(content, encoding="utf-8")
                 size = target.stat().st_size
                 logger.info("file_io wrote %s (%d bytes)", target, size)
@@ -381,6 +385,9 @@ class EditTool(_SandboxedTool):
             new_text = text.replace(old_string, new_string, 1)
             replacements = 1
 
+        # P1-B: photograph the previous version before it is overwritten
+        # (fail-open — a broken snapshot store never blocks the edit).
+        capture_before_image(target, settings=self.settings)
         try:
             # Mirrors FileIOTool.write newline handling (platform-native on
             # write); read uses universal newlines so a model-supplied "\n"
