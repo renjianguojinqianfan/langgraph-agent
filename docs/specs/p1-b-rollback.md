@@ -82,13 +82,13 @@ data/snapshots/<task_id>/
 
 **`restore_task` 规则**（整任务回滚 = 逆序重放）：
 
-1. 无账本目录 / 无 `ledger.jsonl` → `{"ok": True, "files": [], "already_original": True}`；
-2. **留存拍摄**（12②）：对账本里出现过的每个 path（首次出现序去重），当前存在者复制进 `retention/` + 追加 `retention.jsonl`；失败仅 WARNING，不阻断回滚；
-3. **基线摘要**：记录每个 path 当前的 sha256（不存在 = None）；
-4. **逆序重放**：账本行倒序，逐行 `existed=true` → `.bak` 复制回沙箱（建父目录）；`existed=false` → 删除该文件（不存在则跳过）。重放前后**逐路径判等**（sha256）得 `files`（**实际发生变化的**路径列表，POSIX 相对路径）；
-5. 返回 `{"ok": True, "files": [...], "already_original": bool}`（`already_original = 无任何路径变化`——第二次调用天然命中，兑现拍板 13 的幂等语义）；
-6. 路径逃逸防护：账本里的 `path` 拼接后必须仍在沙箱根内，否则跳过该行（账本被篡改不得写穿沙箱）；
-7. 异常 → 抛出由调用方（TaskManager）转 HTTP 500 / 事件不发布；单行损坏（JSON 解析失败）跳过该行不炸整次回滚。
+1. 无账本目录 / 无 `ledger.jsonl` → `{"ok": True, "files": [], "already_original": True}`；总开关 false 同形（零回归）；
+2. **路径闸门先行**：账本里出现过的每个 path（首次出现序去重）先过沙箱包含判定——逃逸项在此丢弃（不读、不写、不进摘要与留存）；
+3. **留存拍摄**（12②）：对每个已确认的 path，当前存在者复制进 `retention/` + 追加 `retention.jsonl`（每次恢复追加一份，随调用次数增长——v1 不限额，拍板 6）；失败仅 WARNING，不阻断回滚；
+4. **基线摘要**：记录每个 path 当前的 sha256（不存在 = None）；
+5. **逆序重放**：账本行倒序，逐行 `existed=true` → `.bak` 复制回沙箱（建父目录）；`existed=false` → 删除该文件（不存在则跳过）。重放前后**逐路径判等**（sha256）得 `files`（**实际发生变化的**路径列表，POSIX 相对路径）；
+6. 返回 `{"ok": True, "files": [...], "already_original": bool}`（`already_original = 无任何路径变化`——第二次调用天然命中，兑现拍板 13 的幂等语义）；
+7. 备份名同样要过闸门（只接受裸文件名，防账本被篡改指向别处）；异常 → 抛出由调用方（TaskManager）转 500 / 事件不发布；单行损坏（JSON 解析失败）跳过该行不炸整次回滚。
 
 ### 3.2 捕获落位（`file_io.py` 两处一行钩子）
 
@@ -115,8 +115,9 @@ def rollback(self, task_id: str) -> Dict[str, Any]:
     return result
 ```
 
-- **启动清扫**：`__init__` 里 `_reconcile_orphans()` 之后调 `cleanup_expired(settings=self.settings)`——遍历 `snapshots/` 顶层任务目录，mtime 早于 `now - retention_days` 者 `shutil.rmtree`；失败仅 WARNING（不得拖垮启动）。
+- **启动清扫**：`__init__` 里 `_reconcile_orphans()` 之后调 `cleanup_expired(settings=self.settings)`——遍历 `snapshots/` 顶层任务目录，寿命取「目录与 `ledger.jsonl` 中较新的 mtime」（追加不推进目录 mtime，故以 ledger 为准），早于 `now - retention_days` 者 `shutil.rmtree`；**受总开关约束**（`snapshot_enabled=false` 时不清扫——停用的特性不得删除数据）；失败仅 WARNING（不得拖垮启动）。
 - **contextvar 设置点**：`run()` 与 `_resume_run()` 各自在开头 `set_current_task_id(task_id)`（worker 线程自有 context，互不串扰）。
+- **rollback 的 trace 归属**（实现期补齐）：终结任务的 TraceRecorder 已 close，故 `rollback()` 发布事件前 `attach`、发布后 `close`（与 `resume()` 的「重开审计段」同款）——否则事件只到 SSE、JSONL 里没有，兑现包 1「trace 记录」；代价是终结任务 JSONL 追加第二枚 `trace_end`（追加式审计的既有语义）。
 
 ### 3.4 REST 端点（`routes.py`）
 
@@ -139,7 +140,7 @@ conftest 加 `SNAPSHOT_ENABLED=false` 隔离行（离线用例默认零快照；
 
 ### 3.6 前端（并入本 spec）
 
-- `TaskHeader`：任务处于非活跃状态时显示「回滚」按钮 → 行内确认（「恢复到任务开始前？」+ 确认回滚/取消）→ 调端点；成功后行内提示「已回滚 N 个文件」/「已是原样（无可回滚的改动）」，失败提示 409 语义。任务记录本身不被回滚改动，故无需刷新详情。
+- `TaskHeader`：任务处于非活跃状态时显示「回滚」按钮 → 行内确认（「恢复到任务开始前？」+ 确认回滚/取消）→ 调端点；成功后行内提示「已回滚 N 个文件」/「已是原样（无可回滚的改动）」；被拒（FastAPI 错误体 `{detail}`）提示「回滚被拒绝（任务尚未收尾）」。任务记录本身不被回滚改动，故无需刷新详情。
 - `api/client.ts` 加 `rollbackTask(id)`；`types/index.ts` 加 `RollbackResult`。SSE `task_rollback` 事件前端按未知类型自然忽略（与 T1.4 同策略）。
 
 ## 四、测试设计（`backend/tests/test_rollback.py`，含纯函数层 + 端到端层）
@@ -178,7 +179,16 @@ conftest 加 `SNAPSHOT_ENABLED=false` 隔离行（离线用例默认零快照；
 - `npx tsc --noEmit` 0 错误（前端改动）。
 - `scripts/live_e2e.py`（`LLM_MODEL=qwen3.7-flash-2026-07-15`）双场景 PASS。
 - 同步 `.env.example`（`snapshot_*` 段）/ README（能力条目 + 事件计数 22→23）/ `docs/architecture.md`（现役计数 + 事件行）/ AGENTS.md（快照计数、目录表、spec 档案、隔离清单）。
-- 合并后：capability §五 硬缺口 → 0、§七 P1-B 行 → ✅；roadmap §三 P1-B 行 → ✅（含 PR 号）；关地图 #27（destination 已达成 + P1-B 落地）。
+- 文档同步（本 PR 内执行，见 §五·补）：capability §四/§五/§六/§七、roadmap §三/§五；AGENTS.md 快照计数、目录表、spec 档案、隔离清单。
+- 合并后：在地图 #27 留 resolution comment（destination 已达成 + P1-B 落地）并关图。
+
+## 五·补 实施记录（2026-09-17）
+
+- **本 PR 内**：capability §四（2026-09-17 复核）/§五 硬缺口 → 0 /§六 P1-A′·T1.4·P1-B 勾选 /§七 P1-B 行 → ✅；roadmap §三 P1-B 行 → ✅（PR #41）+ §五 分支拓扑。
+- **live 实证**：`LLM_MODEL=qwen3.7-flash-2026-07-15` 双场景 PASS；真实任务在 `data/snapshots/<task_id>/` 留下真实账本（场景 1：`agent_summary.txt` 一份 before-image；场景 2 断点续跑：`r1/r2/r3.txt` 三份）——写入捕获在 run 与 resume 两条路径上都生效。
+- **测试**：523 全绿（新增 32 例）；ruff/mypy 0 错；前端 `tsc --noEmit` 0 错。
+- **review（双轴）后的实现修正**（如实记录）：① 逃逸闸门前移到「去重即丢弃」（原只在重放步判，摘要步仍会读逃逸路径）② 清扫受总开关约束（停用不得删数据）+ 寿命取目录/ledger 较新 mtime（追加不推进目录 mtime）③ 沙箱包含判定收敛为模块内单一谓词 `_under_root` ④ 留存 seq 改为先写后用、去掉回推 ⑤ 前端失败提示按 `{detail}` 分支。
+- **口径**：`cleanup_expired` 仍按「目录 mtime」写进 #33 拍板 11 的 spec 文本，实现取更准的 max(dir, ledger)——不改变决策意图（N 天保留），只修正判据。
 
 ## 六、约束与红线
 

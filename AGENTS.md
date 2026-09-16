@@ -27,7 +27,7 @@
 |---|---|
 | `pyproject.toml` | 质量门禁配置（ruff + mypy），含每条「刻意不启用」的理由与实测数字。**不放** `[build-system]`（本仓库不是可安装包）也不放 `[tool.pytest.ini_options]`（隔离靠 conftest 环境变量块）|
 | `requirements.txt` / `requirements-dev.txt` | 运行期依赖（langgraph 三包同钉，理由在文件注释）/ 门禁工具链（ruff+mypy 钉死；不进镜像，Dockerfile 只 COPY 前者）|
-| `backend/config.py` | Settings（17 组配置前缀：llm/context/context_inject/context_evict/tool/plugins/trace/risk/subagent/kb/aux_llm/auth/openapi/mcp/git/checkpoint/sandbox/verify）|
+| `backend/config.py` | Settings（18 组配置前缀：llm/context/context_inject/context_evict/tool/plugins/trace/risk/subagent/kb/aux_llm/auth/openapi/mcp/git/checkpoint/snapshot/sandbox/verify）|
 | `backend/core/agent/` | 编排：state / nodes（planner/executor/tool/reflect/risk_scan/subagent_split/human_confirm）/ graph（mode=main\|subtask）/ context（压缩 + T1.4 工具结果逐出 evict_tool_results）/ inject（P1-A′ 上下文注入：两层 AGENTS.md + skills 清单 + 环境事实，纯函数组）/ risk（EHRB）/ subagent |
 | `backend/core/tools/` | BaseTool 规范 + 18+ 工具：web_search/file_io/read/edit/glob/grep/code_exec/http_request/memory_search/kb_query/spawn_subagent/git_*(7)/McpTool/OpenAPITool + resilience(熔断) + registry(插件发现)。P0-A 新增 read/edit/glob/grep 四个六件套式独立文件工具（沙箱内精读/精确编辑/递归匹配/内容检索），file_io 暂留待退役 |
 | `backend/core/llm/` | LLMClient 抽象 + OpenAI 兼容工厂 + Mock/Aux |
