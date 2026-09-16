@@ -153,6 +153,16 @@ export interface ConfirmRequest {
   approved: boolean;
 }
 
+// --- P1-B: workspace rollback (POST /api/tasks/{id}/rollback) ---
+
+/** Result of a whole-task rollback (docs/specs/p1-b-rollback.md). */
+export interface RollbackResult {
+  ok: boolean;
+  /** Sandbox-relative paths that actually changed (empty = already original). */
+  files: string[];
+  already_original: boolean;
+}
+
 export interface ApiResponse<T = any> {
   code: number;
   data: T;

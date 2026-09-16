@@ -5,6 +5,7 @@ import {
   ConfirmRequest,
   CreateTaskRequest,
   KbDoc,
+  RollbackResult,
   SSEvent,
   Task,
 } from "../types";
@@ -76,6 +77,10 @@ export const confirmTask = (id: string, body: ConfirmRequest) =>
     method: "POST",
     body: JSON.stringify(body),
   });
+
+// ── P1-B: workspace rollback ──
+export const rollbackTask = (id: string) =>
+  req<RollbackResult>(`/tasks/${id}/rollback`, { method: "POST" });
 
 // ── P1 item 5: auth ──
 export const loginRequest = (secret: string) =>
