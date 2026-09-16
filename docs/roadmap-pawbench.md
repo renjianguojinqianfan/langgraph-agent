@@ -39,8 +39,8 @@
 | 执行方式 | AI 写 + 深 review（逐 PR 逐行读，验收测试与失败复盘亲手做） |
 | 首个基准 | **PawBench**（GAIA 留二期） |
 | **v2 接入形态** | **只借题目 + `grade()` 自动检查，不接 PawBench harness**；自建轻量跨-agent 对比评测（详见 §四） |
-| **v2 选手与对照** | 本 agent（大脑换 **deepseek-flash**）+ pi + opencode + qoder；**尽量统一到 deepseek-flash**（同一大脑、不同壳，比纯 harness 差距）；换不了模型的选手单列并标注「不可比」 |
-| **v2 评分** | 硬分 = 借来的 `grade()`（宿主机 exec 看产物）；软分 = 脚本直调**阿里云 qwen3.8-max(0902)**（温度0、固定 prompt）；trae 桌面版仅作人工复核。沿用 hybrid 0.75 闸门（硬分<0.75 则软分归零，plan 阶段再最终确认） |
+| **v2 选手与对照** | 本 agent（大脑换 **deepseek-v4.1-flash**）+ pi + opencode + qoder；**尽量统一到 deepseek-v4.1-flash**（同一大脑、不同壳，比纯 harness 差距）；换不了模型的选手单列并标注「不可比」 |
+| **v2 评分** | 硬分 = 借来的 `grade()`（宿主机 exec 看产物）；软分 = 脚本直调**阿里云 `qwen3.8-max-0902`**（温度0、固定 prompt）；trae 桌面版仅作人工复核。沿用 hybrid 0.75 闸门（硬分<0.75 则软分归零，plan 阶段再最终确认） |
 | **v2 代码归属** | P0-C headless 入口留 **本仓库**；评测台（驱动选手+打分+报告）**单开新仓库** |
 | 评测形态 | live_e2e 模式：`scripts/` 评测脚本 + `--check` 离线冒烟进 CI + 真跑靠环境变量注入 Key；过 ruff/mypy 不进 pytest |
 | 验收机制 | 三里程碑制（见 §四 v2 重写） |
@@ -100,25 +100,25 @@
   自己的 trace JSONL 落盘。
 - **评测台**（新仓库）：借 PawBench 的**题目 + `grade()`**，写一个轻量 runner：解析题目 md →
   给各选手喂 prompt（统一 `-p "<prompt>" --dir <workdir> --yolo --output json` 形态）→ 收产物 →
-  跑 `grade()` 硬分 → 调 qwen3.8-max 软分 → 合成报告。
+  跑 `grade()` 硬分 → 调 qwen3.8-max-0902 软分 → 合成报告。
 - **切片**：先挑 **10–20 道「纯文本+封闭+无素材+无外部依赖」的零依赖题**（只需 `pyyaml`；
   宿主要 `bash` → Windows 走 WSL/Git Bash）。
 - **验收**：这批题在 **≥2 个选手**上跑通出分（**0 分也算过**——验的是链路完整：`grade()` 硬分 +
-  qwen3.8-max 软分 + 产物/trace 落盘可回放），评测台的 `--check` 离线冒烟进它自己的 CI。
+  qwen3.8-max-0902 软分 + 产物/trace 落盘可回放），评测台的 `--check` 离线冒烟进它自己的 CI。
 
 ### M2 — 扩规模 + 失败归因
 
 - 前置：P0-C（已合入，PR #19）/ P0-A（已合入，PR #18）/ P0-B（已合入，PR #26）——**三项均已到位**。
 - 任务：切片扩到全部「可单借」的题（~100+ 道，排除 skillsbench 重依赖题与 open/external-dep 题）；
   按 PawBench 五维/七能力标签做**失败切片分析**。
-- **验收**：一张跨-agent 对比表（同模型 deepseek-flash 口径）+ 失败归因报告（本 agent 掉分在哪类
+- **验收**：一张跨-agent 对比表（同模型 deepseek-v4.1-flash 口径）+ 失败归因报告（本 agent 掉分在哪类
   原子能力/复杂度，Top 3 缺陷维度）。
 
 ### M3 — 定向修复与复验
 
 - 任务：由 M2 失败分析选 2–3 个缺陷维度定向修复，重跑同切片验证。
 - **验收**：目标 = 基线 + Δ（Δ 由 M2 报告决定）；每个修复有前后切片对比。**不追官方榜单、不对外
-  声称可比分数**（裁判是 qwen3.8-max 非 opus，尺子自造，只做内部相对对比）。
+  声称可比分数**（裁判是 qwen3.8-max-0902 非 opus，尺子自造，只做内部相对对比）。
 
 ---
 
@@ -160,8 +160,10 @@ feat/context-injection    ← P1-A′ 上下文注入层（待开；单一注入
   题目+`grade()`，成本从「中低但有架构代价」降为「写个轻量 runner」。见
   [`pawbench-harness-interface.md`](pawbench-harness-interface.md)。
 - ~~Docker 沙箱语义~~ **v2 无关**：不进 PawBench 容器；评测台在自己机器/WSL 跑，选手各自 headless。
-- **待核实的 model id**：`deepseek-flash`（选手大脑）与 `qwen3.8-max(0902)`（裁判）在各自 API 里真正
-  传的字符串需 build 阶段查文档定死。
+- **model id 已核实定死**（2026-09-16，DashScope `GET /compatible-mode/v1/models` 实查，
+  [#35](https://github.com/renjianguojinqianfan/langgraph-agent/issues/35) resolution）：
+  选手大脑 = **`deepseek-v4.1-flash`**（原文口语「deepseek-flash」非 API 字符串）；
+  裁判 = **`qwen3.8-max-0902`**（连字符，非括号写法）。
 - **qoder headless 能否换成 deepseek 自带 key 待核实**：换不了则踢出「同模型对比」、单列标注不可比。
 - **Windows 跑 `grade()` 需 `bash`**：走 WSL/Git Bash。
 - **公开发布题目的上游许可**：PawBench NOTICE 声明 129/150 题各留原许可；内部自跑无妨，公开需逐一核实。
