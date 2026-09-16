@@ -283,12 +283,27 @@ def test_cleanup_expired_removes_only_old_task_dirs(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
         (d / snapshots.LEDGER_NAME).write_text("", encoding="utf-8")
     stale = time.time() - 40 * 86400
-    os.utime(old_dir, (stale, stale))
+    for p in (old_dir, old_dir / snapshots.LEDGER_NAME):
+        os.utime(p, (stale, stale))
 
     removed = cleanup_expired(settings=settings)
     assert removed == 1
     assert not old_dir.exists()
     assert new_dir.exists()
+
+
+def test_cleanup_keeps_dir_whose_ledger_was_touched_recently(tmp_path):
+    """Appending does not bump the dir mtime — the ledger is the age reference."""
+    settings = _s(tmp_path)
+    d = settings.snapshots_path / "still-writing"
+    d.mkdir(parents=True, exist_ok=True)
+    ledger = d / snapshots.LEDGER_NAME
+    ledger.write_text("", encoding="utf-8")
+    stale = time.time() - 60 * 86400
+    os.utime(d, (stale, stale))  # dir looks ancient, ledger looks fresh
+
+    assert cleanup_expired(settings=settings) == 0
+    assert d.exists()
 
 
 def test_cleanup_disabled_when_retention_not_positive(tmp_path):
@@ -298,6 +313,21 @@ def test_cleanup_disabled_when_retention_not_positive(tmp_path):
     stale = time.time() - 400 * 86400
     os.utime(d, (stale, stale))
     assert cleanup_expired(settings=settings) == 0
+    assert d.exists()
+
+
+def test_cleanup_disabled_by_master_switch(tmp_path):
+    """A disabled feature must not delete data it no longer owns."""
+    settings_before = _s(tmp_path)
+    d = settings_before.snapshots_path / "old-task"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / snapshots.LEDGER_NAME).write_text("", encoding="utf-8")
+    stale = time.time() - 400 * 86400
+    for p in (d, d / snapshots.LEDGER_NAME):
+        os.utime(p, (stale, stale))
+
+    settings_off = _s(tmp_path, snapshot_enabled=False)
+    assert cleanup_expired(settings=settings_off) == 0
     assert d.exists()
 
 
@@ -322,11 +352,24 @@ def _wait(tm, task_id, statuses=("COMPLETED", "FAILED", "INTERRUPTED"), timeout=
     return tm.get_task(task_id)
 
 
+def _wait_unwound(tm, task_id, timeout=10.0):
+    """Wait for run()'s teardown to pop the worker thread.
+
+    A terminal status is persisted a beat before ``_threads`` is popped, and
+    rollback correctly refuses a task whose worker is still unwinding — so
+    tests that roll back a settled task must first let that window close.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline and tm._threads.get(task_id) is not None:
+        time.sleep(0.02)
+
+
 def _run_to_completion(settings, path: str, content: str, event_bus=None):
     tm = make_manager(settings, _writer_mock(path, content), event_bus=event_bus)
     task_id = tm.create_task(title="writer", user_input="write a file")
     task = _wait(tm, task_id)
     assert task.status == TaskStatus.COMPLETED
+    _wait_unwound(tm, task_id)
     return tm, task_id
 
 
@@ -435,9 +478,11 @@ def test_startup_cleanup_runs_from_manager_construction(tmp_path):
     settings = _s(tmp_path)
     stale_dir = settings.snapshots_path / "ancient-task"
     stale_dir.mkdir(parents=True, exist_ok=True)
-    (stale_dir / snapshots.LEDGER_NAME).write_text("", encoding="utf-8")
+    ledger = stale_dir / snapshots.LEDGER_NAME
+    ledger.write_text("", encoding="utf-8")
     old = time.time() - 90 * 86400
-    os.utime(stale_dir, (old, old))
+    for p in (stale_dir, ledger):
+        os.utime(p, (old, old))
 
     make_manager(settings, MockLLMClient(plan=[], final_answer="noop"))
     assert not stale_dir.exists()
@@ -464,6 +509,7 @@ def test_rollback_endpoint_restores_files(client):
     test_client, settings, tm = client
     tid = test_client.post("/api/tasks", json={"input": "write api.txt"}).json()["data"]["task_id"]
     _wait(tm, tid)
+    _wait_unwound(tm, tid)
     r = test_client.post(f"/api/tasks/{tid}/rollback")
     assert r.status_code == 200
     body = r.json()
