@@ -174,7 +174,7 @@ conftest 加 `SNAPSHOT_ENABLED=false` 隔离行（离线用例默认零快照；
 
 ## 五、验收标准
 
-- `pytest backend/tests/ -q` 全绿（493 + 新增）；`ruff check backend scripts` 与 `mypy` 0 错（不许 ignore/override）。
+- `pytest backend/tests/ -q` 全绿（493 + 新增 32 = 525）；`ruff check backend scripts` 与 `mypy` 0 错（不许 ignore/override）。
 - 保护文件零改动（`resilience.py` / `registry.py` / `_needs_confirm` 重算块）；`mypy` 现零 override 维持。
 - `npx tsc --noEmit` 0 错误（前端改动）。
 - `scripts/live_e2e.py`（`LLM_MODEL=qwen3.7-flash-2026-07-15`）双场景 PASS。
@@ -186,7 +186,7 @@ conftest 加 `SNAPSHOT_ENABLED=false` 隔离行（离线用例默认零快照；
 
 - **本 PR 内**：capability §四（2026-09-17 复核）/§五 硬缺口 → 0 /§六 P1-A′·T1.4·P1-B 勾选 /§七 P1-B 行 → ✅；roadmap §三 P1-B 行 → ✅（PR #41）+ §五 分支拓扑。
 - **live 实证**：`LLM_MODEL=qwen3.7-flash-2026-07-15` 双场景 PASS；真实任务在 `data/snapshots/<task_id>/` 留下真实账本（场景 1：`agent_summary.txt` 一份 before-image；场景 2 断点续跑：`r1/r2/r3.txt` 三份）——写入捕获在 run 与 resume 两条路径上都生效。
-- **测试**：523 全绿（新增 32 例）；ruff/mypy 0 错；前端 `tsc --noEmit` 0 错。
+- **测试**：525 全绿（新增 32 例）；ruff/mypy 0 错；前端 `tsc --noEmit` 0 错。
 - **review（双轴）后的实现修正**（如实记录）：① 逃逸闸门前移到「去重即丢弃」（原只在重放步判，摘要步仍会读逃逸路径）② 清扫受总开关约束（停用不得删数据）+ 寿命取目录/ledger 较新 mtime（追加不推进目录 mtime）③ 沙箱包含判定收敛为模块内单一谓词 `_under_root` ④ 留存 seq 改为先写后用、去掉回推 ⑤ 前端失败提示按 `{detail}` 分支。
 - **口径**：`cleanup_expired` 仍按「目录 mtime」写进 #33 拍板 11 的 spec 文本，实现取更准的 max(dir, ledger)——不改变决策意图（N 天保留），只修正判据。
 
