@@ -70,6 +70,8 @@ TaskManager 构造器尾部单次执行：持久化里 status ∈ {RUNNING, PEND
 
 ## 4. 安全默认（确认闸门 × 续跑）
 
+**三类硬拒绝（不可放松的契约）**：**非 INTERRUPTED**（含 COMPLETED / FAILED 终态）、**无 checkpoint**（双探测不到）、**停在确认闸口**（`pending_confirm` 标记 / 未决 require_confirm 调用）——一律 409 同步拒绝，闸门永不被静默绕过。
+
 | 场景 | 行为 |
 |---|---|
 | 任务停在人工确认闸口被 stop | human_confirm_node 用 manager 权威 flag 判定 stop-forced，将 `pending_confirm` 标记写入 state 并随快照落盘 |
