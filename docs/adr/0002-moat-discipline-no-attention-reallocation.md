@@ -30,8 +30,9 @@ T1.3 循环控制韧性**；细目以 [capability §四](../capability-first-pri
 
 ## 边界与例外
 
-- 受保护文件（`resilience.py` / `registry.py` / `nodes.py` 的 `_needs_confirm` 重算块）
-  零改动约束**独立于本 ADR**，由 CI guard 机械化拦截——本 ADR 管的是注意力层。
+- 受保护文件零改动约束**独立于本 ADR**：`resilience.py` / `registry.py` 由 CI guard
+  机械化拦截；`nodes.py` 的 `_needs_confirm` 重算块同为冻结区，但**无机械化守卫**（文档级
+  约束，改动需人工确认）。本 ADR 管的是注意力层。
 - spec 执行期的回归停线钩子（spec 验收见 P0 回归 → 该 spec 立即停线）见
   [#29 standing rule](https://github.com/renjianguojinqianfan/langgraph-agent/issues/29)，
   本 ADR 不复制。
@@ -45,4 +46,8 @@ T1.3 循环控制韧性**；细目以 [capability §四](../capability-first-pri
 
 ## 修正记录
 
-（暂无——每次修正须先在对应 ticket 的 resolution comment 留痕，再同步本文件）
+- 2026-09-18 **引用范围纠错（非决策变更）**：原「边界与例外」把 `nodes.py` 的
+  `_needs_confirm` 重算块写进了「由 CI guard 机械化拦截」的范围——与实际不符（guard 只
+  覆盖 `resilience.py` / `registry.py`）。已按引用事实直接修正正文。**本次免 ticket 留痕**
+  （用户拍板）：该条修正未触碰决策本体、仅纠正引用事实，不适用「实证矛盾走记录修正」的
+  实证冲突场景；此后同类纯引用纠错可沿用此分类，触及决策本体的修正仍须先 ticket 留痕。

@@ -10,14 +10,15 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-> **Current state (2026-09-15):** `CONTEXT.md` does not exist yet; `docs/adr/` **does**
-> (seeded with `0001-in-place-migration-and-resume-positioning.md`, migrated in from
-> `.qoder/specs/`). This repo is **single-context** — one `CONTEXT.md` + one `docs/adr/`
+> **Current state (2026-09-18):** `CONTEXT.md` does not exist yet; `docs/adr/` **does** —
+> seeded with `0001-in-place-migration-and-resume-positioning.md` (migrated in from
+> `.qoder/specs/`) and `0002-moat-discipline-no-attention-reallocation.md`
+> (wayfinder #27/#30). This repo is **single-context** — one `CONTEXT.md` + one `docs/adr/`
 > at the root. No `CONTEXT-MAP.md`, no per-package context dirs.
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
 > dirs (`.qoder/`, `.trae/`, `.mimosa/`), which are untracked by design. Full rule table:
-> `AGENTS.md` §3「文档归属」. Memory-type files (`.workbuddy/memory/`,
+> `AGENTS.md`「文档归属」. Memory-type files (`.workbuddy/memory/`,
 > `learning-records/`, `MISSION.md` / `NOTES.md`) stay put — they are not migrated.
 
 ## File structure
@@ -27,9 +28,11 @@ Single-context repo (this repo's layout):
 ```
 /
 ├── CONTEXT.md                         ← glossary / ubiquitous language (not yet created)
-├── AGENTS.md                          ← agent operating manual (exists; §1–§6 + Agent skills)
+├── AGENTS.md                          ← agent operating manual (exists; short entry: positioning /
+│                                        safety boundaries / task routing / verification / Agent skills)
 ├── docs/
-│   ├── adr/                           ← decisions (0001-in-place-migration-and-resume-positioning.md)
+│   ├── adr/                           ← decisions (0001-in-place-migration-and-resume-positioning.md,
+│   │                                     0002-moat-discipline-no-attention-reallocation.md)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain)
 │   ├── prd.md · architecture.md       ← original v0/v0.1 design docs
@@ -64,8 +67,8 @@ When your output names a domain concept (in an issue title, a refactor proposal,
 
 If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 
-Until `CONTEXT.md` exists, the de-facto vocabulary lives in `AGENTS.md` §2–§3 and
-`backend/core/agent/state.py` — use those terms (`planner` / `executor` / `tool` /
+Until `CONTEXT.md` exists, the de-facto vocabulary lives in `backend/core/agent/state.py` /
+`graph.py` (node names) and the hard rules in `AGENTS.md`「跨任务安全边界」 — use those terms (`planner` / `executor` / `tool` /
 `reflect` / `risk_scan` / `subagent_split` / `human_confirm` / `finish`,
 `checkpoint` / `resume` / `confirm gate` / `熔断` / `沙箱根`) rather than coining new ones.
 
@@ -75,8 +78,8 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 
 > _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
 
-`docs/adr/0001` is the live one today (in-place migration over rewrite + resume-project
-positioning, decisions D1–D9). Beyond it, the equivalent frozen decisions are the hard
-rules in `AGENTS.md` §2 (protected files, `_needs_confirm` recompute block, conftest
-isolation, dependency matrix, quality-gate baseline). Treat a contradiction with
-those the same way — surface it, don't silently override.
+`docs/adr/0001` (in-place migration over rewrite + resume-project positioning, decisions
+D1–D9) and `0002` (moat discipline) are the live ADRs today. Beyond them, the equivalent
+frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (protected files,
+`_needs_confirm` recompute block, conftest isolation, dependency matrix, quality-gate
+baseline). Treat a contradiction with those the same way — surface it, don't silently override.

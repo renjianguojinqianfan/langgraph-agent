@@ -4,10 +4,27 @@ Issues and specs for this repo live as GitHub issues in
 [`renjianguojinqianfan/langgraph-agent`](https://github.com/renjianguojinqianfan/langgraph-agent).
 Use the `gh` CLI (v2.96.0+ verified installed) for all operations.
 
-> 本仓库既有约定（见 `AGENTS.md` §2「PR 审查与合并态度」）：功能/依赖/代码改动走
-> feature 分支 + PR + CI 全绿才合；docs/收尾小修可直接 commit+push master。
-> 开 issue 时沿用现有的 `[Feature]` / `[后续候选#N]` 标题前缀风格与
-> `enhancement` / `bug` / `spec` 标签。
+> 本仓库既有约定：开 issue 时沿用现有的 `[Feature]` / `[后续候选#N]` 标题前缀风格与
+> `enhancement` / `bug` / `spec` 标签。发布与合并惯例见下文「Release conventions」。
+
+## Release conventions (repo-side, as practiced)
+
+These describe how changes actually ship in this solo repo. They are **conventions describing
+past practice — not a standing authorization to commit or push**; whether to commit/push is
+still decided by the user in the moment.
+
+- **分级**：功能 / 依赖 / 代码改动走 feature 分支 + PR + CI 全绿才合（护「master 全绿」主张）；
+  docs/ 收尾小修因 `ci.yml` 的 `paths-ignore: docs/**, *.md` 不进 CI、不影响全绿，
+  可直接 commit + push master、免 PR 仪式。
+- **实证优先、不盲信状态标签**：合并前本地复现 CI 的**确切命令**（前端 `npm ci` 而非
+  `npm install`）；`BLOCKED` / 无 checks / CI 红 ≠ 可绕过或强合——先深挖根因，必要时弃
+  自动分支手动接管（先例：PR #6→#15，dependabot rebase 漏升配套 plugin-react 致
+  `npm ci` ERESOLVE，手动配套 bump 才绿）。
+- **依赖类 PR**：Dependabot 自动抬版勿直接合；跨 major 升级警惕配套 peer 缺失；依赖矩阵
+  与抬版纪律见 `AGENTS.md`「跨任务安全边界」。
+- **合并方式**：`[OVERRIDE]` PR 用 squash（免 guard 变红）；合并后删远程分支前先
+  `git ls-remote --heads origin <branch>` 核对；docs-only PR 无 checks / admin bypass
+  属已知现象，不等于强合。
 
 ## Conventions
 
