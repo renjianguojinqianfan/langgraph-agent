@@ -85,7 +85,7 @@
 | T1.7 可观测 | SSE 23 事件 + JSONL trace | ✓ 有 |
 | T1.8 扩展 | plugins + MCP + OpenAPI，全配置化不碰内核 | ✓ 有 |
 | T2.1 web | search 仅返回 snippets；fetch 靠 `http_request` 原始响应；无 extract / 浏览器 | 半缺口 |
-| T2.2 skills | 仅 KB 检索，无运行时加载 | 缺口 |
+| T2.2 skills | **P1-A 已交付（PR #42）**：清单常驻（P1-A′）+ `load_skill` 按名取整档 SKILL.md 进对话（P1-A），渐进披露两半闭合；references 继续走 `kb_query` | ✅ **已闭合** |
 | T2.3 记忆 | 关键词 KB，embeddings 关闭 | 半缺口 |
 | T2.4 headless / 调度 | **P0-C 已交付（PR #19）**：`backend/headless.py` 单发 CLI + JSON 结果契约 + 四级退出码 + 实例级闸门旁路；**调度（cron）仍无** | ◐ headless 已闭合（双重正当性均满足）；调度仍缺 |
 | T3.1 子 agent | 场景触发式 dispatch（非通用 delegate_task） | 有但弱 |
@@ -101,8 +101,8 @@
    **回滚**（T1.5 后半，P8 的补救半边，P1-B / PR #41）——Tier 1 已无未闭合项。其余必需项本仓库都有，其中两项
    （持久化恢复、韧性）深度**超过**两个开源标杆。
 2. **Tier 2 是定位题**：已选定 A 线（通用任务 agent）→ T2.4 headless 已由
-   P0-C / PR #19 闭合（调度仍缺）；剩 **T2.1 fetch、T2.2 skills** 进必修，
-   外加 §七 复核新增的 **上下文注入层**（它是 T2.2 skills 的前置依赖）。
+   P0-C / PR #19 闭合（调度仍缺）；**T2.2 skills 线已收官**（注入 P1-A′ / PR #39 +
+   运行时 P1-A / PR #42）；剩 **T2.1 fetch** 进必修。
 3. **交叉验证成立**：第一性原理推出的必修清单 ≈ PawBench 原子能力标签反推的
    P0 清单（文件精读编辑 / skills / self-verification）。两条独立路径指向同一处
    ——这是「这些能力真的必需」的证据，而非巧合。第一性原理额外推出两项此前
@@ -110,7 +110,7 @@
    §七 又补上第三条漏项：**上下文注入**（四重收敛，证据比 skills 那条更强）。
 4. **护城河纪律**：T1.6 / T1.5 预防面 / T1.3 韧性是反超标杆的部分，
    任何后续规划不得为凑功能挪用这里的注意力——它们的验收走
-   444 测试 + live 双场景，**不走评测分**。
+   549 测试 + live 双场景，**不走评测分**。
    （本条已升格为决策记录：[ADR-0002](adr/0002-moat-discipline-no-attention-reallocation.md)）
 
 ---
@@ -123,7 +123,7 @@
 ✅ P0-C headless 执行入口：CLI 单发批量提交（评测前置依赖）—— 已交付 PR #19
 ✅ P1-A′ 上下文注入层：AGENTS.md 分层加载 + skills 清单渐进披露 + 环境事实（§七 新增）—— 已交付 PR #39
 ✅ P1-B 回滚：每写一次文件级 before-image + 独立端点显式触发回滚 —— 已交付 PR #41（spec `docs/specs/p1-b-rollback.md`；决策见 [#33](https://github.com/renjianguojinqianfan/langgraph-agent/issues/33) / [#34](https://github.com/renjianguojinqianfan/langgraph-agent/issues/34)；原推导「接确认闸口同一路径」被代码实证否决——闸口上无沙箱文件写，2026-09-17 记录修正）
-⬜ P1-A skills 运行时：SKILL.md 按需加载进上下文（依赖 P1-A′）
+✅ P1-A skills 运行时：`load_skill` 按名取整档 SKILL.md 进对话 —— 已交付 PR #42（spec `docs/specs/p1-a-skills-runtime.md`）
 ✅ T1.4 tool-result eviction：大结果落盘换引用（与现有 compress 同层）—— 已交付 PR #40
 ⬜ P1-C web fetch/extract：搜索之外补页面获取
 ⬜ 调度（cron）/ 交互式终端入口（Issue #20）
