@@ -10,9 +10,10 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-> **Current state (2026-09-15):** `CONTEXT.md` does not exist yet; `docs/adr/` **does**
-> (seeded with `0001-in-place-migration-and-resume-positioning.md`, migrated in from
-> `.qoder/specs/`). This repo is **single-context** — one `CONTEXT.md` + one `docs/adr/`
+> **Current state (2026-09-18):** `CONTEXT.md` does not exist yet; `docs/adr/` **does** —
+> seeded with `0001-in-place-migration-and-resume-positioning.md` (migrated in from
+> `.qoder/specs/`) and `0002-moat-discipline-no-attention-reallocation.md`
+> (wayfinder #27/#30). This repo is **single-context** — one `CONTEXT.md` + one `docs/adr/`
 > at the root. No `CONTEXT-MAP.md`, no per-package context dirs.
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
@@ -29,7 +30,8 @@ Single-context repo (this repo's layout):
 ├── CONTEXT.md                         ← glossary / ubiquitous language (not yet created)
 ├── AGENTS.md                          ← agent operating manual (exists; §1–§6 + Agent skills)
 ├── docs/
-│   ├── adr/                           ← decisions (0001-in-place-migration-and-resume-positioning.md)
+│   ├── adr/                           ← decisions (0001-in-place-migration-and-resume-positioning.md,
+│   │                                     0002-moat-discipline-no-attention-reallocation.md)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain)
 │   ├── prd.md · architecture.md       ← original v0/v0.1 design docs
