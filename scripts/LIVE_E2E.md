@@ -1,7 +1,8 @@
 # 真实 LLM 端到端验证指南（Live E2E）
 
-> 项目默认的 250 个测试全部基于 `MockLLMClient`（离线、无 Key、无网络）。
-> 本指南说明如何**接入真实 OpenAI 兼容 LLM**（已验证：QianWen/DashScope `qwen3.6-plus`），
+> 项目默认的 549 个离线测试全部基于 `MockLLMClient`（离线、无 Key、无网络）。
+> 本指南说明如何**接入真实 OpenAI 兼容 LLM**（现役口径：QianWen/DashScope `qwen3.7-flash-2026-07-15`，
+> 见 AGENTS.md §2「真实 LLM 验证」），
 > 用真实模型跑一次端到端任务，验证完整链路（planner → executor → tool → reflect → final_answer）。
 
 ---
@@ -34,7 +35,7 @@ llm_provider=openai
 llm_base_url=https://dashscope.aliyuncs.com/compatible-mode/v1
 # 留空！运行时用环境变量 LLM_API_KEY 注入，避免明文落盘
 llm_api_key=
-llm_model=qwen3.6-plus
+llm_model=qwen3.7-flash-2026-07-15
 use_mock_llm=false
 ```
 
@@ -45,11 +46,11 @@ use_mock_llm=false
 curl -sS -X POST "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" \
   -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen3.6-plus","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
+  -d '{"model":"qwen3.7-flash-2026-07-15","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
 ```
 
 - `403 AllocationQuota.FreeTierOnly` → 免费额度耗尽，换模型或到控制台充值/关闭"仅免费额度"模式。
-- 2026-08 实测：`qwen-turbo`/`qwen-plus` 免费额度已耗尽，`qwen3.6-plus` 可用。
+- 2026-09-16 实测：`qwen3.6-plus` 免费额度已 expire、`qwen3.7-flash`（无日期）已 exhaust；**换模型前先核额度**（口径明细见 AGENTS.md §2）。
 
 ### 2.3 运行真实端到端验证
 
@@ -79,7 +80,7 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" .venv311/Scripts/python.exe scripts/live_e2e.py
 |--------|----------------|------------------|
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| DashScope/QianWen | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.6-plus` |
+| DashScope/QianWen | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.7-flash-2026-07-15` |
 | Ollama（本地） | `http://localhost:11434/v1` | `qwen2.5:7b` |
 
 Key 注入三种方式任选：
@@ -102,9 +103,10 @@ Key 注入三种方式任选：
 
 | 文件 | 作用 |
 |------|------|
-| `scripts/live_e2e.py` | 真实 LLM 端到端验证脚本（独立于 pytest，不参与 250 个离线用例） |
+| `scripts/live_e2e.py` | 真实 LLM 端到端验证脚本（独立于 pytest，不参与 549 个离线用例） |
+| `scripts/live_skill_test.py` | skills 联测两腿：references→KB→真实模型 + skills 运行时（`load_skill`）验收 |
 | `backend/tests/` | 离线测试（MockLLM，无需 Key/网络，日常回归用） |
 | `.env.example` | 配置样板（LLM/Agent/沙箱/检索/P0/P1 全量配置） |
 
 > 设计取舍：离线测试保证**确定性**与 **CI 可跑**；live 脚本验证**真实世界兼容性**。
-> 两者互补：CI 跑 250 个离线用例，发布前/换供应商时跑一次 live_e2e。
+> 两者互补：CI 跑 549 个离线用例，发布前/换供应商时跑一次 live_e2e + live_skill_test。

@@ -122,7 +122,7 @@ checkpointer 时传（1.2.11 在无 checkpointer 时传 `sync` 会 `AttributeErr
 
 **安全闭环**：两条曾被 dismiss 的公告（CVE-2025-67644 / CVE-2026-71433）随 3.1.1 从「已接受」变「已修复」。
 
-**闸门**（迁移当时口径）：351 → **365 passed**（现役基线 **525**）· `--check` 5/5 · 真实模型双场景 PASS · 受保护文件 diff 为空 · CI 全绿。
+**闸门**（迁移当时口径）：351 → **365 passed**（现役基线 **549**）· `--check` 5/5 · 真实模型双场景 PASS · 受保护文件 diff 为空 · CI 全绿。
 
 → 完整评估、A/B 实测证据（旧钉版理由是怎么被推翻的、为什么"读得回 ≠ 跑得续"）与逐条决策：
 [`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md)

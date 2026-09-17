@@ -44,7 +44,7 @@
 | `docs/specs/` | **spec / 实施计划档案**。现有 langgraph-1x-migration / p0-b-completion-verification / second-tier-ci-guard-and-smoke（前三份自 `.qoder/specs/` 迁入）+ p1-a-prime-context-injection + t1-4-tool-result-eviction（上一轮）+ p1-b-rollback + p1-a-skills-runtime（本轮）|
 | `docs/agents/` | mattpocock 技能组配置：issue-tracker / triage-labels / domain（由 `setup-matt-pocock-skills` 生成，本文件末尾 `## Agent skills` 段是其入口）|
 | `.agents/skills/` | 千问官方 skills（model-selector/ops-auth/usage）。集成路径：references 由 `scripts/live_skill_test.py` 复制到 `data/kb/qianwen-skills/` 并重建索引 → 真实模型任务中经 `kb_query`/`memory_search` 工具检索；该脚本同时验证"KB 命中 + 答案给出具体模型"全链路 |
-| `scripts/` | live_e2e.py（真实 LLM 验证，`--check` 为无 Key 离线冒烟）/ live_skill_test.py（skills→KB→真实模型）|
+| `scripts/` | live_e2e.py（真实 LLM 验证，`--check` 为无 Key 离线冒烟）/ live_skill_test.py（两腿：skills→KB→真实模型 + skills 运行时 `load_skill` 验收）|
 | `data/` | 运行时生成（tasks.json/traces/kb/artifacts/snapshots），不入库 |
 
 ### 文档归属（2026-09-15 起，硬约定）
@@ -83,7 +83,7 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_e2e.
 .\.venv311\Scripts\python.exe -m backend.headless -p "<任务>" --dir ./out --auto-approve --output json
 .\.venv311\Scripts\python.exe -m backend.headless --check   # headless 入口离线冒烟（已接入 CI）
 
-# skills 知识库联测（skills references → KB → 真实模型）
+# skills 联测（两腿：references→KB→真实模型 + skills 运行时 load_skill 验收）
 LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_skill_test.py
 
 # 前端（先 cd frontend，Node 22）
@@ -93,7 +93,7 @@ npx tsc --noEmit     # 类型检查 0 错误
 
 ## 5. 完成定义
 - `ruff check backend scripts` 与 `mypy` 均 0 错（基线全净，不许靠 ignore/override 绕过）。
-- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（525）；改前端时 `npx tsc --noEmit` 0 错误。
+- 后端 `.venv311 python -m pytest backend/tests/ -q` 全绿（549）；改前端时 `npx tsc --noEmit` 0 错误。
 - 改动跑通真实模型冒烟（有 Key 时）：`scripts/live_e2e.py` PASS。
 - 改接口/配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
 - 新依赖需说明理由；**避免升级 uvicorn/starlette**（mcp 依赖冲突教训：用 `--no-deps` 装 mcp）。

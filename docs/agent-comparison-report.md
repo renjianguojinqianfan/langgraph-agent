@@ -6,6 +6,8 @@
 > 本文所有「本仓库」论断均基于源码审查，非 README 宣称。
 > **2026-09-15 复核**：P0-A（文件四件套，PR #18）/ P0-B（完成验证，PR #26）/ P0-C（headless，PR #19）
 > 已合入，下文能力表、对比表与差距清单已按代码重算；四款对标 agent 的描述未变。
+> **2026-09-18 复核**：P1-A′（上下文注入，PR #39）/ T1.4（工具结果逐出，PR #40）/ P1-B（回滚，PR #41）
+> / P1-A（skills 运行时，PR #42）已合入；相关行与差距清单已按代码重算（测试 549、SSE 23 事件、16 REST）。
 
 ---
 
@@ -19,16 +21,16 @@ human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可�
 | 维度 | 现状（源码落点） |
 |---|---|
 | 编排内核 | LangGraph 1.2.x，`main`/`subtask` 双拓扑（`backend/core/agent/graph.py`）；具名路由 + `Literal` 注解声明拓扑 |
-| 内置工具 | `web_search` / `read` / `edit` / `glob` / `grep`（P0-A 四件套）/ `file_io`（旧多动作工具，待退役 #17）/ `code_exec`(沙箱) / `http_request` / `memory_search` / `kb_query` / `spawn_subagent` + Git 7 个 + 动态 MCP / OpenAPI / 插件工具（`backend/core/tools/registry.py`）|
+| 内置工具 | `web_search` / `read` / `edit` / `glob` / `grep`（P0-A 四件套）/ `file_io`（旧多动作工具，待退役 #17）/ `code_exec`(沙箱) / `http_request` / `memory_search` / `kb_query` / `load_skill`（P1-A）/ `spawn_subagent` + Git 7 个 + 动态 MCP / OpenAPI / 插件工具（`backend/core/tools/registry.py`）|
 | 韧性 | 熔断（closed→open→half_open）+ 指数退避重试（`backend/core/tools/resilience.py`） |
-| 上下文 | 截断 / LLM 摘要压缩（默认 8000 tokens，`backend/core/agent/context.py`） |
+| 上下文 | evict（保护带外超 4000 字符 tool 结果原地换占位 + trace 回读指针，T1.4）→ 截断 / LLM 摘要压缩（预算默认 32000 est. tokens，`backend/core/agent/context.py`） |
 | 断点续跑 | SqliteSaver checkpoint + `durability="sync"` + `POST /resume`；格式版本打标（`PRAGMA user_version`）、`mode=ro` 只读检测、拒绝语义严格（非 INTERRUPTED / 无 checkpoint / 停在确认闸口一律 409），孤儿任务启动对账 |
-| 安全 | EHRB 五类风险扫描 + `human_confirm` 图内确认闸门（决策后重算 `_needs_confirm`）；HTTP 写方法 / MCP 写类 per-call 判定；Git 危险命令黑名单 + 选项注入防护；文件工具（file_io/read/edit/glob/grep）共享沙箱路径白名单 |
-| 记忆 / KB | 标准库关键词索引（离线可用），embeddings 默认关闭；**无 AGENTS.md / skills 清单类静态上下文注入**（`prompts.py` 是硬编码常量，任务初始 state 只有一条 user 消息）|
-| 入口 | FastAPI Web UI（15 REST + SSE）+ **headless 单发 CLI**（P0-C，`backend/headless.py`：JSON 结果契约 + 四级退出码 + 实例级闸门旁路）|
-| 可观测 | SSE 21 类事件 + JSONL Trace 落盘 + 前端回放 |
+| 安全 | EHRB 五类风险扫描 + `human_confirm` 图内确认闸门（决策后重算 `_needs_confirm`）；HTTP 写方法 / MCP 写类 per-call 判定；Git 危险命令黑名单 + 选项注入防护；文件工具共享沙箱路径白名单；**回滚 P1-B 已交付**（写前文件级 before-image 账本 + `POST /rollback`，与 resume 解耦，PR #41） |
+| 记忆 / KB | 标准库关键词索引（离线可用），embeddings 默认关闭；**上下文注入 P1-A′ 已交付**（两层 AGENTS.md + skills 清单 + 环境事实进 system，PR #39）+ **skills 运行时 P1-A 已交付**（`load_skill` 按名取整档加载，PR #42）|
+| 入口 | FastAPI Web UI（16 REST + SSE）+ **headless 单发 CLI**（P0-C，`backend/headless.py`：JSON 结果契约 + 四级退出码 + 实例级闸门旁路）|
+| 可观测 | SSE 23 类事件 + JSONL Trace 落盘 + 前端回放 |
 | 前端 | React 三栏（历史 / 任务流 / Step 详情 + Trace Tab） |
-| 工程门禁 | 444 离线测试 + ruff/mypy 全净（零 override）+ 真实模型 live_e2e + CI 五 job |
+| 工程门禁 | 549 离线测试 + ruff/mypy 全净（零 override）+ 真实模型 live_e2e + CI 五 job |
 
 ---
 
@@ -65,9 +67,9 @@ human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可�
 | **编排范式** | Plan-and-Execute（StateGraph 显式图） | ReAct 循环（隐式） | 多专家流水线 | ReAct + 记忆驱动 | ReAct + Plan 工具 + Code mode |
 | **文件编辑** | read(行号分页) / edit(str_replace) / glob / grep 四件套（P0-A、PR #18）；旧 file_io 待退役 | 精读精确编辑 | IDE 级编辑 | 文件工具集 | 6 个文件工具（精确替换）|
 | **Shell / 代码执行** | `code_exec` subprocess（仅超时，无容器隔离） | 强沙箱 + 审批策略 | 终端工具 | 多后端（Docker / SSH / Modal）加固 | Minimal 内置持久 bash |
-| **Skills 系统** | 无运行时（skills 仅作 KB 文档被检索） | 原生 Skills + 插件市场 | Skills + 插件 | 自动创建 / 复用技能 | skills 即插件 |
-| **上下文管理** | 截断 / 摘要压缩 | 会话压缩 / 分叉 | 增强上下文工程 + RepoWiki 精剪 | 持久记忆 + 摘要 | tool 结果 eviction 落盘换引用 |
-| **记忆 / 约定注入** | 跨会话关键词 KB；**无 AGENTS.md 类约定注入**（prompts 硬编码、初始 state 只一条 user 消息）| AGENTS.md | 记忆 + Memo | MEMORY.md / USER.md + Honcho 用户建模 | storage 插件 |
+| **Skills 系统** | **P1-A′ + P1-A 已交付**：清单注入（PR #39）+ `load_skill` 按名取整档 SKILL.md（PR #42）| 原生 Skills + 插件市场 | Skills + 插件 | 自动创建 / 复用技能 | skills 即插件 |
+| **上下文管理** | eviction（保护带外大 tool 结果换占位 + 回读指针，T1.4、PR #40）+ 截断 / 摘要压缩 | 会话压缩 / 分叉 | 增强上下文工程 + RepoWiki 精剪 | 持久记忆 + 摘要 | tool 结果 eviction 落盘换引用 |
+| **记忆 / 约定注入** | 跨会话关键词 KB + **两层 AGENTS.md / skills 清单注入（P1-A′、PR #39）** + **skills 运行时（P1-A、PR #42）**| AGENTS.md | 记忆 + Memo | MEMORY.md / USER.md + Honcho 用户建模 | storage 插件 |
 | **断点 / 恢复** | Checkpoint + resume + 格式守卫（深度工程化） | 会话恢复 / 分叉 | Quest 状态追踪 | Checkpoints 回滚 | session 日志 resume / fork / replay |
 | **不可变审计** | JSONL Trace | — | — | — | append-only trajectory 视图 |
 | **人工确认闸门** | 风险扫描 + 确认 / 拒绝重算、写副作用防重试 | 审批模式 | 审批 | 命令审批 | 工具审批（HITL） |
@@ -98,7 +100,7 @@ human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可�
 3. **确认闸门的循环根因修复**（`backend/core/agent/nodes.py` `human_confirm_node`）：
    `_confirmed_ids/_rejected_ids` 决策后重算 `_needs_confirm`，配合
    `_after_tool` 重入判定，修掉单工具流死循环。
-4. **可验证性**：444 个确定性离线测试 + MockLLM + ruff/mypy 全净 +
+4. **可验证性**：549 个确定性离线测试 + MockLLM + ruff/mypy 全净 +
    真实模型 E2E，口径远强于多数闭源产品。
 
 ### 本仓库明显落后 / 缺失的部分
@@ -107,19 +109,17 @@ human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可�
    `str_replace`）/ `glob` / `grep` 四件套已落地，与 Codex / dsh / Hermes 的六件套同构；
    旧 `file_io` 待退役（Issue #17）。原差距描述保留作记录：那曾是「任务执行器」与
    「能操作文件世界的 agent」之差。
-2. **无上下文注入层**（2026-09-15 复核新增；本表最被低估的一项）：`core/agent/prompts.py`
-   是两段硬编码常量（无插值、不读外部文件），`task_manager.py` 的任务初始 state 只有一条
-   user 消息，`AGENTS.md` 运行时从不被读（全仓引用只有 3 处注释文字），`.agents/skills/`
-   只有 3 个 reference 被脚本手工拷进 KB，连沙箱根的绝对路径都不告诉模型。对标列里
-   Codex 的「AGENTS.md」、Hermes 的「MEMORY.md / USER.md」、dsh 的会话预设是同一层能力
-   ——**四重收敛**，证据强度超过本表任何一项。推导与优先级见
+2. ~~**无上下文注入层**~~ **已闭（P1-A′ / PR #39，2026-09-18）**：两层 `AGENTS.md` + skills 清单
+   + 环境事实进 system（任务级缓存、永不裁、不计入压缩预算）；原差距描述保留作记录——它曾是全表
+   最被低估的一项（对标列里 Codex 的「AGENTS.md」、Hermes 的「MEMORY.md / USER.md」、dsh 的
+   会话预设是同一层能力，**四重收敛**）。推导与优先级见
    [`capability-first-principles.md`](capability-first-principles.md) §七。
-3. **无 Skills 运行时**：`.agents/skills/` 仅作 KB 文档检索（`SKILL.md` 本身从未被索引），
-   无「技能清单注入 + 正文按需加载」机制。**依赖上一项**：没有注入层就没有「清单」这一半。
+3. ~~**无 Skills 运行时**~~ **已闭（P1-A / PR #42，2026-09-18）**：`load_skill` 按名取整档
+   SKILL.md 进对话（清单由 P1-A′ 注入）；渐进披露两半齐，references 仍走 `kb_query`。
 4. **无浏览器自动化与多模态**：主流几乎标配；本仓库完全没有。
 5. **沙箱隔离偏弱**：仅 subprocess + 超时，无容器 / ro / syscall 隔离。
 6. **记忆 / 上下文工程偏原始**：关键词检索（embeddings 关闭）、无 RepoWiki
-   类代码库文档、无跨会话用户建模、无 tool-result eviction。
+   类代码库文档、无跨会话用户建模（tool-result eviction 已于 T1.4 / PR #40 闭合）。
 7. **自动化面仍薄**：headless 单发已补（P0-C / PR #19），但无 cron、无消息多平台、
    无交互式常驻会话（Issue #20）。
 8. **无 GitHub/PR 平台交付**：只有本地 git 命令。
