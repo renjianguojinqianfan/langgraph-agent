@@ -5,11 +5,11 @@
 # 内容：
 #   guard-protected-files  受保护文件守卫（resilience.py/registry.py，[OVERRIDE] 逃生舱）
 #   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
-#                   + pytest 离线全量回归（backend/tests/，365 用例）
-#                   + live_e2e.py --check 离线冒烟（无 Key/无网络）
+#                   + pytest 离线全量回归（backend/tests/，549 用例）
+#                   + live_e2e.py --check 与 backend.headless --check 离线冒烟（无 Key/无网络）
 #   frontend-build  npm ci + tsc 类型检查 + vite 生产构建（产物上传为 artifact）
 #   docker-build    验证 backend/Dockerfile 可构建（不 push）
-#   live-e2e        真实 LLM 端到端验证（可选，需配置 LLM_API_KEY secret，默认仅手动触发）
+#   live-e2e        真实 LLM 端到端验证（push master 自动 + 手动；key gate——secrets 为空则跳过、job 仍绿）
 #
 # 硬约束遵循 AGENTS.md：
 #   - mcp 依赖用 --no-deps 单独安装，避免升级 uvicorn/starlette
