@@ -80,7 +80,7 @@
 | 完成验证（reflect 落地自检）| P7：模型「做完了」的声明不可信 | self-verification 是五维原子能力之一；「虚假完工」是明示掉分点 | ✅ **P0-B 已交付**（PR #26）|
 | headless 执行入口 | P12：用户不在场也要能用 | 跑 150 题必须无人值守批量执行（**评测前置依赖**）| ✅ **P0-C 已交付**（PR #19）|
 | **上下文注入层**（AGENTS.md 分层加载 + skills 清单渐进披露 + 环境事实）| **P13**：agent 冷启动失忆，约定只存在于文件系统里——不注入就等于不存在（**四重收敛**：Codex/Claude Code/Qoder/Hermes+dsh）| 间接但是 Skill_Use 的前置（没有「清单注入」就没有按需加载）| ✅ **P1-A′ 已交付**（PR #39）|
-| skills 运行时 | P4+收敛证据（Hermes/dsh 双收敛）| Skill use 是五维原子能力之一（qwen3.6-plus 实测 **0.3562**，全表最低切片之一）| P1-A（依赖 P1-A′）|
+| skills 运行时 | P4+收敛证据（Hermes/dsh 双收敛）| Skill use 是五维原子能力之一（qwen3.6-plus 实测 **0.3562**，全表最低切片之一）| ✅ **P1-A 已交付**（PR #42）|
 | 回滚（写前快照）| P8 补救半边（Hermes `/rollback` 收敛）| 间接（修复失败任务时缩短重跑成本）| ✅ **P1-B 已交付**（PR #41；Tier 1 硬缺口清零）|
 | web fetch/extract | P5（snippets 不够回答事实题） | 开放环境题型（需 web 检索） | P1-C |
 | 多模态 | 不通过第一性原理检验（A 线场景不需要） | 榜上 26 题 | **降级二期**（防应试） |
@@ -160,6 +160,7 @@ feat/reflect-verification ← P0-B 动 nodes.py（已合入，PR #26；review �
 feat/context-injection    ← P1-A′ 上下文注入层（已合入，PR #39；单一注入点 _build_messages，零碰保护文件）
 feat/t1-4-tool-result-eviction ← T1.4 工具结果逐出（已合入，PR #40；context.py + nodes.py 挂接，零碰保护文件）
 feat/rollback-snapshots   ← P1-B 回滚（已合入，PR #41；新 services/snapshots.py + file_io 两写点一行钩子，零碰保护文件）
+feat/skills-runtime       ← P1-A skills 运行时（已合入，PR #42；load_skill + inject 共享发现抽取，零碰保护文件）
 <新仓库> eval-harness      ← v2 评测台：借题目+grade、驱动选手、qwen3.8-max 打分（不在本仓库）
 ```
 

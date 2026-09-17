@@ -230,3 +230,13 @@ ToolResult(success=False, data={"error": "`name` is required."}, error="`name` i
   4. `LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_skill_test.py` —— 两腿 PASS（KB 腿 + skills-runtime 腿：真实模型实际调用 `load_skill`、正文逐字符相等、答案引用正文原句，断言见 §5.5）；
   5. `.\.venv311\Scripts\python.exe scripts/live_e2e.py --check` 与 `.\.venv311\Scripts\python.exe -m backend.headless --check` 离线冒烟不受影响。
 - **零碰清单**（diff 面之外一律不动）：`backend/core/tools/resilience.py`、`backend/core/tools/registry.py`、`backend/core/agent/nodes.py`、`graph.py`、`subagent.py`、`prompts.py`、`context.py`、`backend/services/task_manager.py`、`backend/tests/conftest.py`、`.env.example`。
+
+## 八、实施记录（2026-09-18，PR #42）
+
+- **TDD 序**：tracer 先红（ImportError）→ 最小实现绿；随后 A–E 全 24 例落盘（真红仅初始一次——工具从零新建，其余用例是对既有实现的锁定），全量 525 → **549 passed**；`test_context_injection.py` 零修改全绿（抽取零回归锚）。
+- **code-review 双轴修正 3 条**（规范轴/需求轴并行子代理）：① 移除 `run()` 的宽泛兜底 `except` —— 其分支只给 `error` 不进 `data`，与 §3.4 诊断契约相悖（预期失败面已由发现层容错覆盖，意外异常留给内核安全网）；② 层布局收敛为 `inject.SKILLS_LAYER_SUBPATH` 单常量（原 `_miss_message` 重复拼布局，Shotgun Surgery 轻微）；③ 遍历用例升级为「`Path.read_text` 记录器证明目标文件从未被打开」的强断言（原断言只证明结果未泄漏）。
+- **live 实证与两处记录修正**（真实模型 `qwen3.7-flash-2026-07-15`，两腿全 PASS）：
+  1. §5.5 ③ 的「`documents[0]` 逐字符相等」放宽为「返回的 `documents` 中存在一份逐字符相等」——home 层若也有同名 skill，按 §二 #5 会返回两份且 home 在前，原断言会误判；语义不变、断言更贴 #5。
+  2. §3.4 空名单文案实际形态为 `Unknown skill: '<name>'. No skills found under {home}/.agents/skills or {sandbox}/.agents/skills.`（spec 原文 `<home>/skills` 是简写）；测试锁定实际形态（含 `.agents` 与两个根）。
+- **live 首跑的两个现场发现**（非缺陷，供后续参考）：① 真实模型可能中途调确认闸门工具（`code_exec`），无人代答会把**同批**的 `load_skill` 一并挂起 —— `live_skill_test.py` 现以操作员身份显式代答确认（生产语义不变，闸门仍被咨询）；② home 层 30+ 张卡会吃满 4000 字符清单预算、把工作区层的卡从尾部挤出（P1-A′ #5 既有语义）——live 第二腿的 prompt 直接点名技能，离线清单断言用空 home 目录。
+- **验收**：549 passed / ruff+mypy 0 错 / `live_skill_test.py` 两腿 PASS / `live_e2e.py` 双场景 PASS / 零碰清单未动。

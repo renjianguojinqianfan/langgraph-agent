@@ -17,6 +17,7 @@ the same two-layer shape: ``{layer}/.agents/skills/*/SKILL.md``.
 from __future__ import annotations
 
 import platform
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,9 @@ ENV_SECTION = "# Environment"
 
 #: Skills-budget fallback for settings fakes that predate the field.
 _DEFAULT_SKILLS_BUDGET = 4000
+
+#: Layout of a skills layer relative to its root: ``{root}/.agents/skills``.
+SKILLS_LAYER_SUBPATH = Path(".agents") / "skills"
 
 
 def build_inject_block(settings: Settings, *, home_dir: Optional[Path] = None) -> str:
@@ -54,6 +58,39 @@ def build_inject_block(settings: Settings, *, home_dir: Optional[Path] = None) -
     if not parts:
         return ""
     return "\n\n" + "\n\n".join(parts)
+
+
+@dataclass(frozen=True)
+class SkillEntry:
+    """One discoverable ``SKILL.md``.
+
+    Shared by the injection catalogue (P1-A′) and the ``load_skill`` tool
+    (P1-A) — the single source of truth for the two-layer skills discovery.
+    """
+
+    layer: str  # "home" | "workspace"
+    name: str  # frontmatter ``name``, stripped; guaranteed non-empty
+    description: str  # frontmatter ``description``; missing / non-string -> ""
+    path: Path  # the SKILL.md path
+
+
+def discover_skills(home_dir: Path, sandbox_root: Path) -> List[SkillEntry]:
+    """Enumerate the two skills layers (home first, then workspace root).
+
+    Layer-internal order is by directory name; an entry is returned only when
+    its frontmatter parses to a non-empty string ``name``. A missing directory
+    or an unreadable / undecodable file counts as absent (no warnings).
+    """
+    entries: List[SkillEntry] = []
+    for layer, root in (
+        ("home", home_dir / SKILLS_LAYER_SUBPATH),
+        ("workspace", sandbox_root / SKILLS_LAYER_SUBPATH),
+    ):
+        for skill_dir in _sorted_subdirs(root):
+            entry = _skill_entry(skill_dir / "SKILL.md", layer)
+            if entry is not None:
+                entries.append(entry)
+    return entries
 
 
 # ── internals ────────────────────────────────────────────────────────────────
@@ -80,12 +117,11 @@ def _render_agents_md(home_dir: Path, sandbox_root: Path) -> str:
 
 def _render_skills(home_dir: Path, sandbox_root: Path, budget: int) -> str:
     """Two-layer skills catalogue rendered as ``- {name}: {description}`` cards."""
-    cards: List[str] = []
-    for layer in (home_dir / ".agents" / "skills", sandbox_root / ".agents" / "skills"):
-        for skill_dir in _sorted_subdirs(layer):
-            card = _skill_card(skill_dir / "SKILL.md")
-            if card is not None:
-                cards.append(card)
+    cards = [
+        f"- {entry.name}: {entry.description}"
+        for entry in discover_skills(home_dir, sandbox_root)
+        if entry.description
+    ]
     kept = _fit_budget(cards, budget)
     if not kept:
         return ""
@@ -100,12 +136,13 @@ def _sorted_subdirs(root: Path) -> List[Path]:
         return []
 
 
-def _skill_card(path: Path) -> Optional[str]:
-    """Render one ``SKILL.md`` card, or ``None`` when it must be dropped.
+def _skill_entry(path: Path, layer: str) -> Optional[SkillEntry]:
+    """Parse one ``SKILL.md`` into a :class:`SkillEntry`, or ``None`` to skip it.
 
-    Only the frontmatter whitelist (``name`` / ``description``) is used; a
-    missing key — or missing/invalid frontmatter — drops the whole card
-    (deterministic tolerance, no guessed defaults).
+    Only frontmatter with a non-empty string ``name`` makes an entry; the
+    description is optional (an entry without one stays loadable through the
+    P1-A tool but is left out of the catalogue). Missing or invalid frontmatter
+    drops the entry — deterministic tolerance, no guessed defaults.
     """
     text = _read_text(path)
     if text is None:
@@ -114,12 +151,15 @@ def _skill_card(path: Path) -> Optional[str]:
     if meta is None:
         return None
     name = meta.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
     description = meta.get("description")
-    if not isinstance(name, str) or not isinstance(description, str):
-        return None
-    if not name.strip() or not description.strip():
-        return None
-    return f"- {name.strip()}: {description.strip()}"
+    return SkillEntry(
+        layer=layer,
+        name=name.strip(),
+        description=description.strip() if isinstance(description, str) else "",
+        path=path,
+    )
 
 
 def _frontmatter(text: str) -> Optional[Dict[str, Any]]:

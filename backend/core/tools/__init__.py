@@ -31,6 +31,7 @@ from .git_tools import (
 from .http_api import HttpTool
 from .kb_tools import KbQueryTool, MemorySearchTool
 from .registry import build_tools, get_tool, list_tools, register
+from .skill_tool import LoadSkillTool
 from .subagent_tool import SpawnSubagentTool
 from .web_search import WebSearchTool
 
@@ -52,6 +53,7 @@ __all__ = [
     "SpawnSubagentTool",
     "MemorySearchTool",
     "KbQueryTool",
+    "LoadSkillTool",
     "GitToolRunner",
     "GitStatusTool",
     "GitDiffTool",

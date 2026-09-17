@@ -3,7 +3,7 @@
 自然语言下发任务 → Agent 自主规划（planner → executor → tool → reflect 循环）→ 调用工具完成多步任务，
 全程 SSE 实时可视化 + Trace 回放。基于 **LangGraph 1.2.x（StateGraph）**，FastAPI + React 前后端一体。
 
-**525 个离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 双场景 PASS（千问 `qwen3.7-flash-2026-07-15`：冒烟 + 断点续跑）· CI 五 job 全绿。
+**549 个离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 全绿（千问 `qwen3.7-flash-2026-07-15`：e2e 双场景 + skills 运行时两腿）· CI 五 job 全绿。
 
 这个仓库想证明的不是"能跑通一个 agent demo"，而是 agent 运行时里那几件难做的事被工程化地解决了：
 任务被中途停止后能从检查点续跑、危险操作在执行前被闸门拦住、工具连续失败时熔断降级而不是把循环拖死、
@@ -52,6 +52,7 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 - **文件精读编辑（P0-A）** —— `read`（行号 + 分页，不一次拉爆上下文）/ `edit`（精确 `str_replace`，不整文件重写）/ `glob`（递归名匹配）/ `grep`（内容检索）四个沙箱内独立工具，各有自己的 function schema 与韧性/确认策略；旧 `file_io` 待退役（[#17](https://github.com/renjianguojinqianfan/langgraph-agent/issues/17)）
 - **子 Agent 协作** —— 隔离子任务图（`mode="subtask"`，无风险/确认节点、防递归），线程池并行，主消息只留折叠摘要
 - **上下文注入（P1-A′）** —— planner/executor 每次 LLM 调用前，system 侧注入三段块：两层 `AGENTS.md`（`~/.agents/AGENTS.md` → 工作区根，根→子全量追加、**永不裁**）+ skills 清单（frontmatter 只取 `name`/`description`，卡片粒度 4000 字符预算，超限从末尾丢整卡）+ 环境事实（沙箱根绝对路径 / OS / 日期）。任务级缓存（任务中途改文件下个任务生效）、不计入压缩预算、`context_inject_enabled=false` 一键回到旧行为（零回归锚：system 与改造前逐字节相同）→ [`.env.example`](.env.example) 的 `context_inject_*` 段
+- **skills 运行时（P1-A）** —— `load_skill` 工具按名取回两层 skills 目录（`~/.agents/skills` → 工作区根）里 SKILL.md 的**整档正文**，作为 tool result 进对话、不进 system（渐进披露的另一半，清单由 P1-A′ 注入）；同名跨层两份都返回（home 先）、名字只做等值比较（`../`、绝对路径天然不命中）；未命中把可用名单放进结果 `data`（`tool_node` 只序列化 data，模型才能自我纠偏）；结果不带顶层 `path`，skill 文件不会进产物/KB；零新增配置 → [spec](docs/specs/p1-a-skills-runtime.md)
 - **工具结果逐出（T1.4）+ 上下文压缩 + 知识库** —— 压缩**之前**先搬大件：保护带（最近 10 条）外、单条超 4000 字符的 tool 结果原地换成占位（工具名 + 原文字符数 + 留痕指针 + 头 800/尾 400 预览），纯机械零 LLM 调用、全文留 trace、搬完不超预算则压缩与 LLM 摘要都不触发；超阈值（默认 32000 est. tokens）仍自动截断 / 可选 LLM 摘要；标准库关键词索引的 KB（离线可用），任务中经 `kb_query` / `memory_search` 检索 → [`context.py`](backend/core/agent/context.py)
 - **回滚（P1-B）** —— 每次沙箱内文件写**之前**先把旧版本拍进沙箱外的账本（`data/snapshots/<task_id>/`：`ledger.jsonl` + `NNNN.bak`，文件级 before-image，写多少记多少）；`POST /api/tasks/{id}/rollback` 逆序重放账本，整任务回到起点——只动文件、**不动断点**（与 resume 完全解耦），恢复前先把当前版本拍进 `retention/`（撤销入口 v2）、重复调用返回「已是原样」；活跃任务 409、快照失败 fail-open 不阻塞工具、30 天启动清扫。前端任务头「回滚」按钮 + 行内确认。→ [spec](docs/specs/p1-b-rollback.md)
 - **可观测** —— SSE 23 种事件 + JSONL Trace 落盘（顺序与 SSE 一致），前端时间线回放 + 导出原始字节
@@ -134,7 +135,7 @@ checkpointer 时传（1.2.11 在无 checkpointer 时传 `sync` 会 `AttributeErr
 pip install -r requirements-dev.txt      # ruff + mypy（钉死版本，不进运行期镜像）
 python -m ruff check backend scripts     # 基线全净，零 per-file-ignores
 python -m mypy                           # files=backend，生产与测试同一把闸
-python -m pytest backend/tests/ -q       # 525 用例，唯一权威回归
+python -m pytest backend/tests/ -q       # 549 用例，唯一权威回归
 python scripts/live_e2e.py --check       # 无 Key / 无网络的接线冒烟
 python -m backend.headless --check       # P0-C headless 入口离线冒烟
 ```
