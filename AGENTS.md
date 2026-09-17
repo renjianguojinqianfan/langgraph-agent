@@ -41,7 +41,7 @@
 | `frontend/` | React 三栏 UI：`components/` 14 组件（TaskPanel/TraceTab/RiskBanner/SubtaskList/KbPanel …）+ `pages/` 2 页面（LoginPage/TaskView）|
 | `docs/` | prd / architecture / 增量 PRD+架构（p0/p1/p2/p3-resume）/ migration-langgraph-1x（0.2→1.2.x 迁移评估与实测）/ capability-first-principles / agent-comparison-report / roadmap-pawbench / pawbench-harness-interface |
 | `docs/adr/` | **决策记录**（`NNNN-英文-kebab-case.md`）。现有 0001 = 简历项目定位与 langgraph 原地迁移决策（grilling D1–D9，原 `.qoder/specs/…_grilling总结.md`）|
-| `docs/specs/` | **spec / 实施计划档案**。现有 langgraph-1x-migration / p0-b-completion-verification / second-tier-ci-guard-and-smoke（前三份自 `.qoder/specs/` 迁入）+ p1-a-prime-context-injection + t1-4-tool-result-eviction（上一轮）+ p1-b-rollback（本轮）|
+| `docs/specs/` | **spec / 实施计划档案**。现有 langgraph-1x-migration / p0-b-completion-verification / second-tier-ci-guard-and-smoke（前三份自 `.qoder/specs/` 迁入）+ p1-a-prime-context-injection + t1-4-tool-result-eviction（上一轮）+ p1-b-rollback + p1-a-skills-runtime（本轮）|
 | `docs/agents/` | mattpocock 技能组配置：issue-tracker / triage-labels / domain（由 `setup-matt-pocock-skills` 生成，本文件末尾 `## Agent skills` 段是其入口）|
 | `.agents/skills/` | 千问官方 skills（model-selector/ops-auth/usage）。集成路径：references 由 `scripts/live_skill_test.py` 复制到 `data/kb/qianwen-skills/` 并重建索引 → 真实模型任务中经 `kb_query`/`memory_search` 工具检索；该脚本同时验证"KB 命中 + 答案给出具体模型"全链路 |
 | `scripts/` | live_e2e.py（真实 LLM 验证，`--check` 为无 Key 离线冒烟）/ live_skill_test.py（skills→KB→真实模型）|
