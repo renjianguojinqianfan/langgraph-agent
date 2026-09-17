@@ -18,16 +18,16 @@
 - **确认闸门**：危险工具（code_exec / git_commit / http 写类 / MCP 写类）执行前经 `human_confirm` 闸门，批准/拒绝写回后**重算**是否仍有待确认项。**评测态例外**：`--auto-approve` 仅 `backend/headless.py` 实例级设置（`TaskManager(auto_approve=True)` → `confirm_enabled=False`），FastAPI 服务端路径永不传——不是全局关闸开关。
 - **质量门禁不得放宽**：`ruff check backend scripts` 与 `mypy` 基线全净；类型错误用真实签名修复（`# type: ignore` / `# noqa` 是债，`warn_unused_ignores = true` 还会把陈旧 ignore 变成新错）；mypy 保持零 override；工具链版本钉在 `requirements-dev.txt`；规则集与每条「刻意不启用」的理由在 `pyproject.toml`——**改配置前先读那段**。
 - **测试隔离**：离线测试必须不受本地 `.env` 影响——`backend/tests/conftest.py` 顶部用环境变量覆盖（`setdefault` 语义）；**改 conftest 勿破坏这段隔离**，否则本地 live 配置会污染全部离线用例。
-- **依赖面**：`langgraph>=1.2,<1.3` + `langgraph-checkpoint==4.2.0` + `langgraph-checkpoint-sqlite==3.1.1` 三包同钉（合起来是 resume 契约的存储面，理由在 `requirements.txt` 注释）；抬版走独立 chore + 人工评估，Dependabot 自动抬版勿直接合；`langchain*` 不得重新钉版（0 import 且与 1.x 冲突）；uvicorn/starlette 区间不动（mcp 用 `--no-deps` 装是既定代价）。
+- **依赖面**：`langgraph>=1.2,<1.3` + `langgraph-checkpoint==4.2.0` + `langgraph-checkpoint-sqlite==3.1.1` 三包同钉（合起来是 resume 契约的存储面，理由在 `requirements.txt` 注释）；新依赖需说明理由，抬版走独立 chore + 人工评估，Dependabot 自动抬版勿直接合；`langchain*` 不得重新钉版（0 import 且与 1.x 冲突）；uvicorn/starlette 区间不动（mcp 用 `--no-deps` 装是既定代价）。
 - **真实模型验证**：离线测试只证明确定性；发布前 / 换供应商必须跑真实 LLM（`scripts/live_e2e.py` 双场景 + `scripts/live_skill_test.py` 两腿）。CI 的 live job 有 **key gate**：secrets 为空时整步跳过、job 仍绿——**绿 ≠ 真实模型跑过**，看结论前先看 gate 输出。完整步骤、额度核验与 gate 语义见 `scripts/LIVE_E2E.md`（唯一权威）。
-- **提交边界**：新副作用（写库 / 建文件 / 起服务）可逆或事先说明；提交不得带上 `.env` / `data/` / `frontend/dist` 的密钥或生成物。
+- **提交边界**：新副作用（写库 / 建文件 / 起服务）可逆或事先说明；提交不得带上 `.env` / `data/` / `frontend/dist` 的密钥或生成物；`git push --force` 类危险命令默认拒绝（黑名单）。
 - **发布与合并惯例**（分级 PR/直推、dependabot、合并方式）：见 `docs/agents/issue-tracker.md`「Release conventions」。
 
 ## 任务路由
 
 | 任务触发 | 先读（权威源） | 必须满足 |
 |---|---|---|
-| 后端改动 | 本文件「跨任务安全边界」+ `pyproject.toml` | 门禁命令原样跑（见「验证入口」）；零 ignore / override |
+| 后端改动 | 本文件「跨任务安全边界」+ `pyproject.toml` | 门禁命令原样跑（见「验证入口与完成证据」）；零 ignore / override |
 | 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npx tsc --noEmit` 0 错 |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威停止信号（`_stop_flags` / `is_stop_flagged()`）；三类 409 拒绝不可放松 |
 | 冻结区 / 确认逻辑 | 本文件「熔断层零改动」「`_needs_confirm` 重算块」条 + `ci.yml` 的 guard job | guard 只覆盖 resilience / registry；`_needs_confirm` 无机械守卫、改动前问人 |
