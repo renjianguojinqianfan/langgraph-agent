@@ -16,6 +16,8 @@ Resolution rules (spec §三):
 * Failures carry their diagnostics inside ``data``: ``tool_node`` serialises
   only ``ToolResult.data`` into the conversation, so an ``error`` field alone
   would stay invisible to the model (``backend/core/agent/nodes.py``).
+* Unexpected exceptions are left to the kernel's own safety net (``tool_node``
+  wraps every dispatch); every expected failure path is handled here.
 """
 
 from __future__ import annotations
@@ -24,12 +26,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...config import Settings, get_settings
-from ...utils.logging import get_logger
-from ..agent.inject import SkillEntry, discover_skills
+from ..agent.inject import SKILLS_LAYER_SUBPATH, SkillEntry, discover_skills
 from .base import BaseTool, ToolResult
 from .registry import register
-
-logger = get_logger("tool.skill")
 
 #: Cap on the "Available skills" list echoed back on a miss (spec §3.4).
 _AVAILABLE_MAX = 20
@@ -80,16 +79,12 @@ class LoadSkillTool(BaseTool):
 
         home = self._resolve_home()
         sandbox = self._resolve_sandbox()
-        try:
-            entries = discover_skills(home, sandbox)
-            documents: List[Dict[str, str]] = []
-            for entry in [e for e in entries if e.name == name]:
-                content = _read_skill_text(entry.path)
-                if content is not None:
-                    documents.append({"layer": entry.layer, "content": content})
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("load_skill failed")
-            return ToolResult(success=False, error=str(exc))
+        entries = discover_skills(home, sandbox)
+        documents: List[Dict[str, str]] = []
+        for entry in [e for e in entries if e.name == name]:
+            content = _read_skill_text(entry.path)
+            if content is not None:
+                documents.append({"layer": entry.layer, "content": content})
 
         if not documents:
             message = _miss_message(name, entries, home, sandbox)
@@ -113,7 +108,7 @@ def _miss_message(name: str, entries: List[SkillEntry], home: Path, sandbox: Pat
     if not entries:
         return (
             f"Unknown skill: '{name}'. No skills found under "
-            f"{home / '.agents' / 'skills'} or {sandbox / '.agents' / 'skills'}."
+            f"{home / SKILLS_LAYER_SUBPATH} or {sandbox / SKILLS_LAYER_SUBPATH}."
         )
     names = [entry.name for entry in entries]
     listed = ", ".join(names[:_AVAILABLE_MAX])

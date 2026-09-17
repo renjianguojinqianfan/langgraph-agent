@@ -197,15 +197,25 @@ def test_load_numeric_name_not_found(tmp_path: Path) -> None:
     assert "alpha-skill" in res.data["error"]
 
 
-def test_load_rejects_traversal(tmp_path: Path) -> None:
+def test_load_rejects_traversal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(tmp_path)
     _skill(_skills_root(_sandbox(settings)), "alpha", name="alpha-skill")
-    _write(tmp_path / "secret.txt", "SECRET-CONTENT")
+    secret = _write(tmp_path / "secret.txt", "SECRET-CONTENT")
+    reads: List[str] = []
+    real_read_text = Path.read_text
+
+    def _recording_read(self: Path, *args: Any, **kwargs: Any) -> str:
+        reads.append(str(self.resolve()))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _recording_read)
 
     for bad in ("../secret", "..\\secret", "../../../etc/passwd"):
         res = _load(settings, _home(tmp_path), bad)
         assert res.success is False
         assert "SECRET-CONTENT" not in str(res.data)
+
+    assert str(secret.resolve()) not in reads  # the target file was never opened
 
 
 def test_load_rejects_absolute_path(tmp_path: Path) -> None:
@@ -273,8 +283,11 @@ def test_empty_catalogue_message(tmp_path: Path) -> None:
     res = _load(settings, _home(tmp_path), "anything")
 
     assert res.success is False
-    assert "No skills found" in res.data["error"]
-    assert "anything" in res.data["error"]
+    err = res.data["error"]
+    assert "No skills found" in err
+    assert "anything" in err
+    assert ".agents" in err  # the message names the two concrete skills layers
+    assert str(_home(tmp_path)) in err and str(_sandbox(settings)) in err
 
 
 def test_failure_contract_data_carries_error(tmp_path: Path) -> None:

@@ -34,6 +34,9 @@ ENV_SECTION = "# Environment"
 #: Skills-budget fallback for settings fakes that predate the field.
 _DEFAULT_SKILLS_BUDGET = 4000
 
+#: Layout of a skills layer relative to its root: ``{root}/.agents/skills``.
+SKILLS_LAYER_SUBPATH = Path(".agents") / "skills"
+
 
 def build_inject_block(settings: Settings, *, home_dir: Optional[Path] = None) -> str:
     """Assemble the task-level injection block.
@@ -80,8 +83,8 @@ def discover_skills(home_dir: Path, sandbox_root: Path) -> List[SkillEntry]:
     """
     entries: List[SkillEntry] = []
     for layer, root in (
-        ("home", home_dir / ".agents" / "skills"),
-        ("workspace", sandbox_root / ".agents" / "skills"),
+        ("home", home_dir / SKILLS_LAYER_SUBPATH),
+        ("workspace", sandbox_root / SKILLS_LAYER_SUBPATH),
     ):
         for skill_dir in _sorted_subdirs(root):
             entry = _skill_entry(skill_dir / "SKILL.md", layer)
