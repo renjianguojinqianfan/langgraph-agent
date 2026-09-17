@@ -44,7 +44,7 @@
 
 ## 2. 旧 checkpoint 快照兼容性：A/B 实测（本次迁移最关键的假设验证）
 
-**迁移前的书面理由**（旧 requirements.txt 注释 / AGENTS.md P3 约束）是：
+**迁移前的书面理由**（旧 requirements.txt 注释 / 迁移前的 AGENTS.md P3 约束段）是：
 「3.x 需要 langgraph-checkpoint≥4，serde 兼容对 resume 有影响，因此钉死 2.0.11」。
 这条理由在迁移前**从未被实测过**，是继承来的假设。
 
@@ -231,7 +231,8 @@ spec 的选择规则：优先 durability；仅当 spike 证明 typed streaming v
 注释写的正是这个竞态（「第一个 superstep 的 put 可能在 stop() 翻转状态之后几百毫秒才
 落地」）。`durability="sync"` 让写入在下一个 superstep 开始前完成，从机制上关掉这个窗口。
 
-宽限双探**保留**不删：AGENTS.md 规定 resume 拒绝语义不可放松，`sync` 只是让它从
+宽限双探**保留**不删：resume 拒绝语义不可放松（`AGENTS.md`「任务路由」；三类 409 见
+`docs/incremental-arch-p3-resume.md` §4），`sync` 只是让它从
 "必需的补丁"降级为"纵深防御"。这是有意的冗余，不是忘删。
 
 `subagent.py` 的子任务图**不传** durability：子任务图不挂 checkpointer。
@@ -254,7 +255,7 @@ AttributeError 在第一个 superstep 就炸。
 
 ## 6. 闸门与回滚
 
-闸门（AGENTS.md 完成定义 + spec Testing Decisions）：
+闸门（`AGENTS.md`「验证入口与完成证据」+ spec Testing Decisions）：
 
 1. `.venv311 python -m pytest backend/tests/ -q` 全绿（用例数变化须在 commit 说明）；
 2. `scripts/live_e2e.py --check` 离线冒烟；

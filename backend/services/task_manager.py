@@ -170,8 +170,8 @@ class TaskManager:
         # P0-C headless: instance-scoped confirmation-gate bypass. Only the
         # headless entry (backend/headless.py) passes auto_approve=True; the
         # FastAPI service path (main.py lifespan) never does, so there is no
-        # global "disable the gate" switch (roadmap v2 / AGENTS.md §6: 评测态
-        # ≠ 生产态). When True, AgentRuntime is built with confirm_enabled=False
+        # global "disable the gate" switch (roadmap v2 / AGENTS.md「跨任务安全边界」:
+        # 评测态 ≠ 生产态). When True, AgentRuntime is built with confirm_enabled=False
         # — a branch nodes.py already honours for subtask graphs, so the
         # protected _needs_confirm logic is untouched.
         self._auto_approve = auto_approve
@@ -230,7 +230,7 @@ class TaskManager:
 
         Refusing leaves ``_checkpointer`` as ``None``: the service still starts
         and new tasks still run, while resume falls through to the existing
-        "no checkpoint" 409 (AGENTS.md: resume 拒绝语义不可放松). No automatic
+        "no checkpoint" 409 (AGENTS.md「任务路由」: 三类 409 拒绝不可放松). No automatic
         migration and no partial mount — a refused file is never written to, so
         moving it away is the whole remediation.
         """

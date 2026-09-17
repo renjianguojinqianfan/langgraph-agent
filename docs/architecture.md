@@ -11,14 +11,14 @@
 > 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 16 个端点 / 23 种事件 / 14 个组件）。
 >
 > **现役事实请查这里**：
-> - 目录结构与能力清单 → [`AGENTS.md`](../AGENTS.md) §1–§3
+> - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
 > - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「编排拓扑」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
 > - 各轮增量设计 → `docs/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `-p3-resume.md`
 > - 接口契约 → 运行时 Swagger `http://localhost:8000/docs`（权威）+ [`backend/api/routes.py`](../backend/api/routes.py)
 > - 能力边界的第一性原理推导 → [`capability-first-principles.md`](capability-first-principles.md)
 >
 > **本文的保留价值**（这些不随实现漂移）：§1 初始技术难点与选型理由、§5 跨文件共享约定
-> （其中多数已升格为 `AGENTS.md` §2 硬规则）、§7 T01–T09 的原始实施顺序、§8 Q1–Q8 的初始决策。
+> （其中多数已升格为 `AGENTS.md`「跨任务安全边界」硬规则）、§7 T01–T09 的原始实施顺序、§8 Q1–Q8 的初始决策。
 
 ---
 
@@ -63,7 +63,7 @@
 
 > ⚠️ **v0.1 计划态**，保留作原始设计意图记录。现役目录结构（含 `core/agent/` 的
 > context/risk/subagent/prompts、`core/kb/`、`core/mcp/`、`backend/headless.py`、
-> 40 个测试文件、14 个前端组件、`docs/adr|specs|agents/`）见 [`AGENTS.md`](../AGENTS.md) §3。
+> 40 个测试文件、14 个前端组件、`docs/adr|specs|agents/`）见仓库实际结构（`backend/` / `frontend/` / `docs/`）。
 
 项目根：`E:\code\demo\langgraph-agent\`
 
@@ -540,7 +540,7 @@ T01(基建) → T02(LLM) ┐
 > ⚠️ **Q1–Q8 大体仍现役**，两处已被超越：**Q3 持久化**——任务记录仍走 JSON，但
 > P3 已把 sqlite 真正用起来（`langgraph-checkpoint-sqlite` 存对话快照，含格式守卫）；
 > **Q7 人工介入**——已实现并扩展为 EHRB 五类风险扫描 + 图内 `human_confirm` 节点。
-> §8.2 的 4 项待定均已落定（测试数/能力概述以 `AGENTS.md` §1 为准）。
+> §8.2 的 4 项待定均已落定（能力概述以 [`README.md`](../README.md)「能力」为准）。
 
 ### 8.1 已确认技术决策（面向本地 demo，可后续调整）
 

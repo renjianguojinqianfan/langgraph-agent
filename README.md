@@ -177,11 +177,12 @@ CI 五 job 在 [`ci.yml`](.github/workflows/ci.yml)：受保护文件守卫 · �
   物理约束推导必需能力，含 2026-09-15 复核）·
   [`docs/agent-comparison-report.md`](docs/agent-comparison-report.md)（Codex / Qoder / Hermes / dsh 横向对标）·
   [`docs/roadmap-pawbench.md`](docs/roadmap-pawbench.md)（落地路线 v2）
-- **决策与规范**：[`docs/adr/`](docs/adr/)（ADR；0001 = 原地迁移而非重写 + 简历定位，D1–D9）·
-  [`docs/specs/`](docs/specs/)（spec / 实施计划档案）· [`docs/agents/`](docs/agents/)（技能组配置：
-  issue tracker / triage 标签 / domain 约定）——文档归属约定见 [`AGENTS.md`](AGENTS.md) §3
+- **决策与规范**：[`docs/adr/`](docs/adr/)（ADR；0001 = 原地迁移而非重写 + 简历定位，D1–D9；
+  0002 = 护城河纪律）· [`docs/specs/`](docs/specs/)（spec / 实施计划档案）·
+  [`docs/agents/`](docs/agents/)（技能组配置：issue tracker / triage 标签 / domain 约定）
+  ——文档归属约定见 [`AGENTS.md`](AGENTS.md)「文档归属」
 - **配置**：[`.env.example`](.env.example)（17 组前缀，逐项带注释）
-- **工程约定**：[`AGENTS.md`](AGENTS.md)（硬规则 / 目录结构 / 常用命令 / 完成定义）·
+- **工程约定**：[`AGENTS.md`](AGENTS.md)（安全边界 / 任务路由 / 验证入口）·
   [`OVERVIEW.md`](OVERVIEW.md)（历次交付日志，含 Issue #7 一章）
 
 ## License
