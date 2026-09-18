@@ -110,6 +110,7 @@
   宿主要 `bash` → Windows 走 WSL/Git Bash）。
 - **验收**：这批题在 **≥2 个选手**上跑通出分（**0 分也算过**——验的是链路完整：`grade()` 硬分 +
   qwen3.8-max-0902 软分 + 产物/trace 落盘可回放），评测台的 `--check` 离线冒烟进它自己的 CI。
+- **实现规范（2026-09-19 定稿）**：`eval-harness`（私有仓库）`docs/specs/eval-harness-v1.md`——评测台实现的唯一权威；本仓库零代码改动、仅被驱动。
 
 ### M2 — 扩规模 + 失败归因
 
@@ -181,7 +182,7 @@ feat/skills-runtime       ← P1-A skills 运行时（已合入，PR #42；load_
   裁判 = **`qwen3.8-max-0902`**（连字符，非括号写法）。
 - **qoder headless 能否换成 deepseek 自带 key 待核实**：换不了则踢出「同模型对比」、单列标注不可比。
 - **Windows 跑 `grade()` 需 `bash`**：走 WSL/Git Bash。
-- **公开发布题目的上游许可**：PawBench NOTICE 声明 129/150 题各留原许可；内部自跑无妨，公开需逐一核实。
+- **公开发布题目（2026-09-19 已核实）**：六路来源许可全部一手核实 = 4 路 MIT（Claw-Eval / QwenClawBench / PinchBench / WildClawBench）+ 2 路 Apache-2.0（自建 / skillsbench），清单见 [agent-benchmark-survey.md](agent-benchmark-survey.md) §3.1–3.6；**公开时走「搬题 + `THIRD_PARTY_NOTICES`」三件套**（逐来源版权行 + 传播 PawBench NOTICE + 逐题出处表），内部自跑不受约束。
 - **注意力分配**（纪律 3 + v2）：管道活（驱动脚本/镜像/依赖）交 AI 写、轻 review；亲手注意力押失败
   切片归因 + trace 映射。
 - 「AI 写 + 深 review」执行力风险：对策见纪律 3。
