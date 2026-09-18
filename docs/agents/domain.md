@@ -18,7 +18,7 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
 > dirs (`.qoder/`, `.trae/`, `.mimosa/`), which are untracked by design. Full rule table:
-> `AGENTS.md`「文档归属」. Memory-type files (`.workbuddy/memory/`,
+> 「文档归属」at the bottom of this file. Memory-type files (`.workbuddy/memory/`,
 > `learning-records/`, `MISSION.md` / `NOTES.md`) stay put — they are not migrated.
 
 ## File structure
@@ -83,3 +83,19 @@ D1–D9) and `0002` (moat discipline) are the live ADRs today. Beyond them, the 
 frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (protected files,
 `_needs_confirm` recompute block, conftest isolation, dependency matrix, quality-gate
 baseline). Treat a contradiction with those the same way — surface it, don't silently override.
+
+## 文档归属（hard rule, 2026-09-15 起）
+
+决策 / 计划 / spec 类文档**一律落 `docs/`**；禁写各家 agent 专用目录（`.qoder/` / `.trae/` / `.mimosa/` 等，整体不入库）——换机器或换 agent 就丢，无法当交接的权威源。
+
+| 类型 | 去处 | 命名 |
+|---|---|---|
+| 决策记录（grilling 定居、定位 / 选型结论）| `docs/adr/` | `NNNN-英文-kebab-case.md`（4 位递增编号）|
+| spec / 实施方案 / 任务计划 | `docs/specs/` | `英文-kebab-case.md` |
+| 调研 / 对标 / 路线图 / 迁移评估 | `docs/` 根 | 同上（沿用既有惯例）|
+| 技能组配置 | `docs/agents/` | 由 setup 技能生成 |
+| 记忆类（不迁） | 留原地：`.workbuddy/memory/`、teach 的 `MISSION.md`/`NOTES.md`/`RESOURCES.md`/`learning-records/`/`lessons/` | 各家 agent 自己消费 |
+
+文件名用英文 kebab-case，内容中文照旧；迁移用 `git mv` 保历史（`git log --follow` 可追），并顺手改掉旧路径引用。
+
+（本表此前在 `AGENTS.md`；下沉到这里后，`AGENTS.md`「任务路由」的开 issue / 文档归属行指向本文。）
