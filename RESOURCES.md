@@ -20,6 +20,10 @@
   - [ReAct 项目页（含代码与 demo）](https://react-lm.github.io/)
 - [Building Effective Agents — Anthropic Engineering (2024-12)](https://www.anthropic.com/engineering/building-effective-agents)
   workflows vs agents 之分、五种组合模式、agent 循环 + 停止条件、「能简单就别复杂」。用于：所有设计权衡类面试题的权威背书。
+- [Effective context engineering for AI agents — Anthropic Engineering (2025-09-29)](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+  context rot（窗口内 token 增多则取回能力下降，成因为注意力 n² 两两关系，属性能梯度而非硬悬崖）、
+  注意力预算、compaction、结构化笔记、子 agent 架构。用于：课程 02「上下文预算与压缩」的核心引用，
+  兼作「为什么长上下文会退化」与「压缩后附最近访问的 5 个文件」的出处。
 
 ### MCP（模型上下文协议）
 - [MCP 官方文档 — Introduction](https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro)
@@ -35,6 +39,16 @@
 - `backend/services/task_manager.py` — resume / 孤儿对账 / 权威停止信号
 - `docs/architecture.md` 与 `docs/incremental-arch-p0..p3.md` — 项目自带架构文档（含每轮迭代的「为什么」）
 - `OVERVIEW.md` — 五轮迭代交付全记录（面试叙事的素材矿）
+
+### 本机笔记库 · agent 模式库（跨工具的工程模式卡）
+
+讲义知识源之一。**讲义引用卡片、不复制卡片内容**：正文只取教学所需的最小对比，完整方案空间、
+取舍与「何时不用」通过链接与本地路径指向卡片。
+
+- `E:\笔记\02_沉淀库\C专业知识\C5 Agent研究\agent模式库\README.md` — 索引、七段卡片规范、三层分工、样本清单（含 pin）
+- `E:\笔记\02_沉淀库\C专业知识\C5 Agent研究\agent模式库\20260921_C5_上下文预算与压缩.md` — 模式卡 02，课程 02 的知识源
+- `E:\笔记\02_沉淀库\C专业知识\C5 Agent研究\agent模式库\20260921_C5_工具暴露与两阶段路由.md` — 模式卡 01，可对接后续工具层课程
+- `E:\笔记\02_沉淀库\C专业知识\C5 Agent研究\20260921_C5_Agent与AI产品岗面试真题分布_网络检索.md` — 真题密度排序，决定课程深度的优先级
 
 ## Wisdom (Communities)
 

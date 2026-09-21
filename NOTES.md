@@ -17,7 +17,7 @@
 **主线 B · Agent 工程通用模式**
 5. Agent 主循环与 ReAct：planner→executor→tool→reflect 对照 ReAct 论文与 Anthropic agents 文章
 6. 工具层工程：BaseTool 规范、注册表、熔断+指数退避（resilience.py）
-7. 上下文工程：token 预算与压缩（context.py）
+7. ✅ 上下文工程：token 预算与压缩（context.py）→ 讲义 [`lessons/0002-context-budget-and-compaction.html`](lessons/0002-context-budget-and-compaction.html) + 速查卡 [`reference/context-budget-cheatsheet.html`](reference/context-budget-cheatsheet.html)
 8. 工具生态外扩：MCP 客户端与 Git 工具（task_manager 显式加载、不经 @register 的原因）
 9. 多 Agent 协作与 RAG：子任务隔离、消息折叠、最小 KB
 
@@ -26,7 +26,25 @@
 11. 高频追问题库：为什么 LangGraph、444 测试与 Mock LLM 离线隔离、并发模型、recursion_limit 修复
 12. 手写代码实战：徒手写纯 Python Agent 循环 + mini StateGraph
 
-节奏：每周 2-3 课，穿插「前课混测」（interleaving）。每课结束留下检索练习作业。
+## 节奏与跳课记录
+
+- 节奏：每周 2-3 课，穿插「前课混测」（interleaving）。每课结束留下检索练习作业。
+- **2026-09-21 跳课说明**：课程 02 的讲义按主线 B 第 7 课（上下文工程）交付，而非主线 A 第 2 课
+  （状态更新机制）。原因是笔记库的模式卡 02 刚定稿，知识源齐全、可直接接进课程；
+  主线 A 第 2 课仍待做，它同时是课程 04「断点续跑大坑」的前置，不应被长期推后。
+  本次讲义编号为 `0002`（按讲义产出顺序递增，与课程编号解耦）。
+
+## 知识层对接（2026-09-21 起）
+
+讲义的知识源之一是本机笔记库的 agent 模式库。约定：**讲义引用卡片，不复制卡片内容**——
+正文只取教学所需的最小对比，完整方案空间、取舍与「何时不用」通过链接与本地路径指向卡片。
+
+| 讲义 | 引用的卡片 |
+|---|---|
+| 课程 02 | `E:\笔记\02_沉淀库\C专业知识\C5 Agent研究\agent模式库\20260921_C5_上下文预算与压缩.md`（模式卡 02） |
+
+后续若做课程 06（工具层工程）与课程 08（工具生态），可分别对接模式卡 01
+（`20260921_C5_工具暴露与两阶段路由.md`）与样本档。
 
 ## 教学偏好观察
 - （待积累：讲多细、喜欢什么类型的练习、对英文材料的接受度）

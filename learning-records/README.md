@@ -38,4 +38,12 @@
   [`backend/core/agent/graph.py`](../backend/core/agent/graph.py) 的真代码讲）
   → 讲义 [`lessons/0001-langgraph-mental-model.html`](../lessons/0001-langgraph-mental-model.html)，
   速查卡 [`reference/stategraph-cheatsheet.html`](../reference/stategraph-cheatsheet.html)
-- ⬜ 课程 02–12 → 规划见 [`NOTES.md`](../NOTES.md)
+- ✅ 课程 02 · 上下文预算与压缩（对应主线 B 第 7 课，用
+  [`backend/core/agent/context.py`](../backend/core/agent/context.py) 的两档实现讲；
+  知识源之一是本机笔记库的模式卡 02）
+  → 讲义 [`lessons/0002-context-budget-and-compaction.html`](../lessons/0002-context-budget-and-compaction.html)，
+  速查卡 [`reference/context-budget-cheatsheet.html`](../reference/context-budget-cheatsheet.html)
+- ⬜ 课程 03 起 → 规划见 [`NOTES.md`](../NOTES.md)
+
+> 讲义编号按产出顺序递增，与课程编号解耦。课程 02 的讲义对应课程主线里的第 7 课，
+> 跳课原因记在 [`NOTES.md`](../NOTES.md) 的「节奏与跳课记录」。

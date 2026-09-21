@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课程 02 · 上下文预算与压缩 — langgraph-agent 学习课程</title>
+<link rel="stylesheet" href="../assets/base.css">
+</head>
+<body>
+<main>
+
+  <header>
+    <div class="lesson-meta">
+      <span class="kicker">课程 02</span>
+      <span>主线 B · Agent 工程通用模式</span>
+      <span>预计 35 分钟</span>
+      <span>前置要求：课程 01</span>
+    </div>
+    <h1>上下文预算与压缩：长会话为什么会中途崩掉</h1>
+  </header>
+
+  <div class="mission-note">
+    <b>为什么学这个：</b>在 2026 年的 Agent 岗面试里，上下文管理是真题密度最高的一簇，字节、蔚来、
+    阿里云、小红书都问过同一类问题：压缩放在链路哪一步、怎么保证不丢关键内容、快到窗口阈值时
+    怎么不打断用户。你的项目里已经有一份可讲的实现（<code>backend/core/agent/context.py</code>），
+    这节课的目标是<strong>把这份实现讲成一套有取舍的工程判断</strong>，而不是复述参数。
+  </div>
+
+  <!-- ============ §1 ============ -->
+  <h2>一、问题：窗口是硬的，会话是软的</h2>
+
+  <p>大模型 API 是无状态的。每一轮请求，你都要把<strong>完整历史重新发一遍</strong>——上一轮发过的内容，
+  这一轮还得再发。于是输入长度随轮次单调增长，而窗口是死的上限。三个增长源按体积排序，通常是：
+  <strong>工具结果</strong>（一次网页抓取、一份文件全文）、<strong>助手侧推理过程</strong>、<strong>用户往返文本</strong>。</p>
+
+  <p>更麻烦的是，真正卡住你的往往不是标称窗口，而是<strong>上下文腐烂</strong>：窗口里塞的 token 越多，
+  模型准确取回其中某条信息的能力越差。原因是注意力在 n 个 token 上形成 n² 的两两关系。Anthropic 的
+  上下文工程文章把它写得很克制——这是性能梯度，不是悬崖，所以工程目标落在「给出最小的高信号 token 集合」。</p>
+
+  <blockquote>
+    随着上下文窗口中 token 数量增加，模型从该上下文中准确回忆信息的能力会下降。每一个新引入的
+    token 都会消耗一部分注意力预算。
+    <span class="src">—— 摘译自 <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank">Anthropic · Effective context engineering for AI agents</a>（2025-09-29）</span>
+  </blockquote>
+
+  <p>既然总量必然增长，工程上的共同做法就是<strong>把窗口总额切成几段预留</strong>，不等撞上限才反应。
+  下面三个开源 agent 的默认值口径各不相同，但都留出了非零余量：</p>
+
+  <table style="width:100%;border-collapse:collapse;font-size:14.5px;margin:16px 0">
+    <tr style="background:#f8f7f2">
+      <th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)">样本</th>
+      <th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)">触发点</th>
+      <th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)">保留区</th>
+      <th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)">预留</th>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">opencode v2</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">输入上限减 buffer</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">15,000 tokens</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">buffer 20,000</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">DeepAgents</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">窗口的 0.85</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">窗口的 0.10</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">由两者之差隐含</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px">Codex</td>
+      <td style="padding:8px 10px">配置项前缀减预留</td>
+      <td style="padding:8px 10px">用户消息原话留</td>
+      <td style="padding:8px 10px">计价范围可选</td>
+    </tr>
+  </table>
+  <div class="file-ref">数据与取舍的完整版见笔记库模式卡 02（路径见文末「本课主资源」），本讲义只取教学所需的对比。</div>
+
+  <!-- ============ §2 ============ -->
+  <h2>二、你的项目现在怎么做：一前一后两档</h2>
+
+  <p><code>backend/core/agent/context.py</code> 里有两道工序，顺序固定，成本差别巨大：</p>
+
+  <p><strong>第一档 · 结果驱逐（T1.4）</strong>——纯机械操作，零额外模型调用。单条 <code>tool</code> 消息的
+  content 超过阈值时，只把 <code>content</code> 换成「占位标记 + 工具名 + 原文字符数 + 留痕指针 + 头尾预览」。
+  注意措辞：<strong>换内容，不删消息</strong>。</p>
+
+<pre><code><span class="cm"># backend/core/agent/context.py — 占位符的构造（节选）</span>
+placeholder = (
+    f<span class="st">"{EVICT_PLACEHOLDER_PREFIX} | 工具: {name} | 原文 {len(content)} 字符 | 留痕: {ref}]\n"</span>
+    f<span class="st">"--- 头部预览（前 {head_chars} 字符）---\n{content[:head_chars]}\n"</span>
+    f<span class="st">"--- 尾部预览（后 {tail_chars} 字符）---\n{content[-tail_chars:]}"</span>
+)</code></pre>
+  <div class="file-ref">📄 <code>backend/core/agent/context.py</code> 的 <code>evict_tool_results()</code>（只读引用，教学不改）</div>
+
+  <p>为什么不能整条删掉？代码注释里给了直接原因：OpenAI 要求 <code>tool</code> 回复与它的
+  <code>tool_call_id</code> 保持配对，删了这条消息，请求本身就是非法的。这是<strong>接口约束</strong>，不是优化选择。</p>
+
+  <p><strong>第二档 · 历史压缩</strong>——在每次调用大模型之前执行。总量越过预算时，丢掉早期消息，
+  保留最近若干条原始消息，并按配置决定丢弃的方式：</p>
+
+<pre><code><span class="cm"># backend/core/agent/context.py — 截断分支的产物（节选）</span>
+placeholder = {
+    <span class="st">"role"</span>: <span class="st">"system"</span>,
+    <span class="st">"content"</span>: f<span class="st">"{PLACEHOLDER_PREFIX}{dropped}{PLACEHOLDER_SUFFIX}"</span>,  <span class="cm"># 「[上下文已截断：前 N 步历史已省略]」</span>
+}
+result = [placeholder, *keep_msgs]            <span class="cm"># 摘要策略则把 placeholder 换成模型摘要</span></code></pre>
+  <div class="file-ref">📄 <code>_compress_truncate()</code> 与 <code>_compress_summarize()</code>；两者共用 <code>keep_recent</code> 与「至少保留 2 条」的下限</div>
+
+  <p>两档的实际参数都在 <code>backend/config.py</code>：</p>
+
+  <table style="width:100%;border-collapse:collapse;font-size:14.5px;margin:16px 0">
+    <tr style="background:#f8f7f2">
+      <th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)">档位</th>
+      <th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)">参数</th>
+      <th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)">默认值</th>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)" rowspan="4">结果驱逐</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)"><code>context_evict_threshold_chars</code></td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">4000（单条）</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)"><code>context_evict_protect_recent</code></td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">10（按位置）</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)"><code>context_evict_head_chars</code></td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">800</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)"><code>context_evict_tail_chars</code></td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">400</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)" rowspan="4">历史压缩</td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)"><code>context_token_budget</code></td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">32000（估算口径）</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)"><code>context_keep_recent</code></td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">10（条消息）</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)"><code>context_compress_strategy</code></td>
+      <td style="padding:8px 10px;border-bottom:1px solid var(--line)">truncate（零额外调用）</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 10px"><code>context_summary_max_tokens</code></td>
+      <td style="padding:8px 10px">300（仅 summarize 用）</td>
+    </tr>
+  </table>
+
+  <div class="card amber">
+    <strong>三条容易被忽略的实现细节，都是面试可讲的点：</strong>
+    <p>① <strong>不足预算时返回原对象</strong>（identity），不复制列表——两档都遵循这个约定，配合调用方可跳过无谓处理。</p>
+    <p>② <strong>驱逐是幂等的</strong>：占位符已存在就跳过。因为每次调用大模型前都会重跑这一遍。</p>
+    <p>③ <strong>保护是位置性的、不看角色</strong>：<code>protect_recent=10</code> 保护的是最后 10 条，
+    最新的尾巴永不被驱逐。这样助手的工具调用与它的结果不会被拆开。</p>
+  </div>
+
+  <!-- ============ §3 ============ -->
+  <h2>三、把两档画成一条链路</h2>
+
+  <figure>
+  <svg viewBox="0 0 940 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="上下文预算两档链路图">
+    <defs>
+      <marker id="aB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+      <marker id="aA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b45309"/></marker>
+      <marker id="aS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+    </defs>
+
+    <!-- Panel A -->
+    <g>
+      <rect x="18" y="52" width="238" height="316" rx="12" fill="#ffffff" stroke="#e5e0d6"/>
+      <text x="137" y="82" text-anchor="middle" font-size="15" font-weight="700" fill="#1a2332">消息历史（每轮重发）</text>
+      <rect x="46" y="100" width="182" height="34" rx="7" fill="#f1f5f9" stroke="#94a3b8"/>
+      <text x="137" y="122" text-anchor="middle" font-size="13" fill="#1a2332">user · 短</text>
+      <rect x="46" y="142" width="182" height="86" rx="7" fill="#fee2e2" stroke="#b91c1c"/>
+      <text x="137" y="170" text-anchor="middle" font-size="13" fill="#1a2332">tool 结果 · 12,000 字符</text>
+      <text x="137" y="192" text-anchor="middle" font-size="11.5" fill="#8a94a6">一次网页抓取 / 一份文件全文</text>
+      <text x="137" y="212" text-anchor="middle" font-size="11.5" fill="#8a94a6">体积大头在这里</text>
+      <rect x="46" y="236" width="182" height="34" rx="7" fill="#f1f5f9" stroke="#94a3b8"/>
+      <text x="137" y="258" text-anchor="middle" font-size="13" fill="#1a2332">assistant · 推理过程</text>
+      <rect x="46" y="278" width="182" height="34" rx="7" fill="#f1f5f9" stroke="#94a3b8"/>
+      <text x="137" y="300" text-anchor="middle" font-size="13" fill="#1a2332">tool 结果 · 小</text>
+      <rect x="46" y="320" width="182" height="34" rx="7" fill="#eef4ff" stroke="#2563eb" stroke-width="1.6"/>
+      <text x="137" y="342" text-anchor="middle" font-size="13" fill="#1a2332">最近 10 条 · 受保护</text>
+    </g>
+
+    <!-- arrow A -> B -->
+    <path d="M 260 210 L 300 210" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#aB)"/>
+
+    <!-- Panel B -->
+    <g>
+      <rect x="306" y="52" width="300" height="316" rx="12" fill="#fffdf5" stroke="#b45309"/>
+      <text x="456" y="82" text-anchor="middle" font-size="15" font-weight="700" fill="#1a2332">第一档 · 结果驱逐</text>
+      <text x="456" y="103" text-anchor="middle" font-size="12.5" fill="#b45309">零额外模型调用 · 确定性</text>
+
+      <text x="330" y="132" font-size="12.5" fill="#4a5568">触发：单条 tool 消息 &gt; 4000 字符</text>
+      <rect x="330" y="144" width="252" height="70" rx="8" fill="#ffffff" stroke="#e5e0d6"/>
+      <text x="342" y="166" font-size="12" fill="#1a2332">[内容已驱逐 | 工具: web_fetch |</text>
+      <text x="342" y="183" font-size="12" fill="#1a2332"> 原文 12000 字符 | 留痕: trace#call_7]</text>
+      <text x="342" y="200" font-size="12" fill="#8a94a6">--- 头部预览 800 / 尾部预览 400 ---</text>
+
+      <text x="330" y="240" font-size="12.5" fill="#4a5568">不做的两件事：</text>
+      <text x="330" y="261" font-size="12.5" fill="#1a2332">· 不删整条消息（tool_call_id 要配对）</text>
+      <text x="330" y="282" font-size="12.5" fill="#1a2332">· 不动最后 10 条（位置保护）</text>
+
+      <text x="330" y="313" font-size="12.5" fill="#b45309">缺口：给了地址，没给取回方式</text>
+      <text x="330" y="334" font-size="12" fill="#8a94a6">占位符只写 trace 指针，没写「怎么读回来」</text>
+      <text x="330" y="352" font-size="12" fill="#8a94a6">→ 模型取不回时，卸载与丢弃等价</text>
+    </g>
+
+    <!-- arrow B -> C -->
+    <path d="M 612 210 L 652 210" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#aB)"/>
+
+    <!-- Panel C -->
+    <g>
+      <rect x="658" y="52" width="264" height="316" rx="12" fill="#ffffff" stroke="#e5e0d6"/>
+      <text x="790" y="82" text-anchor="middle" font-size="15" font-weight="700" fill="#1a2332">第二档 · 历史压缩</text>
+      <text x="790" y="103" text-anchor="middle" font-size="12.5" fill="#4a5568">每次调用大模型之前</text>
+
+      <text x="682" y="132" font-size="12.5" fill="#4a5568">触发：估算总量 &gt; 32000 tokens</text>
+      <text x="682" y="154" font-size="12" fill="#8a94a6">估算口径 chars/4</text>
+
+      <rect x="682" y="168" width="216" height="34" rx="7" fill="#eef4ff" stroke="#2563eb"/>
+      <text x="790" y="190" text-anchor="middle" font-size="12.5" fill="#1a2332">[上下文已截断：前 N 步已省略]</text>
+
+      <text x="682" y="226" font-size="12.5" fill="#4a5568">或换成模型摘要（≤ 300 tokens）</text>
+
+      <rect x="682" y="240" width="216" height="34" rx="7" fill="#eef4ff" stroke="#2563eb"/>
+      <text x="790" y="262" text-anchor="middle" font-size="12.5" fill="#1a2332">最近 10 条原始消息 · 原样保留</text>
+
+      <text x="682" y="300" font-size="12.5" fill="#4a5568">下限：至少留 2 条</text>
+      <text x="682" y="322" font-size="12" fill="#8a94a6">「压缩后摘要块放在保留消息之前」</text>
+      <text x="682" y="340" font-size="12" fill="#8a94a6">→ 位置本身是改进线索，见速查卡</text>
+    </g>
+
+    <!-- bottom note -->
+    <text x="470" y="398" text-anchor="middle" font-size="12.5" fill="#8a94a6">顺序固定：卸载发生在工具返回那一刻，压缩发生在下一轮请求构造之前。机械步骤先做，能减少送进摘要的体积。</text>
+  </svg>
+  <figcaption>两档链路（依据 <code>backend/core/agent/context.py</code> 与 <code>backend/config.py</code> 绘制）。左侧红框是体积大头，中间是零成本的机械档，右侧是要过模型的压缩档。琥珀色标注的两处是本课留下的改进线索。</figcaption>
+  </figure>
+
+  <!-- ============ §4 ============ -->
+  <h2>四、像调试一样判断：该动哪一档</h2>
+
+  <p>下面 5 道题考的是「看到现象，判断机制」。答案全部落在真实参数与真实分支上：</p>
+
+  <div id="quiz1"></div>
+
+  <!-- ============ §5 ============ -->
+  <h2>五、检索练习（本课作业）</h2>
+
+  <div class="recall">
+    <h3>凭记忆完成，别翻讲义</h3>
+
+    <p><strong>练习 1 · 报数：</strong>不看代码，说出第一档的四个参数名与默认值，以及第二档的三个。</p>
+    <details>
+      <summary>展开对照</summary>
+      第一档：<code>context_evict_threshold_chars=4000</code>、<code>context_evict_protect_recent=10</code>、
+      <code>context_evict_head_chars=800</code>、<code>context_evict_tail_chars=400</code>。
+      第二档：<code>context_token_budget=32000</code>、<code>context_keep_recent=10</code>、
+      <code>context_summary_max_tokens=300</code>（后者仅 summarize 策略使用）。
+      数不出来不要紧，要紧的是知道「两档各有独立阈值」这件事。
+    </details>
+
+    <p><strong>练习 2 · 判断档位：</strong>三个场景，各走哪一档？<br>
+    ① 一次 <code>web_fetch</code> 返回 30,000 字符，刚发生，是最近的第 2 条消息。<br>
+    ② 一次 <code>web_fetch</code> 返回 9,000 字符，位于历史中段（离最新消息 40 条）。<br>
+    ③ 会话跑了 60 步，累计估算 41,000 tokens，每条消息都不大。</p>
+    <details>
+      <summary>展开答案</summary>
+      ① <strong>都不动。</strong>它落在最后 10 条的位置保护区内——驱逐不看它多大，只看它在哪。<br>
+      ② <strong>走第一档。</strong>超 4000 字符且在保护线之外，换成头 800 / 尾 400 的预览加指针，消息保留。<br>
+      ③ <strong>走第二档。</strong>没有单条超阈值，但总量越过 32000，丢早期消息、保留最近 10 条。
+      第一档治「单条太胖」，第二档治「整体太长」，两者的触发条件互不替代。
+    </details>
+
+    <p><strong>练习 3 · 找缺口：</strong>打开 <code>backend/core/agent/context.py</code> 的 <code>evict_tool_results()</code>，
+    找出「卸载了但模型没法取回」的证据，写出你会补进去的那一句话。</p>
+    <details>
+      <summary>展开提示</summary>
+      看占位符里的 <code>ref</code> 变量：只有 trace 指针，没有「用什么工具、怎么读回来」。对照样本仓库
+      （如 DeepAgents）的做法，替代消息里会显式告诉模型用带 <code>offset</code> 与 <code>limit</code> 的读工具分段取回。
+      补的那句话大意是：<em>「用 read_file(trace_path, offset=N, limit=K) 分段读回全文」</em>——
+      没有这句话，卸载与丢弃对模型而言没有区别。
+    </details>
+  </div>
+
+  <!-- ============ §6 ============ -->
+  <h2>六、面试弹药：30 秒话术（v1）</h2>
+
+  <div class="card">
+    <p>「上下文这块我拆成两件事：<strong>还没进来的</strong>和<strong>已经进来的</strong>。大结果在工具返回那一刻就做卸载，
+    上下文里只留路径加首尾预览，模型要用再按 offset 和 limit 分段读回来，这样它不占常驻空间而且可恢复；
+    已经积累的历史才谈压缩，压缩分两档，先做机械缩减——截旧的工具调用参数、丢中间步骤，零额外调用而且确定性，
+    不够再上模型摘要。摘要必须配硬规则，路径、命令、报错原文、未解决的用户请求要原话保留，
+    用户消息我一般不摘要、原样留着，因为它是意图的唯一来源。触发点不贴窗口上限，要留 buffer。
+    另外压缩要建模成可观测的节点，有事件、能中止，不要悄悄截断。」</p>
+  </div>
+
+  <div class="interview-q">
+    <strong>面试官会往哪追问：</strong>他大概率会问「你项目里真做了吗」——这时你要能立刻报出
+    <code>context.py</code> 的两档参数与顺序（机械档在前），并主动交代你识别出的两个缺口：
+    <em>占位符没给取回方式</em>、<em>32000 贴着估算口径没留缓冲</em>。
+    <strong>主动说缺口，比被问出来强得多</strong>——它证明你真的读过自己的代码，而不是背了别人的方案。
+  </div>
+
+  <!-- ============ resources ============ -->
+  <h2>本课主资源</h2>
+  <p>① <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank">Anthropic · Effective context engineering for AI agents</a>
+  ——读「compaction」与「sub-agent architectures」两节即可，约 15 分钟。带着一个问题读：<em>它说压缩后附上
+  「最近访问的 5 个文件」，这个做法放在你项目的两档里属于哪一档？</em></p>
+  <p>② 笔记库模式卡 02（完整方案空间、三条硬规则、何时不该压缩）：<br>
+  <code>E:\笔记\02_沉淀库\C专业知识\C5 Agent研究\agent模式库\20260921_C5_上下文预算与压缩.md</code>
+  <a href="file:///E:/笔记/02_沉淀库/C专业知识/C5 Agent研究/agent模式库/20260921_C5_上下文预算与压缩.md" target="_blank">（在笔记库中打开）</a></p>
+  <p>③ 速查卡：<a href="../reference/context-budget-cheatsheet.html">上下文预算与压缩速查 · 参考 02</a>
+  （两档阈值、判断流程、三条可直接抄的规则，打印贴墙）。</p>
+
+  <footer class="lesson-footer">
+    <div class="ask">
+      💬 <strong>我是你的老师，不是文档。</strong>这一课牵涉到「什么必须留下」这类判断题，
+      光看结论记不住。看完讲义后随便挑一个场景丢给我——比如「如果我只留 3 条消息会怎样」——
+      我们一起把后果推一遍，比背答案有用。
+    </div>
+    <div class="lesson-nav">
+      <span>📌 作业：完成检索练习 1–3，读 Anthropic 文章两节</span>
+      <span>⏭ 下一课 · 课程 03：状态更新机制——为什么节点返回的是「一部分 state」？（这是理解断点续跑大坑的前置）</span>
+    </div>
+  </footer>
+
+</main>
+
+<script src="../assets/quiz.js"></script>
+<script>
+TeachQuiz.render("quiz1", {
+  title: "档位判断测验：看到现象，判断机制",
+  questions: [
+    {
+      q: "一条 12,000 字符的 tool 结果，位于受保护区间之外。哪一档先动它，动成什么？",
+      opts: [
+        "第一档：换成头 800、尾 400 字符的预览",
+        "第二档：整条消息交给摘要模型去压缩",
+        "都不动：超过 4000 字符时直接丢弃该条",
+        "都不动：等总量超 32000 tokens 再说"
+      ],
+      explain: "第一档的阈值是单条 4000 字符，第二档的阈值是总量 32000 tokens。两档的门槛量和对象都不同，所以先命中第一档。"
+    },
+    {
+      q: "为什么 <code>evict_tool_results()</code> 只换 content，不删整条 tool 消息？",
+      opts: [
+        "tool 回复须与调用 id 配对",
+        "删除消息会让前端事件序号断层",
+        "保留消息骨架可提升缓存命中率",
+        "统计原文体积要读消息长度字段"
+      ],
+      explain: "代码注释写得很直白：OpenAI 要求 tool 回复与它的 tool_call_id 保持配对。这是接口约束，不是性能优化。"
+    },
+    {
+      q: "<code>protect_recent=10</code> 保护的到底是哪批消息？",
+      opts: [
+        "按位置保护最后 10 条，不看角色",
+        "按角色保护最近 10 条工具结果",
+        "按体积保护累计不超过 10 条原始",
+        "按时间保护最近 10 秒内返回的结果"
+      ],
+      explain: "代码是位置性的、不看角色：<code>protect_start = len(messages) - protect_recent</code>，越过这条线的消息一律不动。"
+    },
+    {
+      q: "压缩后摘要块被放在哪个位置？这件事为什么值得注意？",
+      opts: [
+        "放在保留消息之前，作为一条 system 消息",
+        "放在保留消息之后，作为最后一条 user 消息",
+        "替换掉原有 system 提示词的第一段内容",
+        "不放进消息列表，单独存到 state 字段里"
+      ],
+      explain: "现在写作 <code>[{\"role\":\"system\", 摘要}, *keep_msgs]</code>。位置会影响模型取用长上下文中段信息的难度；样本仓库里有把摘要留在末尾、把规范上下文贴在最后一条真实用户消息之前的做法，这是本课留的改进线索。"
+    },
+    {
+      q: "<code>context_token_budget = 32000</code> 这个默认值是怎么来的？",
+      opts: [
+        "按 chars/4 从窗口保守折算而来",
+        "取所用模型官方最大输入长度的一半整",
+        "按历史单轮平均消耗乘最大步数上限",
+        "沿用上游框架默认值未按本项目情况调"
+      ],
+      explain: "config.py 的注释写明是对标比例制并按 128K 窗口保守折算，因为 chars/4 对中文会低估真实 token 二到三倍。注意它贴着估算口径、没有单独预留缓冲——这是第二个可改进点。"
+    }
+  ]
+});
+</script>
+</body>
+</html>

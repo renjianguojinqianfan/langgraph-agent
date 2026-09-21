@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>参考 02 · 上下文预算与压缩速查卡 — langgraph-agent 学习课程</title>
+<link rel="stylesheet" href="../assets/base.css">
+<style>
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #f4f1ea; font-family: "Source Han Serif SC", serif; }
+  td code { white-space: normal; }
+  .steps td:first-child { background: #f8faff; font-weight: 700; width: 24%; }
+  .gap td:first-child { background: #fff8eb; }
+  .later { color: var(--ink-faint); }
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <div class="lesson-meta">
+      <span class="kicker">参考 02</span>
+      <span>上下文预算与压缩速查卡</span>
+      <span>来源：项目 <code>context.py</code> / <code>config.py</code> + 笔记库模式卡 02</span>
+    </div>
+    <h1>上下文预算与压缩速查</h1>
+  </header>
+
+  <h2>两档对照（本项目默认值）</h2>
+  <table>
+    <tr><th style="width:16%">档位</th><th style="width:26%">触发条件</th><th style="width:30%">动作</th><th>成本</th></tr>
+    <tr>
+      <td><b>第一档<br>结果驱逐</b><br><span class="later">T1.4</span></td>
+      <td>单条 <code>tool</code> 消息 content &gt; 4000 字符，且位于最后 10 条之外</td>
+      <td>换 content：占位标记 + 工具名 + 原文字数 + 留痕指针 + 头 800 / 尾 400 预览。<b>消息保留</b></td>
+      <td>零额外模型调用，纯机械、确定性</td>
+    </tr>
+    <tr>
+      <td><b>第二档<br>历史压缩</b></td>
+      <td>估算总量 &gt; 32000 tokens（口径 chars/4），或条数超 <code>context_max_messages</code></td>
+      <td>丢早期消息，插入截断占位符或模型摘要（≤ 300 tokens），保留最近 10 条原始消息</td>
+      <td>截断零成本；摘要多一次模型调用且失真</td>
+    </tr>
+  </table>
+  <p>顺序固定：<b>驱逐先于压缩</b>，且都在「下一次调用大模型之前」执行。机械步骤先做，能减少送进摘要的体积。</p>
+
+  <h2>判断流程（看到现象 → 走哪一档）</h2>
+  <table class="steps">
+    <tr><th>问题</th><th>判断与去向</th></tr>
+    <tr><td>这条消息在最后 10 条里？</td><td>在 → <b>什么都不做</b>。位置保护优先于体积判断，驱逐不看它多大。</td></tr>
+    <tr><td>单条 tool 结果超 4000 字符？</td><td>超 → <b>走第一档</b>，换头尾预览。不足 4000 → 不动。</td></tr>
+    <tr><td>头 800 + 尾 400 ≥ 原文长度？</td><td>是 → 跳过。预览装不下任何东西时，替换不省空间。</td></tr>
+    <tr><td>总量超 32000 tokens？</td><td>超 → <b>走第二档</b>。不超 → 原对象返回（identity，不做任何复制）。</td></tr>
+    <tr><td>剩余消息不足 10 条？</td><td><code>keep = max(2, min(keep_recent, n))</code>。下限 2 条，压缩不会把历史清空。</td></tr>
+  </table>
+
+  <h2>三条可直接抄的摘要硬规则</h2>
+  <p>抄自开源 agent 的摘要提示词（完整出处见模式卡 02）。自己的摘要是丢是留，全看这三条有没有写进去：</p>
+  <table>
+    <tr><th style="width:30%">规则</th><th>为什么</th></tr>
+    <tr><td><b>精确保留</b>文件路径、符号、命令、报错原文、URL、标识符</td><td>这些是可以被逐字复用的东西，摘要时改写一个字就失效</td></tr>
+    <tr><td><b>只带未解决</b>的用户请求，且保留原话</td><td>已解决的问题不必占额度；原话是意图的唯一来源，转述会引入偏差</td></tr>
+    <tr><td><b>保留工作流状态</b>（未提交 / 已提交 / 已推送 / 评审中 / 已合并）</td><td>状态决定下一步动作，丢了它等于让接手的模型重做一遍</td></tr>
+  </table>
+  <p>一条更省事的经验做法：压缩后附上最近访问的 5 个文件。用户消息本身不进摘要、按原话保留，摘要只承载助手侧的过程。</p>
+
+  <h2>本项目待补的两个缺口</h2>
+  <table class="gap">
+    <tr><th style="width:26%">缺口</th><th>证据</th><th>补法</th></tr>
+    <tr>
+      <td><b>卸载了但取不回</b></td>
+      <td>占位符里只有 <code>ref</code>（trace 指针），没有「用什么工具、怎么读」</td>
+      <td>在占位符里加一句读回指令：用带 <code>offset</code> 与 <code>limit</code> 的读工具分段取回原文</td>
+    </tr>
+    <tr>
+      <td><b>阈值贴着上限，没留缓冲</b></td>
+      <td><code>context_token_budget = 32000</code> 是按 chars/4 从 128K 窗口保守折算，无额外余量</td>
+      <td>改成「上限减预留」，单次大结果不会把窗口顶穿</td>
+    </tr>
+    <tr>
+      <td><b>摘要块位置</b></td>
+      <td>摘要作为 system 消息插在保留消息之前</td>
+      <td>对照样本做法：摘要留在末尾，规范上下文贴在最后一条真实用户消息之前</td>
+    </tr>
+  </table>
+
+  <h2>术语表</h2>
+  <table>
+    <tr><th style="width:24%">术语</th><th>定义</th></tr>
+    <tr><td><b>上下文预算</b></td><td>把窗口总额切成输出额度、工具占用、原样保留的近期历史、压缩缓冲几段预留。预算是政策，压缩是执行</td></tr>
+    <tr><td><b>上下文腐烂<br>context rot</b></td><td>窗口内 token 增多时模型准确取回信息的能力下降；成因为注意力的 n² 两两关系，属性能梯度而非硬悬崖</td></tr>
+    <tr><td><b>压缩 compaction</b></td><td>把已发生的消息历史替换成更短的表示</td></tr>
+    <tr><td><b>机械缩减</b></td><td>确定性压缩，按 token 或条数丢弃、按参数长度截断，零额外模型调用</td></tr>
+    <tr><td><b>模型摘要</b></td><td>调用另一个模型把旧历史压成结构化摘要，有损且多一次调用</td></tr>
+    <tr><td><b>上下文折叠 folding</b></td><td>在子任务边界只保留结论、丢掉中间步骤；由任务结构触发，不等窗口压力</td></tr>
+    <tr><td><b>保留区 keep</b></td><td>压缩后原样保留的近期消息条数或 token 额度</td></tr>
+    <tr><td><b>压缩缓冲 buffer</b></td><td>触发点与窗口上限之间预留的余量</td></tr>
+    <tr><td><b>溢出回退</b></td><td>已经超窗后走的重跑或尾部裁剪路径。与显式压缩是两回事：后者要求输入先放得下</td></tr>
+    <tr><td class="later"><b>检查点 checkpoint</b> <span class="later">（进阶）</span></td><td class="later">provider 返回的压缩块，需整体替换历史且不可跨 provider 复用</td></tr>
+  </table>
+
+  <footer class="lesson-footer">
+    <div class="lesson-nav">
+      <span>← 返回课程：<a href="../lessons/0002-context-budget-and-compaction.html">课程 02 · 上下文预算与压缩</a></span>
+      <span>参考 01：<a href="stategraph-cheatsheet.html">StateGraph 核心概念速查</a></span>
+      <span>🖨 本页为打印优化，A4 竖版一页</span>
+    </div>
+  </footer>
+
+</main>
+</body>
+</html>
