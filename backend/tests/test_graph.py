@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from backend.core.agent.graph import build_graph
+from backend.core.agent.graph import _after_planner_subtask, build_graph
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import MockLLMClient
 from backend.tests.conftest import make_manager, make_settings
@@ -253,6 +253,43 @@ def test_human_confirm_skips_tool_on_rejection(settings, event_bus):
         r.get("tool_name") == "code_exec" and r.get("status") == "skipped"
         for r in tool_results
     )
+
+
+# ── planner failure is surfaced, not degraded (Issue #12) ──
+class _FailingPlannerLLM(MockLLMClient):
+    """Planner call raises; executor calls behave normally."""
+
+    def complete(self, messages, tools=None, **kwargs):
+        if not tools:
+            raise RuntimeError("simulated planner provider 403")
+        return super().complete(messages, tools, **kwargs)
+
+
+def test_planner_failure_surfaces_error_and_fails_task(settings, event_bus):
+    """A planner LLM error must land in ``state["error"]`` -> FAILED, and the
+    terminal persist step must not crash on a malformed plan.
+
+    Regression for Issue #12: the old code degraded the error into a string
+    plan item and never set ``state["error"]``, so ``_finalize_terminal``
+    raised ``TypeError`` on ``PlanStep(**p)`` and the real cause was lost.
+    """
+    tm = make_manager(settings, _FailingPlannerLLM(plan=["p"]), event_bus=event_bus)
+    task_id = tm.create_task(title="planner-fail", user_input="do something")
+
+    task = _run_until_done(tm, task_id)
+
+    assert task is not None
+    assert task.status.value == "FAILED"
+    assert "403" in (task.error or "")
+    assert task.plan == []
+
+
+def test_subtask_planner_failure_short_circuits_to_finish():
+    """The subtask router must also skip the executor on a planner failure
+    (Issue #12: both topologies share the planner node)."""
+    assert _after_planner_subtask({"error": "planner boom"}) == "finish"
+    assert _after_planner_subtask({"stop_requested": True}) == "finish"
+    assert _after_planner_subtask({}) == "executor"
 
 
 # ── engineer smoke (offline) included in the unified run ──

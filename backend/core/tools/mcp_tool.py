@@ -112,8 +112,9 @@ class McpTool(BaseTool):
         * otherwise the write-like heuristic decides.
 
         The executor calls this only when ``needs_per_call_confirm`` is set and
-        wraps the call in a try/except — a judgement failure never blocks
-        execution.
+        wraps the call in a try/except — a judgement failure fails **closed**
+        (the executor requires confirmation), never leaking an unconfirmed
+        write-like call through.
         """
         force = getattr(getattr(self, "settings", None), "mcp_force_confirm_list", None) or []
         if self.name in force:

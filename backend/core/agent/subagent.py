@@ -341,12 +341,21 @@ class SubAgentExecutor:
                     except Exception as exc:  # pragma: no cover - defensive
                         logger.warning("failed to register subtask artifact %s: %s", p, exc)
 
+            # Propagate the subtask graph's terminal status: a subtask whose
+            # graph ends FAILED (e.g. a planner LLM error after Issue #12) must
+            # fold back as failed with the real cause, not as a silent
+            # "completed" carrying an empty summary.
+            graph_status = final.get("status") or "COMPLETED"
+            completed = graph_status == "COMPLETED"
             return SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
-                status="completed",
+                status="completed" if completed else "failed",
                 summary=summary,
                 artifacts=unique,
+                error=""
+                if completed
+                else (final.get("error") or f"subtask graph ended {graph_status}"),
                 tool_calls_executed=tool_count,
             )
         except Exception as exc:  # pragma: no cover - defensive

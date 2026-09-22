@@ -45,7 +45,7 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 ## 能力
 
 - **断点续跑** —— `SqliteSaver` 检查点（`thread_id == task_id`）+ 1.x `durability="sync"`（stop() 后快照必已落盘），`POST /api/tasks/{id}/resume` 从断点复活，消息/计划/确认记录全保留。非 INTERRUPTED、无 checkpoint、停在确认闸口三类一律 409 —— 闸门永不被静默绕过；崩溃遗留的孤儿任务启动时自动对账。→ [P3 架构](docs/incremental-arch-p3-resume.md)
-- **危险操作闸门** —— 规划期 EHRB 五类风险扫描（删除/破坏/财务/隐私/通信）+ `human_confirm` 图内中断节点；批准/拒绝写回 `_confirmed_ids` / `_rejected_ids` 后**重算**是否仍有待确认项（P0 修掉的死循环根因）；写类工具（HTTP 写方法 / `git_commit` / MCP 写类）额外走 per-call 判定
+- **危险操作闸门** —— 规划期 EHRB 五类风险扫描（删除/破坏/财务/隐私/通信）+ `human_confirm` 图内中断节点；批准/拒绝写回 `_confirmed_ids` / `_rejected_ids` 后**重算**是否仍有待确认项（P0 修掉的死循环根因）；写类工具（HTTP 写方法 / `git_commit` / MCP 写类）额外走 per-call 判定（MCP 判定函数抛异常时 **fail-closed**：要求确认而非放行，[#47](https://github.com/renjianguojinqianfan/langgraph-agent/issues/47)）
 - **完成验证（P0-B）** —— reflect 不再单信模型的「我做完了」：S1 校验已注册产物存在且非空，S2 拦「全程工具失败却宣称完成」；不达标就带着证据回环 planner（`verify_max_retries` 有界），超限**降级为 COMPLETED + `degraded` 标记**而不是误杀一个可能真完成的任务；`verify_enabled=false` 即回到原空壳行为（零回归）
 - **工具层韧性** —— 熔断（连续失败 3 次短路 / 冷却 30s / half-open 试探）+ 指数退避重试，跳闸发 `tool_circuit_open` 事件；写类工具 `retryable=False`（重试一个已副作用过的调用比重试失败更糟）；MCP 子进程失败隔离
 - **外部工具生态** —— MCP 客户端（stdio，每 server 一线程 + 独立事件循环，工具动态注册成 `mcp__{server}__{tool}`）· OpenAPI spec 一键成工具 · `backend/plugins/` 自动发现（模板见 [`example_tool.py`](backend/plugins/example_tool.py)）· Git 7 工具（参数化无 shell + 危险命令黑名单）。接入方式全是配置项，不改内核：见 [`.env.example`](.env.example) 的 `mcp_*` / `openapi_*` / `plugins_*`
@@ -65,7 +65,7 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 ```mermaid
 flowchart TD
     S0([START]) --> planner
-    planner -->|stop| finish
+    planner -->|stop/规划失败| finish
     planner --> risk_scan
     risk_scan -->|stop| finish
     risk_scan --> subagent_split
@@ -181,7 +181,7 @@ CI 五 job 在 [`ci.yml`](.github/workflows/ci.yml)：受保护文件守卫 · �
   0002 = 护城河纪律）· [`docs/specs/`](docs/specs/)（spec / 实施计划档案）·
   [`docs/agents/`](docs/agents/)（技能组配置：issue tracker / triage 标签 / domain 约定）
   ——文档归属约定见 [`docs/agents/domain.md`](docs/agents/domain.md)「文档归属」
-- **配置**：[`.env.example`](.env.example)（17 组前缀，逐项带注释）
+- **配置**：[`.env.example`](.env.example)（按前缀分组，逐项带注释）
 - **工程约定**：[`AGENTS.md`](AGENTS.md)（安全边界 / 任务路由 / 验证入口）·
   [`OVERVIEW.md`](OVERVIEW.md)（历次交付日志，含 Issue #7 一章）
 

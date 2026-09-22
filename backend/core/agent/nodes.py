@@ -236,15 +236,21 @@ class AgentRuntime:
         }
         state.setdefault("steps", []).append(step)
 
-        # 异常分支把错误文本降级成一条纯字符串项（正常分支是 PlanStep dict），
-        # 两种形态都要能塞进 state["plan"]，所以注解放宽为 Any 而不是改行为。
-        plan: List[Any]
+        # 正常分支产出的永远是 PlanStep dict；异常分支改用 state["error"] 承载
+        # 失败原因、plan 留空（Issue #12），故这里不再需要 List[Any] 的放宽。
+        plan: List[Dict[str, Any]]
         try:
             resp = self.llm.complete(self._build_messages(state, PLANNER_SYSTEM))
             plan = self._parse_plan(resp.content)
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             logger.exception("planner LLM error")
-            plan = [f"Planner error: {exc}"]
+            # Issue #12: surface the real cause instead of degrading it into a
+            # string plan item. ``state["error"]`` makes ``finish`` report FAILED
+            # (and ``graph._after_planner`` short-circuits to finish), so the
+            # provider 403 / network error stays visible instead of being
+            # replaced by a secondary TypeError when the plan is persisted.
+            state["error"] = f"Planner LLM error: {exc}"
+            plan = []
         state["plan"] = plan
         self._publish("plan_update", {"plan": plan})
 
@@ -426,17 +432,20 @@ class AgentRuntime:
                     # P2 item 1: MCP tools run a per-call risk judgement (write-
                     # like heuristic + mcp_force_confirm override). Duck-typed on
                     # `needs_per_call_confirm` so this node never imports McpTool.
-                    # A judgement failure only warns — it never blocks execution.
+                    # A judgement that cannot run fails CLOSED — it requires
+                    # confirmation rather than silently bypassing the gate.
                     if tool and getattr(tool, "needs_per_call_confirm", False):
                         try:
                             # cast 在运行时是恒等函数：BaseTool 不声明 _needs_confirm
-                            # （McpTool 才有），这里只把鸭子类型交代给 mypy，
-                            # 判定逻辑与异常降级路径未动。
+                            # （McpTool 才有），这里只把鸭子类型交代给 mypy。
                             if cast(Any, tool)._needs_confirm(args):
                                 need_confirm = True
                         except Exception:
+                            need_confirm = True
                             logger.warning(
-                                "MCP confirm judgement failed for %s", tool.name, exc_info=True
+                                "MCP confirm judgement failed for %s; requiring confirmation",
+                                tool.name,
+                                exc_info=True,
                             )
                     if risk_blocked:
                         need_confirm = True

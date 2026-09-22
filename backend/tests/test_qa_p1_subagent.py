@@ -17,7 +17,7 @@ import json
 
 from backend.core.agent.graph import build_graph
 from backend.core.agent.nodes import AgentRuntime
-from backend.core.agent.subagent import SubAgentExecutor
+from backend.core.agent.subagent import SubAgentExecutor, SubTaskSpec
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.tests.conftest import make_manager, make_settings
 from backend.tests.test_graph import _run_until_done
@@ -177,6 +177,35 @@ def test_subtask_failure_publishes_failed_event_and_keeps_parent_alive(
     types = {t for t, _ in published}
     assert "subtask_start" in types
     assert "subtask_failed" in types
+
+
+class _FailingPlannerLLM(MockLLMClient):
+    """Planner call raises; executor calls behave normally."""
+
+    def complete(self, messages, tools=None, **kwargs):
+        if not tools:
+            raise RuntimeError("simulated subtask planner 403")
+        return super().complete(messages, tools, **kwargs)
+
+
+def test_subtask_planner_failure_folds_back_as_failed(tmp_path):
+    """A planner LLM error inside a subtask must fold back as ``failed`` with
+    the real cause — not as a silent ``completed`` with an empty summary.
+
+    Regression for the Issue #12 boundary: the subtask graph now ends FAILED
+    (error is set), so the wrapper must read ``final["status"]`` instead of
+    hard-coding ``completed``.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, _FailingPlannerLLM(plan=["p"]))
+
+    res = tm._subagent._exec_one(
+        SubTaskSpec(subtask_id="sub:1", name="研究子任务", instruction="检索素材")
+    )
+
+    assert res.status == "failed"
+    assert "403" in res.error
+    assert res.summary == "(no final answer)"
 
 
 def test_subagent_disabled_does_not_split(tmp_path, event_bus):

@@ -127,7 +127,7 @@
 ✅ T1.4 tool-result eviction：大结果落盘换引用（与现有 compress 同层）—— 已交付 PR #40
 ⬜ P1-C web fetch/extract：搜索之外补页面获取
 ⬜ 调度（cron）/ 交互式终端入口（Issue #20）
-⬜ 债务清理：file_io 退役（#17）、planner 降级分支形态（#12）、live_e2e 超时（#13）
+⬜ 债务清理：file_io 退役（#17）、live_e2e 超时（#13）
 ```
 
 **执行序**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)，2026-09-16

@@ -51,8 +51,15 @@ from .state import AgentState
 
 
 def _after_planner(s: AgentState) -> Literal["finish", "risk_scan"]:
-    """Planner -> risk scan, unless a stop was requested (Issue #4)."""
-    return "finish" if s.get("stop_requested") else "risk_scan"
+    """Planner -> risk scan, unless stopped or planning failed (Issue #12).
+
+    A planner LLM error sets ``state["error"]``; short-circuiting to finish
+    reports FAILED with the real cause instead of running the risk/exec flow
+    on an empty plan.
+    """
+    if s.get("stop_requested") or s.get("error"):
+        return "finish"
+    return "risk_scan"
 
 
 def _after_risk_scan(s: AgentState) -> Literal["finish", "subagent_split"]:
@@ -101,8 +108,15 @@ def _after_tool(s: AgentState) -> Literal["finish", "human_confirm", "reflect"]:
 
 
 def _after_planner_subtask(s: AgentState) -> Literal["finish", "executor"]:
-    """Subtask planner goes straight to the executor — no risk scan, no split."""
-    return "finish" if s.get("stop_requested") else "executor"
+    """Subtask planner goes straight to the executor — no risk scan, no split.
+
+    A planner failure short-circuits to finish just like the main topology
+    (Issue #12): running the executor on an empty plan would waste a call and
+    cannot recover the failed planning step.
+    """
+    if s.get("stop_requested") or s.get("error"):
+        return "finish"
+    return "executor"
 
 
 def _after_executor_subtask(s: AgentState) -> Literal["finish", "reflect", "tool"]:
