@@ -1,0 +1,687 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY (throwaway): 「安静的监控台」 quiet-console direction.
+     Double-click to open. No build, no server. Data is mock. -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>原型 · 安静的监控台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0A0A0B;
+    --panel: #131316;
+    --raised: #17171B;
+    --line: rgba(255, 255, 255, 0.06);
+    --line-strong: rgba(255, 255, 255, 0.11);
+    --ink: #E8E8EA;
+    --dim: #9BA0A6;
+    --mute: #63676D;
+    --accent: #4C8DFF;
+    --ok: #3FB97F;
+    --danger: #E5534B;
+    --warn: #D9A441;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    overflow: hidden;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+
+  .app { display: flex; height: 100vh; }
+
+  /* ---------- sidebar ---------- */
+  .side {
+    width: 250px; flex-shrink: 0; display: flex; flex-direction: column;
+    border-right: 1px solid var(--line); background: var(--bg);
+  }
+  .side-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; }
+  .logo { width: 20px; height: 20px; border-radius: 6px; background: var(--accent); display: grid; place-items: center; }
+  .logo svg { width: 12px; height: 12px; }
+  .side-title { font-weight: 600; font-size: 13.5px; }
+  .icon-btn { margin-left: auto; color: var(--mute); padding: 4px; border-radius: 6px; transition: color .15s; }
+  .icon-btn:hover { color: var(--ink); }
+  .new-btn {
+    margin: 2px 12px 10px; padding: 8px; border: 1px solid var(--line-strong); border-radius: 9px;
+    color: var(--dim); font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px;
+    transition: color .15s, border-color .15s;
+  }
+  .new-btn:hover { color: var(--ink); border-color: rgba(255,255,255,0.2); }
+  .search {
+    margin: 0 12px 8px; padding: 7px 10px; background: var(--raised); border: 1px solid var(--line);
+    border-radius: 8px; color: var(--mute); font-size: 12.5px; display: flex; gap: 7px; align-items: center;
+  }
+  .task-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+  .task-item { width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px; transition: background .15s; display: block; }
+  .task-item:hover { background: rgba(255,255,255,0.035); }
+  .task-item.cur { background: var(--raised); }
+  .task-item .t { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task-item .m { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11px; color: var(--mute); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .dot.run { background: var(--accent); animation: pulse 2.4s ease-in-out infinite; }
+  .dot.ok { background: var(--ok); }
+  .dot.err { background: var(--danger); }
+  .dot.halt { background: var(--warn); }
+  .dot.que { background: var(--mute); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .side-foot { padding: 10px 14px; border-top: 1px solid var(--line); color: var(--mute); font-size: 12.5px; display: flex; gap: 7px; align-items: center; }
+
+  /* ---------- main ---------- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .head {
+    height: 52px; flex-shrink: 0; display: flex; align-items: center; gap: 12px;
+    padding: 0 20px; border-bottom: 1px solid var(--line);
+  }
+  .head h1 { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .head .st { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); flex-shrink: 0; }
+  .head .spacer { flex: 1; min-width: 8px; }
+  .ghost-btn {
+    padding: 5px 11px; border-radius: 7px; font-size: 12.5px; color: var(--dim);
+    border: 1px solid var(--line-strong); transition: color .15s, border-color .15s;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .ghost-btn:hover { color: var(--ink); border-color: rgba(255,255,255,0.2); }
+  .ghost-btn.danger { color: var(--danger); border-color: rgba(229,83,75,0.35); }
+  .ghost-btn.danger:hover { background: rgba(229,83,75,0.08); border-color: rgba(229,83,75,0.6); }
+
+  .flow { flex: 1; overflow-y: auto; }
+  .flow-inner { max-width: 760px; margin: 0 auto; padding: 28px 24px 40px; }
+  .block + .block { margin-top: 18px; }
+
+  /* user request */
+  .req {
+    background: var(--raised); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 16px; font-size: 14px; color: var(--ink);
+  }
+  .req .who { font-size: 11px; color: var(--mute); margin-bottom: 4px; }
+
+  /* collapsible generic */
+  .col { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+  .col-head {
+    width: 100%; display: flex; align-items: center; gap: 9px; padding: 10px 14px;
+    font-size: 13px; color: var(--dim); text-align: left; transition: background .15s;
+  }
+  .col-head:hover { background: rgba(255,255,255,0.025); }
+  .col-head .chev { transition: transform .18s; color: var(--mute); flex-shrink: 0; }
+  .col.open .col-head .chev { transform: rotate(90deg); }
+  .col-body { display: none; border-top: 1px solid var(--line); padding: 12px 14px; }
+  .col.open .col-body { display: block; }
+
+  /* plan */
+  .plan-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 13.5px; }
+  .plan-row .n { font-family: var(--mono); font-size: 11.5px; color: var(--mute); width: 18px; text-align: right; }
+  .plan-row.done .d { color: var(--mute); }
+  .plan-row.active .d { color: var(--ink); }
+  .plan-row .tag { margin-left: auto; font-size: 11px; color: var(--mute); }
+  .plan-row.active .tag { color: var(--accent); }
+
+  /* steps */
+  .step { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; }
+  .step + .step { margin-top: 8px; }
+  .step-head {
+    width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 14px; text-align: left;
+    transition: background .15s;
+  }
+  .step-head:hover { background: rgba(255,255,255,0.025); }
+  .step-head .sum { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .step-head .meta { font-size: 11.5px; color: var(--mute); flex-shrink: 0; font-family: var(--mono); }
+  .step-body { display: none; border-top: 1px solid var(--line); padding: 10px 14px 12px; }
+  .step.open .step-body { display: block; }
+  .step-head .chev { transition: transform .18s; color: var(--mute); flex-shrink: 0; }
+  .step.open .step-head .chev { transform: rotate(90deg); }
+  .step.running { border-color: rgba(76,141,255,0.28); }
+  .tool { display: flex; align-items: baseline; gap: 8px; font-family: var(--mono); font-size: 12px; padding: 3px 0; }
+  .tool .name { color: var(--ink); }
+  .tool .st-txt { margin-left: auto; font-size: 11px; }
+  .st-ok { color: var(--ok); }
+  .st-err { color: var(--danger); }
+  .st-skip { color: var(--warn); }
+  .st-dim { color: var(--mute); }
+  .kv { font-family: var(--mono); font-size: 11px; color: var(--dim); background: var(--bg);
+         border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 6px;
+         white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto; }
+
+  /* marker note */
+  .note { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--mute); padding: 2px 4px; }
+  .note svg { flex-shrink: 0; }
+  .note.warn { color: var(--warn); }
+  .note.err { color: var(--danger); }
+
+  /* markdown answer */
+  .md h2 { font-size: 17px; font-weight: 600; margin: 14px 0 6px; }
+  .md h3 { font-size: 14.5px; font-weight: 600; margin: 12px 0 4px; }
+  .md p { margin: 6px 0; color: #C9CDD3; }
+  .md ul, .md ol { margin: 6px 0 6px 20px; color: #C9CDD3; display: grid; gap: 3px; }
+  .md code { font-family: var(--mono); font-size: 0.85em; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; color: var(--accent); }
+  .md strong { color: var(--ink); font-weight: 600; }
+  .codeblock { margin: 10px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .codeblock .cb-head { display: flex; align-items: center; padding: 6px 12px; background: var(--raised); border-bottom: 1px solid var(--line); }
+  .codeblock .lang { font-family: var(--mono); font-size: 11px; color: var(--mute); }
+  .codeblock .copy { margin-left: auto; font-size: 11.5px; color: var(--dim); display: flex; gap: 5px; align-items: center; transition: color .15s; }
+  .codeblock .copy:hover { color: var(--ink); }
+  .codeblock pre { padding: 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--dim); overflow-x: auto; }
+
+  /* artifacts */
+  .art-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .art-row .f { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+  .art-row .s { font-size: 11px; color: var(--mute); }
+  .art-row .a { margin-left: auto; display: flex; gap: 14px; }
+  .art-row .a span { font-size: 12.5px; color: var(--dim); cursor: pointer; transition: color .15s; }
+  .art-row .a span:hover { color: var(--accent); }
+
+  .sec-label { font-size: 11px; color: var(--mute); letter-spacing: 0.06em; margin-bottom: 8px; }
+
+  /* composer */
+  .composer { flex-shrink: 0; padding: 12px 20px 16px; border-top: 1px solid var(--line); background: var(--bg); }
+  .composer-inner { max-width: 760px; margin: 0 auto; }
+  .composer-card { background: var(--raised); border: 1px solid var(--line-strong); border-radius: 16px; padding: 12px 14px 8px; }
+  .composer-card .ph { color: var(--mute); font-size: 14px; min-height: 44px; }
+  .composer-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .composer-row .hint { font-size: 11px; color: var(--mute); margin-left: 6px; }
+  .composer-row .grow { flex: 1; }
+  .model-chip { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dim); padding: 5px 10px; border-radius: 8px; transition: background .15s; }
+  .model-chip:hover { background: rgba(255,255,255,0.05); }
+  .send-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); display: grid; place-items: center; transition: opacity .15s; }
+  .send-btn:hover { opacity: 0.85; }
+
+  /* ---------- right drawer ---------- */
+  .drawer {
+    width: 0; flex-shrink: 0; overflow: hidden; border-left: 1px solid transparent;
+    transition: width .2s ease, border-color .2s;
+    background: var(--bg); display: flex; flex-direction: column;
+  }
+  .drawer.open { width: 340px; border-color: var(--line); }
+  .drawer-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; border-bottom: 1px solid var(--line); min-width: 340px; }
+  .drawer-tabs { display: flex; gap: 2px; }
+  .drawer-tabs button { font-size: 12.5px; color: var(--mute); padding: 5px 10px; border-radius: 7px; }
+  .drawer-tabs button.cur { color: var(--ink); background: var(--raised); }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 12px 14px; min-width: 340px; }
+  .ev-row { display: flex; gap: 10px; font-family: var(--mono); font-size: 11.5px; padding: 4px 0; color: var(--dim); }
+  .ev-row .ts { color: var(--mute); flex-shrink: 0; }
+
+  /* file tree */
+  .tree-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+              padding: 3px 6px; border-radius: 6px; transition: background .15s; }
+  .tree-row:hover { background: rgba(255,255,255,0.035); }
+  .tree-row .chev { color: var(--mute); flex-shrink: 0; transition: transform .15s; }
+  .tree-row.open .chev { transform: rotate(90deg); }
+  .tree-row .fname { font-family: var(--mono); font-size: 12px; color: var(--dim); flex: 1;
+                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tree-row.dir .fname { color: var(--ink); }
+  .tree-row .fsize { font-size: 10.5px; color: var(--mute); flex-shrink: 0; }
+  .tree-row .fresh { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+  .tree-kids { margin-left: 11px; border-left: 1px solid var(--line); padding-left: 6px; }
+
+  /* preview column (4th column) */
+  .preview { width: 0; flex-shrink: 0; overflow: hidden; border-left: 1px solid transparent;
+             transition: width .2s ease, border-color .2s; background: var(--bg);
+             display: flex; flex-direction: column; }
+  .preview.open { width: 460px; border-color: var(--line); }
+  .pv-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+             border-bottom: 1px solid var(--line); min-width: 460px; }
+  .pv-path { font-family: var(--mono); font-size: 11.5px; color: var(--dim);
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pv-body { flex: 1; overflow-y: auto; padding: 16px 18px; min-width: 460px; }
+  .pv-body pre.raw { font-family: var(--mono); font-size: 11.5px; color: var(--dim);
+                     white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
+
+  /* ---------- confirm dialog ---------- */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: none; align-items: center; justify-content: center; z-index: 50; }
+  .overlay.show { display: flex; }
+  .dialog { width: 440px; max-width: 92vw; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 14px; padding: 20px; }
+  .dialog h2 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .dialog p { font-size: 13.5px; color: #C9CDD3; margin-top: 10px; }
+  .dialog .mono { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
+  .dialog details { margin-top: 10px; }
+  .dialog summary { font-size: 12px; color: var(--mute); cursor: pointer; }
+  .dialog .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  .btn-ghost { padding: 7px 14px; border-radius: 8px; font-size: 13px; color: var(--dim); border: 1px solid var(--line-strong); transition: color .15s; }
+  .btn-ghost:hover { color: var(--ink); }
+  .btn-accent { padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; background: var(--accent); color: #fff; transition: opacity .15s; }
+  .btn-accent:hover { opacity: 0.85; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot.run { animation: none; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- sidebar -->
+  <aside class="side">
+    <div class="side-head">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg></span>
+      <span class="side-title">LangGraph Agent</span>
+      <button class="icon-btn" aria-label="收起侧栏"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+    </div>
+    <button class="new-btn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg> 新任务</button>
+    <div class="search"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg> 搜索任务…</div>
+    <div class="task-list" id="taskList"></div>
+    <div class="side-foot"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg> 设置</div>
+  </aside>
+
+  <!-- main -->
+  <div class="main">
+    <div class="head" id="head"></div>
+    <div class="flow"><div class="flow-inner" id="flow"></div></div>
+    <div class="composer"><div class="composer-inner">
+      <div class="composer-card">
+        <div class="ph">用自然语言描述一个任务，例如：联网查资料并写一份报告…</div>
+        <div class="composer-row">
+          <button class="icon-btn" style="margin:0" aria-label="附件"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+          <span class="hint">Ctrl/⌘ + Enter 发送</span>
+          <span class="grow"></span>
+          <button class="model-chip">qwen3.7-flash <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+          <button class="send-btn" aria-label="发送"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- preview column (4th column: opens when a file is selected) -->
+  <div class="preview" id="preview">
+    <div class="pv-head">
+      <span class="pv-path" id="pvPath"></span>
+      <span style="flex:1"></span>
+      <button class="ghost-btn" style="padding:4px 9px;font-size:12px">下载</button>
+      <button class="icon-btn" id="pvClose" aria-label="关闭预览"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="pv-body" id="pvBody"></div>
+  </div>
+
+  <!-- right drawer -->
+  <div class="drawer" id="drawer">
+    <div class="drawer-head">
+      <div class="drawer-tabs">
+        <button class="cur" data-tab="files">文件</button>
+        <button data-tab="detail">步骤</button>
+        <button data-tab="events">事件</button>
+      </div>
+      <button class="icon-btn" id="drawerClose" aria-label="关闭面板"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </div>
+</div>
+
+<!-- confirm dialog -->
+<div class="overlay" id="overlay">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <h2 id="dlgTitle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg> 需要人工确认</h2>
+    <p>工具 <span class="mono">write_file</span> 要在工作区覆写文件 <span class="mono">langgraph-selection-report.md</span>（约 2 KB）。允许它执行吗？</p>
+    <details>
+      <summary>查看入参</summary>
+      <div class="kv">{ "path": "langgraph-selection-report.md",
+  "content": "# LangGraph 1.x 选型报告\n\n(骨架)…" }</div>
+    </details>
+    <div class="actions">
+      <button class="btn-ghost" data-close>拒绝</button>
+      <button class="btn-accent" data-close>允许执行</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------- mock data ---------------- */
+const TASKS = [
+  {
+    id: "t-1024", title: "调研 LangGraph 1.x 生态，输出选型报告", status: "RUNNING", ago: "14 分钟前",
+    input: "帮我调研 LangGraph 1.x 的主要生态工具和最佳实践，最后写成一份 markdown 选型报告放到工作区。",
+    plan: [
+      { d: "检索官方文档与社区实践", s: "done" }, { d: "对比主流工具组合", s: "done" },
+      { d: "撰写选型报告", s: "active" }, { d: "校验产物并总结", s: "pending" },
+    ],
+    steps: [
+      { i: 1, thought: "先检索知识库和官方文档，了解 LangGraph 1.x 的变化点。", s: "done", tools: [
+        { n: "kb_query", st: "ok", note: "成功", in: '{ "query": "LangGraph 1.x 迁移要点", "top_k": 5 }', out: '{ "hits": 5 }' },
+        { n: "web_search", st: "ok", note: "成功", in: '{ "query": "LangGraph 1.2 release notes" }', out: '{ "results": 8 }' },
+      ]},
+      { i: 2, thought: "整理候选工具清单，读取已有资料做横向对比。", s: "done", tools: [
+        { n: "web_search", st: "ok", note: "成功 · 重试 1 次", in: '{ "query": "LangGraph vs CrewAI vs AutoGen 2026" }', out: '{ "results": 6 }' },
+        { n: "read_file", st: "ok", note: "成功", in: '{ "path": "docs/roadmap-pawbench.md" }', out: '{ "bytes": 4820 }' },
+      ], note: { kind: "dim", text: "上下文在此压缩：6 条早期消息已让位（策略 drop_oldest）" } },
+      { i: 3, thought: "联网检索连续失败触发熔断，先把报告骨架写入工作区，稍后重试。", s: "running", tools: [
+        { n: "web_search", st: "err", note: "失败 429 · 重试 2 次", in: '{ "query": "LangGraph Platform pricing" }', out: "HTTP 429: rate limited" },
+        { n: "web_search", st: "skip", note: "熔断跳过", in: '{ "query": "LangGraph Platform pricing (retry)" }', out: "circuit open, 60s" },
+        { n: "write_file", st: "ok", note: "成功 · 已经确认闸", in: '{ "path": "langgraph-selection-report.md" }', out: '{ "bytes": 2048 }' },
+      ], note: { kind: "err", text: "web_search 触发熔断，冷却 60 秒后自动恢复" } },
+      { i: 4, thought: "", s: "pending", tools: [] },
+    ],
+    artifacts: [{ f: "langgraph-selection-report.md", s: "2.0 KB" }],
+    answer: null, error: null,
+  },
+  {
+    id: "t-1023", title: "整理上周变更并写周报", status: "COMPLETED", ago: "1 天前",
+    input: "看下 git log 上周的提交，整理成一份周报。",
+    plan: [ { d: "读取上周提交记录", s: "done" }, { d: "归类整理要点", s: "done" }, { d: "生成周报", s: "done" } ],
+    steps: [
+      { i: 1, thought: "读取 git 日志。", s: "done", tools: [ { n: "git_log", st: "ok", note: "成功", in: '{ "since": "7 days ago" }', out: '{ "commits": 14 }' } ] },
+      { i: 2, thought: "按主题归类。", s: "done", tools: [] },
+      { i: 3, thought: "写出周报文件。", s: "done", tools: [ { n: "write_file", st: "ok", note: "成功 · 已经确认闸", in: '{ "path": "weekly-2026-W38.md" }', out: '{ "bytes": 3120 }' } ] },
+    ],
+    artifacts: [{ f: "weekly-2026-W38.md", s: "3.0 KB" }],
+    answer: [
+      "## 周报（2026 W38)", "",
+      "上周共 **14** 次提交，按主题归为三类：", "",
+      "- **运行时深度**：P1-A skills 运行时交付，`load_skill` 工具上线",
+      "- **稳定性**：熔断与重试语义补齐，修复 resume 死循环",
+      "- **文档**：AGENTS.md 精简 27%，ADR-0002 定稿", "",
+      "### 下周计划", "",
+      "1. 启动评测台 M1 最小 runner",
+      "2. 前端工作台改版", "",
+      "产物已写入 `weekly-2026-W38.md`。",
+    ].join("\n"),
+    error: null,
+  },
+  {
+    id: "t-1022", title: "部署到测试环境", status: "FAILED", ago: "2 天前",
+    input: "把当前分支部署到测试环境。",
+    plan: [ { d: "构建并推送", s: "done" } ],
+    steps: [
+      { i: 1, thought: "构建通过，准备推送。", s: "done", tools: [
+        { n: "run_command", st: "ok", note: "成功", in: '{ "cmd": "npm run build" }', out: '{ "exit_code": 0 }' },
+        { n: "git_push", st: "err", note: "失败 403 · 重试 3 次", in: '{ "remote": "origin", "branch": "master" }', out: "HTTP 403: permission denied" },
+      ]},
+    ],
+    artifacts: [], answer: null,
+    error: "工具 git_push 连续失败：远端拒绝（403 权限不足）。请检查 GitHub App 的仓库授权。",
+  },
+  {
+    id: "t-1021", title: "批量重命名素材文件", status: "INTERRUPTED", ago: "3 天前",
+    input: "把 data/ 下的素材按日期重命名。",
+    plan: [ { d: "扫描并重命名", s: "done" } ],
+    steps: [
+      { i: 1, thought: "扫到一半被手动停止。", s: "done", tools: [ { n: "run_command", st: "ok", note: "成功", in: '{ "cmd": "ls data/" }', out: '{ "exit_code": 0 }' } ] },
+    ],
+    artifacts: [], answer: null, error: null,
+  },
+];
+
+const EVENTS = [
+  ["14:02:31", "tool_call · write_file"],
+  ["14:02:10", "circuit_open · web_search"],
+  ["14:01:58", "tool_result · 429"],
+  ["14:01:02", "compressed · dropped 6"],
+  ["14:00:11", "step_start · #3"],
+];
+
+const ST = {
+  RUNNING:     { cls: "run",  word: "运行中" },
+  COMPLETED:   { cls: "ok",   word: "已完成" },
+  FAILED:      { cls: "err",  word: "失败" },
+  INTERRUPTED: { cls: "halt", word: "已停止" },
+  PENDING:     { cls: "que",  word: "等待中" },
+};
+
+const $ = (s) => document.querySelector(s);
+let currentId = TASKS[0].id;
+let selectedStep = 3;
+
+/* ---------------- tiny markdown ---------------- */
+function inlineMd(t) {
+  return t
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+function renderMd(src) {
+  const lines = src.split("\n");
+  let html = "", inList = null;
+  const closeList = () => { if (inList) { html += inList === "ul" ? "</ul>" : "</ol>"; inList = null; } };
+  for (const line of lines) {
+    if (line.startsWith("### ")) { closeList(); html += "<h3>" + inlineMd(line.slice(4)) + "</h3>"; continue; }
+    if (line.startsWith("## ")) { closeList(); html += "<h2>" + inlineMd(line.slice(3)) + "</h2>"; continue; }
+    if (line.startsWith("- ")) { if (inList !== "ul") { closeList(); html += "<ul>"; inList = "ul"; } html += "<li>" + inlineMd(line.slice(2)) + "</li>"; continue; }
+    const m = line.match(/^(\d+)\.\s+(.*)$/);
+    if (m) { if (inList !== "ol") { closeList(); html += "<ol>"; inList = "ol"; } html += "<li>" + inlineMd(m[2]) + "</li>"; continue; }
+    closeList();
+    if (line.trim()) html += "<p>" + inlineMd(line) + "</p>";
+  }
+  closeList();
+  return '<div class="md">' + html + "</div>";
+}
+
+/* ---------------- render ---------------- */
+function esc(t) { return t.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+function renderSidebar() {
+  $("#taskList").innerHTML = TASKS.map((t) => {
+    const st = ST[t.status];
+    return '<button class="task-item' + (t.id === currentId ? " cur" : "") + '" data-id="' + t.id + '">' +
+      '<div class="t">' + esc(t.title) + '</div>' +
+      '<div class="m"><span class="dot ' + st.cls + '"></span>' + st.word + '<span>·</span>' + t.ago + '</div>' +
+      '</button>';
+  }).join("");
+}
+
+function renderHead(t) {
+  const st = ST[t.status];
+  const settled = t.status !== "RUNNING";
+  $("#head").innerHTML =
+    '<h1>' + esc(t.title) + '</h1>' +
+    '<span class="st"><span class="dot ' + st.cls + '"></span>' + st.word + '</span>' +
+    '<span class="spacer"></span>' +
+    '<button class="ghost-btn" id="gateBtn">模拟确认弹窗</button>' +
+    (settled ? '<button class="ghost-btn">回滚</button>' : '<button class="ghost-btn danger">停止</button>') +
+    '<button class="icon-btn" id="drawerBtn" aria-label="详情面板"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>';
+}
+
+function toolHtml(tc) {
+  const cls = tc.st === "ok" ? "st-ok" : tc.st === "err" ? "st-err" : tc.st === "skip" ? "st-skip" : "st-dim";
+  return '<div class="tool"><span class="name">' + tc.n + '</span><span class="st-txt ' + cls + '">' + tc.note + '</span></div>' +
+    '<div class="kv">入参 ' + esc(tc.in) + '\n出参 ' + esc(tc.out) + '</div>';
+}
+
+function renderFlow(t) {
+  const toolCount = t.steps.reduce((n, s) => n + s.tools.length, 0);
+  let h = "";
+
+  h += '<div class="block"><div class="req"><div class="who">你的指令</div>' + esc(t.input) + '</div></div>';
+
+  if (t.plan.length) {
+    h += '<div class="block"><div class="col' + (t.status === "RUNNING" ? "" : " open") + '" data-col>' +
+      '<button class="col-head"><svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>规划 · ' + t.plan.length + ' 项</button>' +
+      '<div class="col-body">' +
+      t.plan.map((p, i) =>
+        '<div class="plan-row ' + p.s + '"><span class="n">' + (i + 1) + '</span><span class="d">' + esc(p.d) + '</span><span class="tag">' +
+        (p.s === "done" ? "已完成" : p.s === "active" ? "进行中" : "") + '</span></div>'
+      ).join("") +
+      '</div></div></div>';
+  }
+
+  h += '<div class="block"><div class="sec-label">执行过程 · ' + t.steps.length + ' 步 · ' + toolCount + ' 次工具调用</div>';
+  t.steps.forEach((s) => {
+    const dotCls = s.s === "running" ? "run" : s.s === "done" ? "ok" : "que";
+    const meta = s.tools.length ? s.tools.length + " 个工具" : (s.s === "pending" ? "待执行" : "无工具");
+    const open = s.s === "running" || s.i === selectedStep;
+    h += '<div class="step' + (s.s === "running" ? " running" : "") + (open ? " open" : "") + '" data-step="' + s.i + '">' +
+      '<button class="step-head"><span class="dot ' + dotCls + '"></span><span class="sum">' +
+      (s.thought ? esc(s.thought) : "（等待执行）") + '</span><span class="meta">' + meta + '</span>' +
+      '<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg></button>' +
+      '<div class="step-body">' + (s.tools.length ? s.tools.map(toolHtml).join("") : '<div style="font-size:12px;color:var(--mute)">本步骤未调用工具。</div>') +
+      (s.note ? '<div class="note ' + s.note.kind + '" style="margin-top:8px">' + esc(s.note.text) + '</div>' : "") +
+      '</div></div>';
+  });
+  h += "</div>";
+
+  if (t.error) h += '<div class="block"><div class="note err" style="padding:10px 14px;border:1px solid rgba(229,83,75,.3);border-radius:10px">' + esc(t.error) + '</div></div>';
+
+  if (t.answer) h += '<div class="block"><div class="sec-label">最终回答</div>' + renderMd(t.answer) + "</div>";
+
+  if (t.artifacts.length) {
+    h += '<div class="block"><div class="sec-label">产物文件</div>' +
+      t.artifacts.map((a) =>
+        '<div class="art-row"><span class="f">' + esc(a.f) + '</span><span class="s">' + a.s + '</span><span class="a"><span class="art-pv" data-pv="' + esc(a.f) + '">预览</span><span>下载</span></span></div>'
+      ).join("") + "</div>";
+  }
+
+  $("#flow").innerHTML = h;
+}
+
+/* ---------------- file tree mock (完整沙箱树,正式版走后端 GET /api/files) ---------------- */
+const FILE_TREE = [
+  { n: "backend", type: "dir", kids: [
+    { n: "api", type: "dir", kids: [ { n: "routes.py", s: "18.2 KB" } ] },
+    { n: "core", type: "dir", kids: [ { n: "agent", type: "dir", kids: [ { n: "graph.py", s: "6.1 KB" }, { n: "nodes.py", s: "24.7 KB" } ] } ] },
+    { n: "headless.py", s: "9.3 KB" },
+  ]},
+  { n: "data", type: "dir", kids: [
+    { n: "traces", type: "dir", kids: [ { n: "t-1024.jsonl", s: "41 KB" } ] },
+    { n: "snapshots", type: "dir", kids: [] },
+  ]},
+  { n: "docs", type: "dir", kids: [
+    { n: "roadmap-pawbench.md", s: "12.4 KB" },
+    { n: "agents", type: "dir", kids: [ { n: "domain.md", s: "2.2 KB" } ] },
+  ]},
+  { n: "frontend", type: "dir", kids: [
+    { n: "src", type: "dir", kids: [ { n: "App.tsx", s: "1.1 KB" }, { n: "index.css", s: "2.8 KB" } ] },
+    { n: "package.json", s: "0.7 KB" },
+  ]},
+  { n: "langgraph-selection-report.md", s: "2.0 KB", fresh: true },
+  { n: ".env.example", s: "0.4 KB" },
+  { n: "AGENTS.md", s: "6.6 KB" },
+  { n: "README.md", s: "9.8 KB" },
+];
+const FILE_PREVIEWS = {
+  "langgraph-selection-report.md":
+    "# LangGraph 1.x 选型报告\n\n(骨架,由 write_file 于步骤 #3 写入)\n\n## 候选清单\n\n- **LangGraph 1.2.x**(StateGraph)\n- CrewAI\n- AutoGen\n\n## 评估维度\n\n1. 状态持久化\n2. 人机协同闸门\n3. 工具生态\n\n结论待补:联网恢复后继续。",
+  "weekly-2026-W38.md":
+    "## 周报(2026 W38)\n\n上周共 **14** 次提交,按主题归为三类:\n\n- **运行时深度**:P1-A skills 运行时交付,`load_skill` 工具上线\n- **稳定性**:熔断与重试语义补齐,修复 resume 死循环\n- **文档**:AGENTS.md 精简 27%,ADR-0002 定稿\n\n### 下周计划\n\n1. 启动评测台 M1 最小 runner\n2. 前端工作台改版",
+  "AGENTS.md": "# AGENTS.md - langgraph-agent\n\n> 本文件是项目级 agent 手册:短入口 + 安全边界不变量\n> + 任务路由 + 验证入口。\n\n## 项目定位\n\n基于 LangGraph 1.2.x(StateGraph)的自主任务 Agent 平台…",
+  "backend/api/routes.py": '@router.post("/tasks")\nasync def create_task(body: CreateTaskRequest):\n    task_id = task_manager.create(body.input, title=body.title)\n    return ok({"task_id": task_id})\n\n@router.get("/tasks")\nasync def list_tasks(limit: int = 50):\n    return ok({"tasks": task_manager.list(limit)})\n\n# ... 共 16 个端点',
+  "frontend/package.json": '{\n  "name": "langgraph-agent-frontend",\n  "private": true,\n  "version": "0.1.0",\n  "type": "module"\n}',
+};
+
+let drawerTab = "files";
+const treeOpen = new Set(["backend"]);
+let previewFile = "langgraph-selection-report.md";
+
+function treeHtml(nodes, path) {
+  return nodes.map((n) => {
+    const p = path ? path + "/" + n.n : n.n;
+    if (n.type === "dir") {
+      const open = treeOpen.has(p);
+      return '<button class="tree-row dir' + (open ? " open" : "") + '" data-dir="' + p + '">' +
+        '<svg class="chev" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>' +
+        '<span class="fname">' + n.n + '/</span></button>' +
+        (open ? '<div class="tree-kids">' + treeHtml(n.kids || [], p) + '</div>' : "");
+    }
+    return '<button class="tree-row" data-file="' + p + '">' +
+      '<span style="width:10px;flex-shrink:0"></span>' +
+      '<span class="fname"' + (p === previewFile ? ' style="color:var(--accent)"' : "") + '>' + n.n + '</span>' +
+      (n.fresh ? '<span class="fresh" title="本任务产物"></span>' : "") +
+      '<span class="fsize">' + n.s + '</span></button>';
+  }).join("");
+}
+
+/* ---------------- preview column ---------------- */
+function openPreview(path) {
+  previewFile = path;
+  $("#pvPath").textContent = path;
+  const content = FILE_PREVIEWS[path];
+  if (content && (path.endsWith(".md") || path.endsWith(".markdown"))) {
+    $("#pvBody").innerHTML = renderMd(content);
+  } else if (content) {
+    $("#pvBody").innerHTML = '<pre class="raw">' + esc(content) + '</pre>';
+  } else {
+    $("#pvBody").innerHTML = '<div style="font-size:12.5px;color:var(--mute)">此类型暂不支持内嵌预览,可下载查看。</div>';
+  }
+  $("#preview").classList.add("open");
+}
+
+function renderDrawer() {
+  document.querySelectorAll(".drawer-tabs button").forEach((b) =>
+    b.classList.toggle("cur", b.dataset.tab === drawerTab)
+  );
+  const t = TASKS.find((x) => x.id === currentId);
+
+  if (drawerTab === "files") {
+    $("#drawerBody").innerHTML =
+      '<div class="sec-label">工作区 · 沙箱根</div>' +
+      treeHtml(FILE_TREE, "");
+    document.querySelectorAll("[data-dir]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const p = b.dataset.dir;
+        if (treeOpen.has(p)) treeOpen.delete(p); else treeOpen.add(p);
+        renderDrawer();
+      })
+    );
+    document.querySelectorAll("[data-file]").forEach((b) =>
+      b.addEventListener("click", () => { openPreview(b.dataset.file); renderDrawer(); })
+    );
+    return;
+  }
+
+  if (drawerTab === "events") {
+    $("#drawerBody").innerHTML =
+      '<div class="sec-label">最近事件</div>' +
+      EVENTS.map((e) => '<div class="ev-row"><span class="ts">' + e[0] + '</span><span>' + e[1] + '</span></div>').join("");
+    return;
+  }
+
+  const step = t.steps.find((s) => s.i === selectedStep) || t.steps.filter((s) => s.s !== "pending").slice(-1)[0];
+  $("#drawerBody").innerHTML =
+    '<div class="sec-label">步骤 #' + step.i + '</div>' +
+    '<p style="font-size:13px;color:var(--dim);margin-bottom:10px">' + esc(step.thought || "（等待执行）") + '</p>' +
+    (step.tools.length ? step.tools.map(toolHtml).join("") : '<div style="font-size:12px;color:var(--mute)">本步骤未调用工具。</div>');
+}
+
+function renderAll() {
+  const t = TASKS.find((x) => x.id === currentId);
+  renderSidebar(); renderHead(t); renderFlow(t); renderDrawer();
+  bind();
+}
+
+/* ---------------- interactions ---------------- */
+function bind() {
+  document.querySelectorAll(".task-item").forEach((b) =>
+    b.addEventListener("click", () => { currentId = b.dataset.id; selectedStep = -1; renderAll(); })
+  );
+  document.querySelectorAll("[data-col] .col-head").forEach((b) =>
+    b.addEventListener("click", () => b.parentElement.classList.toggle("open"))
+  );
+  document.querySelectorAll(".step-head").forEach((b) =>
+    b.addEventListener("click", () => {
+      const el = b.parentElement;
+      el.classList.toggle("open");
+      selectedStep = parseInt(el.dataset.step, 10);
+      drawerTab = "detail";
+      renderDrawer();
+    })
+  );
+  $("#gateBtn").addEventListener("click", () => $("#overlay").classList.add("show"));
+  $("#drawerBtn").addEventListener("click", () => $("#drawer").classList.toggle("open"));
+  document.querySelectorAll(".art-pv").forEach((b) =>
+    b.addEventListener("click", () => {
+      $("#drawer").classList.add("open");
+      drawerTab = "files";
+      openPreview(b.dataset.pv);
+      renderDrawer();
+    })
+  );
+}
+document.querySelectorAll("[data-close]").forEach((b) =>
+  b.addEventListener("click", () => $("#overlay").classList.remove("show"))
+);
+$("#overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") e.target.classList.remove("show"); });
+$("#drawerClose").addEventListener("click", () => $("#drawer").classList.remove("open"));
+$("#pvClose").addEventListener("click", () => $("#preview").classList.remove("open"));
+document.querySelectorAll(".drawer-tabs button").forEach((b) =>
+  b.addEventListener("click", () => { drawerTab = b.dataset.tab; renderDrawer(); })
+);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#overlay").classList.remove("show"); });
+
+renderAll();
+</script>
+</body>
+</html>
