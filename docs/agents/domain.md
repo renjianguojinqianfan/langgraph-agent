@@ -41,6 +41,7 @@ Single-context repo (this repo's layout):
 │   ├── migration-langgraph-1x.md      ← 0.2 → 1.2.x migration, measured
 │   ├── capability-first-principles.md ← first-principles capability derivation
 │   ├── agent-comparison-report.md     ←横向对标（Codex/Qoder/Hermes/dsh）
+│   ├── architecture-audit-2026-09-22.md ← 只读架构审计（发现 → issue 映射与状态）
 │   └── roadmap-pawbench.md            ← execution roadmap (v2)
 ├── backend/                           ← Python: api / core(agent,llm,tools,kb,mcp) / services / utils
 └── frontend/                          ← React + Vite + TS: components / pages / store / hooks
