@@ -331,8 +331,13 @@ def test_mcp_force_confirm_overrides_read_tool(tmp_path):
     mgr.cleanup()
 
 
-def test_mcp_confirm_judgement_never_blocks(tmp_path):
-    """A broken _needs_confirm in the executor branch only warns — never blocks."""
+def test_mcp_confirm_judgement_fails_closed(tmp_path):
+    """A broken _needs_confirm must REQUIRE confirmation, not bypass the gate.
+
+    Regression for audit finding 3: the executor used to swallow the exception
+    and leave ``need_confirm`` at the static ``requires_confirm`` (False for MCP
+    tools), silently executing a write-like call with no human gate.
+    """
     from types import SimpleNamespace
 
     from backend.core.agent.nodes import AgentRuntime
@@ -374,8 +379,8 @@ def test_mcp_confirm_judgement_never_blocks(tmp_path):
     rt.executor(state)  # must NOT raise
     recs = state["_current_tool_calls"]
     assert len(recs) == 1
-    # The judgement exception was swallowed before need_confirm could be set.
-    assert recs[0]["need_confirm"] is False
+    # Fail-closed: an un-runnable judgement requires confirmation.
+    assert recs[0]["need_confirm"] is True
     mgr.cleanup()
 
 

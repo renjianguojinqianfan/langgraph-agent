@@ -391,6 +391,10 @@ README 新增第 4 节，与 [`interview-agent-py`](https://github.com/renjiangu
    而正常分支是 `List[Dict]`，下游 `_plan_confirm` 按 dict 用。本轮只加注解不改行为（defensive 分支、
    无测试覆盖）；修它得先决定“计划失败”的形态（改成 dict 计划项，还是让 planner 失败直接走 finish），
    属行为变更，单独开票。
+   **【已解决 · [Issue #12](https://github.com/renjianguojinqianfan/langgraph-agent/issues/12)】** planner 异常
+   改为写 `state["error"]` + 空 `plan`（不再产出字符串计划项）；`_after_planner` 与 `_after_planner_subtask`
+   在 `error` 时短路到 `finish`（任务判 `FAILED` 并携带真实 403/断网原因，不再被持久化时的 `PlanStep(**p)` TypeError 顶掉）。
+   主/子任务两条拓扑各有回归测试。
 3. **`scripts/live_e2e.py` 的预算与超时**（迁移档 §6 已记，仍未动）：场景 1 的终态预算硬编码 ~60s，
    而真实模型一轮 planner 就要 ~10s；`OpenAICompatibleClient` 未设请求 timeout（SDK 默认 600s），
    单次卡顿会吃掉整个预算。

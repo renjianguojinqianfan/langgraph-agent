@@ -313,3 +313,8 @@ AttributeError 在第一个 superstep 就炸。
 > **2026-09-12 后续注记**：上文「`registry.py` 2 处走唯一一条 override」已在解冻窗口修正——
 > `get_tool` / `make_openapi_tool` 两处签名改正、`pyproject.toml` 那条唯一 mypy override 已撤除，
 > mypy 现零 override。详见 `OVERVIEW.md` Issue #7 后续候选 #1。
+>
+> **2026-09-22 后续注记**：上文「planner 异常分支的 `plan` 形态不一致（只加注解未改行为）」已修——
+> planner 异常改为写 `state["error"]` + 空 plan，`_after_planner` / `_after_planner_subtask` 在 `error`
+> 时短路到 `finish`（判定 `FAILED` 并保留真实原因）。详见 `OVERVIEW.md` Issue #7 后续候选 #2 /
+> [Issue #12](https://github.com/renjianguojinqianfan/langgraph-agent/issues/12)。
