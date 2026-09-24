@@ -100,6 +100,32 @@ def test_code_exec_requires_confirm_flag():
     assert tool.requires_confirm is True
 
 
+def test_code_exec_child_env_has_no_secrets(settings, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "super-secret-do-not-leak")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "super-secret-do-not-leak")
+    tool = CodeExecTool(settings)
+    res = tool.run(
+        language="python",
+        code="import os; print('LLM_API_KEY' in os.environ, 'DASHSCOPE_API_KEY' in os.environ)",
+    )
+    assert res.success is True
+    assert res.data["stdout"].strip() == "False False"
+    assert "super-secret-do-not-leak" not in res.data["stdout"]
+
+
+def test_code_exec_child_env_keeps_runtime_basics(settings):
+    tool = CodeExecTool(settings)
+    res = tool.run(
+        language="python",
+        code=(
+            "import os; "
+            "print(bool(os.environ.get('PATH')), bool(os.environ.get('PYTHONUNBUFFERED')))"
+        ),
+    )
+    assert res.success is True
+    assert res.data["stdout"].strip() == "True True"
+
+
 def test_code_exec_failing_code_returns_failure_not_crash(settings):
     tool = CodeExecTool(settings)
     res = tool.run(language="python", code="raise ValueError('boom')")
