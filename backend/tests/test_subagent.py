@@ -15,10 +15,12 @@ from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.subagent import (
     DEFAULT_SPLIT_SCENARIOS,
     SubAgentExecutor,
+    SubTaskResult,
     SubTaskSpec,
     split_plan_for_scenario,
 )
 from backend.core.llm.client import LLMResponse, MockLLMClient
+from backend.services.snapshots import set_current_task_id
 from backend.tests.conftest import make_manager, make_settings
 from backend.tests.test_graph import _run_until_done
 
@@ -188,6 +190,92 @@ def test_spawn_subagent_tool_wired_and_runs(tmp_path):
     assert res.success is True
     assert res.data["status"] == "completed"
     assert "spawned done" in res.data["summary"]
+
+
+class _KeepLoopingMock(MockLLMClient):
+    """Executor never converges: one tool call per turn, counted.
+
+    Used to prove a stop signal actually short-circuits the loop — an unfixed
+    child runs every ``max_steps`` turn, a stopped child barely calls the LLM.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(plan=["p"], final_answer="never reached")
+        self.executor_calls = 0
+
+    def complete(self, messages, tools=None, **kwargs):
+        if not tools:
+            return LLMResponse(content=json.dumps(self.plan))
+        self.executor_calls += 1
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                {
+                    "id": f"c{self.executor_calls}",
+                    "name": "file_io",
+                    "arguments": {"action": "write", "path": "loop.txt", "content": "x"},
+                }
+            ],
+        )
+
+
+def _run_stopped_subtask(tmp_path, stop_key: str, parent_task_id: str):
+    settings = make_settings(tmp_path)
+    mock = _KeepLoopingMock()
+    tm = make_manager(settings, mock)
+    tm._stop_flags[stop_key] = True  # the authoritative signal nodes poll
+    ex = SubAgentExecutor(tm, settings)
+    spec = SubTaskSpec(
+        subtask_id="p60:sub:1",
+        name="looping",
+        instruction="keep going",
+        parent_task_id=parent_task_id,
+    )
+    return ex.run_subtask(spec), mock
+
+
+def test_parent_stop_propagates_to_subtask(tmp_path):
+    """Flagging the PARENT must stop the child run (Issue #60)."""
+    res, mock = _run_stopped_subtask(tmp_path, stop_key="parent-1", parent_task_id="parent-1")
+    assert res.status != "completed"
+    assert mock.executor_calls < 5, f"child ignored the parent stop: {mock.executor_calls} turns"
+
+
+def test_direct_stop_on_subtask_id_still_works(tmp_path):
+    """Propagation must not replace the child's own stop key (single-parent trap)."""
+    res, mock = _run_stopped_subtask(tmp_path, stop_key="p60:sub:1", parent_task_id="parent-1")
+    assert res.status != "completed"
+    assert mock.executor_calls < 5
+
+
+def test_spawn_subagent_records_parent_task_id(tmp_path):
+    """The spawn path runs on the parent's thread, so the parent id is available
+    and must land on the spec — it is the only mapping left once入口 B is gone."""
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="x"))
+    tool = next(t for t in tm._tools if t.name == "spawn_subagent")
+    captured: dict = {}
+
+    class _StubExecutor:
+        def run_subtask(self, spec, publish=None):
+            captured["spec"] = spec
+            return SubTaskResult(
+                subtask_id=spec.subtask_id,
+                name=spec.name,
+                status="completed",
+                summary="ok",
+                artifacts=[],
+                error="",
+            )
+
+    tool.executor = _StubExecutor()
+    set_current_task_id("parent-9")
+    try:
+        res = tool.run(name="research", instruction="collect facts")
+    finally:
+        set_current_task_id(None)
+    assert res.success is True
+    assert captured["spec"].parent_task_id == "parent-9"
 
 
 def test_subtask_failure_does_not_crash_parent(tmp_path):
