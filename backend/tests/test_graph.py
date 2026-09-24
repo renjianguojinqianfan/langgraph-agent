@@ -16,6 +16,7 @@ Also wraps the engineer's offline smoke test so it runs under pytest.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -251,6 +252,45 @@ def test_human_confirm_skips_tool_on_rejection(settings, event_bus):
     tool_results = [e["data"] for e in events if e["type"] == "tool_result"]
     assert any(
         r.get("tool_name") == "code_exec" and r.get("status") == "skipped"
+        for r in tool_results
+    )
+
+
+def test_openapi_write_operation_parks_at_the_gate(tmp_path, event_bus):
+    """A spec-generated POST must be gated end to end, not just by its flag (#59)."""
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": "pets", "version": "1"},
+        "paths": {
+            "/pets": {
+                "post": {
+                    "operationId": "createPet",
+                    "responses": {"200": {"description": "ok"}},
+                },
+            },
+        },
+    }
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    st = make_settings(tmp_path / "store", openapi_enabled=True, openapi_spec_path=str(spec_path))
+
+    mock = MockLLMClient(
+        plan=["p"],
+        tool_calls=[{"id": "cc1", "name": "createPet", "arguments": {"name": "Rex"}}],
+        final_answer="Not sent.",
+    )
+    tm = make_manager(st, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="post", user_input="create a pet")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=False)
+
+    task = _run_until_done(tm, task_id)
+
+    assert task.status.value == "COMPLETED"
+    events = event_bus.replay(task_id)
+    assert "human_confirm_required" in {e["type"] for e in events}
+    tool_results = [e["data"] for e in events if e["type"] == "tool_result"]
+    assert any(
+        r.get("tool_name") == "createPet" and r.get("status") == "skipped"
         for r in tool_results
     )
 
