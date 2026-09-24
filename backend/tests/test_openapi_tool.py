@@ -264,3 +264,39 @@ def test_global_headers_applied(monkeypatch):
     tool = _make_tool(global_headers={"X-Tenant": "acme"})
     tool.run(petId="x")
     assert _FakeHttpxClient.captured["headers"].get("X-Tenant") == "acme"
+
+
+@pytest.mark.parametrize(
+    "method,expected",
+    [
+        ("get", False),
+        ("head", False),
+        ("options", False),
+        ("post", True),
+        ("put", True),
+        ("patch", True),
+        ("delete", True),
+        ("trace", True),  # unknown verb: fail closed
+        ("", True),
+    ],
+)
+def test_generated_tool_confirm_follows_method(method, expected):
+    assert _make_tool(method=method).requires_confirm is expected
+
+
+def test_build_from_spec_gates_write_operations(tmp_path):
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": "pets", "version": "1"},
+        "paths": {
+            "/pets": {
+                "get": {"operationId": "listPets", "responses": {"200": {"description": "ok"}}},
+                "post": {"operationId": "createPet", "responses": {"200": {"description": "ok"}}},
+            },
+        },
+    }
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    tools = {t.name: t for t in build_tools_from_spec(load_openapi_spec(str(path)))}
+    assert tools["listPets"].requires_confirm is False
+    assert tools["createPet"].requires_confirm is True

@@ -204,6 +204,9 @@ class OpenAPITool(BaseTool):
         self.description = description
         self.args_schema = args_schema
         self._method = method.upper()
+        # Anything that is not a known-read verb is gated: an unusual method must
+        # ask a human rather than silently reach the network (fail closed).
+        self.requires_confirm = self._method not in _SAFE_METHODS
         self._path = path
         self._parameters = parameters
         self._security = security or []
