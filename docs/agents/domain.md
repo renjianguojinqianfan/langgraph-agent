@@ -32,7 +32,8 @@ Single-context repo (this repo's layout):
 │                                        safety boundaries / task routing / verification / Agent skills)
 ├── docs/
 │   ├── adr/                           ← decisions (0001-in-place-migration-and-resume-positioning.md,
-│   │                                     0002-moat-discipline-no-attention-reallocation.md)
+│   │                                     0002-moat-discipline-no-attention-reallocation.md,
+│   │                                     0003-subagent-circuit-breaker-per-runtime.md)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain)
 │   ├── prd.md · architecture.md       ← original v0/v0.1 design docs
@@ -80,7 +81,9 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 > _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
 
 `docs/adr/0001` (in-place migration over rewrite + resume-project positioning, decisions
-D1–D9) and `0002` (moat discipline) are the live ADRs today. Beyond them, the equivalent
+D1–D9), `0002` (moat discipline) and `0003` (circuit-breaker state stays per-runtime, never shared
+across parent/subtasks — so **#60's "每个子任务各记一本账" is by design, not a bug to re-file**)
+are the live ADRs today. Beyond them, the equivalent
 frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (protected files,
 `_needs_confirm` recompute block, conftest isolation, dependency matrix, quality-gate
 baseline). Treat a contradiction with those the same way — surface it, don't silently override.

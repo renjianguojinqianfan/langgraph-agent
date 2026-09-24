@@ -15,7 +15,7 @@
 | 触发词 | 不变量 | 权威源 |
 |---|---|---|
 | 密钥 | 只走环境变量注入；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文，只报 set / not set | `scripts/LIVE_E2E.md` §4 安全规范 + `.env.example` 注释 |
-| 熔断层零改动（冻结区） | `resilience.py` / `registry.py` 零改动（CI guard 机械拦截）；`[OVERRIDE]` 是技术开口、不等于人工批准；MCP/Git/OpenAPI 工具由 `task_manager` 显式追加（不经 `@register`） | `docs/adr/0002`「边界与例外」 |
+| 熔断层零改动（冻结区） | `resilience.py` / `registry.py` 零改动（CI guard 机械拦截）；`[OVERRIDE]` 是技术开口、不等于人工批准；MCP/Git/OpenAPI 工具由 `task_manager` 显式追加（不经 `@register`）；熔断计数**按运行各记一本账、不跨父子/子任务共享**是定居决策不是 bug（见 `docs/adr/0003`） | `docs/adr/0002`「边界与例外」+ `docs/adr/0003` |
 | `_needs_confirm` 重算块 | `nodes.py` `human_confirm_node` 中该块一字不动（P0 死循环根因）；新确认逻辑走 `_confirmed_ids` / `_rejected_ids` | **无机械守卫**（guard 不覆盖它），改动前问人；`docs/incremental-arch-p3-resume.md` §3 |
 | 确认闸门 | 危险工具执行前经 `human_confirm`，批准 / 拒绝后重算待确认项；评测态例外：`--auto-approve` 仅 `backend/headless.py` 实例级，服务端永不传 | `README.md`「能力」危险操作闸门 + 「无人值守执行」评测态说明 |
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
@@ -79,5 +79,5 @@ GitHub Issues（`renjianguojinqianfan/langgraph-agent`），走 `gh` CLI；Power
 
 ### Domain docs
 
-Single-context：根 `CONTEXT.md`（未建）+ `docs/adr/`（0001 / 0002）。词汇表在 `backend/core/agent/state.py`（节点名见 `graph.py`）。See `docs/agents/domain.md`.
+Single-context：根 `CONTEXT.md`（未建）+ `docs/adr/`（0001 / 0002 / 0003）。词汇表在 `backend/core/agent/state.py`（节点名见 `graph.py`）。See `docs/agents/domain.md`.
 
