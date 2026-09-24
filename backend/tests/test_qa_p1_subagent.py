@@ -93,7 +93,8 @@ def test_spawn_subagent_tool_requires_confirm(tmp_path):
 
 def test_parent_messages_contain_only_folded_summary(tmp_path):
     """The parent state messages must not contain subtask internal
-    assistant/tool messages — only the folded summary assistant turn."""
+    assistant/tool messages — only the folded summary, carried as a system turn
+    (#51: it is a system-produced digest, not something the model said)."""
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _ResearchMock())
     runtime = AgentRuntime(
@@ -114,11 +115,15 @@ def test_parent_messages_contain_only_folded_summary(tmp_path):
 
     roles = [m.get("role") for m in final["messages"]]
     assert "tool" not in roles, "subtask internal tool messages leaked into parent messages"
-    assistant_turns = [
-        m.get("content", "") for m in final["messages"] if m.get("role") == "assistant"
+    folded = [
+        m.get("content", "")
+        for m in final["messages"]
+        if m.get("role") == "system" and "子任务" in str(m.get("content", ""))
     ]
-    folded = [c for c in assistant_turns if "子任务" in c]
     assert folded, "no folded subtask summary in parent messages"
+    assert not [
+        m for m in final["messages"] if m.get("role") == "assistant" and "子任务" in str(m.get("content", ""))
+    ], "folded summary must not be replayed as an assistant turn (#51)"
     # The folded block is a bounded summary, not the subtask's full internal log.
     assert all(len(c) <= 1000 for c in folded)
 

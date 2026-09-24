@@ -397,9 +397,9 @@ class AgentRuntime:
         state["subtasks"] = [r.to_dict() for r in results]
         folded = _fold_subtask_summaries(results)
         if folded:
-            state.setdefault("messages", []).append(
-                {"role": "assistant", "content": folded}
-            )
+            # A digest the runtime produced, not something the model said — as
+            # ``assistant`` it gets replayed as the model's own prior turn.
+            state.setdefault("messages", []).append({"role": "system", "content": folded})
         state["_last_action"] = "plan"
         return state
 
