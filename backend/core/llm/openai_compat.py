@@ -25,13 +25,19 @@ logger = get_logger("llm.openai")
 class OpenAICompatibleClient(LLMClient):
     """Thin wrapper around the OpenAI SDK configured for any compatible host."""
 
-    def __init__(self, base_url: str, api_key: str, model: str) -> None:
+    def __init__(
+        self, base_url: str, api_key: str, model: str, timeout: float | None = None
+    ) -> None:
         from openai import OpenAI
 
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
-        self._client = OpenAI(base_url=base_url, api_key=api_key or "EMPTY")
+        self.timeout = timeout
+        # Issue #13: the SDK default is 600s, so a single stalled request could
+        # eat an entire task budget and surface as "timed out" instead of a
+        # fast failure the caller can retry / degrade on.
+        self._client = OpenAI(base_url=base_url, api_key=api_key or "EMPTY", timeout=timeout)
         logger.info("OpenAICompatibleClient ready: model=%s base_url=%s", model, base_url)
 
     def complete(
@@ -121,7 +127,9 @@ def create_llm_client(settings: Settings) -> LLMClient:
     model = settings.llm_model
     if not api_key:
         logger.warning("llm_api_key is empty — live calls will fail until configured.")
-    return OpenAICompatibleClient(base_url=base_url, api_key=api_key, model=model)
+    return OpenAICompatibleClient(
+        base_url=base_url, api_key=api_key, model=model, timeout=settings.llm_request_timeout_sec
+    )
 
 
 def create_aux_llm_client(settings: Settings) -> LLMClient | None:
@@ -150,6 +158,7 @@ def create_aux_llm_client(settings: Settings) -> LLMClient | None:
         base_url=base_url,
         api_key=settings.aux_llm_api_key,
         model=settings.aux_llm_model,
+        timeout=settings.llm_request_timeout_sec,
     )
 
 

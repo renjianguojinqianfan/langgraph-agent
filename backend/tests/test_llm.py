@@ -121,3 +121,21 @@ def test_factory_uses_explicit_base_url_when_provided():
     s = Settings(use_mock_llm=False, llm_provider="openai", llm_base_url="https://my.gw/v1", llm_api_key="x")
     client = create_llm_client(s)
     assert client.base_url == "https://my.gw/v1"
+
+
+def test_llm_client_passes_bounded_request_timeout(monkeypatch):
+    """Issue #13: one hung provider request must not eat the whole run budget —
+    the SDK's own default is 600s."""
+    import openai
+
+    captured: dict = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    s = Settings(use_mock_llm=False, llm_base_url="https://gw/v1", llm_api_key="x", llm_model="m")
+    create_llm_client(s)
+    assert captured.get("timeout") == s.llm_request_timeout_sec
+    assert 0 < s.llm_request_timeout_sec < 600, "must stay below the SDK default"

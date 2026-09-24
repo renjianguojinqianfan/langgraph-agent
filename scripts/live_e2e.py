@@ -153,7 +153,10 @@ def main() -> int:
     )
     print(f"task_id: {task_id}\n")
 
-    for _ in range(600):  # up to ~60s
+    # Budget expressed in LLM rounds, so raising llm_request_timeout_sec can never
+    # silently shrink this window (#13).
+    budget_sec = max(90, int(settings.llm_request_timeout_sec) * 4)
+    for _ in range(budget_sec * 10):  # 0.1s poll interval
         time.sleep(0.1)
         task = tm.get_task(task_id)
         if task and task.status.value in ("COMPLETED", "FAILED", "INTERRUPTED"):
