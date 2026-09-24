@@ -58,8 +58,14 @@ class AgentRuntime:
         aux_llm: Any = None,
         subagent_executor: Any = None,
         confirm_enabled: bool = True,
+        parent_task_id: str = "",
     ) -> None:
         self.task_id = task_id
+        self.parent_task_id = parent_task_id
+        # Issue #60: ``TaskManager.stop()`` only flips the id it was handed, so a
+        # subtask has to watch its own id *and* the parent's. Watching the parent
+        # alone would break ``stop(subtask_id)``.
+        self._stop_watch_ids = [task_id] + ([parent_task_id] if parent_task_id else [])
         self.tm = task_manager
         self.llm = llm
         self.tools: Dict[str, BaseTool] = {t.name: t for t in tools}
@@ -97,7 +103,7 @@ class AgentRuntime:
             return True
         tm = getattr(self, "tm", None)
         checker = getattr(tm, "is_stop_flagged", None)  # test fakes may not ship it
-        if callable(checker) and checker(self.task_id):
+        if callable(checker) and any(checker(watched) for watched in self._stop_watch_ids):
             state["stop_requested"] = True
             return True
         return False

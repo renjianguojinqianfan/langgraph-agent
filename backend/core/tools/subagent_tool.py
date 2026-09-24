@@ -18,6 +18,7 @@ import uuid
 from typing import Any
 
 from ...config import Settings
+from ...services.snapshots import get_current_task_id
 from ...utils.logging import get_logger
 from ..agent.subagent import SubAgentExecutor, SubTaskSpec
 from .base import BaseTool, ToolResult
@@ -83,7 +84,11 @@ class SpawnSubagentTool(BaseTool):
             subtask_id=f"spawn:sub:{uuid.uuid4().hex[:8]}",
             name=name,
             instruction=instruction,
-            parent_task_id="",  # the tool has no parent context; no artifact re-registration
+            # The tool runs on the parent's worker thread, where TaskManager has
+            # already seated the task id — so the parent link is available, and
+            # #60's stop propagation depends on it (Issue #33 拍板 5 also wants
+            # subtask writes on the parent's ledger).
+            parent_task_id=get_current_task_id() or "",
         )
         logger.info("spawn_subagent: %s", name)
         result = executor.run_subtask(spec, publish=None)

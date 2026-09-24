@@ -295,6 +295,7 @@ class SubAgentExecutor:
                 aux_llm=getattr(self.tm, "_aux_llm", None),
                 subagent_executor=None,  # never recurse
                 confirm_enabled=False,  # subtask internal: no human confirm
+                parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
             )
             from .graph import build_graph
 
