@@ -231,11 +231,27 @@ class SubAgentExecutor:
 
     # ── internals ──
     def _subtask_tools(self):
-        """Tool list for subtasks — same as the parent minus ``spawn_subagent``.
+        """Shared tool set minus anything that needs a human.
 
-        This is the recursion guard: a subtask can never spawn another subtask.
+        Subtask graphs run with ``confirm_enabled=False`` and no ``human_confirm``
+        node, so a gated tool there doesn't pause — it runs unconfirmed. Honours the
+        static ``requires_confirm`` (``code_exec``, git writes, spec-generated
+        non-GET operations) and the per-call MCP ``needs_per_call_confirm``;
+        ``http_request`` is matched by name because its write gate is hard-coded in
+        the executor rather than declared on the tool. Dropping it costs subtasks
+        read-only GETs too — narrowing the face is the point, re-plumbing subtask
+        confirmations is not (#55 决策②).
         """
-        return [t for t in self.tm._tools if t.name != "spawn_subagent"]
+        keep = []
+        for t in self.tm._tools:
+            if t.name in ("spawn_subagent", "http_request"):
+                continue  # recursion guard / executor-hard-coded write gate
+            if getattr(t, "requires_confirm", False) or getattr(
+                t, "needs_per_call_confirm", False
+            ):
+                continue
+            keep.append(t)
+        return keep
 
     def _exec_one(
         self,

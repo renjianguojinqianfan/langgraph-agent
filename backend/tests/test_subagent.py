@@ -155,6 +155,49 @@ def test_subtask_tools_exclude_spawn(tmp_path):
     assert "web_search" in names  # still shares the shared tool set
 
 
+def test_subtask_tools_exclude_everything_needing_a_human(tmp_path):
+    """子任务图里没有 human_confirm 节点（confirm_enabled=False），所以任何「需要问人」
+    的工具都不该进子任务工具面 —— 否则要么卡住一个永不回音的确认，要么更糟：直接执行。"""
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
+    ex = SubAgentExecutor(tm, settings)
+    names = {t.name for t in ex._subtask_tools()}
+
+    gated = {
+        t.name
+        for t in tm._tools
+        if getattr(t, "requires_confirm", False) or getattr(t, "needs_per_call_confirm", False)
+    }
+    assert gated, "fixture ships no confirm-gated tool; the assertion below is vacuous"
+    assert gated.isdisjoint(names), f"gated tools leaked into the subtask face: {gated & names}"
+    assert "http_request" not in names  # write-method gate is hard-coded in the executor
+    assert "web_search" in names  # read-only tools stay available
+
+
+def test_subtask_tools_exclude_generated_openapi_write(tmp_path):
+    """Audit finding ①: an OpenAPI POST is gated for the parent but must not reach
+    a subtask, where the gate is structurally absent."""
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": "pets", "version": "1"},
+        "paths": {
+            "/pets": {
+                "get": {"operationId": "listPets", "responses": {"200": {"description": "ok"}}},
+                "post": {"operationId": "createPet", "responses": {"200": {"description": "ok"}}},
+            },
+        },
+    }
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    settings = make_settings(tmp_path, openapi_enabled=True, openapi_spec_path=str(spec_path))
+    tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
+    names = {t.name for t in tm._tools}
+    assert {"listPets", "createPet"} <= names  # both generated onto the parent face
+    sub_names = {t.name for t in SubAgentExecutor(tm, settings)._subtask_tools()}
+    assert "listPets" in sub_names  # read-only generated tool survives
+    assert "createPet" not in sub_names
+
+
 def test_subtask_graph_compiles_simplified(tmp_path):
     settings = make_settings(tmp_path)
     tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
