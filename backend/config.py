@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     llm_base_url: str = ""  # 空 -> factory 回退到 provider preset
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
+    llm_request_timeout_sec: int = 90  # per-request wall clock (SDK default 600s ate live budgets, #13)
     use_mock_llm: bool = False  # when True, an offline MockLLMClient is used
 
     # ── Agent / orchestration ──
