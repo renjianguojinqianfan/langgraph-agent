@@ -37,7 +37,8 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 单发、非交互、跑完即退：产物落 `--dir`、trace 落盘、结果 JSON 打到 stdout（日志走 stderr），退出码
 `0` 完成 / `1` 失败 / `2` 中断或超时 / `3` 用法或配置错误；LLM 配置全走 `LLM_*` 环境变量（env 优先于
 .env）。`--auto-approve` 旁路确认闸门，是**评测态**开关（TaskManager 实例级，服务端 API 路径永不触发）；
-离线冒烟 `python -m backend.headless --check`。它是自建 agent 评测台驱动本 agent 的统一入口，路线见
+运行流水在评测态**默认开**（`runs/<task_id>.jsonl`：件清单 + 每轮原话，结果 JSON 带回 `manifest_path`），
+便于 harness 对两次运行做控制变量 diff。离线冒烟 `python -m backend.headless --check`。它是自建 agent 评测台驱动本 agent 的统一入口，路线见
 [`docs/roadmap-pawbench.md`](docs/roadmap-pawbench.md)。
 
 ---
@@ -55,7 +56,7 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 - **skills 运行时（P1-A）** —— `load_skill` 工具按名取回两层 skills 目录（`~/.agents/skills` → 工作区根）里 SKILL.md 的**整档正文**，作为 tool result 进对话、不进 system（渐进披露的另一半，清单由 P1-A′ 注入）；同名跨层两份都返回（home 先）、名字只做等值比较（`../`、绝对路径天然不命中）；未命中把可用名单放进结果 `data`（`tool_node` 只序列化 data，模型才能自我纠偏）；结果不带顶层 `path`，skill 文件不会进产物/KB；零新增配置 → [spec](docs/specs/p1-a-skills-runtime.md)
 - **工具结果逐出（T1.4）+ 上下文压缩 + 知识库** —— 压缩**之前**先搬大件：保护带（最近 10 条）外、单条超 4000 字符的 tool 结果原地换成占位（工具名 + 原文字符数 + 留痕指针 + 头 800/尾 400 预览），纯机械零 LLM 调用、全文留 trace、搬完不超预算则压缩与 LLM 摘要都不触发；超阈值（默认 32000 est. tokens）仍自动截断 / 可选 LLM 摘要；标准库关键词索引的 KB（离线可用），任务中经 `kb_query` / `memory_search` 检索 → [`context.py`](backend/core/agent/context.py)
 - **回滚（P1-B）** —— 每次沙箱内文件写**之前**先把旧版本拍进沙箱外的账本（`data/snapshots/<task_id>/`：`ledger.jsonl` + `NNNN.bak`，文件级 before-image，写多少记多少）；`POST /api/tasks/{id}/rollback` 逆序重放账本，整任务回到起点——只动文件、**不动断点**（与 resume 完全解耦），恢复前先把当前版本拍进 `retention/`（撤销入口 v2）、重复调用返回「已是原样」；活跃任务 409、快照失败 fail-open 不阻塞工具、30 天启动清扫。前端任务头「回滚」按钮 + 行内确认。→ [spec](docs/specs/p1-b-rollback.md)
-- **可观测** —— SSE 23 种事件 + JSONL Trace 落盘（顺序与 SSE 一致），前端时间线回放 + 导出原始字节
+- **可观测** —— SSE 23 种事件 + JSONL Trace 落盘（顺序与 SSE 一致），前端时间线回放 + 导出原始字节；**运行流水（#58）**：旁路新增的每任务一份自解释流水（`data/runs/`）——头部是可 diff 的件清单（每能力一行，只关一项则两份清单恰好差一行），正文是每轮完整请求/响应/token/耗时 + 工具入出参，子任务轮次与 `tool_circuit_open` 带归属标记并入同一份文件；密钥脱敏、体积上限封口；服务端默认关（`run_manifest_enabled`），headless 评测态默认开（结果 JSON 增 `manifest_path`）→ [`run_manifest.py`](backend/services/run_manifest.py)
 - **沙箱与鉴权** —— 文件白名单防逃逸、代码执行受限 subprocess；hmac token 签发（默认关闭，本地 demo 便利）
 
 ---
