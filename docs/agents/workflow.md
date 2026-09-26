@@ -12,8 +12,8 @@
 | 3 | **qoder** | 调用 `code-review` skill **自评审**（双轴：规范轴 + 需求轴），返工发现后才进下一步 |
 | 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」 |
 | 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号（`Closes #N`）；验证状态四态如实写（通过/跳过/未运行/产物验收） |
-| 5 | **opencode** | 以评审者身份独立评 PR：双轴评审 + 门禁核对（ruff/mypy/pytest/`--check`）+ 冻结区检查 + live 视票面需要；**只提意见与返工要求，不直接替改** |
-| 6 | 评审侧/用户 | 合并：CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
+| 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest/`--check`）+ 冻结区检查 + live 视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
+| 6 | 评审侧/用户 | 合并：调 `verification-loop` skill 走收尾门（机械验证 + 端到端验收）→ CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
 
 ## 边界
 
@@ -22,6 +22,21 @@
 - 挂起票 / 决策票（无代码）不走此流程；docs 小修走 AGENTS.md 的直推惯例。
 - 评审发现冻结区触碰 → 直接打回（无需商量）。
 - **评审形态**：opencode 与 qoder 共用同一个 GitHub 账号，GitHub 不允许在自己的 PR 上正式 request changes，所以步 5 的评审以**评论型**提交——评审 body 就是结论载体（含「返工要求：仅 Fx」这类明确裁定），PR 的「评审通过」不靠 GitHub review 状态，靠评审 body + CI + 会话分工追踪。
+
+## 评审动作清单（步 5 细则）
+
+> 2026-09-26 由 PR #69 评审→返工→复核→合并的首个完整循环补入：以下路由此前只活在临时交接文档（handoff）里，现在落进本体——handoff 是会话态，规则必须有持久家。
+
+- **双轴评审**：调 `code-review` skill（规范轴 + 需求轴**并行子代理**）。规范源 = `AGENTS.md` + `pyproject.toml` 注释 + 全局 `~/.agents/AGENTS.md` §7；需求源 = 票面 AC 逐条对照。
+- **安全评审**：涉及**闸门 / 工具面 / 子代理权限**的 PR 必用 `security-review` skill；纯观测面（#58 件清单这类）可跳过。
+- **件清单裁判**：能力面 / 工具面 PR 要跑一个 mock 任务（headless 管线 + 自定义 MockLLM 脚本）后核对 run manifest 的 capability / `subtask_face` 行与票面意图一致——「这次子代理能干什么」必须可 diff、可回看。
+- **live 视票面**：口径唯一权威 `scripts/LIVE_E2E.md`（含「先 A/B 复跑再归因」）。
+- **评审交付物**：评审 body（结论 + 四态 + 逐条裁定）+ 必要时开跟进票、补标签（按 `docs/agents/triage-labels.md` 三类分诊）。
+
+## 返工回环（步 5 → 6 之间）
+
+- 评审提出返工 → qoder 在**同一分支**修 → push → CI 复绿。
+- 复核口径分两档：**纯注释 / docs 返工** → 评审读返工 diff + 新 head CI 全绿 + `mergeable` 即可收口合并；**含代码的返工** → 回到步 5 完整口径（受影响面的门禁 + 相关测试至少重跑一轮）。
 
 ## 备注
 
