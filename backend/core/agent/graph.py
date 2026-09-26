@@ -2,19 +2,23 @@
 
 Wires the :class:`~backend.core.agent.nodes.AgentRuntime` node methods into a
 single graph with conditional edges implementing the
-``Planner -> [RiskScan -> SubAgentSplit] -> Executor -> Tool -> Reflect`` loop,
-the ``human_confirm`` interrupt, and graceful ``finish`` on completion /
+``Planner -> RiskScan -> Executor -> Tool -> Reflect`` loop, the
+``human_confirm`` interrupt, and graceful ``finish`` on completion /
 failure / stop.
 
 Two build modes (P1 item 2):
 
-* ``mode="main"`` (default) — full topology including ``risk_scan``,
-  ``subagent_split`` and ``human_confirm``;
+* ``mode="main"`` (default) — full topology including ``risk_scan`` and
+  ``human_confirm``;
 * ``mode="subtask"`` — simplified topology (planner -> executor -> tool ->
-  reflect -> finish) with **no** risk / confirm / subagent_split nodes; used
-  by :class:`~backend.core.agent.subagent.SubAgentExecutor` so subtasks can
-  never recursively split or block on confirmations that cannot route back to
-  the parent.
+  reflect -> finish) with **no** risk / confirm nodes; used by
+  :class:`~backend.core.agent.subagent.SubAgentExecutor` so subtasks can never
+  recurse or block on confirmations that cannot route back to the parent. Their
+  tool face is a declared tier instead (issue #56), which is what keeps a
+  confirmation-less subtask from being a way to skip the gate.
+
+Issue #56 removed the third main-mode node, ``subagent_split``: it dispatched
+subtasks on a keyword match, i.e. a side effect no one had approved.
 
 langgraph 1.x conventions used here (Issue #7 migration; the measurements
 behind each one are in ``docs/migration-langgraph-1x.md``):
@@ -62,18 +66,9 @@ def _after_planner(s: AgentState) -> Literal["finish", "risk_scan"]:
     return "risk_scan"
 
 
-def _after_risk_scan(s: AgentState) -> Literal["finish", "subagent_split"]:
-    """Risk scan -> subtask split, unless a stop was requested."""
-    return "finish" if s.get("stop_requested") else "subagent_split"
-
-
-def _after_split(s: AgentState) -> Literal["finish", "reflect", "executor"]:
-    """Subtask split -> executor, or straight to reflect on a final answer."""
-    if s.get("stop_requested"):
-        return "finish"
-    if s.get("_last_action") == "final_answer":
-        return "reflect"
-    return "executor"
+def _after_risk_scan(s: AgentState) -> Literal["finish", "executor"]:
+    """Risk scan -> executor, unless a stop was requested."""
+    return "finish" if s.get("stop_requested") else "executor"
 
 
 def _after_executor(
@@ -104,11 +99,11 @@ def _after_tool(s: AgentState) -> Literal["finish", "human_confirm", "reflect"]:
     return "reflect"
 
 
-# ── routers: subtask topology (no risk / confirm / split) ────────────────────
+# ── routers: subtask topology (no risk / confirm) ────────────────────────────
 
 
 def _after_planner_subtask(s: AgentState) -> Literal["finish", "executor"]:
-    """Subtask planner goes straight to the executor — no risk scan, no split.
+    """Subtask planner goes straight to the executor — no risk scan, no gate.
 
     A planner failure short-circuits to finish just like the main topology
     (Issue #12): running the executor on an empty plan would waste a call and
@@ -183,15 +178,13 @@ def build_graph(runtime: AgentRuntime, mode: str = "main", checkpointer: Any | N
     g.add_edge(START, "planner")
 
     if mode == "main":
-        # Main topology: planner -> risk_scan -> subagent_split -> executor
+        # Main topology: planner -> risk_scan -> executor
         # -> (confirm | tool) -> reflect -> (finish | planner).
         g.add_node("risk_scan", runtime.risk_scan)
-        g.add_node("subagent_split", runtime.subagent_split)
         g.add_node("human_confirm", runtime.human_confirm_node)
 
         g.add_conditional_edges("planner", _after_planner)
         g.add_conditional_edges("risk_scan", _after_risk_scan)
-        g.add_conditional_edges("subagent_split", _after_split)
         g.add_conditional_edges("executor", _after_executor)
         g.add_conditional_edges("tool", _after_tool)
         # After a decision the gate always re-enters the tool node: whether the

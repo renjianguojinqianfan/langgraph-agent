@@ -1,9 +1,9 @@
 """P1 integration tests — multiple P1 capabilities cooperating (offline).
 
 These exercise the *combination* of the new nodes/events through the real
-LangGraph loop with a scripted mock LLM: risk report events, subtask summary
-events on the parent channel, knowledge-base auto-indexing, and the aux model
-degradation path.
+LangGraph loop with a scripted mock LLM: risk report events, the approved
+``spawn_subagent`` delegation and its artifact hand-back, knowledge-base
+auto-indexing, and the aux model degradation path.
 """
 
 from __future__ import annotations
@@ -12,14 +12,21 @@ import json
 
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.tests.conftest import make_manager, make_settings
-from backend.tests.test_graph import _run_until_done
+from backend.tests.test_graph import _auto_confirm_in_background, _run_until_done
 
 
 class _ResearchMock(MockLLMClient):
-    """Parent final-answers; research subtask writes one file then ends."""
+    """Parent delegates the research leg; the subtask writes one file then ends.
+
+    Issue #56: the wording no longer splits the plan by itself — the parent has
+    to ask for the delegation and a human has to approve it. The scripted turns
+    cover both sides of that exchange (the subtask is recognised by the marker in
+    its instruction).
+    """
 
     def __init__(self):
         super().__init__(plan=["调研", "写作"], final_answer="主任务完成")
+        self.subtask_turns = 0
 
     def complete(self, messages, tools=None, **kwargs):
         user = " ".join(
@@ -28,16 +35,15 @@ class _ResearchMock(MockLLMClient):
         if not tools:
             return LLMResponse(content=json.dumps(self.plan))
         if "检索" in user:
-            if self._executor_turn == 0:
-                self._executor_turn += 1
+            self.subtask_turns += 1
+            if self.subtask_turns == 1:
                 return LLMResponse(
                     content="",
                     tool_calls=[
                         {
                             "id": "p1sub",
-                            "name": "file_io",
+                            "name": "write",
                             "arguments": {
-                                "action": "write",
                                 "path": "p1_notes.txt",
                                 "content": "P1 integration notes",
                             },
@@ -45,25 +51,49 @@ class _ResearchMock(MockLLMClient):
                     ],
                 )
             return LLMResponse(content="研究完成")
-        if "撰写" in user:
-            return LLMResponse(content="写作完成")
-        return LLMResponse(content="主任务完成")
+        if self._executor_turn == 0:
+            self._executor_turn += 1
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "p1spawn",
+                        "name": "spawn_subagent",
+                        "arguments": {
+                            "name": "研究子任务",
+                            "instruction": "检索素材并记下要点",
+                        },
+                    }
+                ],
+            )
+        return LLMResponse(content=self.final_answer)
+
+
+def _spawn_result(events):
+    return [
+        e["data"]
+        for e in events
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
+    ]
 
 
 def test_p1_events_in_main_channel(tmp_path, event_bus):
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _ResearchMock(), event_bus=event_bus)
     task_id = tm.create_task(title="p1", user_input="调研 RAG 最新进展并写报告")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"
-    events = event_bus.replay(task_id)
-    types = {e["type"] for e in events}
+    types = {e["type"] for e in event_bus.replay(task_id)}
     # Risk scan ran (default enabled) and published its report.
     assert "risk_report" in types
-    # Sub-agent summary events landed on the parent channel.
-    assert "subtask_start" in types
-    assert "subtask_result" in types
+    # The delegation is an ordinary, approved tool call on the parent channel —
+    # and the keyword-triggered summary events are gone with entry B (#56).
+    spawn = _spawn_result(event_bus.replay(task_id))
+    assert spawn and spawn[0]["status"] == "success"
+    assert spawn[0]["output"]["status"] == "completed"
+    assert types.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
     # Parent artifacts include the subtask file via KB auto-index + artifact.
     assert any("p1_notes.txt" in a.filename for a in task.artifacts)
 
@@ -79,16 +109,22 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
         kb_auto_index_artifacts=True,
         context_compress_strategy="truncate",
     )
-    tm = make_manager(settings, _ResearchMock(), event_bus=event_bus)
+    mock = _ResearchMock()
+    tm = make_manager(settings, mock, event_bus=event_bus)
     aux = tm._aux_llm
     assert aux is not None
     aux.role_responses["risk"] = "low: 常规调研任务"
 
     task_id = tm.create_task(title="all", user_input="调研 DeepAgent 架构并写报告")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"
-    assert len(task.subtasks) == 2
+    # One approved delegation actually ran the research leg.
+    assert mock.subtask_turns >= 2
+    assert _spawn_result(event_bus.replay(task_id))[0]["status"] == "success"
+    # ``state["subtasks"]`` belonged to entry B; nothing produces it now (#56).
+    assert task.subtasks == []
     # KB auto-indexed the artifact produced by the research subtask.
     hits = tm._kb.retrieve("P1 integration notes", top_k=3)
     assert len(hits) >= 1

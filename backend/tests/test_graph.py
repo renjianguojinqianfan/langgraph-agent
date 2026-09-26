@@ -87,11 +87,17 @@ def test_main_topology_is_statically_declared(settings):
     声明不出真实分支：运行照跑，但拓扑不再可读，可视化与静态校验全部失效。
     这条测试把“声明出来了”钉住，免得日后改回 lambda 静默退化。
     """
-    edges = _declared_edges(build_graph(_runtime()))
+    compiled = build_graph(_runtime())
+    edges = _declared_edges(compiled)
 
     assert ("planner", "risk_scan") in edges
     assert ("planner", "finish") in edges
-    assert ("risk_scan", "subagent_split") in edges
+    # Issue #56: the keyword-triggered ``subagent_split`` node is gone, so the
+    # risk scan hands straight to the executor.
+    assert ("risk_scan", "executor") in edges
+    assert "subagent_split" not in set(compiled.get_graph().nodes)
+    for src, dst in edges:
+        assert "subagent_split" not in (src, dst)
     assert ("executor", "human_confirm") in edges
     assert ("executor", "tool") in edges
     assert ("tool", "reflect") in edges

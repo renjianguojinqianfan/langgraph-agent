@@ -20,7 +20,13 @@ from typing import Any
 from ...config import Settings
 from ...services.snapshots import get_current_task_id
 from ...utils.logging import get_logger
-from ..agent.subagent import SubAgentExecutor, SubTaskSpec
+from ..agent.subagent import (
+    DEFAULT_TIER,
+    TOOL_TIERS,
+    SubAgentExecutor,
+    SubTaskSpec,
+    TierError,
+)
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -32,9 +38,9 @@ class SpawnSubagentTool(BaseTool):
     name = "spawn_subagent"
     description = (
         "Spawn an isolated sub-agent to complete a focused subtask. The "
-        "sub-agent has its own context and tool set; its final answer is "
-        "returned as the tool result. Requires human confirmation before "
-        "execution."
+        "sub-agent has its own context and a declared capability tier "
+        f"(default '{DEFAULT_TIER}'); its final answer is returned as the tool "
+        "result. Requires human confirmation before execution."
     )
     args_schema = {
         "type": "object",
@@ -47,11 +53,22 @@ class SpawnSubagentTool(BaseTool):
                 "type": "string",
                 "description": "Precise instruction for the sub-agent.",
             },
+            "tier": {
+                "type": "string",
+                "enum": sorted(TOOL_TIERS),
+                "description": (
+                    f"Capability tier (default '{DEFAULT_TIER}'): 'explore' is "
+                    "read-only, 'execute' also writes files inside the sandbox. "
+                    "Nothing that needs human confirmation is available to a "
+                    "sub-agent in any tier."
+                ),
+            },
             "tools": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional tool names to allow (P1: ignored, the "
-                "full shared tool set is used).",
+                "description": "Optional tool names to restrict the sub-agent "
+                "to. Narrows the chosen tier only: a name outside it is "
+                "rejected instead of silently dropped.",
             },
         },
         "required": ["name", "instruction"],
@@ -80,6 +97,15 @@ class SpawnSubagentTool(BaseTool):
                 success=False,
                 error="`name` and `instruction` are required.",
             )
+        tier = str(kwargs.get("tier") or DEFAULT_TIER)
+        raw_tools = kwargs.get("tools")
+        subset: list[str] | None = None
+        if raw_tools:
+            if not isinstance(raw_tools, list):
+                return ToolResult(
+                    success=False, error="`tools` must be an array of tool names."
+                )
+            subset = [str(t) for t in raw_tools]
         spec = SubTaskSpec(
             subtask_id=f"spawn:sub:{uuid.uuid4().hex[:8]}",
             name=name,
@@ -89,9 +115,18 @@ class SpawnSubagentTool(BaseTool):
             # #60's stop propagation depends on it (Issue #33 拍板 5 also wants
             # subtask writes on the parent's ledger).
             parent_task_id=get_current_task_id() or "",
+            tier=tier,
+            tools=subset,
         )
-        logger.info("spawn_subagent: %s", name)
-        result = executor.run_subtask(spec, publish=None)
+        # Resolved here rather than inside the executor so an out-of-tier
+        # request is refused before anything runs (issue #56: no side effect
+        # without an approved cause, and the model gets the reason back).
+        try:
+            executor.check_face(spec)
+        except TierError as exc:
+            return ToolResult(success=False, error=str(exc))
+        logger.info("spawn_subagent: %s (tier=%s)", name, tier)
+        result = executor.run_subtask(spec)
         return ToolResult(
             success=result.status == "completed",
             data=result.to_dict(),

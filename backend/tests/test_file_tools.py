@@ -1,4 +1,4 @@
-"""Tests for the P0-A discrete file tools: read / edit / glob / grep.
+"""Tests for the P0-A discrete file tools: read / write / edit / glob / grep.
 
 These are the six-piece-style precision file tools added under
 ``docs/roadmap-pawbench.md`` P0-A. They live in ``backend/core/tools/file_io.py``
@@ -7,10 +7,13 @@ retained for backward compatibility pending a tracked retirement follow-up.
 
 Design contract under test:
 * every tool is confined to ``Settings.artifacts_path`` (the sandbox root);
-  reads / edits / searches that escape the root are rejected;
+  reads / writes / edits / searches that escape the root are rejected;
 * ``read`` paginates by line (``offset`` / ``limit``) and prefixes 1-based line
   numbers when ``line_numbers`` is on (default) — the P1 "don't blow the context
   on a full read" fix;
+* ``write`` creates or overwrites a whole file (issue #56: the discrete write
+  exists so a sub-agent can be granted sandbox writes without the
+  un-splittable read/write/list ``file_io`` bundle);
 * ``edit`` is an exact ``old_string`` -> ``new_string`` replacement with a
   uniqueness guard (ambiguous unless ``replace_all``);
 * ``glob`` owns recursion (``**`` patterns), returns root-relative sorted paths;
@@ -32,6 +35,7 @@ from backend.core.tools.file_io import (
     GlobTool,
     GrepTool,
     ReadTool,
+    WriteTool,
 )
 from backend.core.tools.registry import build_tools
 
@@ -139,6 +143,59 @@ def test_read_empty_path_errors(settings):
 def test_read_directory_errors(settings):
     (settings.artifacts_path / "adir").mkdir(parents=True, exist_ok=True)
     res = ReadTool(settings).run(path="adir")
+    assert res.success is False
+
+
+# ───────────────────── write (create / overwrite) ─────────────────────
+
+
+def test_write_creates_file_and_reports_path_and_size(settings):
+    res = WriteTool(settings).run(path="notes.md", content="# RAG\n")
+    assert res.success is True
+    target = Path(res.data["path"])
+    assert target.read_text(encoding="utf-8") == "# RAG\n"
+    assert res.data["size"] == target.stat().st_size
+
+
+def test_write_creates_missing_parent_directories(settings):
+    res = WriteTool(settings).run(path="sub/dir/report.md", content="x")
+    assert res.success is True
+    assert (settings.artifacts_path / "sub" / "dir" / "report.md").exists()
+
+
+def test_write_overwrites_an_existing_file(settings):
+    _write(settings, "a.txt", "old content")
+    res = WriteTool(settings).run(path="a.txt", content="new")
+    assert res.success is True
+    assert (settings.artifacts_path / "a.txt").read_text(encoding="utf-8") == "new"
+    assert res.data["size"] == 3
+
+
+def test_write_empty_content_creates_an_empty_file(settings):
+    res = WriteTool(settings).run(path="empty.txt", content="")
+    assert res.success is True
+    assert res.data["size"] == 0
+
+
+def test_write_rejects_escape(settings):
+    res = WriteTool(settings).run(path="../outside.txt", content="x")
+    assert res.success is False
+    assert "outside the sandbox" in res.error
+    assert not (settings.artifacts_path.parent / "outside.txt").exists()
+
+
+def test_write_requires_path(settings):
+    assert WriteTool(settings).run(path="", content="x").success is False
+
+
+def test_write_rejects_non_string_content(settings):
+    res = WriteTool(settings).run(path="a.txt", content={"not": "text"})
+    assert res.success is False
+
+
+def test_write_refuses_to_clobber_a_directory(settings):
+    (settings.artifacts_path / "d").mkdir(parents=True)
+    res = WriteTool(settings).run(path="d", content="x")
     assert res.success is False
 
 
@@ -407,6 +464,7 @@ def test_new_tools_sandbox_policy(settings):
         GlobTool(settings),
         GrepTool(settings),
         EditTool(settings),
+        WriteTool(settings),
     ):
         # sandbox-confined local FS: no confirm, no retry, no circuit breaker
         # (identical policy to the legacy file_io tool).
@@ -417,6 +475,7 @@ def test_new_tools_sandbox_policy(settings):
 
 def test_new_tools_openai_schema_names(settings):
     assert ReadTool(settings).to_openai_schema()["function"]["name"] == "read"
+    assert WriteTool(settings).to_openai_schema()["function"]["name"] == "write"
     assert EditTool(settings).to_openai_schema()["function"]["name"] == "edit"
     assert GlobTool(settings).to_openai_schema()["function"]["name"] == "glob"
     assert GrepTool(settings).to_openai_schema()["function"]["name"] == "grep"
@@ -424,9 +483,16 @@ def test_new_tools_openai_schema_names(settings):
 
 def test_build_tools_includes_new_tools_and_keeps_file_io(settings):
     names = {t.name for t in build_tools(settings)}
-    assert {"read", "edit", "glob", "grep"} <= names
+    assert {"read", "write", "edit", "glob", "grep"} <= names
     # additive: the legacy multi-action tool is retained (retirement tracked separately)
     assert "file_io" in names
+
+
+def test_write_then_read_round_trip(settings):
+    WriteTool(settings).run(path="rt.txt", content="line1\nline2\n")
+    res = ReadTool(settings).run(path="rt.txt")
+    assert res.data["total_lines"] == 2
+    assert res.data["start_line"] == 1
 
 
 def test_edit_then_read_round_trip(settings):

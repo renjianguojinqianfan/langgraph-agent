@@ -14,14 +14,14 @@
 ## 一、本仓库实际能力盘点（源码依据）
 
 **形态定位**：前后端一体的「自主任务 Agent 平台」——自然语言下发任务 →
-LangGraph `StateGraph` 图驱动（planner → risk_scan → subagent_split → executor →
+LangGraph `StateGraph` 图驱动（planner → risk_scan → executor →
 human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可视化。
 定位是「Agent 运行时 + 通用任务执行」，而非纯编码 agent。
 
 | 维度 | 现状（源码落点） |
 |---|---|
 | 编排内核 | LangGraph 1.2.x，`main`/`subtask` 双拓扑（`backend/core/agent/graph.py`）；具名路由 + `Literal` 注解声明拓扑 |
-| 内置工具 | `web_search` / `read` / `edit` / `glob` / `grep`（P0-A 四件套）/ `file_io`（旧多动作工具，待退役 #17）/ `code_exec`(沙箱) / `http_request` / `memory_search` / `kb_query` / `load_skill`（P1-A）/ `spawn_subagent` + Git 7 个 + 动态 MCP / OpenAPI / 插件工具（`backend/core/tools/registry.py`）|
+| 内置工具 | `web_search` / `read` / `write` / `edit` / `glob` / `grep`（P0-A 离散精读件）/ `file_io`（旧多动作工具，待退役 #17）/ `code_exec`(沙箱) / `http_request` / `memory_search` / `kb_query` / `load_skill`（P1-A）/ `spawn_subagent`（子代理只拿内置两档，见 #56）+ Git 7 个 + 动态 MCP / OpenAPI / 插件工具（`backend/core/tools/registry.py`）|
 | 韧性 | 熔断（closed→open→half_open）+ 指数退避重试（`backend/core/tools/resilience.py`） |
 | 上下文 | evict（保护带外超 4000 字符 tool 结果原地换占位 + trace 回读指针，T1.4）→ 截断 / LLM 摘要压缩（预算默认 32000 est. tokens，`backend/core/agent/context.py`） |
 | 断点续跑 | SqliteSaver checkpoint + `durability="sync"` + `POST /resume`；格式版本打标（`PRAGMA user_version`）、`mode=ro` 只读检测、拒绝语义严格（非 INTERRUPTED / 无 checkpoint / 停在确认闸口一律 409），孤儿任务启动对账 |

@@ -30,7 +30,12 @@ from pathlib import Path
 from typing import IO, Any, Callable, Dict, Iterator, List, Optional
 
 from ..config import Settings
-from ..core.agent.subagent import DEFAULT_SPLIT_SCENARIOS, subtask_owner
+from ..core.agent.subagent import (
+    DEFAULT_TIER,
+    TOOL_TIERS,
+    subtask_owner,
+    tier_face_names,
+)
 from ..core.llm.client import LLMClient, LLMResponse
 from ..utils.logging import get_logger
 from .event_bus import Event, EventBus
@@ -80,7 +85,6 @@ def _capability_lines(
     settings: Settings,
     tool_names: List[str],
     confirm_enabled: bool,
-    subagent_tool_names: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """The «件清单» — one deterministic line per capability.
 
@@ -89,7 +93,6 @@ def _capability_lines(
     two runs of the same problem must produce byte-identical headers.
     """
     face = sorted(tool_names)
-    subagent_face = sorted(subagent_tool_names or [])
 
     def in_face(name: str) -> bool:
         return name in face
@@ -166,19 +169,17 @@ def _capability_lines(
         },
         {
             "type": "capability",
-            # Entry A = model-driven spawn_subagent tool; entry B = the
-            # keyword auto-split graph node. ``face`` lists the tools a
-            # subtask can actually reach (the sub-agent "档位" — today the
-            # confirm-stripped face; #56's tiers will replace this list).
-            # Entry B's truth is the scenario table itself, NOT
-            # ``subagent_enabled``: when #56 deletes the table this line
-            # flips to False — the disappearance must stay diffable.
+            # Issue #56: one entry point (the ``spawn_subagent`` tool, gated by
+            # ``subagent_enabled``) and two built-in tiers. ``tiers`` lists what
+            # each tier resolves to against the actually-mounted face, so
+            # "关掉某件" flips the members here as well as in ``tool_face`` and
+            # the header stays diffable; a per-run narrowing shows up as an
+            # extra ``subtask_face`` body line, never as a header change.
             "name": "subagent",
             "enabled": settings.subagent_enabled,
             "params": {
-                "entry_a_spawn": settings.subagent_enabled and in_face("spawn_subagent"),
-                "entry_b_split": settings.subagent_enabled and bool(DEFAULT_SPLIT_SCENARIOS),
-                "face": subagent_face,
+                "default_tier": DEFAULT_TIER,
+                "tiers": {t: tier_face_names(tool_names, t) for t in sorted(TOOL_TIERS)},
                 "max_concurrency": settings.subagent_max_concurrency,
                 "timeout_sec": settings.subagent_timeout_sec,
             },
@@ -306,15 +307,12 @@ class RunManifest:
         settings: Settings,
         tool_names: List[str],
         confirm_enabled: bool = True,
-        subagent_tool_names: Optional[List[str]] = None,
         max_bytes: Optional[int] = None,
     ) -> None:
         self._dir: Path = settings.run_manifest_path
         self._dir.mkdir(parents=True, exist_ok=True)
         self._secrets = [s for s in _secret_values(settings) if s]
-        self._cap_lines = _capability_lines(
-            settings, tool_names, confirm_enabled, subagent_tool_names
-        )
+        self._cap_lines = _capability_lines(settings, tool_names, confirm_enabled)
         self._max_bytes = (
             max_bytes if max_bytes is not None else settings.run_manifest_max_mb * 1024 * 1024
         )
@@ -344,14 +342,36 @@ class RunManifest:
         self._subscribe(event_bus, task_id, task_id, "parent")
 
     def attach_subtask(
-        self, event_bus: EventBus, parent_task_id: str, subtask_id: str
+        self,
+        event_bus: EventBus,
+        parent_task_id: str,
+        subtask_id: str,
+        tier: str = "",
+        face: Optional[List[str]] = None,
     ) -> None:
         """Mirror ``subtask_id``'s bus channel into the parent's file (owner tag).
+
+        ``tier`` / ``face`` (issue #56) also record what this subtask could
+        actually do: one body line per subtask, so a per-run narrowing is
+        reviewable without the diffable header changing.
 
         No-op when the parent has no open file (its run started with the
         manifest off) — subtask channels then stay trace-only, no empty shells.
         """
-        self._subscribe(event_bus, subtask_id, parent_task_id, subtask_owner(subtask_id))
+        owner = subtask_owner(subtask_id)
+        if tier or face is not None:
+            with self._lock:
+                self._write(
+                    parent_task_id,
+                    {
+                        "type": "subtask_face",
+                        "ts": time.time(),
+                        "owner": owner,
+                        "tier": tier,
+                        "tools": sorted(face or []),
+                    },
+                )
+        self._subscribe(event_bus, subtask_id, parent_task_id, owner)
 
     def detach_subtask(self, subtask_id: str) -> None:
         """Unsubscribe one subtask channel (its rounds already landed in the file)."""

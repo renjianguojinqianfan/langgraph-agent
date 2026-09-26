@@ -29,7 +29,7 @@ config.checkpoint_enabled/dir ──► TaskManager.__init__
                               thread_id == task_id          (D3 约定)
 ```
 
-`_thread_config` 同时注入 `recursion_limit = max_steps*8 + 20`。**为什么 ×8**：P1 主拓扑每 agent 循环消耗 7 个 superstep（planner→risk_scan→subagent_split→executor→[human_confirm]→tool→reflect），旧版 langgraph 默认 25 的上限意味着 `max_steps>6` 从未真正生效——这是挂接测试时由 GraphRecursionError 揭示的存量缺陷。子代理图独立注入 `×4+10`（subtask 拓扑 4 superstep/轮）。
+`_thread_config` 同时注入 `recursion_limit = max_steps*8 + 20`。**为什么 ×8**：P1 主拓扑每 agent 循环消耗 7 个 superstep（planner→risk_scan→subagent_split→executor→[human_confirm]→tool→reflect），旧版 langgraph 默认 25 的上限意味着 `max_steps>6` 从未真正生效——这是挂接测试时由 GraphRecursionError 揭示的存量缺陷。子代理图独立注入 `×4+10`（subtask 拓扑 4 superstep/轮）。**#56 之后**：`subagent_split` 节点删除，主循环降到 6 个 superstep；`×8` 是上限不是预算，故不动。
 
 ### 2.2 resume 编排（与 spec D4 的实现级偏离）
 
@@ -62,7 +62,7 @@ TaskManager 构造器尾部单次执行：持久化里 status ∈ {RUNNING, PEND
 
 1. TaskManager 新增权威信号 `self._stop_flags[task_id]`（`stop()` 置位，`is_stop_flagged()` peek）。
 2. AgentRuntime 新增 `_stopped(state)` helper：state 字段 OR manager flag；命中则把 True **写回本次 run 的副本**，下游条件边立即可见。
-3. planner / risk_scan / subagent_split / executor / tool_node 五处守卫统一换用 helper。
+3. planner / risk_scan / executor / tool_node 四处守卫统一换用 helper（`subagent_split` 曾在此列，随 #56 删除）。
 4. 两处确认等待循环（human_confirm 节点、risk pause 计划级确认）改为轮询 flag。
 5. run/_resume_run teardown pop flag；shutdown 前 join 全部 worker 再关 sqlite 连接（防 WAL 写中关闭引发 native crash——开发中真实发生过 access violation）。
 

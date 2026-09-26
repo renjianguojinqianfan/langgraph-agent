@@ -45,5 +45,5 @@ class AgentState(TypedDict, total=False):
     _risk_blocked: bool                     # high-risk round -> executor must confirm
 
     # ── P1 item 2: sub-agent ──
-    subtasks: List[Dict[str, Any]]          # SubTask dicts (folded summaries)
-    _is_subtask: bool                       # True inside a subtask state (anti-recursion)
+    subtasks: List[Dict[str, Any]]          # SubTask dicts folded into the parent record
+    _is_subtask: bool                       # True inside a subtask state

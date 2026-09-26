@@ -110,12 +110,18 @@ def make_manager(
     mock: MockLLMClient,
     event_bus: EventBus | None = None,
     persistence: Persistence | None = None,
+    auto_approve: bool = False,
 ) -> TaskManager:
     """Construct a :class:`TaskManager` wired with a scripted mock LLM.
 
     Registers an autouse teardown so every manager built through this helper
     releases its process-level resources (MCP children, checkpoint sqlite
     connection) even when a test forgets to call ``shutdown()``.
+
+    ``auto_approve`` mirrors the headless evaluation switch and exists for tests
+    whose subject is *not* the confirm gate (``run_manifest`` / spawn plumbing),
+    so they need no background confirmer thread. It is instance-scoped here, same
+    as in production: the service path never passes it.
     """
     eb = event_bus or EventBus()
     persistence = persistence or Persistence(settings)
@@ -126,6 +132,7 @@ def make_manager(
         persistence,
         llm_client=mock,
         tools=tools,
+        auto_approve=auto_approve,
     )
 
     _request = _current_request.get()

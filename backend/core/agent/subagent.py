@@ -1,36 +1,31 @@
-"""Sub-agent collaboration (P1 item 2).
+"""Sub-agent collaboration (P1 item 2; tool face pinned by issue #56).
 
 The main agent can delegate work to **isolated** sub-agents. Isolation means:
 
 * every subtask runs with its **own** :class:`AgentState` (independent
   ``messages`` / ``plan`` / ``steps`` / ``artifacts``);
-* every subtask runs with its **own** :class:`AgentRuntime` built over the
-  *same* tool set and LLM, using a **simplified graph** (``mode="subtask"`` —
-  no risk / confirm / subagent_split, so subtasks can never recurse or block on
-  confirmations that cannot route back to the parent);
+* every subtask runs over a **declared capability tier** (:data:`TOOL_TIERS`),
+  not over "whatever the parent had" — a subtask has no ``human_confirm`` node,
+  so any tool that would need a human has to be structurally absent rather than
+  present-and-refused;
+* every subtask runs with its **own** :class:`AgentRuntime` using a
+  **simplified graph** (``mode="subtask"`` — no risk / confirm nodes, so
+  subtasks can never recurse or block on confirmations that cannot route back
+  to the parent);
 * subtask internal events are published on the **subtask's own EventBus
-  channel** (``<parent>:sub:<hex>``), never on the parent channel; the parent
-  channel only receives the three summary events (``subtask_start`` /
-  ``subtask_result`` / ``subtask_failed``);
-* subtasks do **not** attach a ``TraceRecorder`` and are **not** persisted as
-  :class:`Task` records — only the folded summary lands in the parent
-  ``Task.subtasks``.
+  channel** (``<parent>:sub:<hex>``), never on the parent channel.
 
-Two entry points:
-
-* :meth:`SubAgentExecutor.run_subtask` — single subtask (used by the
-  ``spawn_subagent`` tool);
-* :meth:`SubAgentExecutor.run_plan_with_subtasks` — built-in scenario dispatch
-  ("调研+报告" -> research + writing subtasks), parallelised by a thread pool
-  sized by ``subagent_max_concurrency`` (1 = serial, 2 = parallel).
+One entry point: :meth:`SubAgentExecutor.run_subtask`, reached through the
+``spawn_subagent`` tool. Issue #56 removed the second entry ("entry B", the
+keyword-triggered ``subagent_split`` graph node): a subtask that fired because
+the user's phrasing happened to contain "报告" was a side effect nobody approved.
 """
 
 from __future__ import annotations
 
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ...config import Settings
 from ...services.snapshots import get_current_task_id, set_current_task_id
@@ -39,31 +34,97 @@ from .state import AgentState
 
 logger = get_logger("agent.subagent")
 
-#: Built-in split scenarios. The backend matches the *user input* against
-#: ``match`` keywords and deterministically emits one spec per ``subtasks``
-#: entry (no LLM orchestration required).
-DEFAULT_SPLIT_SCENARIOS: List[Dict[str, Any]] = [
-    {
-        "name": "research_and_report",
-        "match": ["调研", "研究", "写报告", "出报告", "报告", "文档", "research", "report"],
-        "subtasks": [
-            {
-                "name": "研究子任务",
-                "instruction_template": (
-                    "检索并收集关于“{topic}”的资料与事实素材，输出结构化要点清单，"
-                    "不要写最终报告。"
-                ),
-            },
-            {
-                "name": "写作子任务",
-                "instruction_template": (
-                    "基于研究素材撰写一份结构化报告，保存为 Markdown 文件，"
-                    "并输出最终总结。"
-                ),
-            },
-        ],
-    },
+# ── capability tiers (issue #56) ─────────────────────────────────────────────
+#
+# A tier is a *name set*, and the face a subtask actually gets is that set
+# intersected with the tools really mounted (``git_enabled=false`` therefore
+# drops the git names from the tier with no code change). Everything outside
+# the tiers is unreachable by construction: ``code_exec``, ``http_request``,
+# the git write operations, MCP / OpenAPI / plugin tools, the legacy
+# ``file_io`` and ``spawn_subagent`` itself.
+#
+# Nothing listed here may carry ``requires_confirm`` / ``needs_per_call_confirm``
+# — the subtask graph has no confirm gate, so a gated member would either hang
+# on a confirmation that can never arrive or, worse, run unconfirmed. The
+# member list is held to that by ``test_qa_p1_subagent`` rather than by this
+# comment.
+EXPLORE_TIER = "explore"
+EXECUTE_TIER = "execute"
+
+#: Tier -> tool names. ``execute`` is ``explore`` plus the sandbox writes, and
+#: derives from it so the two can never drift apart.
+_EXPLORE_MEMBERS = [
+    "read",
+    "glob",
+    "grep",
+    "kb_query",
+    "memory_search",
+    "load_skill",
+    "web_search",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_branch",
 ]
+
+TOOL_TIERS: Dict[str, List[str]] = {
+    EXPLORE_TIER: _EXPLORE_MEMBERS,
+    EXECUTE_TIER: [*_EXPLORE_MEMBERS, "write", "edit"],
+}
+
+#: What a subtask gets when it does not ask for a tier. Keeps the shipped
+#: "subtask writes its report to disk" behaviour working.
+DEFAULT_TIER = EXECUTE_TIER
+
+
+class TierError(ValueError):
+    """Unknown tier, or a ``tools`` narrowing that reaches outside the tier."""
+
+
+def tier_names(tier: str) -> List[str]:
+    """The declared members of ``tier``; :class:`TierError` on a bad name."""
+    try:
+        return TOOL_TIERS[tier]
+    except KeyError:
+        raise TierError(
+            f"unknown tier {tier!r} (expected one of {sorted(TOOL_TIERS)})"
+        ) from None
+
+
+def tier_face_names(tool_names: Any, tier: str) -> List[str]:
+    """Tier members ∩ actually-loaded tool names, sorted.
+
+    Module-level on purpose: the run manifest's capability header lists the
+    same face (issue #58 — «这次子代理能干什么»), so execution and
+    observability share one implementation.
+    """
+    loaded = set(tool_names)
+    return sorted(name for name in tier_names(tier) if name in loaded)
+
+
+def resolve_tool_face(
+    tools: List[Any],
+    tier: str = DEFAULT_TIER,
+    subset: Optional[List[str]] = None,
+) -> List[Any]:
+    """The tool instances one subtask may use.
+
+    ``tier`` selects the declared capability tier; ``subset`` (the
+    ``spawn_subagent`` ``tools`` argument) may only **narrow** it — a name
+    outside the tier is refused with a reason instead of being silently
+    dropped, because a silent drop would let the model believe it had handed
+    the subtask a capability it never got.
+    """
+    members = set(tier_names(tier))
+    if subset is not None:
+        outside = sorted(set(subset) - members)
+        if outside:
+            raise TierError(
+                f"tier {tier!r} does not include {outside}; the tools argument "
+                f"can only narrow, never widen. Members: {sorted(members)}"
+            )
+        members &= set(subset)
+    return [t for t in tools if t.name in members]
 
 
 def subtask_owner(subtask_id: str) -> str:
@@ -75,34 +136,6 @@ def subtask_owner(subtask_id: str) -> str:
     return f"subtask:{subtask_id}"
 
 
-def subtask_tool_face(tools: List[Any]) -> List[Any]:
-    """Shared tool set minus anything that needs a human.
-
-    Subtask graphs run with ``confirm_enabled=False`` and no ``human_confirm``
-    node, so a gated tool there doesn't pause — it runs unconfirmed. Honours the
-    static ``requires_confirm`` (``code_exec``, git writes, spec-generated
-    non-GET operations) and the per-call MCP ``needs_per_call_confirm``;
-    ``http_request`` is matched by name because its write gate is hard-coded in
-    the executor rather than declared on the tool. Dropping it costs subtasks
-    read-only GETs too — narrowing the face is the point, re-plumbing subtask
-    confirmations is not (#55 决策②).
-
-    Module-level on purpose: the run manifest's capability header lists the
-    same face (issue #58 — «子代理档位实际装载的工具名»), so the filter has
-    exactly one implementation shared by execution and observability.
-    """
-    keep = []
-    for t in tools:
-        if t.name in ("spawn_subagent", "http_request"):
-            continue  # recursion guard / executor-hard-coded write gate
-        if getattr(t, "requires_confirm", False) or getattr(
-            t, "needs_per_call_confirm", False
-        ):
-            continue
-        keep.append(t)
-    return keep
-
-
 @dataclass
 class SubTaskSpec:
     """A single subtask to be executed in isolation."""
@@ -111,6 +144,9 @@ class SubTaskSpec:
     name: str
     instruction: str
     parent_task_id: str = ""
+    tier: str = DEFAULT_TIER
+    #: Extra narrowing inside ``tier`` (issue #56: narrow-only, validated there).
+    tools: Optional[List[str]] = None
 
 
 @dataclass
@@ -124,6 +160,7 @@ class SubTaskResult:
     artifacts: List[str] = field(default_factory=list)
     error: str = ""
     tool_calls_executed: int = 0
+    tool_face: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dict compatible with the :class:`SubTask` schema."""
@@ -137,44 +174,6 @@ class SubTaskResult:
         }
 
 
-def _extract_topic(user_input: str) -> str:
-    """Heuristic topic extraction for the built-in research scenario."""
-    text = (user_input or "").strip()
-    for marker in ("调研", "研究", "写报告", "出报告"):
-        idx = text.find(marker)
-        if idx >= 0:
-            return text[idx + len(marker):].strip(" ：:，。,.、") or text
-    return text
-
-
-def split_plan_for_scenario(user_input: str, plan: List[Any]) -> List[SubTaskSpec]:
-    """Return subtask specs when ``user_input`` matches a built-in scenario.
-
-    ``plan`` is accepted for symmetry / future heuristic use; the current
-    built-in scenarios are driven by the user input alone. Returns ``[]`` when
-    no scenario matches (zero regression).
-    """
-    text = (user_input or "").lower()
-    for scenario in DEFAULT_SPLIT_SCENARIOS:
-        if any(k in text for k in scenario["match"]):
-            topic = _extract_topic(user_input)
-            specs: List[SubTaskSpec] = []
-            for st in scenario["subtasks"]:
-                subtask_id = f"{scenario['name']}:sub:{uuid.uuid4().hex[:8]}"
-                instruction = st["instruction_template"].format(topic=topic)
-                specs.append(
-                    SubTaskSpec(
-                        subtask_id=subtask_id,
-                        name=st["name"],
-                        instruction=instruction,
-                        parent_task_id="",
-                    )
-                )
-            logger.info("split_plan_for_scenario matched %s (topic=%r)", scenario["name"], topic)
-            return specs
-    return []
-
-
 class SubAgentExecutor:
     """Runs isolated subtasks on a bounded thread pool."""
 
@@ -186,106 +185,53 @@ class SubAgentExecutor:
         )
 
     # ── public entry points ──
-    def run_subtask(
-        self,
-        spec: SubTaskSpec,
-        publish: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> SubTaskResult:
-        """Run a single subtask synchronously (spawn_subagent tool path)."""
-        return self._exec_one(spec, publish)
+    def run_subtask(self, spec: SubTaskSpec) -> SubTaskResult:
+        """Run one subtask on the pool, bounded by ``subagent_timeout_sec``.
 
-    def run_plan_with_subtasks(
-        self,
-        parent_task_id: str,
-        user_input: str,
-        plan: List[Any],
-        publish: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[SubTaskResult]:
-        """Dispatch the built-in scenario's subtasks (optionally parallel).
-
-        Publishes ``subtask_start`` before submitting and
-        ``subtask_result`` / ``subtask_failed`` as each future resolves. A
-        subtask failure never crashes the parent — it is folded into the
-        results list.
+        The pool is what gives the wall-clock bound (a hung subtask must not
+        wedge the parent's worker thread) and what makes
+        ``subagent_max_concurrency`` mean anything; ``_exec_one`` re-seats the
+        parent task id on the pool thread so its writes still land on the
+        parent's rollback ledger (Issue #33 拍板 5).
         """
-        specs = split_plan_for_scenario(user_input, plan)
-        if not specs:
-            return []
-        for spec in specs:
-            spec.parent_task_id = parent_task_id
-
-        results: List[SubTaskResult] = []
-        futures: List[tuple] = []
-        for spec in specs:
-            if publish is not None:
-                publish(
-                    "subtask_start",
-                    {
-                        "subtask_id": spec.subtask_id,
-                        "name": spec.name,
-                        "status": "running",
-                        "parent_task_id": parent_task_id,
-                    },
-                )
-            futures.append(
-                (spec, self._pool.submit(self._exec_one, spec, publish))
+        future = self._pool.submit(self._exec_one, spec)
+        try:
+            return future.result(timeout=self.settings.subagent_timeout_sec)
+        except Exception as exc:  # timeout / worker crash
+            future.cancel()
+            logger.warning("subtask %s aborted: %s", spec.subtask_id, exc)
+            return SubTaskResult(
+                subtask_id=spec.subtask_id,
+                name=spec.name,
+                status="failed",
+                error=f"subtask timeout or worker error: {exc}",
             )
 
-        for spec, fut in futures:
-            try:
-                res: SubTaskResult = fut.result(timeout=self.settings.subagent_timeout_sec)
-            except Exception as exc:  # timeout / worker crash
-                logger.warning("subtask %s failed: %s", spec.subtask_id, exc)
-                res = SubTaskResult(
-                    subtask_id=spec.subtask_id,
-                    name=spec.name,
-                    status="failed",
-                    error=f"subtask timeout or worker error: {exc}",
-                )
-            results.append(res)
-            if publish is not None:
-                if res.status == "completed":
-                    publish(
-                        "subtask_result",
-                        {
-                            "subtask_id": res.subtask_id,
-                            "name": res.name,
-                            "status": res.status,
-                            "summary": res.summary,
-                            "artifacts": res.artifacts,
-                        },
-                    )
-                else:
-                    publish(
-                        "subtask_failed",
-                        {
-                            "subtask_id": res.subtask_id,
-                            "name": res.name,
-                            "error": res.error or "unknown error",
-                        },
-                    )
-        return results
+    def check_face(self, spec: SubTaskSpec) -> List[str]:
+        """The tool names ``spec`` would get, without running anything.
+
+        Lets the ``spawn_subagent`` tool reject a widening request (and hand the
+        model the reason) before an LLM round or a tool call exists.
+        """
+        return sorted(t.name for t in self._subtask_tools(spec))
 
     # ── internals ──
-    def _subtask_tools(self):
-        """Shared tool set minus anything that needs a human (see :func:`subtask_tool_face`)."""
-        return subtask_tool_face(self.tm._tools)
+    def _subtask_tools(self, spec: SubTaskSpec) -> List[Any]:
+        """The declared tier of the parent face (see :func:`resolve_tool_face`)."""
+        return resolve_tool_face(self.tm._tools, spec.tier, spec.tools)
 
-    def _exec_one(
-        self,
-        spec: SubTaskSpec,
-        publish: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> SubTaskResult:
+    def _exec_one(self, spec: SubTaskSpec) -> SubTaskResult:
         """Execute one subtask in its own runtime + state + simplified graph.
 
         Internal events are published on the subtask's own EventBus channel
         (``spec.subtask_id``) — they never reach the parent channel.
         """
-        # P1-B: pool threads start with a *fresh* context, so a subtask that
-        # came through run_plan_with_subtasks must re-seat the parent task id or
-        # its file writes would miss the parent's rollback ledger (Issue #33
-        # 拍板 5: 子代理写归主任务账本). The spawn_subagent path already
-        # inherits the id on the main thread and passes an empty parent id.
+        # P1-B: the pool thread starts with a *fresh* context, so the parent task
+        # id must be re-seated or the subtask's file writes would miss the
+        # parent's rollback ledger (Issue #33 拍板 5: 子代理写归主任务账本).
+        # Since #56 every path crosses the pool, spawn_subagent included — which
+        # is why that tool hands the spec an explicit parent id (see
+        # ``SpawnSubagentTool.run``) instead of relying on inheritance.
         if spec.parent_task_id:
             set_current_task_id(spec.parent_task_id)
         try:
@@ -311,7 +257,8 @@ class SubAgentExecutor:
                 "subtasks": [],
                 "_is_subtask": True,
             }
-            tools = self._subtask_tools()
+            tools = self._subtask_tools(spec)
+            face = [t.name for t in tools]
             schemas = [t.to_openai_schema() for t in tools]
             # Lazy imports: `nodes`/`graph` are part of a pre-existing import
             # cycle (graph -> nodes -> tools -> subagent_tool -> subagent), so
@@ -320,14 +267,21 @@ class SubAgentExecutor:
             from .nodes import AgentRuntime
 
             # #58: mirror this subtask's rounds and tool events into the
-            # parent's run manifest (owner-tagged). The spawn path carries an
-            # empty ``spec.parent_task_id`` (it inherits the ledger id from
-            # the worker thread's contextvar instead), hence the fallback —
-            # the same parent the rollback ledger uses.
+            # parent's run manifest (owner-tagged), and record the face it
+            # actually got (#56). ``spec.parent_task_id`` is the spawn tool's
+            # link; the contextvar fallback covers a spec built without one
+            # (a direct ``run_subtask`` caller), and the subtask id is the last
+            # resort so a parent-less run still gets a self-describing file.
             manifest = getattr(self.tm, "_manifest", None)
             manifest_parent = spec.parent_task_id or get_current_task_id() or spec.subtask_id
             if manifest is not None:
-                manifest.attach_subtask(self.tm.event_bus, manifest_parent, spec.subtask_id)
+                manifest.attach_subtask(
+                    self.tm.event_bus,
+                    manifest_parent,
+                    spec.subtask_id,
+                    tier=spec.tier,
+                    face=face,
+                )
 
             try:
                 runtime = AgentRuntime(
@@ -347,7 +301,6 @@ class SubAgentExecutor:
                         "aux",
                         subtask_owner(spec.subtask_id),
                     ),
-                    subagent_executor=None,  # never recurse
                     confirm_enabled=False,  # subtask internal: no human confirm
                     parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
                 )
@@ -417,6 +370,17 @@ class SubAgentExecutor:
                 if completed
                 else (final.get("error") or f"subtask graph ended {graph_status}"),
                 tool_calls_executed=tool_count,
+                tool_face=sorted(face),
+            )
+        except TierError as exc:
+            # A bad tier / a widening request never started a run: no LLM call,
+            # no tool, no side effect.
+            logger.warning("subtask %s refused: %s", spec.subtask_id, exc)
+            return SubTaskResult(
+                subtask_id=spec.subtask_id,
+                name=spec.name,
+                status="failed",
+                error=str(exc),
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("subtask %s crashed", spec.subtask_id)
