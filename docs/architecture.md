@@ -97,7 +97,7 @@ langgraph-agent/
 │   │       ├── base.py              # BaseTool 抽象类 + ToolResult
 │   │       ├── registry.py          # 工具注册表/自动发现
 │   │       ├── web_search.py        # 联网检索（DuckDuckGo 默认，可插 SerpAPI）
-│   │       ├── file_io.py           # 文件读/写/列目录（沙箱白名单）
+│   │       ├── file_io.py           # 六个沙箱文件工具：read/write/edit/glob/grep/ls
 │   │       ├── code_exec.py         # 受限 subprocess 代码执行
 │   │       └── http_api.py          # P1：通用 HTTP 请求
 │   ├── services/
