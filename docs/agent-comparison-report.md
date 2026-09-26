@@ -21,7 +21,7 @@ human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可�
 | 维度 | 现状（源码落点） |
 |---|---|
 | 编排内核 | LangGraph 1.2.x，`main`/`subtask` 双拓扑（`backend/core/agent/graph.py`）；具名路由 + `Literal` 注解声明拓扑 |
-| 内置工具 | `web_search` / `read` / `write` / `edit` / `glob` / `grep`（P0-A 离散精读件）/ `file_io`（旧多动作工具，待退役 #17）/ `code_exec`(沙箱) / `http_request` / `memory_search` / `kb_query` / `load_skill`（P1-A）/ `spawn_subagent`（子代理只拿内置两档，见 #56）+ Git 7 个 + 动态 MCP / OpenAPI / 插件工具（`backend/core/tools/registry.py`）|
+| 内置工具 | `web_search` / `read` / `write` / `edit` / `glob` / `grep` / `ls`（沙箱文件六件套：P0-A + #56 + #17）/ `code_exec`(沙箱) / `http_request` / `memory_search` / `kb_query` / `load_skill`（P1-A）/ `spawn_subagent`（子代理只拿内置两档，见 #56）+ Git 7 个 + 动态 MCP / OpenAPI / 插件工具（`backend/core/tools/registry.py`）|
 | 韧性 | 熔断（closed→open→half_open）+ 指数退避重试（`backend/core/tools/resilience.py`） |
 | 上下文 | evict（保护带外超 4000 字符 tool 结果原地换占位 + trace 回读指针，T1.4）→ 截断 / LLM 摘要压缩（预算默认 32000 est. tokens，`backend/core/agent/context.py`） |
 | 断点续跑 | SqliteSaver checkpoint + `durability="sync"` + `POST /resume`；格式版本打标（`PRAGMA user_version`）、`mode=ro` 只读检测、拒绝语义严格（非 INTERRUPTED / 无 checkpoint / 停在确认闸口一律 409），孤儿任务启动对账 |
@@ -65,7 +65,7 @@ human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可�
 | 维度 | 本仓库 | Codex | Qoder | Hermes | DeepSeek Harness |
 |---|---|---|---|---|---|
 | **编排范式** | Plan-and-Execute（StateGraph 显式图） | ReAct 循环（隐式） | 多专家流水线 | ReAct + 记忆驱动 | ReAct + Plan 工具 + Code mode |
-| **文件编辑** | read(行号分页) / edit(str_replace) / glob / grep 四件套（P0-A、PR #18）；旧 file_io 待退役 | 精读精确编辑 | IDE 级编辑 | 文件工具集 | 6 个文件工具（精确替换）|
+| **文件编辑** | read(行号分页) / write / edit(str_replace) / glob / grep / ls 六件套（P0-A PR #18，#56 补 write、#17 补 ls 并退役旧 file_io）| 精读精确编辑 | IDE 级编辑 | 文件工具集 | 6 个文件工具（精确替换）|
 | **Shell / 代码执行** | `code_exec` subprocess（仅超时，无容器隔离） | 强沙箱 + 审批策略 | 终端工具 | 多后端（Docker / SSH / Modal）加固 | Minimal 内置持久 bash |
 | **Skills 系统** | **P1-A′ + P1-A 已交付**：清单注入（PR #39）+ `load_skill` 按名取整档 SKILL.md（PR #42）| 原生 Skills + 插件市场 | Skills + 插件 | 自动创建 / 复用技能 | skills 即插件 |
 | **上下文管理** | eviction（保护带外大 tool 结果换占位 + 回读指针，T1.4、PR #40）+ 截断 / 摘要压缩 | 会话压缩 / 分叉 | 增强上下文工程 + RepoWiki 精剪 | 持久记忆 + 摘要 | tool 结果 eviction 落盘换引用 |
@@ -105,10 +105,10 @@ human_confirm → tool → reflect 循环）→ 工具执行 → SSE 实时可�
 
 ### 本仓库明显落后 / 缺失的部分
 
-1. ~~**无编程精读工具**~~ **已补（P0-A / PR #18）**：`read`（行号分页）/ `edit`（精确
-   `str_replace`）/ `glob` / `grep` 四件套已落地，与 Codex / dsh / Hermes 的六件套同构；
-   旧 `file_io` 待退役（Issue #17）。原差距描述保留作记录：那曾是「任务执行器」与
-   「能操作文件世界的 agent」之差。
+1. ~~**无编程精读工具**~~ **已补（P0-A / PR #18，六件套由 #56 / #17 补齐）**：`read`（行号分页）/
+   `write` / `edit`（精确 `str_replace`）/ `glob` / `grep` / `ls` 六件已落地，与 Codex / dsh /
+   Hermes 的六件套同构；旧 multi-action `file_io` 已退役（Issue #17）。原差距描述保留作记录：那曾是
+   「任务执行器」与「能操作文件世界的 agent」之差。
 2. ~~**无上下文注入层**~~ **已闭（P1-A′ / PR #39，2026-09-18）**：两层 `AGENTS.md` + skills 清单
    + 环境事实进 system（任务级缓存、永不裁、不计入压缩预算）；原差距描述保留作记录——它曾是全表
    最被低估的一项（对标列里 Codex 的「AGENTS.md」、Hermes 的「MEMORY.md / USER.md」、dsh 的

@@ -98,9 +98,8 @@ def test_auto_index_disabled_does_not_index_artifact(tmp_path, event_bus):
         tool_calls=[
             {
                 "id": "qakb1",
-                "name": "file_io",
+                "name": "write",
                 "arguments": {
-                    "action": "write",
                     "path": "no_index.txt",
                     "content": "这段内容不应被自动入库",
                 },

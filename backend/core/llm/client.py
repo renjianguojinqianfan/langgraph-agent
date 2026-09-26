@@ -121,9 +121,8 @@ def make_default_mock_client() -> MockLLMClient:
             },
             {
                 "id": "call_write",
-                "name": "file_io",
+                "name": "write",
                 "arguments": {
-                    "action": "write",
                     "path": "report.txt",
                     "content": "Autonomous agents are trending. (mock report)",
                 },

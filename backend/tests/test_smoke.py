@@ -40,9 +40,8 @@ def build_manager(settings: Settings) -> tuple[TaskManager, EventBus]:
         tool_calls=[
             {
                 "id": "c1",
-                "name": "file_io",
+                "name": "write",
                 "arguments": {
-                    "action": "write",
                     "path": "hello.txt",
                     "content": "Hello from the autonomous agent!",
                 },

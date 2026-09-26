@@ -55,8 +55,8 @@ def _run_task_once(tmp_path, index: int) -> tuple[str, set[str]]:
         tool_calls=[
             {
                 "id": f"c{index}",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": f"out_{index}.txt", "content": f"content {index}"},
+                "name": "write",
+                "arguments": {"path": f"out_{index}.txt", "content": f"content {index}"},
             }
         ],
         final_answer="done",

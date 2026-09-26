@@ -64,7 +64,7 @@ def test_trace_recorder_writes_events_in_order(tmp_path):
     rec.attach(bus, "t1")
     bus.publish("t1", "task_created", {"task_id": "t1"})
     bus.publish("t1", "step_start", {"index": 1})
-    bus.publish("t1", "tool_result", {"tool_name": "file_io"})
+    bus.publish("t1", "tool_result", {"tool_name": "write"})
     rec.close("t1")
 
     events = [json.loads(ln) for ln in _read_lines(rec.file_path("t1"))]
@@ -125,8 +125,8 @@ def trace_client(tmp_path):
         tool_calls=[
             {
                 "id": "c1",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "t.txt", "content": "hi"},
+                "name": "write",
+                "arguments": {"path": "t.txt", "content": "hi"},
             }
         ],
         final_answer="done.",

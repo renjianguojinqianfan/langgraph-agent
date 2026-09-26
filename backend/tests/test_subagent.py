@@ -54,11 +54,10 @@ from backend.tests.test_graph import (
 )
 
 #: Everything #56 puts out of a subtask's reach by construction: external
-#: writes, generated / legacy tools, and the spawn tool itself (anti-recursion).
+#: writes, generated tools, and the spawn tool itself (anti-recursion).
 OUT_OF_TIER_NAMES = (
     "code_exec",
     "http_request",
-    "file_io",
     "git_commit",
     "git_init",
     "git_checkout",
@@ -70,6 +69,7 @@ OUT_OF_TIER_NAMES = (
 
 EXPLORE_MEMBERS = [
     "read",
+    "ls",
     "glob",
     "grep",
     "kb_query",
@@ -271,7 +271,7 @@ def test_tier_names_rejects_an_unknown_tier():
 
 
 def test_tier_face_names_intersect_with_the_loaded_face():
-    loaded = ["read", "write", "code_exec", "file_io"]
+    loaded = ["read", "write", "code_exec", "spawn_subagent"]
     assert tier_face_names(loaded, EXECUTE_TIER) == ["read", "write"]
     assert tier_face_names(loaded, EXPLORE_TIER) == ["read"]
     assert tier_face_names([], EXECUTE_TIER) == []
@@ -361,7 +361,7 @@ def test_no_tier_mounts_a_confirmation_gated_tool(tmp_path):
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):
-    """档外即不可达：外部写 / legacy file_io / 生成型工具一个都进不了子任务。"""
+    """档外即不可达：外部写 / 逃逸舱 / 生成型工具一个都进不了子任务。"""
     seen_mounted: set = set()
     for label, tm, ex in _mounted_managers(tmp_path):
         names = {t.name for t in tm._tools}
@@ -411,7 +411,7 @@ def _write_pet_spec(tmp_path) -> str:
 
 
 def test_spawned_subtask_face_carries_the_sandbox_writes_only(tmp_path):
-    """execute 档 = explore 档 + write/edit；legacy file_io 不在任何档里。"""
+    """execute 档 = explore 档 + write/edit；ls 属 explore，file_io 已整个退役。"""
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _CountingMock())
     ex = SubAgentExecutor(tm, settings)
@@ -419,7 +419,8 @@ def test_spawned_subtask_face_carries_the_sandbox_writes_only(tmp_path):
     explore = ex.check_face(_spec(tier=EXPLORE_TIER))
 
     assert set(execute) - set(explore) == {"write", "edit"}
-    assert "file_io" not in execute and "file_io" in {t.name for t in tm._tools}
+    assert "ls" in explore  # 目录可见性是只读档的原语（#17）
+    assert "file_io" not in {t.name for t in tm._tools}
     assert "spawn_subagent" not in execute  # anti-recursion
     assert "web_search" in execute
 
@@ -551,7 +552,7 @@ def test_subagent_disabled_removes_the_spawn_tool(tmp_path):
     assert "spawn_subagent" not in {s["function"]["name"] for s in tm._tool_schemas}
     assert tm._subagent is None
     # The rest of the face is untouched.
-    assert {"read", "write", "file_io"} <= names
+    assert {"read", "write", "ls"} <= names
 
 
 class _StubExecutor:
@@ -698,8 +699,8 @@ class _EscalatingSubtaskMock(MockLLMClient):
             self.offered_to_subtask = sorted(t["function"]["name"] for t in tools)
             self.subtask_turns += 1
             if self.subtask_turns == 1:
-                # The out-of-tier family: an external write and the legacy
-                # bundle tool. Neither exists on this graph's face.
+                # The out-of-tier family: an external write and the sandbox
+                # escape hatch. Neither exists on this graph's face.
                 return LLMResponse(
                     content="",
                     tool_calls=[
@@ -714,11 +715,12 @@ class _EscalatingSubtaskMock(MockLLMClient):
                         },
                         {
                             "id": "out2",
-                            "name": "file_io",
+                            "name": "code_exec",
                             "arguments": {
-                                "action": "write",
-                                "path": self.SIDE_EFFECT,
-                                "content": "must never exist",
+                                "language": "python",
+                                "code": (
+                                    f"open({self.SIDE_EFFECT!r}, 'w').write('nope')"
+                                ),
                             },
                         },
                     ],
@@ -791,7 +793,7 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
     ex = tm._subagent
     assert ex is not None
     face = ex.check_face(_spec(subtask_id=subtask_id, tier=EXECUTE_TIER))
-    for name in ("http_request", "file_io", "code_exec", "spawn_subagent"):
+    for name in ("http_request", "code_exec", "spawn_subagent"):
         assert name not in face
         assert name not in mock.offered_to_subtask
     assert set(mock.offered_to_subtask) <= set(TOOL_TIERS[EXECUTE_TIER])
@@ -801,9 +803,9 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
     refused = [
         e["data"]
         for e in sub_events
-        if e["type"] == "tool_result" and e["data"]["tool_name"] in ("http_request", "file_io")
+        if e["type"] == "tool_result" and e["data"]["tool_name"] in ("http_request", "code_exec")
     ]
-    assert {r["tool_name"] for r in refused} == {"http_request", "file_io"}
+    assert {r["tool_name"] for r in refused} == {"http_request", "code_exec"}
     assert all(r["status"] == "failed" and "unknown tool" in r["error"] for r in refused)
     assert _RecordingHttpClient.calls == []  # the HTTP layer was never touched
     assert not (settings.artifacts_path / mock.SIDE_EFFECT).exists()

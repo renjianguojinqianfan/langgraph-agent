@@ -95,8 +95,8 @@ def test_risk_report_and_found_event_payloads(settings, event_bus):
         tool_calls=[
             {
                 "id": "qar1",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "qar1.txt", "content": "x"},
+                "name": "write",
+                "arguments": {"path": "qar1.txt", "content": "x"},
             }
         ],
         final_answer="done.",
@@ -135,8 +135,8 @@ def test_high_risk_tool_not_executed_before_confirm(settings, event_bus):
         tool_calls=[
             {
                 "id": "qar2",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "qar2.txt", "content": "x"},
+                "name": "write",
+                "arguments": {"path": "qar2.txt", "content": "x"},
             }
         ],
         final_answer="done.",
@@ -156,7 +156,7 @@ def test_high_risk_tool_not_executed_before_confirm(settings, event_bus):
     task = _run_until_done(tm, task_id)
     assert task.status.value == "COMPLETED"
     results = [e["data"] for e in event_bus.replay(task_id) if e["type"] == "tool_result"]
-    assert any(r.get("tool_name") == "file_io" and r.get("status") == "success" for r in results)
+    assert any(r.get("tool_name") == "write" and r.get("status") == "success" for r in results)
 
 
 def test_risk_disabled_publishes_no_risk_events(settings, event_bus):

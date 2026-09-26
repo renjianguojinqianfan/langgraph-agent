@@ -40,8 +40,8 @@ logger = get_logger("agent.subagent")
 # intersected with the tools really mounted (``git_enabled=false`` therefore
 # drops the git names from the tier with no code change). Everything outside
 # the tiers is unreachable by construction: ``code_exec``, ``http_request``,
-# the git write operations, MCP / OpenAPI / plugin tools, the legacy
-# ``file_io`` and ``spawn_subagent`` itself.
+# the git write operations, MCP / OpenAPI / plugin tools and
+# ``spawn_subagent`` itself.
 #
 # Nothing listed here may carry ``requires_confirm`` / ``needs_per_call_confirm``
 # — the subtask graph has no confirm gate, so a gated member would either hang
@@ -55,6 +55,7 @@ EXECUTE_TIER = "execute"
 #: derives from it so the two can never drift apart.
 _EXPLORE_MEMBERS = [
     "read",
+    "ls",
     "glob",
     "grep",
     "kb_query",

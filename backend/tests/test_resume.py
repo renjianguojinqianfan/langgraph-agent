@@ -44,8 +44,8 @@ def _big_script():
         tool_calls=[
             {
                 "id": f"c{i}",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": f"f{i}.txt", "content": "x"},
+                "name": "write",
+                "arguments": {"path": f"f{i}.txt", "content": "x"},
             }
             for i in range(5)
         ],

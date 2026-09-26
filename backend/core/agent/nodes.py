@@ -476,10 +476,13 @@ class AgentRuntime:
                 {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(result.data, ensure_ascii=False, default=str)}
             )
 
-            # Register an artifact if the tool produced a file on disk.
+            # Register an artifact if the tool produced a file on disk. Files
+            # only: a result that advertises a directory under ``path`` would
+            # otherwise land in verification as a 0-byte「产物为空」and loop a
+            # healthy task back (#17).
             if result.success and isinstance(result.data, dict) and result.data.get("path"):
                 p = Path(result.data["path"])
-                if p.exists():
+                if p.is_file():
                     self.tm.add_artifact(self.task_id, p)
 
         state["_last_action"] = "tool_done"

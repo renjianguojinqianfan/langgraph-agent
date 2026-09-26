@@ -1,6 +1,7 @@
 """Tests for the tool layer.
 
-* ``file_io``  — sandbox whitelist (allow writes inside root, reject escapes).
+* the discrete sandbox file tools (``write`` / ``read`` / ``ls``) — sandbox
+  whitelist: allow operations inside the root, reject escapes.
 * ``code_exec`` — restricted subprocess (runs code, honours timeout, requires_confirm).
 * ``http_api`` — confirm logic (GET free, write methods gated); network mocked.
 * ``web_search`` — mocked provider, validates returned structure.
@@ -14,15 +15,14 @@ from unittest.mock import patch
 
 from backend.config import Settings
 from backend.core.tools.code_exec import CodeExecTool
-from backend.core.tools.file_io import FileIOTool
+from backend.core.tools.file_io import LsTool, ReadTool, WriteTool
 from backend.core.tools.http_api import WRITE_METHODS, HttpTool
 from backend.core.tools.web_search import WebSearchTool
 
 
-# ───────────────────────────── file_io ─────────────────────────────
-def test_file_io_write_then_read_within_sandbox(settings):
-    tool = FileIOTool(settings)
-    res = tool.run(action="write", path="hello.txt", content="hi there")
+# ─────────────────────────── sandbox file tools ───────────────────────────
+def test_write_then_read_within_sandbox(settings):
+    res = WriteTool(settings).run(path="hello.txt", content="hi there")
     assert res.success is True
     assert "path" in res.data
 
@@ -30,60 +30,48 @@ def test_file_io_write_then_read_within_sandbox(settings):
     assert written.exists()
     assert "hi there" in written.read_text(encoding="utf-8")
 
-    read = tool.run(action="read", path="hello.txt")
+    read = ReadTool(settings).run(path="hello.txt", line_numbers=False)
     assert read.success is True
     assert read.data["content"] == "hi there"
 
 
-def test_file_io_write_to_subdirectory_allowed(settings):
-    tool = FileIOTool(settings)
-    res = tool.run(action="write", path="sub/dir/note.txt", content="nested")
+def test_write_to_subdirectory_allowed(settings):
+    res = WriteTool(settings).run(path="sub/dir/note.txt", content="nested")
     assert res.success is True
     assert (settings.artifacts_path / "sub" / "dir" / "note.txt").exists()
 
 
-def test_file_io_rejects_parent_path_escape(settings):
-    tool = FileIOTool(settings)
-    res = tool.run(action="write", path="../escape.txt", content="x")
+def test_write_rejects_parent_path_escape(settings):
+    res = WriteTool(settings).run(path="../escape.txt", content="x")
     assert res.success is False
     assert "outside the sandbox" in res.error or "rejected" in res.error.lower()
 
 
-def test_file_io_rejects_absolute_path_escape(settings):
-    tool = FileIOTool(settings)
-    res = tool.run(action="read", path="/etc/passwd")
+def test_read_rejects_absolute_path_escape(settings):
+    res = ReadTool(settings).run(path="/etc/passwd")
     assert res.success is False
     assert "outside the sandbox" in res.error or "rejected" in res.error.lower()
 
 
-def test_file_io_rejects_empty_path(settings):
-    tool = FileIOTool(settings)
-    res = tool.run(action="write", path="", content="x")
+def test_write_rejects_empty_path(settings):
+    res = WriteTool(settings).run(path="", content="x")
     assert res.success is False
     assert "path" in res.error.lower()
 
 
-def test_file_io_read_missing_file_reports_error(settings):
-    tool = FileIOTool(settings)
-    res = tool.run(action="read", path="does_not_exist.txt")
+def test_read_missing_file_reports_error(settings):
+    res = ReadTool(settings).run(path="does_not_exist.txt")
     assert res.success is False
     assert "not found" in res.error.lower()
 
 
-def test_file_io_list_returns_entries(settings):
-    tool = FileIOTool(settings)
-    tool.run(action="write", path="a.txt", content="1")
-    tool.run(action="write", path="b.txt", content="2")
-    res = tool.run(action="list", path=".")
+def test_ls_returns_entries(settings):
+    WriteTool(settings).run(path="a.txt", content="1")
+    WriteTool(settings).run(path="b.txt", content="2")
+    res = LsTool(settings).run()
     assert res.success is True
     names = {e["name"] for e in res.data["entries"]}
     assert {"a.txt", "b.txt"}.issubset(names)
-
-
-def test_file_io_unknown_action_errors(settings):
-    tool = FileIOTool(settings)
-    res = tool.run(action="frobnicate", path="x")
-    assert res.success is False
 
 
 # ──────────────────────────── code_exec ────────────────────────────

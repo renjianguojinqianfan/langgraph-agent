@@ -3,8 +3,9 @@
 Reviewer-perspective coverage beyond the engineer's suite: exact exponential
 backoff delay sequence, tool-level ``max_retries`` override, breaker counting
 once per dispatch (not per retry), short-circuit never executing the underlying
-tool, and *real* built-in tools behaving per policy (code_exec/file_io: no
-retry/no breaker; web_search/http_request: retryable + trippable breaker).
+tool, and *real* built-in tools behaving per policy (the sandbox file tools and
+code_exec: no retry/no breaker; web_search/http_request: retryable + trippable
+breaker).
 All offline (tiny backoff / monkeypatched sleep, deterministic failure paths).
 """
 
@@ -13,10 +14,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import pytest
+
 from backend.config import Settings
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.core.tools.code_exec import CodeExecTool
-from backend.core.tools.file_io import FileIOTool
+from backend.core.tools.file_io import LsTool, ReadTool, WriteTool
 from backend.core.tools.http_api import HttpTool
 from backend.core.tools.resilience import ToolExecutor, with_retry
 from backend.core.tools.web_search import WebSearchTool
@@ -201,23 +204,36 @@ def test_real_code_exec_never_retries_or_breaks():
     assert "code_exec" not in ex._breakers
 
 
-def test_real_file_io_never_retries_or_breaks():
-    settings = _settings(tool_max_retries=5, tool_failure_threshold=1)
-    tool = FileIOTool(settings)
+@pytest.mark.parametrize(
+    "tool_cls,tool_name,call",
+    [
+        (ReadTool, "read", {"path": ""}),
+        (WriteTool, "write", {"path": ""}),
+        (LsTool, "ls", {"path": "../escape"}),
+    ],
+)
+def test_real_sandbox_file_tools_never_retry_or_break(tmp_path, tool_cls, tool_name, call):
+    """Sandbox file tools are local FS: deterministic, so no retry and no
+    breaker — repeated failures must never short-circuit them (issue #17 migrated
+    this off the retired multi-action ``file_io`` bundle)."""
+    settings = _settings(
+        tool_max_retries=5, tool_failure_threshold=1, artifacts_dir=str(tmp_path)
+    )
+    tool = tool_cls(settings)
     ex = ToolExecutor(settings)
 
     assert tool.retryable is False
     assert tool.max_retries == 0
     assert tool.circuit_breaker is False
 
-    r = ex.dispatch(tool, action="read", path="")
+    r = ex.dispatch(tool, **call)
     assert r.success is False
     assert r.retries == 0
     assert r.circuit_open is False
-    assert "file_io" not in ex._breakers
+    assert tool_name not in ex._breakers
     for _ in range(3):
-        assert ex.dispatch(tool, action="read", path="").circuit_open is False
-    assert "file_io" not in ex._breakers
+        assert ex.dispatch(tool, **call).circuit_open is False
+    assert tool_name not in ex._breakers
 
 
 def test_real_web_search_retryable_and_trips_breaker(monkeypatch):

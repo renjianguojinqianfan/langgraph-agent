@@ -2,7 +2,7 @@
 
 Design contract under test (``docs/specs/p1-b-rollback.md``):
 
-* capture happens *before* every sandbox file write (file_io write / edit) and
+* capture happens *before* every sandbox file write (``write`` / ``edit``) and
   lands **outside** the sandbox under ``<data_dir>/snapshots/<task_id>/``;
 * the ledger (``ledger.jsonl`` + ``NNNN.bak`` files) is a reverse-replay undo
   log: restoring walks it backwards to the task's starting state;
@@ -333,21 +333,12 @@ def test_cleanup_disabled_by_master_switch(tmp_path):
 
 # ───────────────────── seam: tools capture, manager restores ─────────────────────
 def _writer_mock(path: str, content: str) -> MockLLMClient:
+    """Script the discrete ``write`` tool — the sandbox write on the execute tier."""
     return MockLLMClient(
         plan=["write one file"],
         tool_calls=[
-            {"id": "w1", "name": "file_io", "arguments": {"action": "write", "path": path, "content": content}}
+            {"id": "w1", "name": "write", "arguments": {"path": path, "content": content}}
         ],
-        final_answer="done",
-    )
-
-
-def _write_tool_mock(path: str, content: str) -> MockLLMClient:
-    """Script the discrete ``write`` tool — the only sandbox write a subtask can
-    reach since issue #56 (``file_io`` is on no capability tier)."""
-    return MockLLMClient(
-        plan=["write one file"],
-        tool_calls=[{"id": "w1", "name": "write", "arguments": {"path": path, "content": content}}],
         final_answer="done",
     )
 
@@ -461,11 +452,11 @@ def test_rollback_missing_task_raises(tmp_path):
 def test_subtask_writes_land_in_parent_ledger(tmp_path):
     """Pool threads get a fresh context — _exec_one must re-seat the parent id.
 
-    Issue #56: the subtask writes with the discrete ``write`` tool now, which is
-    on the execute tier (``file_io`` is on no tier at all).
+    Issue #56: the subtask writes with the discrete ``write`` tool, which is on
+    the execute tier.
     """
     settings = _s(tmp_path, subagent_max_concurrency=2)
-    tm = make_manager(settings, _write_tool_mock("sub_out.txt", "from subtask"))
+    tm = make_manager(settings, _writer_mock("sub_out.txt", "from subtask"))
     executor = SubAgentExecutor(tm, settings)
     spec = SubTaskSpec(
         subtask_id="s1", name="writer", instruction="write the file",
@@ -484,7 +475,7 @@ def test_spawned_subtask_write_lands_on_the_parent_ledger(tmp_path):
     """The surviving entry point shares the same ledger: the spawn tool runs on
     the parent's thread, so its subtask's write is accounted to the parent."""
     settings = _s(tmp_path)
-    tm = make_manager(settings, _write_tool_mock("spawn_out.txt", "from spawned subtask"))
+    tm = make_manager(settings, _writer_mock("spawn_out.txt", "from spawned subtask"))
     tool = next(t for t in tm._tools if t.name == "spawn_subagent")
     set_current_task_id("parent-spawn")
     try:

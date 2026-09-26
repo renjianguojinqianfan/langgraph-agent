@@ -130,8 +130,8 @@ def test_risk_confirm_flow_blocks_until_approved(settings, event_bus):
         tool_calls=[
             {
                 "id": "r1",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "out.txt", "content": "x"},
+                "name": "write",
+                "arguments": {"path": "out.txt", "content": "x"},
             }
         ],
         final_answer="done after confirmation.",
@@ -149,7 +149,7 @@ def test_risk_confirm_flow_blocks_until_approved(settings, event_bus):
     assert "human_confirm_required" in types
     # The tool executed only after approval.
     tool_results = [e["data"] for e in events if e["type"] == "tool_result"]
-    assert any(r.get("tool_name") == "file_io" and r.get("status") == "success" for r in tool_results)
+    assert any(r.get("tool_name") == "write" and r.get("status") == "success" for r in tool_results)
     # risk_report persisted to the task.
     assert any(it.level == "high" for it in task.risk_report)
 
@@ -160,8 +160,8 @@ def test_risk_confirm_flow_skips_on_rejection(settings, event_bus):
         tool_calls=[
             {
                 "id": "r2",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "out2.txt", "content": "x"},
+                "name": "write",
+                "arguments": {"path": "out2.txt", "content": "x"},
             }
         ],
         final_answer="skipped.",
@@ -184,8 +184,8 @@ def test_risk_disabled_is_zero_regression(settings, event_bus):
         tool_calls=[
             {
                 "id": "r3",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "n.txt", "content": "ok"},
+                "name": "write",
+                "arguments": {"path": "n.txt", "content": "ok"},
             }
         ],
         final_answer="done.",
@@ -221,8 +221,8 @@ def test_risk_pause_policy_approves_at_plan_level(settings, event_bus):
         tool_calls=[
             {
                 "id": "r4",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "p.txt", "content": "x"},
+                "name": "write",
+                "arguments": {"path": "p.txt", "content": "x"},
             }
         ],
     )
@@ -246,8 +246,8 @@ def test_risk_pause_policy_rejects_and_skips(settings, event_bus):
         tool_calls=[
             {
                 "id": "r5",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "q.txt", "content": "x"},
+                "name": "write",
+                "arguments": {"path": "q.txt", "content": "x"},
             }
         ],
     )

@@ -47,9 +47,8 @@ def test_journey_risk_confirm_execute_kb_index(tmp_path, event_bus):
         tool_calls=[
             {
                 "id": "qaA1",
-                "name": "file_io",
+                "name": "write",
                 "arguments": {
-                    "action": "write",
                     "path": "risk_report_artifact.txt",
                     "content": "风险任务产物内容：安全策略说明",
                 },

@@ -1,27 +1,22 @@
-"""File I/O tools with sandbox path restrictions.
+"""Sandbox file tools: the discrete six-piece family.
 
 All paths are confined to ``Settings.artifacts_path`` (the sandbox root). Reads
 outside the root, writes that escape the root, and non-existent files are
 rejected. Successful writes return the absolute path so the kernel can register
 an :class:`~backend.services.persistence.Artifact`.
 
-Two families live here:
+Each capability is its own ``BaseTool`` so the function schema and the
+per-tool resilience/confirm policy stay focused:
 
-* :class:`FileIOTool` (``file_io``) -- the original multi-action tool
-  (``read`` / ``write`` / ``list``). Retained for backward compatibility; a
-  tracked follow-up covers migrating callers off it and retiring it.
-* The P0-A discrete "six-piece" tools (``docs/roadmap-pawbench.md``):
-  :class:`ReadTool` (``read``, line pagination + line numbers),
-  :class:`WriteTool` (``write``, whole-file create/overwrite),
-  :class:`EditTool` (``edit``, exact ``str_replace``), :class:`GlobTool`
-  (``glob``, recursive filename match) and :class:`GrepTool` (``grep``, regex
-  content search). Each is its own ``BaseTool`` so the function schema and the
-  per-tool resilience/confirm policy stay focused. ``write`` exists so a
-  sub-agent can be given sandbox writes without the un-splittable ``file_io``
-  read/write/list bundle (issue #56).
+* :class:`ReadTool` (``read``, line pagination + line numbers),
+* :class:`WriteTool` (``write``, whole-file create/overwrite),
+* :class:`EditTool` (``edit``, exact ``str_replace``),
+* :class:`GlobTool` (``glob``, recursive filename match),
+* :class:`GrepTool` (``grep``, regex content search),
+* :class:`LsTool` (``ls``, shallow listing of the directory it was asked for).
 
-Both families share the same sandbox confinement; the discrete tools factor it
-into :class:`_SandboxedTool`.
+The multi-action ``file_io`` bundle these replaced is retired (issue #17); the
+module is still named after it.
 """
 
 from __future__ import annotations
@@ -40,116 +35,16 @@ from .registry import register
 logger = get_logger("tool.file_io")
 
 
-@register
-class FileIOTool(BaseTool):
-    name = "file_io"
-    description = (
-        "Read, write or list files inside the sandbox artifacts directory. "
-        "Paths are relative to the sandbox root and may not escape it."
-    )
-    args_schema = {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["read", "write", "list"],
-                "description": "Operation to perform.",
-            },
-            "path": {
-                "type": "string",
-                "description": "Relative path inside the sandbox (for read/write).",
-            },
-            "content": {
-                "type": "string",
-                "description": "Content to write (for action=write).",
-            },
-        },
-        "required": ["action", "path"],
-    }
-    requires_confirm = False
-    # P0 resilience: local FS operations — deterministic, no retry, no breaker.
-    retryable = False
-    max_retries = 0
-    circuit_breaker = False
-
-    def __init__(self, settings: Settings | None = None) -> None:
-        super().__init__(settings)
-        self._root = settings.artifacts_path if settings else Path("data/artifacts")
-
-    def _safe_path(self, path: str) -> Path | None:
-        """Resolve ``path`` against the sandbox root; return None if it escapes."""
-        try:
-            root = self._root.resolve()
-            root.mkdir(parents=True, exist_ok=True)
-            candidate = (root / path).resolve()
-            if candidate != root and root not in candidate.parents:
-                return None
-            return candidate
-        except Exception:
-            return None
-
-    def run(self, **kwargs: Any) -> ToolResult:
-        action = str(kwargs.get("action", "")).lower()
-        path = str(kwargs.get("path", ""))
-        if not path:
-            return ToolResult(success=False, error="`path` is required.")
-        target = self._safe_path(path)
-        if target is None:
-            return ToolResult(
-                success=False,
-                error=f"Path '{path}' is outside the sandbox root and was rejected.",
-            )
-
-        try:
-            if action == "read":
-                if not target.exists():
-                    return ToolResult(success=False, error=f"File not found: {path}")
-                text = target.read_text(encoding="utf-8", errors="replace")
-                return ToolResult(success=True, data={"path": str(target), "content": text, "size": target.stat().st_size})
-
-            if action == "write":
-                content = str(kwargs.get("content", ""))
-                target.parent.mkdir(parents=True, exist_ok=True)
-                # P1-B: photograph the previous version before it is overwritten
-                # (fail-open — a broken snapshot store never blocks the write).
-                capture_before_image(target, settings=self.settings)
-                target.write_text(content, encoding="utf-8")
-                size = target.stat().st_size
-                logger.info("file_io wrote %s (%d bytes)", target, size)
-                return ToolResult(
-                    success=True,
-                    data={"path": str(target), "size": size, "content": content},
-                )
-
-            if action == "list":
-                root = self._root.resolve()
-                root.mkdir(parents=True, exist_ok=True)
-                entries = [
-                    {
-                        "name": p.name,
-                        "is_dir": p.is_dir(),
-                        "size": p.stat().st_size if p.is_file() else 0,
-                    }
-                    for p in sorted(root.iterdir())
-                ]
-                return ToolResult(success=True, data={"path": str(root), "entries": entries})
-
-            return ToolResult(success=False, error=f"Unknown action: {action}")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("file_io failed")
-            return ToolResult(success=False, error=str(exc))
-
-
-# ───────────────────── P0-A discrete file tools ─────────────────────
-# Six-piece-style precision tools (read/edit/glob/grep) added under
-# docs/roadmap-pawbench.md P0-A. They complement -- and will eventually replace
-# -- the multi-action FileIOTool above (retirement tracked in a follow-up).
+# ───────────────────── the discrete sandbox file tools ─────────────────────
+# Six-piece-style precision tools (read / write / edit / glob / grep / ls) under
+# docs/roadmap-pawbench.md P0-A, the set closed by issue #17.
 #
 # The defaults below are module constants (not Settings) to avoid config
 # sprawl; they can be promoted to Settings later if a deployment needs to tune
 # them. Tests may monkeypatch them to exercise the caps without huge fixtures.
 DEFAULT_READ_LIMIT = 2000  # max lines a single `read` returns before truncating
 GLOB_MAX_MATCHES = 500  # cap on glob results (guards a runaway `**` pattern)
+LS_MAX_ENTRIES = 500  # cap on ls entries (a sandbox root can hold a lot of files)
 GREP_MAX_RESULTS = 100  # cap on grep matches returned
 GREP_MAX_FILE_BYTES = 1_000_000  # skip files larger than this when grepping
 
@@ -165,8 +60,7 @@ def _coerce_int(value: Any, default: int) -> int:
 class _SandboxedTool(BaseTool):
     """Base for the discrete file tools.
 
-    Confines every path to ``Settings.artifacts_path`` and carries the same
-    resilience/confirm policy as :class:`FileIOTool`: local FS operations are
+    Confines every path to ``Settings.artifacts_path``. Local FS operations are
     deterministic, so no retry, no circuit breaker and no human confirmation
     (sandbox-confined file writes are not on the AGENTS.md danger list).
     """
@@ -446,9 +340,9 @@ class EditTool(_SandboxedTool):
         # (fail-open — a broken snapshot store never blocks the edit).
         capture_before_image(target, settings=self.settings)
         try:
-            # Mirrors FileIOTool.write newline handling (platform-native on
-            # write); read uses universal newlines so a model-supplied "\n"
-            # old_string still matches CRLF files.
+            # Newline handling: platform-native on write, while read uses
+            # universal newlines so a model-supplied "\n" old_string still
+            # matches CRLF files.
             target.write_text(new_text, encoding="utf-8")
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("edit write failed")
@@ -630,5 +524,64 @@ class GrepTool(_SandboxedTool):
                 "count": len(matches),
                 "files_matched": len(files_matched),
                 "truncated": truncated,
+            },
+        )
+
+
+@register
+class LsTool(_SandboxedTool):
+    name = "ls"
+    description = (
+        "List the entries of a directory inside the sandbox, one level deep. "
+        "Each entry carries name / is_dir / size. Defaults to the sandbox root; "
+        "pass `path` to list a sub-directory. Use `glob` for recursive file "
+        "discovery."
+    )
+    args_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Relative directory inside the sandbox (default: root).",
+            },
+        },
+    }
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        sub = str(kwargs.get("path", "") or "")
+        target = self._base_dir(sub)
+        if target is None:
+            return ToolResult(
+                success=False,
+                error=f"Path '{sub}' is outside the sandbox root and was rejected.",
+            )
+        if not target.exists():
+            return ToolResult(
+                success=False, error=f"Directory not found: {sub or '.'}"
+            )
+        if not target.is_dir():
+            return ToolResult(success=False, error=f"Path is not a directory: {sub}")
+
+        try:
+            found = [
+                {
+                    "name": p.name,
+                    "is_dir": p.is_dir(),
+                    "size": p.stat().st_size if p.is_file() else 0,
+                }
+                for p in sorted(target.iterdir())
+            ]
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("ls failed")
+            return ToolResult(success=False, error=str(exc))
+
+        # ``dir`` rather than ``path`` on purpose — see the registration guard in
+        # nodes.py: a directory advertised as a product reads as an empty one.
+        return ToolResult(
+            success=True,
+            data={
+                "dir": str(target),
+                "entries": found[:LS_MAX_ENTRIES],
+                "truncated": len(found) > LS_MAX_ENTRIES,
             },
         )

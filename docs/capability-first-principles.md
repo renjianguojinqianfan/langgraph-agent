@@ -76,7 +76,7 @@
 
 | 能力 | 现状 | 判定 |
 |---|---|---|
-| T1.1 文件操作 | **P0-A 已交付（PR #18）**：`read`（分页/行号）、`edit`（精确 str_replace）、`glob`（递归名匹配）、`grep`（内容检索）四个独立沙箱工具；旧 `file_io` 待退役（Issue #17）| ✅ **已闭合**（原硬缺口：read 全量撞 P1）|
+| T1.1 文件操作 | **P0-A 已交付（PR #18）**：`read`（分页/行号）、`edit`（精确 str_replace）、`glob`（递归名匹配）、`grep`（内容检索）；**#56 补 `write`、#17 补 `ls` 并退役旧 multi-action `file_io`** —— 六件套齐备，各自独立沙箱工具 | ✅ **已闭合**（原硬缺口：read 全量撞 P1）|
 | T1.2 代码执行 | `code_exec` subprocess + 超时 + 确认 | ✓ 有（隔离弱） |
 | T1.3 循环控制 | max_steps 正确派生；熔断 + 退避**反超两个标杆**；**P0-B 已交付（PR #26）**：reflect 落地确定性自检（S1 产物完整性 + S2 全程失败闸 + 有界回环降级），finish 不再单信模型的 final_answer 声明 | ✅ **已闭合**（P7）|
 | T1.4 上下文管理 | **T1.4 已交付（PR #40）**：evict→compress 固定序（保护带外超 4000 字符的 tool 结果原地换占位——头/尾预览 + trace 回读指针，全文不丢）+ compress truncate / summarize | ✅ **已闭合**（原半缺口：无 eviction）|
@@ -127,7 +127,7 @@
 ✅ T1.4 tool-result eviction：大结果落盘换引用（与现有 compress 同层）—— 已交付 PR #40
 ⬜ P1-C web fetch/extract：搜索之外补页面获取
 ⬜ 调度（cron）/ 交互式终端入口（Issue #20）
-⬜ 债务清理：file_io 退役（#17——先决项 `write` 落在 #56，退役紧随其后）
+✅ 债务清理：file_io 退役（#17——先决项 `write` 落在 #56，`ls` 随退役一并补上，六件套齐备）
 ```
 
 **执行序**（[#37](https://github.com/renjianguojinqianfan/langgraph-agent/issues/37)，2026-09-16
