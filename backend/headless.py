@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import tempfile
 import time
@@ -72,6 +73,8 @@ _RESULT_KEYS: Tuple[str, ...] = (
     "artifacts",
     "trace_path",
     "trace_exists",
+    "manifest_path",
+    "manifest_exists",
     "steps",
     "timed_out",
     "error",
@@ -158,10 +161,18 @@ def _build_settings(
     ``risk_policy=pause`` block). Init kwargs win over env in pydantic-settings,
     so unspecified fields (LLM_*, MCP_*, GIT_*) still come from env/.env.
     """
+    # #58: the run manifest (capability header + LLM rounds + owner-tagged
+    # tool events) is ON in evaluation mode *by default* — the harness diffs
+    # two runs' headers to prove "only that capability changed". A default,
+    # not a force: the env channel can turn it off (RUN_MANIFEST_ENABLED in
+    # 0/false/no/off), mirroring headless's env-wins-over-.env stance.
+    _env_manifest = os.environ.get("RUN_MANIFEST_ENABLED", "").strip().lower()
     overrides: Dict[str, Any] = {
         "artifacts_dir": str(workdir),
         "data_dir": str(run_root),
         "trace_dir": str(run_root / "traces"),
+        "run_manifest_enabled": _env_manifest not in ("0", "false", "no", "off"),
+        "run_manifest_dir": str(run_root / "runs"),
         "checkpoint_enabled": False,
         "risk_scan_enabled": False,
     }
@@ -200,6 +211,7 @@ def _collect(
                 {"filename": art.filename, "path": str(workdir / art.filename)}
             )
     trace_path = settings.trace_path / f"{task_id}.jsonl"
+    manifest_path = settings.run_manifest_path / f"{task_id}.jsonl"
     return {
         "task_id": task_id,
         "status": status,
@@ -210,6 +222,8 @@ def _collect(
         "artifacts": artifacts,
         "trace_path": str(trace_path),
         "trace_exists": trace_path.exists(),
+        "manifest_path": str(manifest_path),
+        "manifest_exists": manifest_path.exists(),
         "steps": len(task.steps) if task is not None else 0,
         "timed_out": timed_out,
         "error": task.error if task is not None else None,
@@ -345,6 +359,8 @@ def run_check() -> int:
         data_dir=str(tmp),
         artifacts_dir=str(workdir),
         trace_dir=str(tmp / "traces"),
+        run_manifest_enabled=True,
+        run_manifest_dir=str(tmp / "runs"),
         kb_dir=str(tmp / "kb"),
         checkpoint_enabled=False,
         risk_scan_enabled=False,
@@ -405,6 +421,19 @@ def run_check() -> int:
         trace_path = Path(str(result["trace_path"]))
         assert trace_path.exists(), "trace file missing"
         assert trace_path.read_text(encoding="utf-8").strip(), "trace file empty"
+        # #58: the run manifest is default-ON in headless; its header must
+        # carry the capability lines and its body the LLM rounds.
+        manifest_path = Path(str(result["manifest_path"]))
+        assert result["manifest_exists"], "run manifest missing"
+        manifest_lines = [
+            json.loads(line)
+            for line in manifest_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        caps = [line for line in manifest_lines if line.get("type") == "capability"]
+        assert any(c.get("name") == "tool_face" for c in caps), "no tool_face capability line"
+        assert any(line.get("type") == "llm_call" for line in manifest_lines), "no llm_call recorded"
+        assert manifest_lines[-1].get("type") == "manifest_end", "manifest not closed"
 
     step("headless run reaches COMPLETED (mock, auto_approve)", _run)
     step("result JSON contract + artifact in --dir + non-empty trace", _assert_result)

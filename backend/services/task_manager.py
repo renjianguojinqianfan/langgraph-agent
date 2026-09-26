@@ -31,7 +31,7 @@ from ..config import Settings
 from ..core.agent.graph import build_graph
 from ..core.agent.nodes import AgentRuntime
 from ..core.agent.state import AgentState
-from ..core.agent.subagent import SubAgentExecutor
+from ..core.agent.subagent import SubAgentExecutor, subtask_tool_face
 from ..core.kb.knowledge_base import KnowledgeBase, set_kb_instance
 from ..core.llm.client import LLMClient
 from ..core.llm.openai_compat import create_aux_llm_client, create_llm_client
@@ -42,6 +42,7 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from .event_bus import EventBus
 from .persistence import Persistence
+from .run_manifest import RunManifest
 from .snapshots import cleanup_expired, restore_task, set_current_task_id
 from .trace import TraceRecorder
 
@@ -199,6 +200,24 @@ class TaskManager:
         self._wire_injected_tools()
         # P0 item 4: resident trace recorder (EventBus subscriber).
         self._trace: Optional[TraceRecorder] = TraceRecorder(settings) if settings.trace_enabled else None
+        # #58: bypass run manifest (LLM rounds + tool events, owner-tagged).
+        # Built after the tool face is complete so the «件清单» header lists
+        # every actually-mounted tool (MCP / Git / OpenAPI included), plus the
+        # sub-agent face (the tools a subtask can actually reach).
+        self._manifest: Optional[RunManifest] = (
+            RunManifest(
+                settings,
+                [t.name for t in self._tools],
+                confirm_enabled=not self._auto_approve,
+                subagent_tool_names=(
+                    [t.name for t in subtask_tool_face(self._tools)]
+                    if settings.subagent_enabled
+                    else []
+                ),
+            )
+            if settings.run_manifest_enabled
+            else None
+        )
 
         self._lock = threading.Lock()
         self._active_states: Dict[str, AgentState] = {}
@@ -490,6 +509,25 @@ class TaskManager:
             self._checkpoint_conn = None
 
     # ── creation / query ──
+    def _wrap_llm_for_manifest(
+        self,
+        task_id: str,
+        client: Optional[LLMClient],
+        client_tag: str = "main",
+        owner: str = "parent",
+    ) -> Optional[LLMClient]:
+        """Wrap an LLM client for the run manifest (#58); no-op when off.
+
+        ``wrap_llm`` returns unwrapped clients for tasks without an open file,
+        so callers need no ``if`` — and double-wrapping is refused there too.
+        Used by the main run/resume paths (owner ``parent``) and by the
+        sub-agent executor (owner ``subtask:<id>``, rounds land in the
+        parent's file) — one wrap shape, two attributions.
+        """
+        if self._manifest is None or client is None:
+            return client
+        return self._manifest.wrap_llm(task_id, owner, client, client_tag)
+
     def create_task(self, title: Optional[str], user_input: str) -> str:
         task_id = uuid.uuid4().hex
         now = _now()
@@ -505,6 +543,9 @@ class TaskManager:
         # the JSONL captures task_created onwards.
         if self._trace is not None:
             self._trace.attach(self.event_bus, task_id)
+        # #58: open the run manifest (header = capability lines) alongside.
+        if self._manifest is not None:
+            self._manifest.attach(self.event_bus, task_id)
         self.persistence.save_task(task)
         self.event_bus.publish(
             task_id,
@@ -570,11 +611,11 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._wrap_llm_for_manifest(task_id, self._llm),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=self._aux_llm,
+                aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
                 subagent_executor=self._subagent,
                 confirm_enabled=not self._auto_approve,
             )
@@ -603,6 +644,9 @@ class TaskManager:
             # so the JSONL terminates with a trace_end line.
             if self._trace is not None:
                 self._trace.close(task_id)
+            # #58: same closure guarantee for the run manifest.
+            if self._manifest is not None:
+                self._manifest.close(task_id)
 
     # ── control ──
     def stop(self, task_id: str) -> Dict[str, Any]:
@@ -823,6 +867,9 @@ class TaskManager:
         # Reopen the audit trail for the continued era.
         if self._trace is not None:
             self._trace.attach(self.event_bus, task_id)
+        # #58: the manifest reopens too — a fresh header marks the resumed era.
+        if self._manifest is not None:
+            self._manifest.attach(self.event_bus, task_id)
 
         t = threading.Thread(target=self._resume_run, args=(task_id,), daemon=True)
         self._threads[task_id] = t
@@ -878,11 +925,11 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._wrap_llm_for_manifest(task_id, self._llm),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=self._aux_llm,
+                aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
                 subagent_executor=self._subagent,
                 confirm_enabled=not self._auto_approve,
             )
@@ -931,6 +978,8 @@ class TaskManager:
             self._stop_flags.pop(task_id, None)
             if self._trace is not None:
                 self._trace.close(task_id)
+            if self._manifest is not None:
+                self._manifest.close(task_id)
 
     # ── P1-B: workspace rollback (docs/specs/p1-b-rollback.md) ──
     def rollback(self, task_id: str) -> Dict[str, Any]:
