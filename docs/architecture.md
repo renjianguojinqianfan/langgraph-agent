@@ -366,9 +366,9 @@ classDiagram
 
 ## 4. 程序调用流程（mermaid `sequenceDiagram`）
 
-> ⚠️ **v0.1 时序图**：缺 `risk_scan` / `subagent_split` / `human_confirm` 重算 / 完成验证
-> 四个环节，也没有 checkpointer 挂载与 `durability` 传参。现役拓扑（与 `graph.py` 逐边
-> 一致，含全部 8 个节点与 5 个具名 router）见 [`README.md`](../README.md)「编排拓扑」。
+> ⚠️ **v0.1 时序图**：缺 `risk_scan` / `human_confirm` 重算 / 完成验证
+> 等环节，也没有 checkpointer 挂载与 `durability` 传参。现役拓扑（与 `graph.py` 逐边
+> 一致）见 [`README.md`](../README.md)「编排拓扑」。
 > 下图保留作初始循环设计的讲解版本。
 
 > 详见 `docs/sequence-diagram.mermaid`。

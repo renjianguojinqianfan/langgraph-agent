@@ -33,7 +33,7 @@
 | 10 | 配置 | **零新增 Settings**；工具常驻注册；与 `context_inject_enabled` 正交（注入关 → 清单不出现，但显式点名仍可加载，因为工具读盘不读注入块） | 本 spec 定版 |
 | 11 | 沙箱边界 | **名字不参与任何路径拼接**：文件从两层 skills 目录**枚举**得到，名字只做等值比较 → 无路径注入面；`../`、绝对路径、含分隔符的名字天然不命中（有测试锁死） | 本 spec 定版 |
 | 12 | artifact 登记 | 结果 `data` **不含顶层 `path` 键** → 不触发 `tool_node` 的 artifact 登记（`nodes.py:531-535`），skill 文件不落产物列表、不进 KB | 本 spec 定版（实证同上） |
-| 13 | 子任务可用性 | 子图工具表 = 父表 − `spawn_subagent`（既有 `subagent.py:_subtask_tools`）→ `load_skill` 自动可用，**零代码** | 既有实证 |
+| 13 | 子任务可用性 | 子图工具表 = 父表 − `spawn_subagent`（既有 `subagent.py:_subtask_tools`）→ `load_skill` 自动可用，**零代码**（**#56 现状**：子图表改为内置两档 ∩ 装载面，`load_skill` 两档都在档内，本条结论不变） | 既有实证 |
 | 14 | T1.4 交互 | 整档如实进对话；保护带外超 4000 字符的 skill 正文会被逐出为占位（含 trace 回读指针）——既有语义，不需任何新处理 | 既有 T1.4 |
 | 15 | 提示词 | `prompts.py` **零改动**；使用引导只写在工具 description（「任务匹配 Available Skills 清单中的技能时调用」） | 本 spec 定版 |
 | 16 | live 验收 | 扩展 `scripts/live_skill_test.py` 新增 skills-runtime 腿：真实模型须实际调用 `load_skill`、tool_result 的 `documents[0].content` 与磁盘全文逐字符相等、final answer 含正文原句引用（断言细节见 §5.5） | 本会话拍板（用户确认，2026-09-17） |
@@ -119,7 +119,7 @@ ToolResult(success=False, data={"error": "`name` is required."}, error="`name` i
 
 ### 3.6 与相邻机制的交互（零代码，仅确认）
 
-- 子任务：`subagent.py:_subtask_tools` 只剔除 `spawn_subagent` → 子图自动获得 `load_skill`（#13）。
+- 子任务：`subagent.py:_subtask_tools` 只剔除 `spawn_subagent` → 子图自动获得 `load_skill`（#13）。**#56 现状**：该函数已换成 `resolve_tool_face`（档位 ∩ 装载面），`load_skill` 在 `explore`/`execute` 两档内，故本条仍然成立。
 - T1.4：大段正文的逐出与回读指针由既有 eviction 承担（#14）。
 - 注入开关：`context_inject_enabled=false` 时清单不注入、工具仍注册可用（#10），与 P1-A′ 的「零回归锚」不冲突。
 

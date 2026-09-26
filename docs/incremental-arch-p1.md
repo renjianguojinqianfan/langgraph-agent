@@ -14,7 +14,7 @@
 | # | 能力 | 一句话方案 |
 |---|------|-----------|
 | 1 | 规划期风险扫描（EHRB） | 新增独立 `risk_scan` 节点插入 `planner→executor` 之间；关键词扫描+可选 aux 语义分析；命中 high → 该轮工具调用强制走**现有 human_confirm** 确认（`risk_policy=confirm`，不整任务暂停） |
-| 2 | 子 Agent 协作 | 新增 `SubAgentExecutor`：独立 AgentState + 独立 task_id 频道 + 复用同一工具集/LLM 的独立 `AgentRuntime`；`spawn_subagent` 工具 + 内置"调研+报告"确定性拆分（后端调度，不走 LLM 编排） |
+| 2 | 子 Agent 协作 | 新增 `SubAgentExecutor`：独立 AgentState + 独立 task_id 频道 + 独立 `AgentRuntime`；`spawn_subagent` 工具 + 内置"调研+报告"确定性拆分（后端调度，不走 LLM 编排）。**#56 已改**：自动拆分删除、能力面改内置两档，详见 §2.4 现状修正 |
 | 3 | RAG + 跨会话记忆 | 新增 `KnowledgeBase`（分块 + 纯标准库关键词/结构化索引，持久化 `.index.json`，无 Embedding 自动离线）；`memory_search`/`kb_query` 工具 + KB 管理 REST |
 | 4 | 辅助模型分工 | `aux_llm_*` 配置 + `create_aux_llm_client()` 工厂（未启用返回 None）；摘要/风险语义优先 aux，无 aux 自动降级主模型/规则，**零额外 LLM 调用** |
 | 5 | 基础鉴权 | 新增 `services/auth.py`（标准库 hmac 签发/校验/过期）；`POST /api/auth/token` 落地；受保护接口 `Depends(verify_token)`；SSE 用 `?token=`；`auth_enabled=false` 全放行 |
@@ -24,7 +24,7 @@
 1. **复用而非新建机制**：风险确认复用 P0 的 `human_confirm`/`_confirmed_ids`/`_rejected_ids`/`_needs_confirm`（P0 已修复死循环，直接复用，零新增确认状态机）。
 2. **隔离而非污染**：子任务持有独立 `AgentState` 与独立 EventBus 频道（`<parent>:sub:<hex>`），主 `messages` 零污染；子任务内部事件不进主任务 SSE。
 3. **默认零回归**：6 项能力开关全部收口 `Settings` 且默认值遵循 PRD Q1–Q6（`risk_scan_enabled=true` 但空词表不阻断、`subagent_enabled=true` 但场景不匹配即跳过、`aux_llm_enabled=false`、`auth_enabled=false`、`openapi_enabled=false`、`kb_enabled=true` 目录缺失静默）。
-4. **子任务用简化 graph**：子任务运行时使用不含 `risk_scan`/`human_confirm`/`subagent_split` 的简化图，规避"子任务内确认无法路由回主任务"的复杂度；`spawn_subagent` 工具本身 `requires_confirm=True`，派生子任务前经主流程确认。
+4. **子任务用简化 graph**：子任务运行时使用不含 `risk_scan`/`human_confirm` 的简化图，规避"子任务内确认无法路由回主任务"的复杂度；`spawn_subagent` 工具本身 `requires_confirm=True`，派生子任务前经主流程确认。#56 补齐了另一半：子任务的能力面是**内置两档**（见 §2.4 现状修正），需要问人的工具在子任务里根本不存在。
 
 ---
 
@@ -197,10 +197,19 @@ def kb_path(self) -> Path:
 | `_is_subtask` | bool | 内部：标记子任务 state（简化 graph 用，防递归拆分） |
 
 **子 Agent 运行时隔离方案**（回答"独立 AgentRuntime 实例？独立 state？"）：
-- **独立 state**：每个子任务新建 `AgentState`（`messages=[{role:"user", content: instruction}]`、空 plan/steps/artifacts），与主 state 完全分离；子任务完成后主 `state["messages"]` 只追加一条**折叠摘要** assistant 消息（token 量级 ≤ 子任务全量 1/10，可经 `context.summarize_messages` 佐证）。
-- **独立 AgentRuntime**：`SubAgentExecutor._exec_one` 为每个子任务 new 一个 `AgentRuntime(task_id=subtask_id, task_manager=tm, llm=主LLM, tools=同一工具集, tool_schemas=同一schemas)`，并 `build_graph(runtime, mode="subtask")`（简化图：planner→executor→tool→reflect→finish，无 risk/confirm/subagent_split）。
-- **独立事件频道**：子任务内部事件发布到 `subtask_id` 频道（同一 EventBus 的不同 key），**不进主任务 SSE**；主任务频道只收到 3 类汇总事件。子任务不挂 `TraceRecorder`（保持简单，trace 文件仅主任务）。
-- **并行**：`SubAgentExecutor` 持 `ThreadPoolExecutor(max_workers=subagent_max_concurrency)`；内置场景 `run_plan_with_subtasks` 批量提交，=2 时两子任务运行区间重叠（时间戳可证），=1 时排队串行。
+
+> **现状修正（#56，2026-09-26）——本节以下五条为准；本文其余章节（§文件变更清单、SSE 事件表、隔离对照表、时序图、T03 / Q6 交付表）里与它冲突的描述，都是 P1 交付当时的形态，保留不改以存当时的判断。**
+> 1. **入口只剩一个**：`spawn_subagent` 工具（`requires_confirm=True`，先经人批准）。内置「调研+报告」关键词自动拆分（entry B：`subagent_split` 节点、`DEFAULT_SPLIT_SCENARIOS`、`split_plan_for_scenario`、`run_plan_with_subtasks`）已删除——话术里带「报告」两个字不等于批准了一次带副作用的派生。
+> 2. **能力面 = 代码内置两档**，取代「父工具集减 `spawn_subagent`」：`explore`（11 件只读）/ `execute`（= explore + `write` + `edit`，默认档）；档位是名字集合、与实际装载面取交集（`git_enabled=false` 时 git 四件自然不在档）。`spawn_subagent` 的 `tools` 参数生效但**只能收窄**，越界即拒并回理由。两档都不含 `code_exec` / `http_request` / git 写类 / MCP / OpenAPI 生成工具 / legacy `file_io`，即危险面在子任务里**结构性不可达**。为让子任务能落盘写报告而不带上不可拆的 `file_io`，新增独立 `write` 工具（`file_io.py`，`requires_confirm=False`）。
+> 3. **`subagent_enabled` 语义收窄**：只控制 `spawn_subagent` 工具是否装载（不再挂节点）。
+> 4. **归档与可回看**：档位实装面进 #58 运行流水的 `subagent` 能力行，每次派生再落一行 `subtask_face`（tier + 实际工具名）。
+> 5. **已知缺口（未拍板，见 PR/后续 issue）**：entry B 是 `subtask_start`/`subtask_result`/`subtask_failed` 与 `state["subtasks"]`→`Task.subtasks` 的唯一生产者，删除后 `Task.subtasks` 恒空、前端 `SubtaskList` 面板无数据来源（`_is_subtask` 亦变为只写不读）。spawn 路径的可见性走普通 `tool_call`/`tool_result` 事件。
+
+- **独立 state**：每个子任务新建 `AgentState`（`messages=[{role:"user", content: instruction}]`、空 plan/steps/artifacts），与主 state 完全分离；子任务的内部消息不进主 `messages`，主上下文只见工具调用的返回值。
+- **独立 AgentRuntime**：`SubAgentExecutor._exec_one` 为每个子任务 new 一个 `AgentRuntime(task_id=subtask_id, task_manager=tm, llm=主LLM, tools=档位解析出的工具面, tool_schemas=对应schemas)`，并 `build_graph(runtime, mode="subtask")`（简化图：planner→executor→tool→reflect→finish，无 risk/confirm 节点）。
+- **独立事件频道**：子任务内部事件发布到 `subtask_id` 频道（同一 EventBus 的不同 key），**不进主任务 SSE**；子任务不挂 `TraceRecorder`（保持简单，trace 文件仅主任务）。
+- **线程池与超时**：`SubAgentExecutor` 持 `ThreadPoolExecutor(max_workers=subagent_max_concurrency)`，`run_subtask` 提交到池并等 `future.result(timeout=subagent_timeout_sec)`——单发子任务因此有墙钟上限（#56 之后这是该键唯一的执行点）；`_exec_one` 在池线程上重坐父 task id，故其写仍进父任务回滚账本（#33 拍板 5）。
+
 
 ### 2.5 风险扫描插入 graph 的方案（回答"独立节点还是 planner 内联"）
 
@@ -215,9 +224,7 @@ def kb_path(self) -> Path:
 planner
   → (stop? finish : risk_scan)
 risk_scan
-  → (stop? finish : subagent_split)
-subagent_split
-  → (_last_action=="final_answer" ? reflect : executor)
+  → (stop? finish : executor)
 executor
   → (stop? finish : final_answer? reflect : needs_confirm? human_confirm : tool)
 tool

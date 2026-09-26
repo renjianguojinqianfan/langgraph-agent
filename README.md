@@ -50,8 +50,8 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 - **完成验证（P0-B）** —— reflect 不再单信模型的「我做完了」：S1 校验已注册产物存在且非空，S2 拦「全程工具失败却宣称完成」；不达标就带着证据回环 planner（`verify_max_retries` 有界），超限**降级为 COMPLETED + `degraded` 标记**而不是误杀一个可能真完成的任务；`verify_enabled=false` 即回到原空壳行为（零回归）
 - **工具层韧性** —— 熔断（连续失败 3 次短路 / 冷却 30s / half-open 试探）+ 指数退避重试，跳闸发 `tool_circuit_open` 事件；写类工具 `retryable=False`（重试一个已副作用过的调用比重试失败更糟）；MCP 子进程失败隔离
 - **外部工具生态** —— MCP 客户端（stdio，每 server 一线程 + 独立事件循环，工具动态注册成 `mcp__{server}__{tool}`）· OpenAPI spec 一键成工具 · `backend/plugins/` 自动发现（模板见 [`example_tool.py`](backend/plugins/example_tool.py)）· Git 7 工具（参数化无 shell + 危险命令黑名单）。接入方式全是配置项，不改内核：见 [`.env.example`](.env.example) 的 `mcp_*` / `openapi_*` / `plugins_*`
-- **文件精读编辑（P0-A）** —— `read`（行号 + 分页，不一次拉爆上下文）/ `edit`（精确 `str_replace`，不整文件重写）/ `glob`（递归名匹配）/ `grep`（内容检索）四个沙箱内独立工具，各有自己的 function schema 与韧性/确认策略；旧 `file_io` 待退役（[#17](https://github.com/renjianguojinqianfan/langgraph-agent/issues/17)）
-- **子 Agent 协作** —— 隔离子任务图（`mode="subtask"`，无风险/确认节点、防递归），**子任务工具面只保留不需要问人的工具**（静态 `requires_confirm`、MCP 逐调用判定、`http_request` 三类一并剔除 —— 子任务里没有 `human_confirm` 节点，留着闸门等于没有闸门），线程池并行，主消息只留折叠摘要；父任务 `stop()` 会传播到正在跑的子任务，不再只能等 `subagent_timeout_sec` 兜底（[#60](https://github.com/renjianguojinqianfan/langgraph-agent/issues/60)）
+- **文件精读编辑（P0-A）** —— `read`（行号 + 分页，不一次拉爆上下文）/ `write`（整档写入或新建，自动建父目录、覆写前拍 before-image）/ `edit`（精确 `str_replace`，不整文件重写）/ `glob`（递归名匹配）/ `grep`（内容检索）五个沙箱内独立工具，各有自己的 function schema 与韧性/确认策略；旧 `file_io` 待退役（[#17](https://github.com/renjianguojinqianfan/langgraph-agent/issues/17)）
+- **子 Agent 协作（能力面白名单化，#56）** —— **只有一个入口**：executor 显式调 `spawn_subagent`（`requires_confirm=True`，派生前经人批准）。曾经的关键词自动拆分（`subagent_split` 节点）已删除——用户话里带「报告」两个字，不该等于批准了一次带副作用的派生。子任务能用什么由**代码内置两档**决定，档位是名字集合、与实际装载面取交集：`explore` = 11 件只读（`read`/`glob`/`grep`/`kb_query`/`memory_search`/`load_skill`/`web_search` + git 只读四件），`execute`（默认档）= explore + `write` + `edit`，可写沙箱内文件；`spawn_subagent` 的 `tools` 参数**只能收窄**，出现档外名字即拒并回理由（不静默忽略）。两档都不含 `code_exec` / `http_request` / git 写类 / MCP / OpenAPI 生成工具 / legacy `file_io`，所以这些在子任务里**结构性拿不到**，而不是「看得见但被拒」。子任务仍走简化图（`mode="subtask"`，无 risk/confirm 节点，故永不递归、永不等确认），在线程池上跑并受 `subagent_timeout_sec` 封顶，写沙箱内文件进**父任务回滚账本**，父任务 `stop()` 会传播到正在跑的子任务（[#60](https://github.com/renjianguojinqianfan/langgraph-agent/issues/60)）。档位与每次派生的实装面进 [#58 运行流水](backend/services/run_manifest.py)（`subagent` 能力行 + 每子任务一行 `subtask_face`），「这次子代理能干什么」可 diff、可回看
 - **上下文注入（P1-A′）** —— planner/executor 每次 LLM 调用前，system 侧注入三段块：两层 `AGENTS.md`（`~/.agents/AGENTS.md` → 工作区根，根→子全量追加、**永不裁**）+ skills 清单（frontmatter 只取 `name`/`description`，卡片粒度 4000 字符预算，超限从末尾丢整卡）+ 环境事实（沙箱根绝对路径 / OS / 日期）。任务级缓存（任务中途改文件下个任务生效）、不计入压缩预算、`context_inject_enabled=false` 一键回到旧行为（零回归锚：system 与改造前逐字节相同）→ [`.env.example`](.env.example) 的 `context_inject_*` 段
 - **skills 运行时（P1-A）** —— `load_skill` 工具按名取回两层 skills 目录（`~/.agents/skills` → 工作区根）里 SKILL.md 的**整档正文**，作为 tool result 进对话、不进 system（渐进披露的另一半，清单由 P1-A′ 注入）；同名跨层两份都返回（home 先）、名字只做等值比较（`../`、绝对路径天然不命中）；未命中把可用名单放进结果 `data`（`tool_node` 只序列化 data，模型才能自我纠偏）；结果不带顶层 `path`，skill 文件不会进产物/KB；零新增配置 → [spec](docs/specs/p1-a-skills-runtime.md)
 - **工具结果逐出（T1.4）+ 上下文压缩 + 知识库** —— 压缩**之前**先搬大件：保护带（最近 10 条）外、单条超 4000 字符的 tool 结果原地换成占位（工具名 + 原文字符数 + 留痕指针 + 头 800/尾 400 预览），纯机械零 LLM 调用、全文留 trace、搬完不超预算则压缩与 LLM 摘要都不触发；超阈值（默认 32000 est. tokens）仍自动截断 / 可选 LLM 摘要；标准库关键词索引的 KB（离线可用），任务中经 `kb_query` / `memory_search` 检索 → [`context.py`](backend/core/agent/context.py)
@@ -69,10 +69,7 @@ flowchart TD
     planner -->|stop/规划失败| finish
     planner --> risk_scan
     risk_scan -->|stop| finish
-    risk_scan --> subagent_split
-    subagent_split -->|final_answer| reflect
-    subagent_split --> executor
-    subagent_split -->|stop| finish
+    risk_scan --> executor
     executor -->|需确认| human_confirm
     executor --> tool
     executor -->|final_answer| reflect

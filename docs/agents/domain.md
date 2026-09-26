@@ -71,7 +71,7 @@ If the concept you need isn't in the glossary yet, that's a signal — either yo
 
 Until `CONTEXT.md` exists, the de-facto vocabulary lives in `backend/core/agent/state.py` /
 `graph.py` (node names) and the hard rules in `AGENTS.md`「跨任务安全边界」 — use those terms (`planner` / `executor` / `tool` /
-`reflect` / `risk_scan` / `subagent_split` / `human_confirm` / `finish`,
+`reflect` / `risk_scan` / `human_confirm` / `finish`,
 `checkpoint` / `resume` / `confirm gate` / `熔断` / `沙箱根`) rather than coining new ones.
 
 ## Flag ADR conflicts
