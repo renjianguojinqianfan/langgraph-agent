@@ -13,10 +13,11 @@ short step descriptions, for example:
 ["Search the web for X", "Summarise the findings", "Write a report file"]
 Return ONLY the JSON array, no extra commentary.
 
-Sub-agent hint (P1): for research-and-report style requests (调研/研究 X 并写
-报告/文档), you may include two high-level steps "研究子任务：检索并收集素材"
-and "写作子任务：基于素材写报告" so the backend's built-in splitter can
-dispatch them to isolated sub-agents. Otherwise keep steps as plain actions."""
+Delegation: if part of the task is a focused, self-contained job that will
+feed a later step, plan it as one plain step such as "Research X in a
+sub-agent"; the executor may then call `spawn_subagent` for it. Never assume
+sub-agents get dispatched on their own -- the only way one runs is the
+executor calling that tool (and a human approving it)."""
 
 EXECUTOR_SYSTEM = """You are the executor for an autonomous task agent.
 Based on the conversation and the available tools, decide the next action:
