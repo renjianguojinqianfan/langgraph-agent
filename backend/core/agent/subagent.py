@@ -23,7 +23,7 @@ the user's phrasing happened to contain "报告" was a side effect nobody approv
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -193,13 +193,15 @@ class SubAgentExecutor:
         wedge the parent's worker thread) and what makes
         ``subagent_max_concurrency`` mean anything; ``_exec_one`` re-seats the
         parent task id on the pool thread so its writes still land on the
-        parent's rollback ledger (Issue #33 拍板 5).
+        parent's rollback ledger (Issue #33 拍板 5). Over the bound the fold
+        also asks the worker to stop, so the slot comes back at the next node
+        boundary instead of at ``max_steps`` (see :meth:`_request_worker_stop`).
         """
         future = self._pool.submit(self._exec_one, spec)
         try:
             return future.result(timeout=self.settings.subagent_timeout_sec)
         except Exception as exc:  # timeout / worker crash
-            future.cancel()
+            self._request_worker_stop(future, spec)
             logger.warning("subtask %s aborted: %s", spec.subtask_id, exc)
             return SubTaskResult(
                 subtask_id=spec.subtask_id,
@@ -217,6 +219,35 @@ class SubAgentExecutor:
         return sorted(t.name for t in self._subtask_tools(spec))
 
     # ── internals ──
+    def _request_worker_stop(
+        self, future: "Future[SubTaskResult]", spec: SubTaskSpec
+    ) -> None:
+        """Ask an already-running worker to unwind at its next node boundary.
+
+        ``cancel()`` returns False exactly when the work already started (or
+        already landed), and a running thread cannot be killed — so the only
+        lever left is the manager's authoritative stop flag, which
+        :meth:`AgentRuntime._stopped` polls at every node entry:
+        ``_stop_watch_ids`` holds this subtask's own id first. Without it the
+        folded-away worker keeps spending LLM rounds and keeps holding a
+        ``subagent_max_concurrency`` slot until ``max_steps`` runs out, writing
+        into the parent's ledger the whole time.
+
+        The flag's second lifecycle is the future's done callback: a subtask is
+        never registered in ``_active_states``, so no run teardown pops a
+        subtask-keyed key and the dict would grow one entry per timed-out
+        subtask for the life of the process. Registering the callback *after*
+        the write is required — ``add_done_callback`` fires inline for an
+        already-finished future, so the other order pops before setting and
+        leaks the key forever.
+        """
+        if future.cancel():
+            return  # never started: nothing is running, nothing to unwind
+        self.tm._stop_flags[spec.subtask_id] = True
+        future.add_done_callback(
+            lambda _f: self.tm._stop_flags.pop(spec.subtask_id, None)
+        )
+
     def _subtask_tools(self, spec: SubTaskSpec) -> List[Any]:
         """The declared tier of the parent face (see :func:`resolve_tool_face`)."""
         return resolve_tool_face(self.tm._tools, spec.tier, spec.tools)

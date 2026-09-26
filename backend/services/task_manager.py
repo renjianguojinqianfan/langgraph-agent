@@ -229,6 +229,9 @@ class TaskManager:
         # per-superstep COPY of the state, so mutating ``_active_states``
         # (legacy path) never reaches a running graph. This authoritative
         # flag is what nodes poll instead; cleared when the run finishes.
+        # Sub-agent ids (Issue #71) enter the dict too and have no run
+        # teardown to pop them — ``SubAgentExecutor._request_worker_stop``
+        # clears those from the subtask future's done callback instead.
         self._stop_flags: Dict[str, bool] = {}
         # Spec Issue #4 (D1/D2): durable checkpointer — one sqlite file per
         # settings identity (checkpoint_path), not per manager instance: the
@@ -677,7 +680,9 @@ class TaskManager:
 
     def is_stop_flagged(self, task_id: str) -> bool:
         """Peek (not consume) the authoritative stop signal — nodes poll this
-        every cycle / confirmation wait; the flag is popped in run teardown."""
+        every cycle / confirmation wait. A task's own flag is popped in run
+        teardown; a sub-agent's is popped by the executor's done callback
+        (Issue #71), since a subtask never enters ``_active_states``."""
         return self._stop_flags.get(task_id, False)
 
     # ── spec Issue #4: checkpoint-backed resume ──
