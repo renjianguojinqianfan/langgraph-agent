@@ -194,13 +194,25 @@ classDiagram
         +run(**kwargs) ToolResult
     }
     class WebSearchTool
-    class FileIOTool
     class CodeExecTool
     class HttpTool
+    class _SandboxedTool
+    class ReadTool
+    class WriteTool
+    class EditTool
+    class GlobTool
+    class GrepTool
+    class LsTool
     BaseTool <|-- WebSearchTool
-    BaseTool <|-- FileIOTool
     BaseTool <|-- CodeExecTool
     BaseTool <|-- HttpTool
+    BaseTool <|-- _SandboxedTool
+    _SandboxedTool <|-- ReadTool
+    _SandboxedTool <|-- WriteTool
+    _SandboxedTool <|-- EditTool
+    _SandboxedTool <|-- GlobTool
+    _SandboxedTool <|-- GrepTool
+    _SandboxedTool <|-- LsTool
     BaseTool ..> ToolResult : produces
 
     %% ── 编排状态 ──

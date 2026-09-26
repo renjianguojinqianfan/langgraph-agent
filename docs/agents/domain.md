@@ -35,6 +35,9 @@ Single-context repo (this repo's layout):
 │   │                                     0002-moat-discipline-no-attention-reallocation.md,
 │   │                                     0003-subagent-circuit-breaker-per-runtime.md)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
+│   │                                     「冻结」只覆盖**已交付增量**的记录——不改写，现状写进权威段
+│   │                                     （README 能力 / architecture）；**未开工增量**的 spec 是活的设计
+│   │                                     权威，可以也应该改（如前置依赖清掉了就更新）
 │   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain)
 │   ├── prd.md · architecture.md       ← original v0/v0.1 design docs
 │   ├── incremental-prd-p{0,1,2}.md    ← per-iteration PRDs
