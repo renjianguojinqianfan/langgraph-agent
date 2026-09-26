@@ -226,11 +226,12 @@ class SubAgentExecutor:
         Internal events are published on the subtask's own EventBus channel
         (``spec.subtask_id``) — they never reach the parent channel.
         """
-        # P1-B: the pool thread starts with a *fresh* context, so a subtask
-        # submitted through the pool must re-seat the parent task id or its file
-        # writes would miss the parent's rollback ledger (Issue #33 拍板 5:
-        # 子代理写归主任务账本). The spawn_subagent path already inherits the id
-        # on the parent's worker thread and passes an empty parent id.
+        # P1-B: the pool thread starts with a *fresh* context, so the parent task
+        # id must be re-seated or the subtask's file writes would miss the
+        # parent's rollback ledger (Issue #33 拍板 5: 子代理写归主任务账本).
+        # Since #56 every path crosses the pool, spawn_subagent included — which
+        # is why that tool hands the spec an explicit parent id (see
+        # ``SpawnSubagentTool.run``) instead of relying on inheritance.
         if spec.parent_task_id:
             set_current_task_id(spec.parent_task_id)
         try:
@@ -267,10 +268,10 @@ class SubAgentExecutor:
 
             # #58: mirror this subtask's rounds and tool events into the
             # parent's run manifest (owner-tagged), and record the face it
-            # actually got (#56). The spawn path carries an empty
-            # ``spec.parent_task_id`` (it inherits the ledger id from the worker
-            # thread's contextvar instead), hence the fallback — the same parent
-            # the rollback ledger uses.
+            # actually got (#56). ``spec.parent_task_id`` is the spawn tool's
+            # link; the contextvar fallback covers a spec built without one
+            # (a direct ``run_subtask`` caller), and the subtask id is the last
+            # resort so a parent-less run still gets a self-describing file.
             manifest = getattr(self.tm, "_manifest", None)
             manifest_parent = spec.parent_task_id or get_current_task_id() or spec.subtask_id
             if manifest is not None:
