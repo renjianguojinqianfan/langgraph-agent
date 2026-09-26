@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from ...config import Settings
-from ...services.snapshots import set_current_task_id
+from ...services.snapshots import get_current_task_id, set_current_task_id
 from ...utils.logging import get_logger
 from .state import AgentState
 
@@ -64,6 +64,43 @@ DEFAULT_SPLIT_SCENARIOS: List[Dict[str, Any]] = [
         ],
     },
 ]
+
+
+def subtask_owner(subtask_id: str) -> str:
+    """The manifest owner label for one subtask's rounds/events.
+
+    Lives here (not in ``run_manifest``) so the format has one home and the
+    services layer imports it downstream — ``subagent`` cannot import back.
+    """
+    return f"subtask:{subtask_id}"
+
+
+def subtask_tool_face(tools: List[Any]) -> List[Any]:
+    """Shared tool set minus anything that needs a human.
+
+    Subtask graphs run with ``confirm_enabled=False`` and no ``human_confirm``
+    node, so a gated tool there doesn't pause — it runs unconfirmed. Honours the
+    static ``requires_confirm`` (``code_exec``, git writes, spec-generated
+    non-GET operations) and the per-call MCP ``needs_per_call_confirm``;
+    ``http_request`` is matched by name because its write gate is hard-coded in
+    the executor rather than declared on the tool. Dropping it costs subtasks
+    read-only GETs too — narrowing the face is the point, re-plumbing subtask
+    confirmations is not (#55 决策②).
+
+    Module-level on purpose: the run manifest's capability header lists the
+    same face (issue #58 — «子代理档位实际装载的工具名»), so the filter has
+    exactly one implementation shared by execution and observability.
+    """
+    keep = []
+    for t in tools:
+        if t.name in ("spawn_subagent", "http_request"):
+            continue  # recursion guard / executor-hard-coded write gate
+        if getattr(t, "requires_confirm", False) or getattr(
+            t, "needs_per_call_confirm", False
+        ):
+            continue
+        keep.append(t)
+    return keep
 
 
 @dataclass
@@ -231,27 +268,8 @@ class SubAgentExecutor:
 
     # ── internals ──
     def _subtask_tools(self):
-        """Shared tool set minus anything that needs a human.
-
-        Subtask graphs run with ``confirm_enabled=False`` and no ``human_confirm``
-        node, so a gated tool there doesn't pause — it runs unconfirmed. Honours the
-        static ``requires_confirm`` (``code_exec``, git writes, spec-generated
-        non-GET operations) and the per-call MCP ``needs_per_call_confirm``;
-        ``http_request`` is matched by name because its write gate is hard-coded in
-        the executor rather than declared on the tool. Dropping it costs subtasks
-        read-only GETs too — narrowing the face is the point, re-plumbing subtask
-        confirmations is not (#55 决策②).
-        """
-        keep = []
-        for t in self.tm._tools:
-            if t.name in ("spawn_subagent", "http_request"):
-                continue  # recursion guard / executor-hard-coded write gate
-            if getattr(t, "requires_confirm", False) or getattr(
-                t, "needs_per_call_confirm", False
-            ):
-                continue
-            keep.append(t)
-        return keep
+        """Shared tool set minus anything that needs a human (see :func:`subtask_tool_face`)."""
+        return subtask_tool_face(self.tm._tools)
 
     def _exec_one(
         self,
@@ -301,32 +319,57 @@ class SubAgentExecutor:
             # is imported first (the uvicorn entry point).
             from .nodes import AgentRuntime
 
-            runtime = AgentRuntime(
-                task_id=spec.subtask_id,
-                task_manager=self.tm,
-                llm=self.tm._llm,
-                tools=tools,
-                tool_schemas=schemas,
-                max_steps=self.settings.max_steps,
-                aux_llm=getattr(self.tm, "_aux_llm", None),
-                subagent_executor=None,  # never recurse
-                confirm_enabled=False,  # subtask internal: no human confirm
-                parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
-            )
-            from .graph import build_graph
+            # #58: mirror this subtask's rounds and tool events into the
+            # parent's run manifest (owner-tagged). The spawn path carries an
+            # empty ``spec.parent_task_id`` (it inherits the ledger id from
+            # the worker thread's contextvar instead), hence the fallback —
+            # the same parent the rollback ledger uses.
+            manifest = getattr(self.tm, "_manifest", None)
+            manifest_parent = spec.parent_task_id or get_current_task_id() or spec.subtask_id
+            if manifest is not None:
+                manifest.attach_subtask(self.tm.event_bus, manifest_parent, spec.subtask_id)
 
-            graph = build_graph(runtime, mode="subtask")
-            # The subtask topology runs 4 nodes per cycle; lift the default
-            # recursion limit (25) so deep subtasks honor settings.max_steps.
-            #
-            # No checkpointer here, and deliberately no ``durability=`` either
-            # (langgraph 1.x): subtasks are never resumed — they fold into the
-            # parent's ``subtasks`` summary — and 1.x warns that durability has
-            # no effect when no checkpointer is present.
-            final = graph.invoke(
-                state,
-                {"recursion_limit": self.settings.max_steps * 4 + 10},
-            )
+            try:
+                runtime = AgentRuntime(
+                    task_id=spec.subtask_id,
+                    task_manager=self.tm,
+                    # #58: rounds land in the parent's manifest file, attributed
+                    # to this subtask (shared wrap shape, subtask owner label).
+                    llm=self.tm._wrap_llm_for_manifest(
+                        manifest_parent, self.tm._llm, "main", subtask_owner(spec.subtask_id)
+                    ),
+                    tools=tools,
+                    tool_schemas=schemas,
+                    max_steps=self.settings.max_steps,
+                    aux_llm=self.tm._wrap_llm_for_manifest(
+                        manifest_parent,
+                        getattr(self.tm, "_aux_llm", None),
+                        "aux",
+                        subtask_owner(spec.subtask_id),
+                    ),
+                    subagent_executor=None,  # never recurse
+                    confirm_enabled=False,  # subtask internal: no human confirm
+                    parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
+                )
+                from .graph import build_graph
+
+                graph = build_graph(runtime, mode="subtask")
+                # The subtask topology runs 4 nodes per cycle; lift the default
+                # recursion limit (25) so deep subtasks honor settings.max_steps.
+                #
+                # No checkpointer here, and deliberately no ``durability=`` either
+                # (langgraph 1.x): subtasks are never resumed — they fold into the
+                # parent's ``subtasks`` summary — and 1.x warns that durability has
+                # no effect when no checkpointer is present.
+                final = graph.invoke(
+                    state,
+                    {"recursion_limit": self.settings.max_steps * 4 + 10},
+                )
+            finally:
+                # #58: the subtask's channel detaches here; its rounds and
+                # tool events stay in the parent's file with their owner tags.
+                if manifest is not None:
+                    manifest.detach_subtask(spec.subtask_id)
 
             summary = final.get("final_answer", "") or "(no final answer)"
             # Collect artifact paths produced by subtask tool calls.
