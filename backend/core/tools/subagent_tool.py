@@ -126,7 +126,7 @@ class SpawnSubagentTool(BaseTool):
         except TierError as exc:
             return ToolResult(success=False, error=str(exc))
         logger.info("spawn_subagent: %s (tier=%s)", name, tier)
-        result = executor.run_subtask(spec, publish=None)
+        result = executor.run_subtask(spec)
         return ToolResult(
             success=result.status == "completed",
             data=result.to_dict(),

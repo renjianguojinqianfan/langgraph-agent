@@ -184,7 +184,8 @@ class TaskManager:
         # P1 item 4: auxiliary model client (None when disabled -> degradation).
         self._aux_llm = create_aux_llm_client(settings)
         # P1 item 2: sub-agent executor (None when disabled).
-        self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None        # P1 item 3: knowledge base singleton (empty instance when disabled).
+        self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None
+        # P1 item 3: knowledge base singleton (empty instance when disabled).
         self._kb = KnowledgeBase(settings)
         set_kb_instance(self._kb)
         # P1 item 6: append OpenAPI-generated tools after the built-ins/plugins

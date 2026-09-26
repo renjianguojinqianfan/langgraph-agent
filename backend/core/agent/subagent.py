@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ...config import Settings
 from ...services.snapshots import get_current_task_id, set_current_task_id
@@ -51,36 +51,25 @@ logger = get_logger("agent.subagent")
 EXPLORE_TIER = "explore"
 EXECUTE_TIER = "execute"
 
-#: Tier -> tool names. ``execute`` is ``explore`` plus the sandbox writes.
+#: Tier -> tool names. ``execute`` is ``explore`` plus the sandbox writes, and
+#: derives from it so the two can never drift apart.
+_EXPLORE_MEMBERS = [
+    "read",
+    "glob",
+    "grep",
+    "kb_query",
+    "memory_search",
+    "load_skill",
+    "web_search",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_branch",
+]
+
 TOOL_TIERS: Dict[str, List[str]] = {
-    EXPLORE_TIER: [
-        "read",
-        "glob",
-        "grep",
-        "kb_query",
-        "memory_search",
-        "load_skill",
-        "web_search",
-        "git_status",
-        "git_diff",
-        "git_log",
-        "git_branch",
-    ],
-    EXECUTE_TIER: [
-        "read",
-        "glob",
-        "grep",
-        "kb_query",
-        "memory_search",
-        "load_skill",
-        "web_search",
-        "git_status",
-        "git_diff",
-        "git_log",
-        "git_branch",
-        "write",
-        "edit",
-    ],
+    EXPLORE_TIER: _EXPLORE_MEMBERS,
+    EXECUTE_TIER: [*_EXPLORE_MEMBERS, "write", "edit"],
 }
 
 #: What a subtask gets when it does not ask for a tier. Keeps the shipped
@@ -196,13 +185,27 @@ class SubAgentExecutor:
         )
 
     # ── public entry points ──
-    def run_subtask(
-        self,
-        spec: SubTaskSpec,
-        publish: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> SubTaskResult:
-        """Run a single subtask synchronously (spawn_subagent tool path)."""
-        return self._exec_one(spec, publish)
+    def run_subtask(self, spec: SubTaskSpec) -> SubTaskResult:
+        """Run one subtask on the pool, bounded by ``subagent_timeout_sec``.
+
+        The pool is what gives the wall-clock bound (a hung subtask must not
+        wedge the parent's worker thread) and what makes
+        ``subagent_max_concurrency`` mean anything; ``_exec_one`` re-seats the
+        parent task id on the pool thread so its writes still land on the
+        parent's rollback ledger (Issue #33 拍板 5).
+        """
+        future = self._pool.submit(self._exec_one, spec)
+        try:
+            return future.result(timeout=self.settings.subagent_timeout_sec)
+        except Exception as exc:  # timeout / worker crash
+            future.cancel()
+            logger.warning("subtask %s aborted: %s", spec.subtask_id, exc)
+            return SubTaskResult(
+                subtask_id=spec.subtask_id,
+                name=spec.name,
+                status="failed",
+                error=f"subtask timeout or worker error: {exc}",
+            )
 
     def check_face(self, spec: SubTaskSpec) -> List[str]:
         """The tool names ``spec`` would get, without running anything.
@@ -217,11 +220,7 @@ class SubAgentExecutor:
         """The declared tier of the parent face (see :func:`resolve_tool_face`)."""
         return resolve_tool_face(self.tm._tools, spec.tier, spec.tools)
 
-    def _exec_one(
-        self,
-        spec: SubTaskSpec,
-        publish: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> SubTaskResult:
+    def _exec_one(self, spec: SubTaskSpec) -> SubTaskResult:
         """Execute one subtask in its own runtime + state + simplified graph.
 
         Internal events are published on the subtask's own EventBus channel

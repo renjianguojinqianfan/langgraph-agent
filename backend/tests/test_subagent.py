@@ -42,6 +42,7 @@ from backend.core.agent.subagent import (
 )
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.core.tools import http_api
+from backend.core.tools.mcp_tool import McpTool
 from backend.services.snapshots import set_current_task_id
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_manager, make_settings
@@ -63,6 +64,8 @@ OUT_OF_TIER_NAMES = (
     "git_checkout",
     "spawn_subagent",
     "createPet",
+    "mcp__demo__fetch",
+    "mcp__demo__create_issue",
 )
 
 EXPLORE_MEMBERS = [
@@ -155,11 +158,26 @@ def _mounted_managers(tmp_path) -> List[Tuple[str, TaskManager, SubAgentExecutor
             "openapi_enabled": True,
             "openapi_spec_path": str(spec_path),
         },
+        "mcp": {},
     }
     out: List[Tuple[str, TaskManager, SubAgentExecutor]] = []
     for label, overrides in configs.items():
         settings = make_settings(tmp_path / label, **overrides)
         tm = make_manager(settings, _CountingMock(plan=["p"], final_answer="d"))
+        if label == "mcp":
+            # A real server would spawn a subprocess; TaskManager appends
+            # discovered MCP tools to the same list the same way, so mount two.
+            for tool_name in ("fetch", "create_issue"):
+                tm._tools.append(
+                    McpTool(
+                        server_name="demo",
+                        tool_name=tool_name,
+                        description="",
+                        input_schema={"type": "object", "properties": {}},
+                        manager=None,
+                        settings=settings,
+                    )
+                )
         out.append((label, tm, SubAgentExecutor(tm, settings)))
     return out
 
@@ -339,7 +357,7 @@ def test_no_tier_mounts_a_confirmation_gated_tool(tmp_path):
             leaked = set(face) & gated
             assert not leaked, f"{label}/{tier} 档漏进了需要确认的工具 {sorted(leaked)}"
     # The gated families the issue names are all really present somewhere above.
-    assert {"code_exec", "spawn_subagent", "git_commit"} <= seen_gated
+    assert {"code_exec", "spawn_subagent", "git_commit", "mcp__demo__fetch"} <= seen_gated
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):
@@ -876,6 +894,18 @@ def test_parallel_subtasks_overlap(tmp_path):
     assert all(r.status == "completed" for r in results)
     # Two subtasks of two 0.4s rounds each; with 2 workers ~0.8s, not ~1.6s.
     assert elapsed < 1.2, f"subtasks did not overlap (elapsed={elapsed:.2f}s)"
+
+
+def test_run_subtask_is_bounded_by_the_wall_clock_timeout(tmp_path):
+    """`subagent_timeout_sec` 现役的执行点：跑不完就折成 failed，不挂住父线程。"""
+    settings = make_settings(tmp_path, subagent_timeout_sec=1)
+    tm = make_manager(settings, _SleepingMock(sleep=0.9))
+    ex = SubAgentExecutor(tm, settings)
+
+    res = ex.run_subtask(_spec(subtask_id="timeout:sub:1", instruction="think slowly"))
+
+    assert res.status == "failed"
+    assert "timeout" in res.error
 
 
 def test_serial_subtasks_when_concurrency_1(tmp_path):
