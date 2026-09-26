@@ -12,10 +12,13 @@ Two families live here:
   tracked follow-up covers migrating callers off it and retiring it.
 * The P0-A discrete "six-piece" tools (``docs/roadmap-pawbench.md``):
   :class:`ReadTool` (``read``, line pagination + line numbers),
+  :class:`WriteTool` (``write``, whole-file create/overwrite),
   :class:`EditTool` (``edit``, exact ``str_replace``), :class:`GlobTool`
   (``glob``, recursive filename match) and :class:`GrepTool` (``grep``, regex
   content search). Each is its own ``BaseTool`` so the function schema and the
-  per-tool resilience/confirm policy stay focused.
+  per-tool resilience/confirm policy stay focused. ``write`` exists so a
+  sub-agent can be given sandbox writes without the un-splittable ``file_io``
+  read/write/list bundle (issue #56).
 
 Both families share the same sandbox confinement; the discrete tools factor it
 into :class:`_SandboxedTool`.
@@ -288,6 +291,60 @@ class ReadTool(_SandboxedTool):
                 "size": target.stat().st_size,
             },
         )
+
+
+@register
+class WriteTool(_SandboxedTool):
+    name = "write"
+    description = (
+        "Write a text file inside the sandbox, creating parent directories and "
+        "overwriting an existing file. Prefer this for new files; use `edit` "
+        "for surgical changes to a file that already exists."
+    )
+    args_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Relative path inside the sandbox.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Full file content to write.",
+            },
+        },
+        "required": ["path", "content"],
+    }
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        path = str(kwargs.get("path", ""))
+        if not path:
+            return ToolResult(success=False, error="`path` is required.")
+        content = kwargs.get("content", "")
+        if not isinstance(content, str):
+            return ToolResult(success=False, error="`content` must be a string.")
+        target = self._safe_path(path)
+        if target is None:
+            return ToolResult(
+                success=False,
+                error=f"Path '{path}' is outside the sandbox root and was rejected.",
+            )
+        if target.is_dir():
+            return ToolResult(success=False, error=f"Path is a directory: {path}")
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # P1-B: photograph the previous version before it is overwritten
+            # (fail-open — a broken snapshot store never blocks the write).
+            capture_before_image(target, settings=self.settings)
+            target.write_text(content, encoding="utf-8")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("write failed")
+            return ToolResult(success=False, error=str(exc))
+
+        size = target.stat().st_size
+        logger.info("write wrote %s (%d bytes)", target, size)
+        return ToolResult(success=True, data={"path": str(target), "size": size})
 
 
 @register

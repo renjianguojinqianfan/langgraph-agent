@@ -31,7 +31,7 @@ from ..config import Settings
 from ..core.agent.graph import build_graph
 from ..core.agent.nodes import AgentRuntime
 from ..core.agent.state import AgentState
-from ..core.agent.subagent import SubAgentExecutor, subtask_tool_face
+from ..core.agent.subagent import SubAgentExecutor
 from ..core.kb.knowledge_base import KnowledgeBase, set_kb_instance
 from ..core.llm.client import LLMClient
 from ..core.llm.openai_compat import create_aux_llm_client, create_llm_client
@@ -184,8 +184,7 @@ class TaskManager:
         # P1 item 4: auxiliary model client (None when disabled -> degradation).
         self._aux_llm = create_aux_llm_client(settings)
         # P1 item 2: sub-agent executor (None when disabled).
-        self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None
-        # P1 item 3: knowledge base singleton (empty instance when disabled).
+        self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None        # P1 item 3: knowledge base singleton (empty instance when disabled).
         self._kb = KnowledgeBase(settings)
         set_kb_instance(self._kb)
         # P1 item 6: append OpenAPI-generated tools after the built-ins/plugins
@@ -196,6 +195,13 @@ class TaskManager:
         self._load_mcp_tools(settings)
         # P2 item 2: append Git tools (git_enabled switch, no @register).
         self._load_git_tools(settings)
+        # Issue #56: ``subagent_enabled`` now gates exactly one thing — the
+        # ``spawn_subagent`` tool. It used to also mount the keyword-triggered
+        # ``subagent_split`` node, which could dispatch a subtask (and its side
+        # effects) with nobody approving it; that entry is gone, so "off" simply
+        # keeps the tool off the face.
+        if not settings.subagent_enabled:
+            self._tools = [t for t in self._tools if t.name != "spawn_subagent"]
         self._tool_schemas = [t.to_openai_schema() for t in self._tools]
         self._wire_injected_tools()
         # P0 item 4: resident trace recorder (EventBus subscriber).
@@ -203,17 +209,12 @@ class TaskManager:
         # #58: bypass run manifest (LLM rounds + tool events, owner-tagged).
         # Built after the tool face is complete so the «件清单» header lists
         # every actually-mounted tool (MCP / Git / OpenAPI included), plus the
-        # sub-agent face (the tools a subtask can actually reach).
+        # sub-agent tiers as they resolve against that face (#56).
         self._manifest: Optional[RunManifest] = (
             RunManifest(
                 settings,
                 [t.name for t in self._tools],
                 confirm_enabled=not self._auto_approve,
-                subagent_tool_names=(
-                    [t.name for t in subtask_tool_face(self._tools)]
-                    if settings.subagent_enabled
-                    else []
-                ),
             )
             if settings.run_manifest_enabled
             else None
@@ -616,7 +617,6 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
-                subagent_executor=self._subagent,
                 confirm_enabled=not self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
@@ -697,10 +697,11 @@ class TaskManager:
         """LangGraph runnable config under the thread_id == task_id convention.
 
         Also lifts the default recursion limit (25). The P1 main topology runs
-        7 nodes per agent cycle (planner→risk_scan→subagent_split→executor→
+        6 nodes per agent cycle (planner→risk_scan→executor→
         [human_confirm]→tool→reflect), so the earlier ×4 estimate undershot and
         long tasks crashed with GraphRecursionError; ×8 covers the full cycle
-        plus finish with headroom.
+        plus finish with headroom (issue #56 dropped one node per cycle and left
+        the multiplier alone — the limit is a ceiling, not a budget).
         """
         return {
             "configurable": {"thread_id": task_id},
@@ -930,7 +931,6 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
-                subagent_executor=self._subagent,
                 confirm_enabled=not self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)

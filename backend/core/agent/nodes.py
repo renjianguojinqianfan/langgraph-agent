@@ -24,26 +24,6 @@ from .state import AgentState
 logger = get_logger("agent.runtime")
 
 
-def _fold_subtask_summaries(results) -> str:
-    """Build a compact folded summary of subtask results.
-
-    Only this compact summary is appended to the main ``messages`` — subtask
-    internal assistant/tool messages never reach the parent context (the
-    token volume is bounded well below the subtask's full message history).
-    """
-    if not results:
-        return ""
-    lines = []
-    for r in results:
-        if getattr(r, "status", "") == "completed":
-            lines.append(f"[子任务 {r.name}] 完成。摘要：{r.summary}")
-        else:
-            lines.append(f"[子任务 {r.name}] 失败：{getattr(r, 'error', '') or 'unknown error'}")
-    text = "\n".join(lines)
-    # Hard cap so the folded block is at most ~1/10 of a typical subtask log.
-    return text[:1000]
-
-
 class AgentRuntime:
     """Per-task runtime that backs the LangGraph nodes."""
 
@@ -56,7 +36,6 @@ class AgentRuntime:
         tool_schemas: List[Dict[str, Any]],
         max_steps: int = 15,
         aux_llm: Any = None,
-        subagent_executor: Any = None,
         confirm_enabled: bool = True,
         parent_task_id: str = "",
     ) -> None:
@@ -75,7 +54,6 @@ class AgentRuntime:
         self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
         self._aux = aux_llm  # injected aux client (may be None)
         self._aux_computed = aux_llm is not None
-        self.subagent_executor = subagent_executor  # SubAgentExecutor (main mode only)
         # P1-A′: discover + merge once per task (task-level cache); mid-task edits
         # to AGENTS.md intentionally do not take effect. Subtask graphs share this
         # __init__, so they receive the same block with no extra code.
@@ -357,51 +335,6 @@ class AgentRuntime:
                 else:
                     plan[idx] = {"index": idx + 1, "description": str(step), "status": "skipped"}
         state["plan"] = plan
-
-    # ── P1 item 2: sub-agent split (built-in scenario dispatch) ──
-    def subagent_split(self, state: AgentState) -> AgentState:
-        """Detect a built-in subtask scenario and dispatch isolated subtasks.
-
-        Runs only in ``mode="main"`` graphs (subtask graphs omit this node,
-        which is the recursion guard). When no scenario matches — or the
-        executor is unavailable / disabled — the flow simply proceeds to the
-        executor (zero regression). Sub-agent summary events are published on
-        the main channel; subtask *internal* events stay on their own channel.
-        """
-        if self._stopped(state):
-            state["_last_action"] = "stop"
-            return state
-        state["subtasks"] = state.get("subtasks", []) or []
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        executor = self.subagent_executor
-        if not settings.subagent_enabled or executor is None or state.get("_is_subtask"):
-            state["_last_action"] = "plan"
-            return state
-
-        user_input = ""
-        for m in state.get("messages", []) or []:
-            if m.get("role") == "user":
-                user_input = str(m.get("content", ""))
-                break
-        plan = state.get("plan", []) or []
-        results = executor.run_plan_with_subtasks(
-            parent_task_id=self.task_id,
-            user_input=user_input,
-            plan=plan,
-            publish=self._publish,
-        )
-        if not results:
-            state["_last_action"] = "plan"
-            return state
-
-        state["subtasks"] = [r.to_dict() for r in results]
-        folded = _fold_subtask_summaries(results)
-        if folded:
-            # A digest the runtime produced, not something the model said — as
-            # ``assistant`` it gets replayed as the model's own prior turn.
-            state.setdefault("messages", []).append({"role": "system", "content": folded})
-        state["_last_action"] = "plan"
-        return state
 
     def executor(self, state: AgentState) -> AgentState:
         if self._stopped(state):
