@@ -3,7 +3,7 @@
 自然语言下发任务 → Agent 自主规划（planner → executor → tool → reflect 循环）→ 调用工具完成多步任务，
 全程 SSE 实时可视化 + Trace 回放。基于 **LangGraph 1.2.x（StateGraph）**，FastAPI + React 前后端一体。
 
-**离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 全绿（千问 `qwen3.7-flash-2026-07-15`：e2e 双场景 + skills 运行时两腿）· CI 五 job 全绿。
+**离线测试全绿**（零网络、零 Key、MockLLM）· 真实 LLM 按 [`scripts/LIVE_E2E.md`](scripts/LIVE_E2E.md) 双场景 + skills 两腿验证（最近全绿记录：`qwen3.7-flash-2026-07-15`，2026-08-24；现役 `.env` 口径 `deepseek-v4.1-flash` 下场景 1 通过、场景 2 存在既有闸门问题 [#68](https://github.com/renjianguojinqianfan/langgraph-agent/issues/68)，A/B 已归因与主干无关）· CI 五 job 全绿。
 
 这个仓库想证明的不是"能跑通一个 agent demo"，而是 agent 运行时里那几件难做的事被工程化地解决了：
 任务被中途停止后能从检查点续跑、危险操作在执行前被闸门拦住、工具连续失败时熔断降级而不是把循环拖死、

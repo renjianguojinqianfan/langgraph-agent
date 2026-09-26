@@ -29,6 +29,7 @@
 
 | 任务触发 | 先读（权威源） | 完成判据 |
 |---|---|---|
+| 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：qoder 实施+自评审提 PR，opencode 独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
 | 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过 |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；三类 409 拒绝逐条仍成立 |
@@ -67,7 +68,7 @@ npx tsc --noEmit     # 本地快检，0 错误
 ## Agent skills
 
 > 本节由 `setup-matt-pocock-skills` 技能生成（2026-09-15），供 mattpocock 工程技能组读取；
-> 下面三个 `###` 标题是它们的读取入口。细节改 `docs/agents/*.md` 即可，不必重跑技能。
+> 下面四个 `###` 标题是它们的读取入口。细节改 `docs/agents/*.md` 即可，不必重跑技能。
 
 ### Issue tracker
 
@@ -80,4 +81,8 @@ GitHub Issues（`renjianguojinqianfan/langgraph-agent`），走 `gh` CLI；Power
 ### Domain docs
 
 Single-context：根 `CONTEXT.md`（未建）+ `docs/adr/`（0001 / 0002 / 0003）。词汇表在 `backend/core/agent/state.py`（节点名见 `graph.py`）。See `docs/agents/domain.md`.
+
+### Implementation workflow
+
+新票实施分工：qoder 切分支 + `implement` + `code-review` 自评审 + 提 PR；opencode 独立评 PR（不改代码只提返工）；评审侧/用户合并。See `docs/agents/workflow.md`.
 

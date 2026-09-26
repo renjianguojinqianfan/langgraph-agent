@@ -3,7 +3,9 @@
 > 项目默认的离线测试全部基于 `MockLLMClient`（离线、无 Key、无网络）。
 > 本指南是**真实 LLM 验证的唯一权威**——步骤、额度核验、CI key gate 的实际语义都以本文为准
 > （规则与缘由见 `AGENTS.md`「跨任务安全边界」）。
-> 现役模型口径：QianWen/DashScope `qwen3.7-flash-2026-07-15`。
+> 现役模型口径（`.env`）：DashScope `deepseek-v4.1-flash`（评测线统一大脑，见 `docs/roadmap-pawbench.md`）；
+> 全绿历史记录为 `qwen3.7-flash-2026-07-15`（2026-08-24）。已知：场景 2 在 `deepseek-v4.1-flash` 下
+> 会因模型中途请求确认而超时（[#68](https://github.com/renjianguojinqianfan/langgraph-agent/issues/68)，既有问题，与主干无关）。
 
 ---
 

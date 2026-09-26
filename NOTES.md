@@ -23,7 +23,7 @@
 
 **主线 C+D · 面试冲刺**
 10. STAR 项目叙事：两个核心故事（P0 死循环修复 / P3 副本语义发现）+ 简历表述打磨
-11. 高频追问题库：为什么 LangGraph、444 测试与 Mock LLM 离线隔离、并发模型、recursion_limit 修复
+11. 高频追问题库：为什么 LangGraph、离线全量测试与 Mock LLM 离线隔离（计数以实跑为准，不背数字）、并发模型、recursion_limit 修复
 12. 手写代码实战：徒手写纯 Python Agent 循环 + mini StateGraph
 
 ## 节奏与跳课记录
