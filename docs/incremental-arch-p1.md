@@ -208,7 +208,7 @@ def kb_path(self) -> Path:
 - **独立 state**：每个子任务新建 `AgentState`（`messages=[{role:"user", content: instruction}]`、空 plan/steps/artifacts），与主 state 完全分离；子任务的内部消息不进主 `messages`，主上下文只见工具调用的返回值。
 - **独立 AgentRuntime**：`SubAgentExecutor._exec_one` 为每个子任务 new 一个 `AgentRuntime(task_id=subtask_id, task_manager=tm, llm=主LLM, tools=档位解析出的工具面, tool_schemas=对应schemas)`，并 `build_graph(runtime, mode="subtask")`（简化图：planner→executor→tool→reflect→finish，无 risk/confirm 节点）。
 - **独立事件频道**：子任务内部事件发布到 `subtask_id` 频道（同一 EventBus 的不同 key），**不进主任务 SSE**；子任务不挂 `TraceRecorder`（保持简单，trace 文件仅主任务）。
-- **线程池与超时**：`SubAgentExecutor` 持 `ThreadPoolExecutor(max_workers=subagent_max_concurrency)`，`run_subtask` 提交到池并等 `future.result(timeout=subagent_timeout_sec)`——单发子任务因此有墙钟上限（#56 之后这是该键唯一的执行点）；`_exec_one` 在池线程上重坐父 task id，故其写仍进父任务回滚账本（#33 拍板 5）。
+- **线程池与超时**：`SubAgentExecutor` 持 `ThreadPoolExecutor(max_workers=subagent_max_concurrency)`，`run_subtask` 提交到池并等 `future.result(timeout=subagent_timeout_sec)`——单发子任务因此有墙钟上限（#56 之后这是该键唯一的执行点）；`_exec_one` 在池线程上重坐父 task id，故其写仍进父任务回滚账本（#33 拍板 5）。超时折 `failed` 之后还会经 `_request_worker_stop` 置**子任务自身**的 stop 旗标：线程杀不掉，但节点入口的 `_stopped()` 会看到它，于是 worker 在下一个节点入口收场、池位随之归还，而不是把 `max_steps` 轮跑满（残余 = 在途那一轮 LLM 与该轮已排队的工具批次仍会跑完）。机制见 `incremental-arch-p3-resume.md` §3 第 6 条，[#71](https://github.com/renjianguojinqianfan/langgraph-agent/issues/71)。
 
 
 ### 2.5 风险扫描插入 graph 的方案（回答"独立节点还是 planner 内联"）
