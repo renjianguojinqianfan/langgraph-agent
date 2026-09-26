@@ -134,9 +134,8 @@ def test_artifact_auto_index(tmp_path, event_bus):
         tool_calls=[
             {
                 "id": "kb1",
-                "name": "file_io",
+                "name": "write",
                 "arguments": {
-                    "action": "write",
                     "path": "kb_artifact.txt",
                     "content": "知识库自动入库产物内容",
                 },

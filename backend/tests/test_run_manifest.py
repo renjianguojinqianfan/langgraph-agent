@@ -47,7 +47,7 @@ _FACE = [
     "memory_search",
     "load_skill",
     "web_search",
-    "file_io",
+    "ls",
     "code_exec",
     "spawn_subagent",
 ]
@@ -149,6 +149,11 @@ def test_header_reflects_tool_face_and_confirm_gate(tmp_path):
     assert set(sub["tiers"]) == {EXPLORE_TIER, EXECUTE_TIER}
     assert sub["tiers"][EXPLORE_TIER] == tier_face_names(_FACE, EXPLORE_TIER)
     assert sub["tiers"][EXECUTE_TIER] == tier_face_names(_FACE, EXECUTE_TIER)
+    # #17: the six-piece family is what the tiers speak of — ``ls`` is an explore
+    # member and the retired multi-action bundle appears nowhere.
+    assert "ls" in sub["tiers"][EXPLORE_TIER]
+    assert "ls" in sub["tiers"][EXECUTE_TIER]
+    assert "file_io" not in caps["tool_face"]["params"]["tools"]
 
 
 # ── body: LLM rounds via the proxy ───────────────────────────────────────────
@@ -203,7 +208,7 @@ def test_subtask_channel_mirrored_into_parent_file_with_owner(tmp_path):
     m.attach(bus, "parent-1")
     m.attach_subtask(bus, "parent-1", "sub-9")
 
-    bus.publish("sub-9", "tool_call", {"tool_name": "file_io", "arguments": {"path": "x"}})
+    bus.publish("sub-9", "tool_call", {"tool_name": "ls", "arguments": {"path": "x"}})
     bus.publish("sub-9", "tool_result", {"ok": True})
     bus.publish("sub-9", "task_completed", {"status": "COMPLETED"})  # NOT mirrored
 
@@ -211,7 +216,7 @@ def test_subtask_channel_mirrored_into_parent_file_with_owner(tmp_path):
     events = [ln for ln in parent_lines if ln.get("type") == "event"]
     assert [e["event"] for e in events] == ["tool_call", "tool_result"]
     assert all(e["owner"] == "subtask:sub-9" for e in events)
-    assert events[0]["data"]["tool_name"] == "file_io"
+    assert events[0]["data"]["tool_name"] == "ls"
     # A face query without tier / face writes nothing: the header stays honest.
     assert not [ln for ln in parent_lines if ln.get("type") == "subtask_face"]
 
@@ -313,9 +318,8 @@ def _write_mock() -> MockLLMClient:
         tool_calls=[
             {
                 "id": "c1",
-                "name": "file_io",
+                "name": "write",
                 "arguments": {
-                    "action": "write",
                     "path": "hello.txt",
                     "content": "manifest smoke",
                 },
@@ -356,7 +360,7 @@ def test_task_run_writes_manifest_end_to_end(tmp_path):
     assert "write" in params["tiers"][EXECUTE_TIER]
     assert "write" not in params["tiers"][EXPLORE_TIER]
     # Everything gated / external is out of both tiers by construction.
-    for name in ("file_io", "code_exec", "http_request", "spawn_subagent"):
+    for name in ("code_exec", "http_request", "spawn_subagent"):
         assert name in mounted  # mounted for the parent...
         assert all(name not in tier for tier in params["tiers"].values())  # ...never for a subtask
 
@@ -373,7 +377,7 @@ def test_task_run_writes_manifest_end_to_end(tmp_path):
     events = [ln for ln in lines if ln.get("type") == "event"]
     assert any(e["event"] == "tool_call" for e in events)
     assert any(
-        e["event"] == "tool_result" and e["data"].get("tool_name") == "file_io"
+        e["event"] == "tool_result" and e["data"].get("tool_name") == "write"
         for e in events
     )
 
@@ -438,7 +442,7 @@ def test_subtask_rounds_labeled_in_parent_manifest(tmp_path):
     ]
     assert sub_calls, "no subtask llm_call lines in the parent manifest"
     # Subtask tool events are mirrored with the same attribution — the subtask
-    # writes with the tier's ``write`` tool, no longer with ``file_io`` (#56).
+    # writes with the tier's ``write`` tool (#56).
     sub_events = [
         ln
         for ln in lines
@@ -471,7 +475,7 @@ def test_subtask_face_line_names_the_tier_and_the_resolved_face(tmp_path):
     assert faces[0]["tier"] == DEFAULT_TIER
     assert faces[0]["tools"] == tier_face_names(mounted, DEFAULT_TIER)
     assert "write" in faces[0]["tools"]
-    assert not {"file_io", "code_exec", "spawn_subagent"} & set(faces[0]["tools"])
+    assert not {"code_exec", "spawn_subagent"} & set(faces[0]["tools"])
 
     spawn_results = [
         ln

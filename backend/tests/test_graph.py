@@ -133,8 +133,8 @@ def test_build_graph_runs_and_produces_final_answer(settings, event_bus):
         tool_calls=[
             {
                 "id": "c1",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "out.txt", "content": "result"},
+                "name": "write",
+                "arguments": {"path": "out.txt", "content": "result"},
             }
         ],
         final_answer="I wrote out.txt.",
@@ -171,7 +171,7 @@ def test_stop_interrupts_loop_within_two_seconds(settings, event_bus):
     mock = _SlowMockLLMClient(
         plan=["p"],
         tool_calls=[
-            {"id": f"c{i}", "name": "file_io", "arguments": {"action": "write", "path": f"f{i}.txt", "content": "x"}}
+            {"id": f"c{i}", "name": "write", "arguments": {"path": f"f{i}.txt", "content": "x"}}
             for i in range(8)
         ],
         final_answer="never reached",

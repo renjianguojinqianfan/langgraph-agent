@@ -30,7 +30,7 @@ def test_llm_response_defaults():
 
 
 def test_llm_response_carries_tool_calls_and_raw():
-    tc = {"id": "1", "name": "file_io", "arguments": {}}
+    tc = {"id": "1", "name": "write", "arguments": {}}
     resp = LLMResponse(content="", tool_calls=[tc], raw={"x": 1})
     assert resp.tool_calls == [tc]
     assert resp.raw == {"x": 1}
@@ -49,7 +49,7 @@ def test_mock_planner_returns_plan_as_json():
 def test_mock_executor_emits_scripted_tool_calls_then_final_answer():
     """Executor calls return one scripted tool call per turn, then final_answer."""
     tool_calls = [
-        {"id": "c1", "name": "file_io", "arguments": {"action": "write", "path": "a.txt"}},
+        {"id": "c1", "name": "write", "arguments": {"path": "a.txt"}},
         {"id": "c2", "name": "code_exec", "arguments": {"language": "python", "code": "1+1"}},
     ]
     mock = MockLLMClient(plan=["p"], tool_calls=tool_calls, final_answer="all done")
@@ -58,14 +58,14 @@ def test_mock_executor_emits_scripted_tool_calls_then_final_answer():
     r2 = mock.complete([], tools=[{"type": "function"}])
     r3 = mock.complete([], tools=[{"type": "function"}])
 
-    assert r1.tool_calls[0]["name"] == "file_io"
+    assert r1.tool_calls[0]["name"] == "write"
     assert r2.tool_calls[0]["name"] == "code_exec"
     assert r3.tool_calls == []            # script exhausted
     assert r3.content == "all done"       # now a final answer
 
 
 def test_mock_resets_executor_turn_counter():
-    mock = MockLLMClient(plan=["p"], tool_calls=[{"id": "c1", "name": "file_io", "arguments": {}}], final_answer="x")
+    mock = MockLLMClient(plan=["p"], tool_calls=[{"id": "c1", "name": "write", "arguments": {}}], final_answer="x")
     assert mock.complete([], tools=[{}]).tool_calls  # c1
     assert mock.complete([], tools=[{}]).content == "x"  # exhausted
     mock.reset()
@@ -86,7 +86,7 @@ def test_make_default_mock_client_is_runnable():
     mock = make_default_mock_client()
     assert isinstance(mock, MockLLMClient)
     assert any(tc["name"] == "web_search" for tc in mock.tool_calls)
-    assert any(tc["name"] == "file_io" for tc in mock.tool_calls)
+    assert any(tc["name"] == "write" for tc in mock.tool_calls)
 
 
 # ── create_llm_client factory ──

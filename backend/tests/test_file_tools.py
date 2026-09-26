@@ -1,24 +1,25 @@
-"""Tests for the P0-A discrete file tools: read / write / edit / glob / grep.
+"""Tests for the six-piece discrete file tools: read / write / edit / glob / grep / ls.
 
-These are the six-piece-style precision file tools added under
-``docs/roadmap-pawbench.md`` P0-A. They live in ``backend/core/tools/file_io.py``
-alongside (but separate from) the legacy multi-action ``file_io`` tool, which is
-retained for backward compatibility pending a tracked retirement follow-up.
+These are the precision file tools added under ``docs/roadmap-pawbench.md`` P0-A
+(``ls`` closing the set in issue #17). They live in
+``backend/core/tools/file_io.py``; the legacy multi-action ``file_io`` tool they
+replaced is retired (#17).
 
 Design contract under test:
 * every tool is confined to ``Settings.artifacts_path`` (the sandbox root);
-  reads / writes / edits / searches that escape the root are rejected;
+  reads / writes / edits / listings / searches that escape the root are rejected;
 * ``read`` paginates by line (``offset`` / ``limit``) and prefixes 1-based line
   numbers when ``line_numbers`` is on (default) — the P1 "don't blow the context
   on a full read" fix;
-* ``write`` creates or overwrites a whole file (issue #56: the discrete write
-  exists so a sub-agent can be granted sandbox writes without the
-  un-splittable read/write/list ``file_io`` bundle);
+* ``write`` creates or overwrites a whole file, capturing a before-image first;
 * ``edit`` is an exact ``old_string`` -> ``new_string`` replacement with a
   uniqueness guard (ambiguous unless ``replace_all``);
 * ``glob`` owns recursion (``**`` patterns), returns root-relative sorted paths;
 * ``grep`` is a regex content search with a filename ``glob`` filter, scope
-  ``path``, ``ignore_case`` and a ``max_results`` cap.
+  ``path``, ``ignore_case`` and a ``max_results`` cap;
+* ``ls`` is the shallow listing of the directory it was asked for (never the
+  root by default alone), and its result carries no top-level ``path`` key so a
+  directory can never be mistaken for a produced artifact.
 
 Everything is offline; each test gets a fresh ``tmp_path`` sandbox.
 """
@@ -31,9 +32,9 @@ import backend.core.tools.file_io as file_io
 from backend.config import Settings
 from backend.core.tools.file_io import (
     EditTool,
-    FileIOTool,
     GlobTool,
     GrepTool,
+    LsTool,
     ReadTool,
     WriteTool,
 )
@@ -457,6 +458,69 @@ def test_grep_rejects_path_escape(settings):
     assert "sandbox" in res.error.lower() or "rejected" in res.error.lower()
 
 
+# ──────────────────────────── ls (shallow listing) ────────────────────────────
+def test_ls_lists_the_sandbox_root_by_default(settings):
+    _write(settings, "a.txt", "1")
+    _write(settings, "b.txt", "22")
+    res = LsTool(settings).run()
+    assert res.success is True
+    by_name = {e["name"]: e for e in res.data["entries"]}
+    assert set(by_name) == {"a.txt", "b.txt"}
+    assert by_name["a.txt"]["is_dir"] is False
+    assert by_name["a.txt"]["size"] == 1
+    assert by_name["b.txt"]["size"] == 2
+
+
+def test_ls_lists_the_requested_directory_not_the_root(settings):
+    """The retired ``file_io`` list validated ``path`` and then listed the root
+    anyway; ``ls`` lists what it was asked for, one level deep."""
+    _write(settings, "root.txt", "x")
+    _write(settings, "sub/inner.txt", "y")
+    _write(settings, "sub/deep/z.txt", "z")
+
+    res = LsTool(settings).run(path="sub")
+
+    assert res.success is True
+    assert {e["name"] for e in res.data["entries"]} == {"inner.txt", "deep"}
+    assert {e["name"] for e in res.data["entries"] if e["is_dir"]} == {"deep"}
+
+
+def test_ls_result_carries_no_top_level_path_key(settings):
+    """A top-level ``path`` sends the tool node down
+    ``add_artifact(directory)``, and verification then reads the 0-byte dir as
+    「产物为空」and loops the task back (PR #69 live attribution)."""
+    res = LsTool(settings).run()
+    assert res.success is True
+    assert "path" not in res.data
+    assert Path(res.data["dir"]).is_dir()
+
+
+def test_ls_empty_directory_returns_no_entries(settings):
+    (settings.artifacts_path / "empty").mkdir(parents=True)
+    res = LsTool(settings).run(path="empty")
+    assert res.success is True
+    assert res.data["entries"] == []
+
+
+def test_ls_missing_directory_reports_error(settings):
+    res = LsTool(settings).run(path="nope")
+    assert res.success is False
+    assert "not found" in res.error.lower()
+
+
+def test_ls_on_a_file_reports_error(settings):
+    _write(settings, "a.txt", "1")
+    res = LsTool(settings).run(path="a.txt")
+    assert res.success is False
+    assert "directory" in res.error.lower()
+
+
+def test_ls_rejects_escape(settings):
+    res = LsTool(settings).run(path="../")
+    assert res.success is False
+    assert "sandbox" in res.error.lower() or "rejected" in res.error.lower()
+
+
 # ────────────── cross-cutting: policy / schema / registry / round-trip ──────────────
 def test_new_tools_sandbox_policy(settings):
     for tool in (
@@ -465,9 +529,9 @@ def test_new_tools_sandbox_policy(settings):
         GrepTool(settings),
         EditTool(settings),
         WriteTool(settings),
+        LsTool(settings),
     ):
         # sandbox-confined local FS: no confirm, no retry, no circuit breaker
-        # (identical policy to the legacy file_io tool).
         assert tool.requires_confirm is False
         assert tool.retryable is False
         assert tool.circuit_breaker is False
@@ -479,13 +543,14 @@ def test_new_tools_openai_schema_names(settings):
     assert EditTool(settings).to_openai_schema()["function"]["name"] == "edit"
     assert GlobTool(settings).to_openai_schema()["function"]["name"] == "glob"
     assert GrepTool(settings).to_openai_schema()["function"]["name"] == "grep"
+    assert LsTool(settings).to_openai_schema()["function"]["name"] == "ls"
 
 
-def test_build_tools_includes_new_tools_and_keeps_file_io(settings):
+def test_build_tools_exposes_the_six_pieces_and_no_file_io(settings):
     names = {t.name for t in build_tools(settings)}
-    assert {"read", "write", "edit", "glob", "grep"} <= names
-    # additive: the legacy multi-action tool is retained (retirement tracked separately)
-    assert "file_io" in names
+    assert {"read", "write", "edit", "glob", "grep", "ls"} <= names
+    # retired in #17: the un-splittable multi-action bundle is off the face
+    assert "file_io" not in names
 
 
 def test_write_then_read_round_trip(settings):
@@ -502,8 +567,9 @@ def test_edit_then_read_round_trip(settings):
     assert res.data["content"] == "one 2 three"
 
 
-def test_legacy_file_io_still_works_alongside(settings):
-    # the retained file_io tool is untouched and still functional
-    tool = FileIOTool(settings)
-    assert tool.run(action="write", path="legacy.txt", content="ok").success is True
-    assert tool.run(action="read", path="legacy.txt").data["content"] == "ok"
+def test_write_then_ls_round_trip(settings):
+    """The delivery path a task actually takes: write lands, ls sees it."""
+    res = WriteTool(settings).run(path="out/report.txt", content="body")
+    assert res.success is True
+    listed = LsTool(settings).run(path="out")
+    assert {e["name"] for e in listed.data["entries"]} == {"report.txt"}

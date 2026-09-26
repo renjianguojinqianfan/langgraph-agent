@@ -47,8 +47,8 @@ def client(tmp_path):
         tool_calls=[
             {
                 "id": "c1",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "api_out.txt", "content": "via api"},
+                "name": "write",
+                "arguments": {"path": "api_out.txt", "content": "via api"},
             }
         ],
         final_answer="Created api_out.txt.",

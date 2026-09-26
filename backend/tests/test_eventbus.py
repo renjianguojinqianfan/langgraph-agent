@@ -10,10 +10,10 @@ def test_subscriber_receives_published_events():
     received = []
     bus.subscribe("t1", received.append)
     bus.publish("t1", "step_start", {"index": 1})
-    bus.publish("t1", "tool_call", {"name": "file_io"})
+    bus.publish("t1", "tool_call", {"name": "write"})
     assert len(received) == 2
     assert received[0]["type"] == "step_start"
-    assert received[1]["data"]["name"] == "file_io"
+    assert received[1]["data"]["name"] == "write"
 
 
 def test_subscribers_are_scoped_per_task():

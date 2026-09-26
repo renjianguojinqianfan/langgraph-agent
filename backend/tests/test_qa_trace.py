@@ -125,8 +125,8 @@ def test_trace_ndjson_valid_and_matches_json_format(tmp_path):
         tool_calls=[
             {
                 "id": "qa1",
-                "name": "file_io",
-                "arguments": {"action": "write", "path": "qa.txt", "content": "hello"},
+                "name": "write",
+                "arguments": {"path": "qa.txt", "content": "hello"},
             }
         ],
         final_answer="wrote it",
