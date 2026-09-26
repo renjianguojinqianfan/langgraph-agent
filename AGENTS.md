@@ -38,6 +38,7 @@
 | live / 换模型 | `scripts/LIVE_E2E.md` + `ci.yml` 的 live-e2e job | 先核免费额度 |
 | headless / 评测台 | `README.md`「无人值守执行（P0-C headless）」 | 四级退出码 0/1/2/3 语义不变；`degraded` 标记不丢 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
+| 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆） | 调研总结（含文件级引用）落进票面评论，再拍板 |
 
 ## 验证入口与完成证据
 
