@@ -14,7 +14,7 @@ Requirements:
 
 This script drives the REAL LangGraph kernel end-to-end with a natural-language
 task, verifying planner -> executor -> tool -> reflect -> final_answer and that
-the file_io tool actually writes an artifact.
+the write tool actually writes an artifact.
 
 It then exercises the Issue #4 resume path: a second task is stopped mid-run,
 the TaskManager is rebuilt (simulating a process restart), and the task is
