@@ -44,6 +44,7 @@ logger = get_logger("tool.file_io")
 # them. Tests may monkeypatch them to exercise the caps without huge fixtures.
 DEFAULT_READ_LIMIT = 2000  # max lines a single `read` returns before truncating
 GLOB_MAX_MATCHES = 500  # cap on glob results (guards a runaway `**` pattern)
+LS_MAX_ENTRIES = 500  # cap on ls entries (a sandbox root can hold a lot of files)
 GREP_MAX_RESULTS = 100  # cap on grep matches returned
 GREP_MAX_FILE_BYTES = 1_000_000  # skip files larger than this when grepping
 
@@ -548,7 +549,7 @@ class LsTool(_SandboxedTool):
 
     def run(self, **kwargs: Any) -> ToolResult:
         sub = str(kwargs.get("path", "") or "")
-        target = self._safe_path(sub)
+        target = self._base_dir(sub)
         if target is None:
             return ToolResult(
                 success=False,
@@ -562,7 +563,7 @@ class LsTool(_SandboxedTool):
             return ToolResult(success=False, error=f"Path is not a directory: {sub}")
 
         try:
-            entries = [
+            found = [
                 {
                     "name": p.name,
                     "is_dir": p.is_dir(),
@@ -574,7 +575,13 @@ class LsTool(_SandboxedTool):
             logger.exception("ls failed")
             return ToolResult(success=False, error=str(exc))
 
-        # Deliberately no top-level ``path`` key: the tool node registers any
-        # ``path`` a successful result advertises as a task artifact, and a
-        # directory there is what makes verification see an empty product.
-        return ToolResult(success=True, data={"dir": str(target), "entries": entries})
+        # ``dir`` rather than ``path`` on purpose — see the registration guard in
+        # nodes.py: a directory advertised as a product reads as an empty one.
+        return ToolResult(
+            success=True,
+            data={
+                "dir": str(target),
+                "entries": found[:LS_MAX_ENTRIES],
+                "truncated": len(found) > LS_MAX_ENTRIES,
+            },
+        )

@@ -22,7 +22,7 @@
 | 4·11 | 保留 | **30 天**（`snapshot_retention_days` 可配）+ **TaskManager 启动时顺带清扫**（`_reconcile_orphans` 同钩子位；无调度宿主，无新线程/定时器）|
 | 5 | 账本边界 | **沙箱根为界**：沙箱内文件写全记账（子代理写归主任务账本）；沙箱外（code_exec 临时目录 / `git_*` 外部 repo / MCP·OpenAPI 远端）**声明不保** |
 | 6 | 限额护栏 | v1 不设体积上限（N 天清理 + 按任务分目录已让体积有界）；未来加显式上限 + 告警，不做静默丢弃 |
-| 7 | 捕获落位 | 新 `backend/services/snapshots.py`（capture / restore / cleanup）+ `file_io.py` 两个写点各一行调用；task_id 传递 = **contextvar**（`TaskManager.run()` / `_resume_run()` 工作线程入口设置）——账本逻辑单一权威文件，零碰保护文件。**#17 现状修正**：multi-action `file_io` 退役后两个写点变成 `WriteTool` 与 `EditTool`，钩子随工具走、不随之消失 |
+| 7 | 捕获落位 | 新 `backend/services/snapshots.py`（capture / restore / cleanup）+ `file_io.py` 两个写点各一行调用；task_id 传递 = **contextvar**（`TaskManager.run()` / `_resume_run()` 工作线程入口设置）——账本逻辑单一权威文件，file_io 退役（Issue #17）时钩子随之消失，零碰保护文件 |
 | 8 | 触发形态 | **仅独立端点** `POST /api/tasks/{task_id}/rollback`（用户显式触发）；「拒绝时自动回滚」被代码事实否决——闸口拒绝那一刻沙箱里没有该工具写的文件可撤，自动回滚会误撤之前已确认的成功写 |
 | 9 | 与 resume 共存 | **完全解耦**（候选 C）：回滚只恢复文件、checkpoint 不动；resume 三条 409 一字不改。「回滚后 resume」= agent 看到回到旧版本的文件继续跑，是自然语义而非 bug |
 | 10 | 回滚粒度 | v1 **整任务回滚**（账本逆序全重放，回到任务起点）；按点回滚（target 参数）、单步撤销留记录修正路径 |
@@ -94,7 +94,7 @@ data/snapshots/<task_id>/
 
 | 工具 | 位置 | 钩子 |
 |---|---|---|
-| `WriteTool`（`write`，#56 起独立成件）| `target.write_text` 之前 | `capture_before_image(target, settings=self.settings)` |
+| `FileIOTool`（`action=write`）| `target.write_text` 之前 | `capture_before_image(target, settings=self.settings)` |
 | `EditTool` | `target.write_text(new_text)` 之前 | 同上 |
 
 - 沙箱文件写只有这两个入口（#34 代码交叉验证）；`code_exec` 写临时目录、`git_*` 在外部 repo、MCP/OpenAPI 在远端，均不在账本边界内（拍板 5）。

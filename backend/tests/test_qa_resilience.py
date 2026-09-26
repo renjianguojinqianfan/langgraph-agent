@@ -213,8 +213,8 @@ def test_real_code_exec_never_retries_or_breaks():
     ],
 )
 def test_real_sandbox_file_tools_never_retry_or_break(tmp_path, tool_cls, tool_name, call):
-    """The six-piece file family is local FS: deterministic, so no retry and no
-    breaker — repeated failures must never short-circuit it (issue #17 migrated
+    """Sandbox file tools are local FS: deterministic, so no retry and no
+    breaker — repeated failures must never short-circuit them (issue #17 migrated
     this off the retired multi-action ``file_io`` bundle)."""
     settings = _settings(
         tool_max_retries=5, tool_failure_threshold=1, artifacts_dir=str(tmp_path)

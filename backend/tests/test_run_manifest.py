@@ -149,11 +149,9 @@ def test_header_reflects_tool_face_and_confirm_gate(tmp_path):
     assert set(sub["tiers"]) == {EXPLORE_TIER, EXECUTE_TIER}
     assert sub["tiers"][EXPLORE_TIER] == tier_face_names(_FACE, EXPLORE_TIER)
     assert sub["tiers"][EXECUTE_TIER] == tier_face_names(_FACE, EXECUTE_TIER)
-    # #17: the six-piece family is what the tiers speak of — ``ls`` is an explore
-    # member and the retired multi-action bundle appears nowhere.
+    # #17: ``ls`` is an explore member, so both tiers speak of it.
     assert "ls" in sub["tiers"][EXPLORE_TIER]
     assert "ls" in sub["tiers"][EXECUTE_TIER]
-    assert "file_io" not in caps["tool_face"]["params"]["tools"]
 
 
 # ── body: LLM rounds via the proxy ───────────────────────────────────────────

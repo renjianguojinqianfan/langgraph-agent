@@ -17,9 +17,10 @@ Design contract under test:
 * ``glob`` owns recursion (``**`` patterns), returns root-relative sorted paths;
 * ``grep`` is a regex content search with a filename ``glob`` filter, scope
   ``path``, ``ignore_case`` and a ``max_results`` cap;
-* ``ls`` is the shallow listing of the directory it was asked for (never the
-  root by default alone), and its result carries no top-level ``path`` key so a
-  directory can never be mistaken for a produced artifact.
+* ``ls`` is the shallow listing of the directory it was asked for (``path``
+  defaults to the sandbox root), capped like ``glob``; its result carries no
+  top-level ``path`` key so a directory can never be mistaken for a produced
+  artifact.
 
 Everything is offline; each test gets a fresh ``tmp_path`` sandbox.
 """
@@ -486,13 +487,21 @@ def test_ls_lists_the_requested_directory_not_the_root(settings):
 
 
 def test_ls_result_carries_no_top_level_path_key(settings):
-    """A top-level ``path`` sends the tool node down
-    ``add_artifact(directory)``, and verification then reads the 0-byte dir as
-    「产物为空」and loops the task back (PR #69 live attribution)."""
+    """The shape that keeps a listing out of the task's artifact list."""
     res = LsTool(settings).run()
     assert res.success is True
     assert "path" not in res.data
     assert Path(res.data["dir"]).is_dir()
+
+
+def test_ls_caps_entries(settings, monkeypatch):
+    monkeypatch.setattr(file_io, "LS_MAX_ENTRIES", 3)
+    for i in range(5):
+        _write(settings, f"f{i}.txt", "x")
+    res = LsTool(settings).run()
+    assert res.success is True
+    assert len(res.data["entries"]) == 3
+    assert res.data["truncated"] is True
 
 
 def test_ls_empty_directory_returns_no_entries(settings):

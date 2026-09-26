@@ -95,7 +95,7 @@ def reflect(self, state):
 ## 五、测试计划（TDD，先红后绿；全离线 MockLLM + tmp_path）
 
 新增 `backend/tests/test_verify.py`：
-1. **S1 空产物**：`write` 写空文件 → 登记但 size==0 → reflect 判失败回环（`_last_action=verify_failed`）→ 第二次写非空 → COMPLETED，`_verification.passed=True`。
+1. **S1 空产物**：file_io 写空文件 → 登记但 size==0 → reflect 判失败回环（`_last_action=verify_failed`）→ 第二次写非空 → COMPLETED，`_verification.passed=True`。
 2. **S1 产物消失**：登记后删文件 → `exists()==False` → 失败回环。
 3. **S2 全程失败 + 收窄反例**：零成功产物 + 零成功工具 + ≥1 failed + final_answer → 判失败回环；**反例**：1 个成功工具（web_search）+ 1 个 failed + 零产物（纯问答）→ **PASS 不打回**。
 4. **Q9 no-op**：纯 final_answer、无 artifact 无 failed tool → 直接 PASS（attempts=0，不回环）。
