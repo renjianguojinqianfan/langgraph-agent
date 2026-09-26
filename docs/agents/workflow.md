@@ -21,6 +21,7 @@
 - **opencode 评审不改代码**——返工回 qoder 分支（保持评审上下文干净，等价于「新人视角复审」）。
 - 挂起票 / 决策票（无代码）不走此流程；docs 小修走 AGENTS.md 的直推惯例。
 - 评审发现冻结区触碰 → 直接打回（无需商量）。
+- **评审形态**：opencode 与 qoder 共用同一个 GitHub 账号，GitHub 不允许在自己的 PR 上正式 request changes，所以步 5 的评审以**评论型**提交——评审 body 就是结论载体（含「返工要求：仅 Fx」这类明确裁定），PR 的「评审通过」不靠 GitHub review 状态，靠评审 body + CI + 会话分工追踪。
 
 ## 备注
 
