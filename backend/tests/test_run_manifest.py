@@ -4,10 +4,12 @@ Covers the module contract end-to-end, fully offline:
 
 * the «件清单» header is deterministic and **minimally diffable** — flipping
   one capability changes exactly one header line (the control-variable
-  criterion from the issue's acceptance criteria);
+  criterion from the issue's acceptance criteria); a tool gate flips the lines
+  of both capabilities it feeds, which is still a nameable difference;
 * every LLM round lands with its full request / response / usage / elapsed,
 * subtask channels are mirrored into the parent's file with owner tags and
-  detach cleanly;
+  detach cleanly, plus one ``subtask_face`` line per subtask saying which
+  capability tier and which resolved face it got (issue #56);
 * configured key literals and key-shaped strings never hit the disk;
 * the byte cap stops the file with one ``manifest_truncated`` marker;
 * TaskManager wiring: manifest on -> file written and closed; off (default)
@@ -21,6 +23,13 @@ import json
 import time
 from pathlib import Path
 
+from backend.core.agent.subagent import (
+    DEFAULT_TIER,
+    EXECUTE_TIER,
+    EXPLORE_TIER,
+    subtask_owner,
+    tier_face_names,
+)
 from backend.core.llm.client import MockLLMClient
 from backend.services.event_bus import EventBus
 from backend.services.run_manifest import RunManifest
@@ -28,7 +37,20 @@ from backend.tests.conftest import make_manager, make_settings
 from backend.tests.test_graph import _run_until_done
 from backend.tests.test_subagent import _ResearchMock
 
-_FACE = ["read", "glob", "grep", "kb_query", "load_skill", "spawn_subagent"]
+_FACE = [
+    "read",
+    "glob",
+    "grep",
+    "write",
+    "edit",
+    "kb_query",
+    "memory_search",
+    "load_skill",
+    "web_search",
+    "file_io",
+    "code_exec",
+    "spawn_subagent",
+]
 
 
 def _lines(path: Path) -> list:
@@ -120,7 +142,13 @@ def test_header_reflects_tool_face_and_confirm_gate(tmp_path):
     caps = {ln["name"]: ln for ln in _lines(m.file_path("t1")) if ln.get("type") == "capability"}
     assert caps["tool_face"]["params"]["tools"] == sorted(_FACE)
     assert caps["confirm_gate"]["enabled"] is False
-    assert caps["subagent"]["params"]["entry_a_spawn"] is True
+    # Issue #56: one entry point + two built-in tiers, resolved against the face.
+    sub = caps["subagent"]["params"]
+    assert set(sub) == {"default_tier", "tiers", "max_concurrency", "timeout_sec"}
+    assert sub["default_tier"] == DEFAULT_TIER
+    assert set(sub["tiers"]) == {EXPLORE_TIER, EXECUTE_TIER}
+    assert sub["tiers"][EXPLORE_TIER] == tier_face_names(_FACE, EXPLORE_TIER)
+    assert sub["tiers"][EXECUTE_TIER] == tier_face_names(_FACE, EXECUTE_TIER)
 
 
 # ── body: LLM rounds via the proxy ───────────────────────────────────────────
@@ -178,15 +206,30 @@ def test_subtask_channel_mirrored_into_parent_file_with_owner(tmp_path):
     bus.publish("sub-9", "tool_call", {"tool_name": "file_io", "arguments": {"path": "x"}})
     bus.publish("sub-9", "tool_result", {"ok": True})
     bus.publish("sub-9", "task_completed", {"status": "COMPLETED"})  # NOT mirrored
-    m.detach_subtask("sub-9")
-    bus.publish("sub-9", "tool_call", {"tool_name": "late"})  # detached: dropped
 
     parent_lines = _lines(m.file_path("parent-1"))
     events = [ln for ln in parent_lines if ln.get("type") == "event"]
     assert [e["event"] for e in events] == ["tool_call", "tool_result"]
     assert all(e["owner"] == "subtask:sub-9" for e in events)
     assert events[0]["data"]["tool_name"] == "file_io"
+    # A face query without tier / face writes nothing: the header stays honest.
+    assert not [ln for ln in parent_lines if ln.get("type") == "subtask_face"]
+
+    # Issue #56: pass the tier and the resolved face and one body line records
+    # what that subtask could actually do — a per-run narrowing never shows up
+    # as a header change.
+    m.attach_subtask(bus, "parent-1", "sub-10", tier=EXPLORE_TIER, face=["grep", "read"])
+    m.detach_subtask("sub-9")
+    m.detach_subtask("sub-10")
+    bus.publish("sub-9", "tool_call", {"tool_name": "late"})  # detached: dropped
     m.close("parent-1")
+
+    faces = [ln for ln in _lines(m.file_path("parent-1")) if ln.get("type") == "subtask_face"]
+    assert len(faces) == 1
+    assert faces[0]["owner"] == subtask_owner("sub-10")
+    assert faces[0]["tier"] == EXPLORE_TIER
+    assert faces[0]["tools"] == ["grep", "read"]
+    assert faces[0]["ts"]
 
     # Detached channels leave no residue: the parent channel never carries
     # subtask events, and close unsubscribes everything it attached.
@@ -300,16 +343,22 @@ def test_task_run_writes_manifest_end_to_end(tmp_path):
     assert lines[0]["type"] == "manifest_begin"
     assert lines[-1]["type"] == "manifest_end"
 
-    # The sub-agent capability line carries its actual mounted face (not just
-    # switches): the confirm-stripped subtask tool list, with the gated /
-    # recursion / hard-coded-write tools absent by construction.
+    # Issue #56: the sub-agent capability line lists the two built-in tiers as
+    # they resolve against the actually-mounted face — not a switch, and not a
+    # hand-written list.
     sub = next(c for c in caps if c["name"] == "subagent")
-    assert sub["params"]["entry_a_spawn"] is True
-    assert sub["params"]["entry_b_split"] is True  # scenario table still exists (#56 flips this)
-    face = sub["params"]["face"]
-    assert "file_io" in face and "read" in face
-    assert "spawn_subagent" not in face and "http_request" not in face
-    assert "code_exec" not in face  # requires_confirm=True is structurally out
+    mounted = [t.name for t in tm._tools]
+    params = sub["params"]
+    assert set(params) == {"default_tier", "tiers", "max_concurrency", "timeout_sec"}
+    assert params["default_tier"] == DEFAULT_TIER
+    assert set(params["tiers"]) == {EXPLORE_TIER, EXECUTE_TIER}
+    assert params["tiers"][EXECUTE_TIER] == tier_face_names(mounted, EXECUTE_TIER)
+    assert "write" in params["tiers"][EXECUTE_TIER]
+    assert "write" not in params["tiers"][EXPLORE_TIER]
+    # Everything gated / external is out of both tiers by construction.
+    for name in ("file_io", "code_exec", "http_request", "spawn_subagent"):
+        assert name in mounted  # mounted for the parent...
+        assert all(name not in tier for tier in params["tiers"].values())  # ...never for a subtask
 
     calls = [ln for ln in lines if ln.get("type") == "llm_call"]
     assert calls and all(c["owner"] == "parent" for c in calls)
@@ -361,37 +410,111 @@ def test_trace_event_sequence_unchanged_by_manifest(tmp_path):
     assert off_types == on_types
 
 
-def test_subtask_rounds_labeled_in_parent_manifest(tmp_path):
+def _spawn_run(tmp_path, label="run", **overrides):
+    """One approved delegation run with the manifest on -> (tm, task_id, lines)."""
     settings = make_settings(
-        tmp_path,
+        tmp_path / label,
         run_manifest_enabled=True,
-        run_manifest_dir=str(tmp_path / "runs"),
+        run_manifest_dir=str(tmp_path / label / "runs"),
+        **overrides,
     )
-    tm = make_manager(settings, _ResearchMock())
+    # auto_approve: the gate is the subject of the sub-agent suite, not of this
+    # file — what is under test here is where the rounds land.
+    tm = make_manager(settings, _ResearchMock(), auto_approve=True)
     task_id = tm.create_task(title="t", user_input="调研 RAG 最新进展并写报告")
     task = _run_until_done(tm, task_id)
     assert task.status.value == "COMPLETED"
+    lines = _lines_until_end(settings.run_manifest_path / f"{task_id}.jsonl", "manifest_end")
+    return tm, task_id, lines
 
-    path = settings.run_manifest_path / f"{task_id}.jsonl"
-    lines = _lines_until_end(path, "manifest_end")
+
+def test_subtask_rounds_labeled_in_parent_manifest(tmp_path):
+    tm, task_id, lines = _spawn_run(tmp_path)
+    settings = tm.settings
+
     # Subtask LLM rounds land in the PARENT file with a subtask owner tag.
     sub_calls = [
         ln for ln in lines if ln.get("type") == "llm_call" and ln["owner"].startswith("subtask:")
     ]
     assert sub_calls, "no subtask llm_call lines in the parent manifest"
-    # Subtask tool events are mirrored with the same attribution.
+    # Subtask tool events are mirrored with the same attribution — the subtask
+    # writes with the tier's ``write`` tool, no longer with ``file_io`` (#56).
     sub_events = [
         ln
         for ln in lines
         if ln.get("type") == "event" and ln["owner"].startswith("subtask:")
     ]
     assert any(
-        e["event"] == "tool_call" and e["data"].get("tool_name") == "file_io"
-        for e in sub_events
+        e["event"] == "tool_call" and e["data"].get("tool_name") == "write" for e in sub_events
     )
-    # Entry B is on (the split path ran); both subtasks are represented.
+    # One delegation, one owner label; the parent's own rounds keep "parent".
     owners = {ln["owner"] for ln in sub_calls}
-    assert any(task.subtasks[0].subtask_id in o for o in owners)
+    assert len(owners) == 1
+    assert next(iter(owners)).startswith("subtask:spawn:sub:")
+    assert any(
+        ln.get("type") == "llm_call" and ln["owner"] == "parent" for ln in lines
+    )
+    # Mirroring is attribution, not a second file: nothing was opened for the
+    # subtask's own channel.
+    assert list(settings.run_manifest_path.glob("*.jsonl")) == [
+        settings.run_manifest_path / f"{task_id}.jsonl"
+    ]
+
+
+def test_subtask_face_line_names_the_tier_and_the_resolved_face(tmp_path):
+    """票面验收 #58/#56 交界：子任务跑完后文件里有一行 subtask_face。"""
+    tm, _task_id, lines = _spawn_run(tmp_path, label="face")
+
+    faces = [ln for ln in lines if ln.get("type") == "subtask_face"]
+    assert len(faces) == 1, "一次派生应恰好留下一行实装面记录"
+    mounted = [t.name for t in tm._tools]
+    assert faces[0]["tier"] == DEFAULT_TIER
+    assert faces[0]["tools"] == tier_face_names(mounted, DEFAULT_TIER)
+    assert "write" in faces[0]["tools"]
+    assert not {"file_io", "code_exec", "spawn_subagent"} & set(faces[0]["tools"])
+
+    spawn_results = [
+        ln
+        for ln in lines
+        if ln.get("type") == "event"
+        and ln.get("event") == "tool_result"
+        and ln["data"].get("tool_name") == "spawn_subagent"
+    ]
+    assert spawn_results, "父任务面上没有 spawn_subagent 的回传"
+    assert faces[0]["owner"] == subtask_owner(spawn_results[0]["data"]["output"]["subtask_id"])
+
+
+def test_git_switch_moves_exactly_the_lines_it_feeds(tmp_path):
+    """「关掉某件，清单差异恰好落在它喂到的行上」。
+
+    Git names are tier members, so switching Git flips both the ``subagent``
+    tier lists and ``tool_face`` — two lines, and the criterion is that the diff
+    is *nameable*, not that it is a single line.
+    """
+
+    def _caps(label, **overrides):
+        settings = make_settings(tmp_path / label, **overrides)
+        tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
+        names = [t.name for t in tm._tools]
+        # Header built from the really-mounted face; no file is opened here.
+        return RunManifest(settings, names, confirm_enabled=True)._cap_lines, names
+
+    off_caps, off_face = _caps("git_off")
+    on_caps, on_face = _caps("git_on", git_enabled=True)
+    assert "git_status" in on_face and "git_status" not in off_face
+    assert len(off_caps) == len(on_caps)
+
+    diff = [a["name"] for a, b in zip(off_caps, on_caps) if a != b]
+    assert diff == ["subagent", "tool_face"]
+
+    off_tiers = next(c["params"]["tiers"] for c in off_caps if c["name"] == "subagent")
+    on_tiers = next(c["params"]["tiers"] for c in on_caps if c["name"] == "subagent")
+    git_reads = {"git_status", "git_diff", "git_log", "git_branch"}
+    for tier in (EXPLORE_TIER, EXECUTE_TIER):
+        assert set(on_tiers[tier]) - set(off_tiers[tier]) == git_reads
+        assert set(off_tiers[tier]) <= set(on_tiers[tier])
+    # The gated Git write verbs never join a tier, Git on or off.
+    assert not {"git_commit", "git_checkout", "git_init"} & set(on_tiers[EXECUTE_TIER])
 
 
 def test_subagent_off_leaves_no_subtask_lines(tmp_path):
@@ -410,10 +533,19 @@ def test_subagent_off_leaves_no_subtask_lines(tmp_path):
     assert not any(
         str(ln.get("owner", "")).startswith("subtask:") for ln in lines
     ), "subagent disabled yet subtask owner lines present"
+    assert not any(ln.get("type") == "subtask_face" for ln in lines)
     caps = {ln["name"]: ln for ln in lines if ln.get("type") == "capability"}
-    assert caps["subagent"]["params"]["face"] == []
-    assert caps["subagent"]["params"]["entry_a_spawn"] is False
-    assert caps["subagent"]["params"]["entry_b_split"] is False
+    assert caps["subagent"]["enabled"] is False
+    # Issue #56: the entry point is gone from the face itself, while the tier
+    # lists keep describing what a tier *would* resolve to on this face.
+    assert "spawn_subagent" not in caps["tool_face"]["params"]["tools"]
+    assert caps["subagent"]["params"]["default_tier"] == DEFAULT_TIER
+    assert set(caps["subagent"]["params"]) == {
+        "default_tier",
+        "tiers",
+        "max_concurrency",
+        "timeout_sec",
+    }
 
 
 def test_two_run_diff_points_at_divergent_round(tmp_path):

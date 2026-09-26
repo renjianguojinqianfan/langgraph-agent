@@ -342,6 +342,16 @@ def _writer_mock(path: str, content: str) -> MockLLMClient:
     )
 
 
+def _write_tool_mock(path: str, content: str) -> MockLLMClient:
+    """Script the discrete ``write`` tool — the only sandbox write a subtask can
+    reach since issue #56 (``file_io`` is on no capability tier)."""
+    return MockLLMClient(
+        plan=["write one file"],
+        tool_calls=[{"id": "w1", "name": "write", "arguments": {"path": path, "content": content}}],
+        final_answer="done",
+    )
+
+
 def _wait(tm, task_id, statuses=("COMPLETED", "FAILED", "INTERRUPTED"), timeout=15):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -449,20 +459,44 @@ def test_rollback_missing_task_raises(tmp_path):
 
 
 def test_subtask_writes_land_in_parent_ledger(tmp_path):
-    """Pool threads get a fresh context — _exec_one must re-seat the parent id."""
+    """Pool threads get a fresh context — _exec_one must re-seat the parent id.
+
+    Issue #56: the subtask writes with the discrete ``write`` tool now, which is
+    on the execute tier (``file_io`` is on no tier at all).
+    """
     settings = _s(tmp_path, subagent_max_concurrency=2)
-    tm = make_manager(settings, _writer_mock("sub_out.txt", "from subtask"))
+    tm = make_manager(settings, _write_tool_mock("sub_out.txt", "from subtask"))
     executor = SubAgentExecutor(tm, settings)
     spec = SubTaskSpec(
         subtask_id="s1", name="writer", instruction="write the file",
         parent_task_id="parent-task",
     )
-    executor._pool.submit(executor._exec_one, spec).result(timeout=30)
+    res = executor._pool.submit(executor._exec_one, spec).result(timeout=30)
+    assert res.status == "completed"
 
     lines = _ledger(settings, "parent-task")
     assert len(lines) == 1
     assert lines[0]["path"] == "sub_out.txt"
     assert get_current_task_id() is None  # pool thread's context died with it
+
+
+def test_spawned_subtask_write_lands_on_the_parent_ledger(tmp_path):
+    """The surviving entry point shares the same ledger: the spawn tool runs on
+    the parent's thread, so its subtask's write is accounted to the parent."""
+    settings = _s(tmp_path)
+    tm = make_manager(settings, _write_tool_mock("spawn_out.txt", "from spawned subtask"))
+    tool = next(t for t in tm._tools if t.name == "spawn_subagent")
+    set_current_task_id("parent-spawn")
+    try:
+        res = tool.run(name="writer", instruction="write the file")
+    finally:
+        set_current_task_id(None)
+
+    assert res.success is True
+    assert (settings.artifacts_path / "spawn_out.txt").exists()
+    assert [ln["path"] for ln in _ledger(settings, "parent-spawn")] == ["spawn_out.txt"]
+    # The subtask's own id never gets a ledger of its own.
+    assert not (settings.snapshots_path / res.data["subtask_id"]).exists()
 
 
 def test_disabled_switch_is_zero_regression(tmp_path):
