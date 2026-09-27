@@ -1052,10 +1052,41 @@ class TaskManager:
 
     # ── artifacts ──
     def add_artifact(self, task_id: str, path: Path) -> Artifact:
-        art = self.persistence.register_artifact(path)
-        st = self._active_states.get(task_id)
-        if st is not None:
-            st.setdefault("artifacts", []).append(art.model_dump())
+        """Register a file the task produced; one record per task and file.
+
+        Dedupe lives here rather than at the two call sites (the kernel's tool
+        node and the sub-agent's hand-back) because both funnel through this
+        method (#72). Skipping the second registration skips a record, its
+        ``artifact_created`` event and a redundant ``add_document`` call — the
+        knowledge base is already idempotent per resolved path, so what a
+        duplicate used to cost is a spurious product row, not a double index.
+
+        Two settled semantics callers rely on: the key is per **task**, so a
+        subtask handing its file back to the parent registers once under each
+        owner; and a hit returns the record as first registered, i.e. its
+        ``size`` / ``created_at`` are the ones from the initial write (completion
+        verification re-stats the disk, so S1 is unaffected). A task with no
+        active state has no registry to dedupe against and registers as before.
+
+        The lookup and the append are one atomic step under ``self._lock`` (the
+        same manager lock the resume claim uses), because subtasks run on a pool:
+        two of them handing the same path back to one parent can arrive at the
+        same microsecond, and an unlocked check-then-act would let both miss.
+        """
+        resolved = str(Path(path).resolve())
+        # Only the check-mint-append is guarded. The event and the knowledge-base
+        # ingest stay outside the lock so no SSE subscriber or file-index callback
+        # ever runs while it is held (and no caller of this method holds it, so
+        # the non-reentrant lock cannot be taken twice on one path).
+        with self._lock:
+            st = self._active_states.get(task_id)
+            if st is not None:
+                for existing in st.get("artifacts", []):
+                    if existing.get("path") and str(Path(existing["path"]).resolve()) == resolved:
+                        return Artifact(**existing)
+            art = self.persistence.register_artifact(path)
+            if st is not None:
+                st.setdefault("artifacts", []).append(art.model_dump())
         self.event_bus.publish(task_id, "artifact_created", art.model_dump())
         # P1 item 3: auto-index text artifacts into the knowledge base.
         # Failure is only a warning — it must never break the task.

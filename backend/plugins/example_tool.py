@@ -12,6 +12,11 @@ IMPORTANT
 
 This tool is registered with ``retryable=False`` / ``max_retries=0`` /
 ``circuit_breaker=False`` to keep it deterministic; adjust these per tool.
+
+A plugin that *writes a file the task should deliver* has to say so: set
+``registers_artifact = True`` on the class and return the file under
+``data["path"]``. Without that flag the kernel treats the tool as read-only and
+its ``path`` is not registered as a product (issue #72).
 """
 
 from __future__ import annotations

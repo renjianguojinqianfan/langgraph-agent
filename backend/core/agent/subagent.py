@@ -357,10 +357,16 @@ class SubAgentExecutor:
                     manifest.detach_subtask(spec.subtask_id)
 
             summary = final.get("final_answer", "") or "(no final answer)"
-            # Collect artifact paths produced by subtask tool calls.
+            # Collect the products of the subtask: only the tools on its face
+            # that declare ``registers_artifact`` produced a file, so a ``read``
+            # the subtask did on an existing file is not handed to the parent as
+            # a product (#72 — product = what the task wrote).
+            producing = {t.name for t in tools if t.registers_artifact}
             paths: List[str] = []
             for s in final.get("steps", []) or []:
                 for tc in s.get("tool_calls", []) or []:
+                    if tc.get("tool_name") not in producing:
+                        continue
                     out = tc.get("output")
                     if isinstance(out, dict) and out.get("path"):
                         paths.append(str(out["path"]))

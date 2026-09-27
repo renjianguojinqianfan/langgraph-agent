@@ -33,7 +33,8 @@ Single-context repo (this repo's layout):
 ├── docs/
 │   ├── adr/                           ← decisions (0001-in-place-migration-and-resume-positioning.md,
 │   │                                     0002-moat-discipline-no-attention-reallocation.md,
-│   │                                     0003-subagent-circuit-breaker-per-runtime.md)
+│   │                                     0003-subagent-circuit-breaker-per-runtime.md,
+│   │                                     0004-artifact-is-what-the-task-wrote.md)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   │                                     「冻结」只覆盖**已交付增量**的记录——不改写，现状写进权威段
 │   │                                     （README 能力 / architecture）；**未开工增量**的 spec 是活的设计
@@ -84,9 +85,11 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 > _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
 
 `docs/adr/0001` (in-place migration over rewrite + resume-project positioning, decisions
-D1–D9), `0002` (moat discipline) and `0003` (circuit-breaker state stays per-runtime, never shared
+D1–D9), `0002` (moat discipline), `0003` (circuit-breaker state stays per-runtime, never shared
 across parent/subtasks — so **#60's "每个子任务各记一本账" is by design, not a bug to re-file**)
-are the live ADRs today. Beyond them, the equivalent
+and `0004` (a product is a file the task *wrote*: only `registers_artifact` tools are product
+sources, deduped per task by resolved path — so **#72's "read 回读不再登记 / 重写只一条" is by
+design, not a bug to re-file**) are the live ADRs today. Beyond them, the equivalent
 frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (protected files,
 `_needs_confirm` recompute block, conftest isolation, dependency matrix, quality-gate
 baseline). Treat a contradiction with those the same way — surface it, don't silently override.

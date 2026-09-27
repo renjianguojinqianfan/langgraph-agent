@@ -863,6 +863,49 @@ def test_subtask_writes_and_events_do_not_pollute_the_parent(tmp_path, event_bus
     assert "direct_note.md" in ledger.read_text(encoding="utf-8")
 
 
+def test_subtask_that_only_reads_hands_no_product_to_the_parent(tmp_path, event_bus):
+    """#72: 「产物 = 写出的文件」也管子任务。explore 档只读，读过的文件既不是
+    子任务的产物，也不该向父任务登记——父任务频道不该出现 artifact_created。
+
+    The read itself must succeed, otherwise the empty product list would pass on
+    a subtask that never ran the tool."""
+    settings = make_settings(tmp_path)
+    mock = _CountingMock(plan=["p"], final_answer="读完了")
+    tm = make_manager(settings, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="parent", user_input="父任务：只要一句话结论")
+    _run_until_done(tm, task_id)
+
+    seen = settings.artifacts_path / "already_there.txt"
+    seen.parent.mkdir(parents=True, exist_ok=True)
+    seen.write_text("body", encoding="utf-8")
+
+    mock.tool_calls = [{"id": "r1", "name": "read", "arguments": {"path": "already_there.txt"}}]
+    ex = SubAgentExecutor(tm, settings)
+    res = ex.run_subtask(
+        _spec(
+            subtask_id="read:sub:1",
+            name="read only",
+            instruction="读那个文件并复述一行",
+            parent_task_id=task_id,
+            tier=EXPLORE_TIER,
+        )
+    )
+
+    assert res.status == "completed"
+    assert res.artifacts == []
+    task = tm.get_task(task_id)
+    assert task is not None and task.artifacts == []
+    parent_types = {e["type"] for e in event_bus.replay(task_id)}
+    assert "artifact_created" not in parent_types
+
+    sub_reads = [
+        e["data"]
+        for e in event_bus.replay("read:sub:1")
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "read"
+    ]
+    assert sub_reads and sub_reads[0]["status"] == "success"
+
+
 # ── scheduling on the surviving pool ────────────────────────────────────────
 class _SleepingMock(MockLLMClient):
     def __init__(self, sleep=0.4):
