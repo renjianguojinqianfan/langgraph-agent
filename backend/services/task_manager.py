@@ -1052,8 +1052,22 @@ class TaskManager:
 
     # ── artifacts ──
     def add_artifact(self, task_id: str, path: Path) -> Artifact:
-        art = self.persistence.register_artifact(path)
+        """Register a file the task produced, once per task and resolved path.
+
+        The dedupe lives here rather than at the call sites because both of them
+        (the kernel's tool node and the sub-agent's hand-back) funnel through this
+        method: re-writing a file is one product, not two, and a second record
+        would also mean a duplicate ``artifact_created`` event and a second
+        knowledge-base ingest (#72). Scoping is per task on purpose — a subtask
+        handing its file back to the parent is two owners of one path.
+        """
+        resolved = str(Path(path).resolve())
         st = self._active_states.get(task_id)
+        if st is not None:
+            for existing in st.get("artifacts", []):
+                if existing.get("path") and str(Path(existing["path"]).resolve()) == resolved:
+                    return Artifact(**existing)
+        art = self.persistence.register_artifact(path)
         if st is not None:
             st.setdefault("artifacts", []).append(art.model_dump())
         self.event_bus.publish(task_id, "artifact_created", art.model_dump())
