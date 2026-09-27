@@ -191,6 +191,7 @@ classDiagram
         +str description
         +dict args_schema
         +bool requires_confirm
+        +bool registers_artifact
         +run(**kwargs) ToolResult
     }
     class WebSearchTool
@@ -365,7 +366,7 @@ classDiagram
 | `tool_call` | `ToolCallRecord`（含 `need_confirm`） | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
 | `human_confirm_required` | `{tool_call_id, tool_name, input}` | 需用户确认（P1） |
-| `artifact_created` | `Artifact` | 产出文件 |
+| `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
 | `final_answer` | `{answer:str}` | 最终答案 |
 | `task_completed` | `{task_id, status}` | 完成 |
 | `task_failed` | `{task_id, error}` | 失败 |
@@ -425,8 +426,8 @@ sequenceDiagram
             G->>T: run(**input)
             T-->>G: ToolResult
             G->>EB: publish(tool_result)
-            opt 产出文件
-                G->>TM: save_artifact()
+            opt 产物源工具写出真实文件
+                G->>TM: add_artifact(task_id, path)
                 TM->>EB: publish(artifact_created)
             end
         else final_answer
@@ -457,7 +458,7 @@ sequenceDiagram
 1. **配置管理**：所有配置经 `backend/config.py` 的 `Settings`（`pydantic-settings`），从 `.env` 读取。**禁止**在业务代码中硬编码 Key/路径；通过 `get_settings()` 获取单例。
 2. **LLM 接入抽象层**：业务只依赖 `LLMClient` 抽象。调用统一返回 `LLMResponse{content, tool_calls, raw}`。新增供应商只需新增 `LLMClient` 子类并据 `Settings` 选择；支持 OpenAI / DeepSeek / 本地 Ollama（仅改 `base_url`）。
 3. **工具接口规范 `BaseTool`**：
-   - 每个工具实现 `name / description / args_schema(dict) / requires_confirm / run(**kwargs)->ToolResult`；
+   - 每个工具实现 `name / description / args_schema(dict) / requires_confirm / registers_artifact / run(**kwargs)->ToolResult`；
    - `args_schema` 必须是 JSON Schema（供 LLM function calling 使用）；
    - 工具务必返回 `ToolResult`，**禁止**抛未捕获异常导致进程崩溃（外层统一 try/except 兜底）；
    - 新工具在 `registry.py` 中 `@register` 即被 Agent 自动发现（满足 SC4 上手 <30min）。
@@ -465,7 +466,7 @@ sequenceDiagram
 5. **错误与重试约定**：工具失败返回 `ToolResult(success=False, error=...)`；`code_exec`/`http_api` 支持按 `Settings` 重试（P1-4，默认退避 2s×2）。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。
 6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在每轮开头检测，为真则提前 `END` 并发布 `task_interrupted`（P0-9：2s 内生效）。
 7. **人工介入**：`requires_confirm=True` 的工具（代码执行、HTTP 写操作）在 `executor` 后插入 `human_confirm` 中断（P1-2）；前端 `ConfirmDialog` 提交 `POST /confirm`。
-8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。
+8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
 9. **成功判定（Q8）**：任务进入最终反思并产出 `final_answer`、期间无未捕获致命异常 → 记 `COMPLETED`（成功）；达到 `max_steps` 未产出或抛出异常 → `FAILED`。
 10. **日志**：统一经 `utils/logging.py`，结构化输出到控制台 + `data_dir/logs/`；不打印明文 API Key。
 
