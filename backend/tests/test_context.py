@@ -15,6 +15,8 @@ from typing import Any, Dict, List, cast
 
 from backend.core.agent.context import (
     EVICT_PLACEHOLDER_PREFIX,
+    MESSAGE_PLACEHOLDER_PREFIX,
+    NOTE_PREFIXES,
     compress_messages,
     estimate_tokens,
     evict_tool_results,
@@ -47,12 +49,41 @@ def _tool(content: str, call_id: str) -> dict:
 
 
 def _notes(out: list) -> list:
-    """Contents in ``out`` that are eviction notes."""
+    """Contents in ``out`` that are eviction notes (tool marker or 消息 marker)."""
     return [
         m["content"]
         for m in out
-        if str(m.get("content", "")).startswith(EVICT_PLACEHOLDER_PREFIX)
+        if str(m.get("content", "")).startswith(NOTE_PREFIXES)
     ]
+
+
+def _note_markers(content: str) -> int:
+    """便签头的条数——一条消息最多一层便签，所以恒为 1。"""
+    return sum(str(content).count(prefix) for prefix in NOTE_PREFIXES)
+
+
+def _mixed_band() -> List[Dict[str, Any]]:
+    """带内既有工具结果也有 user / assistant 轮次的一组消息（#49 评审 F1/F2）。
+
+    首条会被截断挤到带外，剩下四条进保护带：assistant 调用（content 空，无可挤）、
+    工具结果、user、assistant——两种前缀、两种指针形态正好同框。
+    """
+    return [
+        _msg("user", "任务：把这几段读完"),
+        _assistant_call("c0", "read"),
+        _tool("t" * 4000, "c0"),
+        _msg("user", "u" * 4000),
+        _msg("assistant", "a" * 4000),
+    ]
+
+
+def _notes_by_role(out: list) -> Dict[str, str]:
+    """带内便签按 role 归堆，方便逐个点名。"""
+    return {
+        str(m.get("role")): m["content"]
+        for m in out[1:]
+        if str(m.get("content", "")).startswith(NOTE_PREFIXES)
+    }
 
 
 def _runtime(tmp_path: Path, bus: EventBus, task_id: str, **settings_overrides) -> AgentRuntime:
@@ -262,7 +293,7 @@ def test_band_squeeze_from_oldest_keeps_the_newest_verbatim():
 
     assert meta["band_evicted"] == 1  # 只挤了最旧那条就到位了
     assert meta["context_tokens"] <= 3600
-    assert out[1]["content"].startswith(EVICT_PLACEHOLDER_PREFIX)
+    assert out[1]["content"].startswith(MESSAGE_PLACEHOLDER_PREFIX)  # user 消息，不是 tool result
     # 其余带内消息（含最新一条）没被碰过——连对象都是同一个。
     assert out[2:] == msgs[3:]
     assert out[2] is msgs[3]
@@ -341,25 +372,72 @@ def test_band_note_keeps_the_tool_name_when_the_call_was_truncated_away():
 
 
 def test_band_note_labels_non_tool_messages_without_a_fake_anchor():
-    """非工具消息没有 per-call 锚点：如实写 ``消息: <role>``，指针指向 trace 文件本身。"""
+    """非工具消息没有 per-call 锚点：如实写 ``消息: <role>``，留痕一栏不假装有原文。"""
     msgs = [_msg("user", "x" * 4000) for _ in range(6)]
     out, meta = compress_messages(msgs, budget=1000, keep_recent=4, trace_ref=TRACE_REF)
     assert meta["band_evicted"] > 0
     note = _notes(out)[0]
     assert "消息: user" in note
-    assert TRACE_REF in note
     assert "#" not in note  # 不编造回读不到的锚点
+    assert TRACE_REF not in note  # trace 里根本没有这条，指过去就是失实
 
-    # trace 关掉了就写「无（trace 未开启）」，与带外逐出同一套措辞。
+
+def test_band_note_of_non_tool_message_does_not_claim_a_tool_result():
+    """#49 评审 F1：便签前缀要说清「移走的是什么」——user 消息不是 tool result。
+
+    带内挤压原先对所有角色无条件写 ``[tool result 已移除``，等于向模型与读流水的人
+    声称移除过一条工具结果，而它从头到尾是一句话。工具结果那一侧的 T1.4 措辞不动。
+    """
+    out, meta = compress_messages(_mixed_band(), budget=1000, keep_recent=4, trace_ref=TRACE_REF)
+    assert meta["band_evicted"] == 3, out
+
+    notes = _notes_by_role(out)
+    tool_note = notes["tool"]
+    assert tool_note.startswith(EVICT_PLACEHOLDER_PREFIX)  # T1.4 契约一字不改
+    assert "工具: read" in tool_note
+
+    for role in ("user", "assistant"):
+        note = notes[role]
+        assert note.startswith(MESSAGE_PLACEHOLDER_PREFIX), note
+        assert f"消息: {role}" in note, note
+        assert EVICT_PLACEHOLDER_PREFIX not in note, note  # 不再冒名 tool result
+
+
+def test_band_note_pointers_are_readable_only_where_they_are():
+    """#49 评审 F2：留痕指针只承诺 trace 里真有的东西。
+
+    trace 是 EventBus 的镜像（``backend/services/trace.py``），只有 ``tool_result`` 事件
+    携带消息原文；user / assistant 轮次没有任何事件承载它，指针指过去就是第二处失实。
+    """
+    msgs = _mixed_band()
+    out, _ = compress_messages(msgs, budget=1000, keep_recent=4, trace_ref=TRACE_REF)
+    notes = _notes_by_role(out)
+
+    # 工具结果：文件 + 锚点，grep 即定位（T1.4 契约）。
+    assert f"留痕: {TRACE_REF}#c0" in notes["tool"], notes["tool"]
+    # 非工具消息：不指向 trace 文件，也不留一个空洞的文件名。
+    for role in ("user", "assistant"):
+        assert "留痕: 无（trace 不落该条原文）" in notes[role], notes[role]
+        assert TRACE_REF not in notes[role], notes[role]
+
+    # trace 关掉时工具便签照旧写「未开启」，与带外逐出同一套措辞。
     off, _ = compress_messages(msgs, budget=1000, keep_recent=4, trace_ref="")
-    assert "留痕: 无（trace 未开启）" in _notes(off)[0]
+    assert "留痕: 无（trace 未开启）" in _notes_by_role(off)["tool"], off
+
 
 
 def test_band_squeeze_is_idempotent_across_rounds():
-    """卡 2：便签不套便签——已是 marker-only 的消息这一轮原样留着，只挤新的。"""
+    """卡 2：便签不套便签——已是 marker-only 的消息这一轮原样留着，只挤新的。
+
+    两种前缀都在幂等判据里（``NOTE_PREFIXES``）：上一轮留下的工具便签与消息便签都不许
+    被再包一层。
+    """
     marker_only = {
         "role": "user",
-        "content": f"{EVICT_PLACEHOLDER_PREFIX} | 消息: user | 原文 4000 字符 | 留痕: {TRACE_REF}]",
+        "content": (
+            f"{MESSAGE_PLACEHOLDER_PREFIX} | 消息: user | 原文 4000 字符 | "
+            "留痕: 无（trace 不落该条原文）]"
+        ),
     }
     msgs = [_msg("user", "x" * 4000), marker_only] + [
         _msg("assistant", "x" * 4000) for _ in range(4)
@@ -370,17 +448,19 @@ def test_band_squeeze_is_idempotent_across_rounds():
     assert meta["context_tokens"] <= 1000
     # 带 = msgs[1:]，第一条就是上轮留下的 marker-only → 没 notch 可走，对象都不变。
     assert out[1] is marker_only
-    assert out[1]["content"].count(EVICT_PLACEHOLDER_PREFIX) == 1
+    assert _note_markers(out[1]["content"]) == 1
     for content in _notes(out):
-        assert content.count(EVICT_PLACEHOLDER_PREFIX) == 1  # 绝不打第二层便签
+        assert _note_markers(content) == 1  # 绝不打第二层便签
     # 没被挤的仍是原对象（身份约定与 evict_tool_results 一致）。
     assert out[-1] is not msgs[-1]  # 最新这条被降到了 marker-only（见卡 6 的读法）
     assert out[-1]["role"] == "assistant"
+    assert out[-1]["content"].startswith(MESSAGE_PLACEHOLDER_PREFIX)
 
 
 def test_band_squeeze_stops_when_nothing_left_to_squeeze():
     """卡 7：无可再挤就停手——不空转、不发新事件，``dropped`` 如实报。"""
-    msgs = _many_messages(30)  # 每条 ~58 字符，便签比原文还长 → 挤了反而变大
+    # 每条 12 字符：marker-only 便签（≈53 字符）比原文还长 → 挤了反而变大，无路可挤。
+    msgs = [_msg("user" if i % 2 == 0 else "assistant", f"m{i:02d}" + "x" * 9) for i in range(30)]
     out, meta = compress_messages(msgs, budget=1, keep_recent=2)
 
     assert meta["compressed"] is True  # 截断本身照旧（旧语义不变）

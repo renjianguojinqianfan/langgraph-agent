@@ -14,7 +14,8 @@ context window. This module provides:
   budget) or rewrites the early history into a truncation placeholder / an LLM
   summary, keeping the most recent ``keep_recent`` messages verbatim — unless the
   protected band alone still outgrows the budget, in which case it is squeezed
-  oldest-first into the same kind of note (:func:`evict_tool_results`' contract);
+  oldest-first into a note of the same shape as :func:`evict_tool_results`' (its
+  marker names the role that gave way);
 * :func:`summarize_messages` — optional LLM-based summarisation of the dropped
   early messages (only used when ``strategy="summarize"`` and an LLM is given).
 
@@ -74,9 +75,14 @@ def estimate_tokens(messages: List[Dict[str, Any]]) -> int:
     return max(1, total // 4)
 
 
-# T1.4 tool-result eviction: the marker every placeholder starts with (also the
+# T1.4 tool-result eviction: the marker a tool note starts with (also part of the
 # idempotency guard — an already-evicted message is never evicted twice).
 EVICT_PLACEHOLDER_PREFIX = "[tool result 已移除"
+# A squeezed user / assistant / system message is not a tool result, so its note
+# says so (#49 review F1): the marker names what actually went away.
+MESSAGE_PLACEHOLDER_PREFIX = "[消息原文已移除"
+# Every note header, for the idempotency guards — a note is never re-wrapped.
+NOTE_PREFIXES = (EVICT_PLACEHOLDER_PREFIX, MESSAGE_PLACEHOLDER_PREFIX)
 # In-band squeeze (#49): how many trailing messages stay verbatim before the band
 # starts giving way. One, because the last reply is what the model answers against;
 # pi keeps the newest suffix verbatim and opencode v1 only protects a couple of
@@ -86,15 +92,23 @@ _BAND_PROTECT_NEWEST = 1
 
 
 def _note_ref(trace_ref: str, anchor: str) -> str:
-    """Trace pointer of a note: ``<file>#<tool_call_id>``, honest when unavailable."""
+    """Trace pointer of a note: ``<file>#<tool_call_id>``, honest when unavailable.
+
+    Only a tool result has an anchor to point at. ``trace.py`` mirrors **events**, and
+    ``tool_result`` is the one event kind that carries a message's full text; a user /
+    assistant turn is in no event at all, so pointing such a note at the trace file
+    would promise text that was never written there (#49 review F2).
+    """
+    if not anchor:
+        return "无（trace 不落该条原文）"
     if not trace_ref:
         return "无（trace 未开启）"
-    return f"{trace_ref}#{anchor}" if anchor else trace_ref
+    return f"{trace_ref}#{anchor}"
 
 
-def _note_marker(text: str, *, label: str, ref: str) -> str:
+def _note_marker(text: str, *, prefix: str, label: str, ref: str) -> str:
     """The single-line header every note starts with (``原文`` size included)."""
-    return f"{EVICT_PLACEHOLDER_PREFIX} | {label} | 原文 {len(text)} 字符 | 留痕: {ref}]"
+    return f"{prefix} | {label} | 原文 {len(text)} 字符 | 留痕: {ref}]"
 
 
 def _note_preview(text: str, head_chars: int, tail_chars: int) -> str:
@@ -106,23 +120,25 @@ def _note_preview(text: str, head_chars: int, tail_chars: int) -> str:
     )
 
 
-def _note_label_and_anchor(msg: Dict[str, Any], names: Dict[str, str]) -> Tuple[str, str]:
-    """Note label + trace anchor for one message.
+def _note_form(msg: Dict[str, Any], names: Dict[str, str]) -> Tuple[str, str, str]:
+    """Note marker prefix + label + trace anchor for one message.
 
-    ``tool`` results keep the T1.4 contract verbatim (tool name, ``tool_call_id``
-    pointer). Other roles have no per-call anchor in the trace, so they say what
-    they are (``消息: <role>``) and point at the trace file itself.
+    ``tool`` results keep the T1.4 contract verbatim (its marker, tool name,
+    ``tool_call_id`` pointer). Other roles have no marker claiming a tool result and
+    no per-call anchor in the trace, so their note just says what it folded away
+    (``消息: <role>``).
     """
     role = str(msg.get("role") or "unknown")
     if role == "tool":
         call_id = str(msg.get("tool_call_id") or "?")
-        return f"工具: {names.get(call_id, '?')}", call_id
-    return f"消息: {role}", ""
+        return EVICT_PLACEHOLDER_PREFIX, f"工具: {names.get(call_id, '?')}", call_id
+    return MESSAGE_PLACEHOLDER_PREFIX, f"消息: {role}", ""
 
 
 def _squeeze_content(
     content: Any,
     *,
+    prefix: str,
     label: str,
     anchor: str,
     trace_ref: str,
@@ -138,14 +154,14 @@ def _squeeze_content(
     """
     if not isinstance(content, str) or not content:
         return None  # non-text / empty content is left alone (same as T1.4)
-    if content.startswith(EVICT_PLACEHOLDER_PREFIX):
+    if content.startswith(NOTE_PREFIXES):
         if with_preview:
             return None  # already a note at this notch: idempotent skip
         header, sep, rest = content.partition("\n")
         if not sep or not rest:
             return None  # marker-only already: no notch left
         return header
-    marker = _note_marker(content, label=label, ref=_note_ref(trace_ref, anchor))
+    marker = _note_marker(content, prefix=prefix, label=label, ref=_note_ref(trace_ref, anchor))
     if with_preview and int(head_chars) + int(tail_chars) < len(content):
         candidate = marker + _note_preview(content, head_chars, tail_chars)
     else:
@@ -189,9 +205,10 @@ def _squeeze_band(
     fits = False
     for with_preview, stop in ((True, newest), (False, len(result))):
         for i in range(1, stop):
-            label, anchor = _note_label_and_anchor(result[i], names)
+            prefix, label, anchor = _note_form(result[i], names)
             squeezed = _squeeze_content(
                 result[i].get("content"),
+                prefix=prefix,
                 label=label,
                 anchor=anchor,
                 trace_ref=trace_ref,
@@ -268,13 +285,18 @@ def evict_tool_results(
         content = msg.get("content")
         if not isinstance(content, str) or len(content) <= int(threshold_chars):
             continue
-        if content.startswith(EVICT_PLACEHOLDER_PREFIX):
+        if content.startswith(NOTE_PREFIXES):
             continue  # idempotent: every LLM call re-runs this pass
         if int(head_chars) + int(tail_chars) >= len(content):
             continue  # degenerate preview: no space would be saved
         call_id = str(msg.get("tool_call_id") or "?")
         name = names.get(call_id, "?")
-        placeholder = _note_marker(content, label=f"工具: {name}", ref=_note_ref(trace_ref, call_id))
+        placeholder = _note_marker(
+            content,
+            prefix=EVICT_PLACEHOLDER_PREFIX,
+            label=f"工具: {name}",
+            ref=_note_ref(trace_ref, call_id),
+        )
         placeholder += _note_preview(content, head_chars, tail_chars)
         new_msg = dict(msg)
         new_msg["content"] = placeholder
