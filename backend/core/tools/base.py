@@ -35,6 +35,13 @@ class BaseTool(ABC):
     description: str = ""
     args_schema: Dict[str, Any] = field(default_factory=dict)  # JSON Schema (parameters)
     requires_confirm: bool = False
+    # A tool whose successful result *produces* a file on disk, i.e. the source
+    # of a task artifact (issue #72: product = what the task wrote). Read-only
+    # tools keep this False even when their result carries a ``path`` — the
+    # kernel registers an artifact only from a tool declaring True. A wrapper
+    # around an external tool (MCP / OpenAPI / plugin) that does write files
+    # opts in by setting it True on the wrapper class.
+    registers_artifact: bool = False
     # P0 resilience knobs (all optional; built-ins override as needed).
     retryable: bool = True  # whether transient failures may be retried
     max_retries: Optional[int] = None  # None -> use global Settings.tool_max_retries
