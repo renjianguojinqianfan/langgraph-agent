@@ -1067,16 +1067,26 @@ class TaskManager:
         ``size`` / ``created_at`` are the ones from the initial write (completion
         verification re-stats the disk, so S1 is unaffected). A task with no
         active state has no registry to dedupe against and registers as before.
+
+        The lookup and the append are one atomic step under ``self._lock`` (the
+        same manager lock the resume claim uses), because subtasks run on a pool:
+        two of them handing the same path back to one parent can arrive at the
+        same microsecond, and an unlocked check-then-act would let both miss.
         """
         resolved = str(Path(path).resolve())
-        st = self._active_states.get(task_id)
-        if st is not None:
-            for existing in st.get("artifacts", []):
-                if existing.get("path") and str(Path(existing["path"]).resolve()) == resolved:
-                    return Artifact(**existing)
-        art = self.persistence.register_artifact(path)
-        if st is not None:
-            st.setdefault("artifacts", []).append(art.model_dump())
+        # Only the check-mint-append is guarded. The event and the knowledge-base
+        # ingest stay outside the lock so no SSE subscriber or file-index callback
+        # ever runs while it is held (and no caller of this method holds it, so
+        # the non-reentrant lock cannot be taken twice on one path).
+        with self._lock:
+            st = self._active_states.get(task_id)
+            if st is not None:
+                for existing in st.get("artifacts", []):
+                    if existing.get("path") and str(Path(existing["path"]).resolve()) == resolved:
+                        return Artifact(**existing)
+            art = self.persistence.register_artifact(path)
+            if st is not None:
+                st.setdefault("artifacts", []).append(art.model_dump())
         self.event_bus.publish(task_id, "artifact_created", art.model_dump())
         # P1 item 3: auto-index text artifacts into the knowledge base.
         # Failure is only a warning — it must never break the task.

@@ -16,6 +16,7 @@ not an implementation detail.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -139,6 +140,50 @@ def test_add_artifact_dedupes_by_resolved_path(tmp_path, event_bus):
     events = [e for e in event_bus.replay(task_id) if e["type"] == "artifact_created"]
     assert second.id == first.id
     assert len(tm._active_states[task_id]["artifacts"]) == 1
+    assert len(events) == 1
+
+
+def test_registration_of_one_path_is_atomic_across_threads(tmp_path, event_bus, monkeypatch):
+    """#72 review F1: two threads registering the same path for one task still
+    land exactly one record and one event.
+
+    The interleaving is forced rather than hoped for: the first registration
+    parks inside ``register_artifact`` waiting for a second thread to join it,
+    which can only happen if the lookup and the append are NOT one atomic step.
+    With the lock in place the second thread cannot be in there at all, so the
+    barrier breaks and the test costs ~1.5s instead of milliseconds.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(plan=["unused"], tool_calls=[]), event_bus=event_bus)
+    task_id = "t_concurrent"
+    tm._active_states[task_id] = {"artifacts": []}
+
+    target = settings.artifacts_path / "shared.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("body", encoding="utf-8")
+
+    gate = threading.Barrier(2)
+    original = tm.persistence.register_artifact
+
+    def _parking_register(path: Path) -> Any:
+        try:
+            gate.wait(timeout=1.5)
+        except threading.BrokenBarrierError:
+            pass
+        return original(path)
+
+    monkeypatch.setattr(tm.persistence, "register_artifact", _parking_register)
+
+    threads = [
+        threading.Thread(target=tm.add_artifact, args=(task_id, target)) for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert len(tm._active_states[task_id]["artifacts"]) == 1
+    events = [e for e in event_bus.replay(task_id) if e["type"] == "artifact_created"]
     assert len(events) == 1
 
 
