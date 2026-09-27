@@ -217,6 +217,8 @@ export interface ToolCircuitOpenData {
 export interface ContextCompressedData {
   step_index: number;
   dropped: number;
+  /** Absent on events persisted before the in-band squeeze (#49). */
+  band_evicted?: number;
   context_tokens: number;
   strategy: string;
 }
