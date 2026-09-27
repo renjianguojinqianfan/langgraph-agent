@@ -158,6 +158,7 @@ def _squeeze_band(
     result: List[Dict[str, Any]],
     budget: int,
     *,
+    names: Dict[str, str],
     head_chars: int,
     tail_chars: int,
     trace_ref: str,
@@ -171,12 +172,16 @@ def _squeeze_band(
     first layout that fits ends the squeeze, and a message that cannot shrink
     strictly is skipped, so the pass is bounded by the band size and can never spin.
 
+    ``names`` is the ``tool_call_id`` → tool name map of the **whole** history, not
+    just the band: truncation drops the oldest messages, and a band tool result
+    whose assistant call just went out of the band still has to be named in its
+    note (T1.4 contract), not degraded to ``?``.
+
     Returns how many band messages gave way (0 = nothing squeezed). A message
     demoted at both notches counts once.
     """
     if len(result) <= 1 or estimate_tokens(result) <= int(budget):
         return 0
-    names = _tool_names_by_call_id(result)
     # Pass 1 keeps a preview and stops short of the newest; pass 2 demotes to
     # marker-only and runs all the way through, so the newest only gives way last.
     newest = max(1, len(result) - _BAND_PROTECT_NEWEST)
@@ -346,6 +351,13 @@ def _compress_truncate(
     all by itself (#49): truncation then just recycles its own placeholder and the
     compression ratio stays at 1 forever. :func:`_squeeze_band` gives the band way
     under exactly that condition, oldest-first, until the budget is met.
+
+    Convergence guard (#49): on the token trigger, a round that leaves the context no
+    smaller than it was is not a compression. It reports ``compressed=False``, leaves
+    the notes/placeholder bookkeeping at zero and returns the input list untouched —
+    that is what stops the per-round ``context_compressed`` flood once the band has
+    nothing left to give. The count trigger keeps truncating unconditionally (bounding
+    the message count is its job, token size is not).
     """
     n = len(messages)
     keep = max(_MIN_KEEP_RECENT, min(int(keep_recent), n))
@@ -361,13 +373,25 @@ def _compress_truncate(
     }
     result = [placeholder, *keep_msgs]
     band_evicted = _squeeze_band(
-        result, budget, head_chars=head_chars, tail_chars=tail_chars, trace_ref=trace_ref
+        result,
+        budget,
+        names=_tool_names_by_call_id(messages),
+        head_chars=head_chars,
+        tail_chars=tail_chars,
+        trace_ref=trace_ref,
     )
+    tokens = estimate_tokens(result)
+    if meta_base["trigger"] == "token" and tokens >= int(meta_base["context_tokens"]):
+        # Nothing strictly smaller (band gave way nowhere, truncation only recycled the
+        # previous placeholder): no rewrite to report and no event to flood the stream.
+        meta = dict(meta_base)
+        meta["band_evicted"] = 0
+        return messages, meta
     meta = dict(meta_base)
     meta["compressed"] = True
     meta["dropped"] = dropped
     meta["band_evicted"] = band_evicted
-    meta["context_tokens"] = estimate_tokens(result)
+    meta["context_tokens"] = tokens
     return result, meta
 
 
@@ -413,7 +437,8 @@ def compress_messages(
 
     Returns ``(messages, meta)`` where ``meta`` carries:
 
-    * ``compressed`` — whether a rewrite happened;
+    * ``compressed`` — whether the context actually got smaller (a round that saves
+      nothing reports ``False``, the convergence guard of #49);
     * ``dropped`` — number of messages removed;
     * ``band_evicted`` — number of still-protected messages squeezed to a note
       (only the ``truncate`` strategy squeezes, so ``summarize`` reports ``0``);
@@ -422,7 +447,9 @@ def compress_messages(
       ``truncate`` when no LLM is available);
     * ``trigger`` — ``"token"`` | ``"count"`` | ``"none"``.
 
-    Under the budget the input list is returned unchanged (identity).
+    Under the budget the input list is returned unchanged (identity) — as it is on the
+    token trigger when a compression round would leave the context no smaller (see
+    ``compressed``).
     """
     meta_base: Meta = {
         "compressed": False,

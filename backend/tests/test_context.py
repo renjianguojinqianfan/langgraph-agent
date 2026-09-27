@@ -55,6 +55,21 @@ def _notes(out: list) -> list:
     ]
 
 
+def _runtime(tmp_path: Path, bus: EventBus, task_id: str, **settings_overrides) -> AgentRuntime:
+    """A runtime wired to ``bus``, for the event-level assertions below."""
+    return AgentRuntime(
+        task_id=task_id,
+        task_manager=SimpleNamespace(
+            settings=make_settings(tmp_path, **settings_overrides),
+            event_bus=bus,
+            add_artifact=lambda *a, **k: None,
+        ),
+        llm=SimpleNamespace(),
+        tools=[],
+        tool_schemas=[],
+    )
+
+
 def _many_messages(n: int = 20) -> list:
     return [
         _msg("user" if i % 2 == 0 else "assistant", f"message number {i} " + "x" * 40)
@@ -301,6 +316,30 @@ def test_band_note_reuses_the_evict_contract():
         assert note.count(EVICT_PLACEHOLDER_PREFIX) == 1  # 不套便签
 
 
+def test_band_note_keeps_the_tool_name_when_the_call_was_truncated_away():
+    """便签的工具名反查不许被截断自缚：整列表里查得到，就不能写成 ``?``。
+
+    T1.4 契约要求便签点名工具。截断把最旧那条 assistant 调用挤到带外之后，带内
+    那条 tool 结果照样要叫得出名字——同一条消息走带外逐出时点得出 ``read``，走带
+    内挤压也必须点得出。
+    """
+    msgs = [
+        _assistant_call("c1", "read"),
+        _tool("a" * 4000, "c1"),
+        _assistant_call("c2", "grep"),
+        _tool("b" * 4000, "c2"),
+    ]
+
+    out, meta = compress_messages(msgs, budget=100, keep_recent=3, trace_ref=TRACE_REF)
+
+    assert meta["dropped"] == 1  # c1 的 assistant 调用被截到带外了
+    notes = _notes(out)
+    assert len(notes) == 2, out
+    assert "工具: read" in notes[0], notes[0]  # 调用已在带外，名字仍要查到
+    assert "工具: grep" in notes[1], notes[1]
+    assert "工具: ?" not in notes[0] + notes[1]
+
+
 def test_band_note_labels_non_tool_messages_without_a_fake_anchor():
     """非工具消息没有 per-call 锚点：如实写 ``消息: <role>``，指针指向 trace 文件本身。"""
     msgs = [_msg("user", "x" * 4000) for _ in range(6)]
@@ -349,6 +388,69 @@ def test_band_squeeze_stops_when_nothing_left_to_squeeze():
     assert meta["dropped"] == 28
     assert len(out) == 3
     assert _notes(out) == []
+
+
+def test_compression_stalls_when_the_rewrite_does_not_shrink_the_context():
+    """票面症状的残留半边：无可再挤时不得每轮自称压缩过。
+
+    短消息带内挤不动（便签比原文长），预算又够不着，于是截断只能丢掉上一轮的
+    placeholder、再放一条新的：``context_tokens`` 恒定、压缩比恒为 1。这一轮没让
+    上下文变小，就必须如实报「没压缩」并原样返回，否则 ``context_compressed`` 每
+    轮一条、事件刷屏照旧。
+    """
+    msgs = [_msg("user" if i % 2 == 0 else "assistant", "y" * 50) for i in range(12)]
+
+    first, meta1 = compress_messages(msgs, budget=10, keep_recent=10)
+    assert meta1["compressed"] is True  # 首轮真丢了 2 条，确实变小
+    assert meta1["dropped"] == 2
+    assert meta1["context_tokens"] < estimate_tokens(msgs)
+
+    seen = [meta1["context_tokens"]]
+    current = first
+    for _ in range(3):
+        nxt, meta = compress_messages(current, budget=10, keep_recent=10)
+        assert meta["compressed"] is False, meta  # 无改善 = 没压缩
+        assert meta["dropped"] == 0 and meta["band_evicted"] == 0, meta
+        assert nxt is current  # 原样返回：连回收占位都不做（身份约定同「预算内」）
+        current = nxt
+        seen.append(meta["context_tokens"])
+    assert len(set(seen)) == 1, seen  # 恒定：正是票面的压缩比恒为 1，只是不再自称压缩
+
+
+def test_count_trigger_still_truncates_without_a_token_gain():
+    """收敛判据只管 token 触发：条数超限时截断照旧，哪怕占位比空消息还大。
+
+    条数上限（``context_max_messages``）的职责是把消息数压回去，不是把 token 压小，
+    不许被 #49 的停手判据挡住。
+    """
+    msgs = [_msg("user", "") for _ in range(6)]
+    out, meta = compress_messages(msgs, budget=1_000_000, keep_recent=2, max_messages=4)
+
+    assert meta["trigger"] == "count"
+    assert meta["compressed"] is True  # 占位比 4 条空消息还大，也照样截
+    assert meta["dropped"] == 4
+    assert len(out) == 3
+
+
+def test_no_context_compressed_event_once_the_squeeze_stalls(tmp_path: Path):
+    """端到端：停手之后不再发事件——票面「事件刷屏」判据的真正落点。"""
+    bus = EventBus()
+    events: List[Dict[str, Any]] = []
+    bus.subscribe("t49stall", events.append)
+    rt = _runtime(tmp_path, bus, "t49stall", context_evict_enabled=False, context_token_budget=10)
+    state = cast(
+        AgentState,
+        {
+            "messages": [_msg("user" if i % 2 == 0 else "assistant", "y" * 50) for i in range(12)],
+            "step_index": 2,
+        },
+    )
+
+    for _ in range(3):
+        rt._build_messages(state, "SYS")
+
+    assert [e for e in events if e["type"] == "context_compressed"] == events[:1], events
+    assert len(events) == 1  # 只有真正变小那一轮发了一条，此后停手
 
 
 def test_summarize_strategy_reports_band_evicted_zero():
