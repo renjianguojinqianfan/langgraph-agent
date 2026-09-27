@@ -65,7 +65,7 @@ TaskManager 构造器尾部单次执行：持久化里 status ∈ {RUNNING, PEND
 3. planner / risk_scan / executor / tool_node 四处守卫统一换用 helper（`subagent_split` 曾在此列，随 #56 删除）。
 4. 两处确认等待循环（human_confirm 节点、risk pause 计划级确认）改为轮询 flag。
 5. run/_resume_run teardown pop flag；shutdown 前 join 全部 worker 再关 sqlite 连接（防 WAL 写中关闭引发 native crash——开发中真实发生过 access violation）。
-6. **子任务 id 的第二条生命周期（[#71](https://github.com/renjianguojinqianfan/langgraph-agent/issues/71) 追加）**：`run_subtask` 超时时会置 `spec.subtask_id` **自己**的旗标（`_stop_watch_ids` 首位就是它），让正在跑的池线程在下一个节点入口协作式退出，而不是跑到 `max_steps`。子任务从不注册进 `_active_states`，故 run/_resume_run 的 teardown 永远不会 pop 它——清旗改挂在子任务 future 的 done callback 上（回调在 `_exec_one` 返回后、同一池线程取下一件工作之前触发，故「旗标消失」可用于判定池位归还）。**别把它搬回 `_exec_one` 的 finally**：那条路径盖不住内层 try 之前的出口（`TierError` / `attach_subtask` / runtime 构造），会重新引入进程级字典的键泄漏。
+6. **子任务 id 的第二条生命周期（[#71](https://github.com/renjianguojinqianfan/langgraph-agent/issues/71) 追加）**：`run_subtask` 超时时会置 `spec.subtask_id` **自己**的旗标（`_stop_watch_ids` 首位就是它），让正在跑的池线程在下一个节点入口协作式退出，而不是跑到 `max_steps`。子任务从不注册进 `_active_states`，故 run/_resume_run 的 teardown 永远不会 pop 它——清旗改挂在子任务 future 的 done callback 上（回调在 `_exec_one` 返回后、同一池线程取下一件工作之前触发，故「旗标消失」可用于判定池位归还）。**别把它搬回 `_exec_one` 的 finally**：那个 finally 在内层 try 上，盖不住内层 try 之前的出口（`_subtask_tools` 抛 `TierError`、`manifest.attach_subtask`，再往外还有外层 try 之前的 `set_current_task_id`），会重新引入进程级字典的键泄漏。
 
 红线遵守：`_needs_confirm` 重算块一字未动，仅添加警示注释。
 

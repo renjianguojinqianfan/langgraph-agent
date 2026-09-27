@@ -195,9 +195,10 @@ class SubAgentExecutor:
         parent task id on the pool thread so its writes still land on the
         parent's rollback ledger (Issue #33 拍板 5). Over the bound the fold
         also asks the worker to stop, so the slot comes back at the next node
-        entry instead of at ``max_steps`` — the LLM round already in flight (and
-        its queued tool batch) still completes, which is as narrow as
-        cooperative cancellation gets (:meth:`_request_worker_stop`).
+        entry instead of at ``max_steps``: the LLM call already in flight still
+        finishes, and a tool batch runs only if ``tool_node`` had already passed
+        its entry check (it polls once, not per call). As narrow as cooperative
+        cancellation gets — see :meth:`_request_worker_stop`.
         """
         future = self._pool.submit(self._exec_one, spec)
         try:

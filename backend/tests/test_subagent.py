@@ -1024,8 +1024,9 @@ def test_timeout_fold_stops_the_worker_at_the_next_node_boundary(tmp_path):
     concurrent.futures 吞掉，那时这里读到的是「还活着」。）
 
     两条断言互为保险：置旗/清旗钉住所选机制，``executor_calls`` 的增量与机制无关，
-    单独就能证明窗口真收窄了，而不是「worker 恰好自己跑完了」。本 mock 每轮只排
-    一个工具调用，所以「同一轮剩余工具批次仍会跑完」这条更宽的残余窗口未被目击。
+    单独就能证明窗口真收窄了，而不是「worker 恰好自己跑完了」。残余窗口按代码事实是
+    两段（在途那次 LLM 调用 + 已过 ``tool_node`` 入口检查的批次），本 mock 每轮只排
+    一个工具调用，走的是「旗标先于入口命中 ⇒ 整批跳过」这条更窄的路径。
     """
     sid = "timeout71:sub:1"
     settings = make_settings(tmp_path, subagent_timeout_sec=1, max_steps=15)
