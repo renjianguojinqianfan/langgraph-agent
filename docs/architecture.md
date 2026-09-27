@@ -372,6 +372,7 @@ classDiagram
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 被停止 |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
+| `context_compressed` | `{step_index, dropped, band_evicted, context_tokens, strategy}` | 上下文压缩指示；`band_evicted` = 保护带内被挤成便签的条数（#49）。本轮没让上下文严格变小就不发（收敛判据，止住空转刷屏） |
 | `task_rollback` | `{task_id, ok, files, already_original}` | 工作区回滚完成（P1-B，`files` = 实际变动的沙箱内路径） |
 | `heartbeat` | `{}` | 保活（每 15s） |
 

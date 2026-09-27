@@ -176,7 +176,7 @@ export type SSEventType =
   | "tool_call"
   | "tool_result"
   | "tool_circuit_open" // P0: {tool_name, cooldown_sec}
-  | "context_compressed" // P0: {step_index, dropped, context_tokens, strategy}
+  | "context_compressed" // P0: {step_index, dropped, band_evicted, context_tokens, strategy}
   | "human_confirm_required"
   | "artifact_created"
   | "final_answer"
