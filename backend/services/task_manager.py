@@ -1052,14 +1052,21 @@ class TaskManager:
 
     # ── artifacts ──
     def add_artifact(self, task_id: str, path: Path) -> Artifact:
-        """Register a file the task produced, once per task and resolved path.
+        """Register a file the task produced; one record per task and file.
 
-        The dedupe lives here rather than at the call sites because both of them
-        (the kernel's tool node and the sub-agent's hand-back) funnel through this
-        method: re-writing a file is one product, not two, and a second record
-        would also mean a duplicate ``artifact_created`` event and a second
-        knowledge-base ingest (#72). Scoping is per task on purpose — a subtask
-        handing its file back to the parent is two owners of one path.
+        Dedupe lives here rather than at the two call sites (the kernel's tool
+        node and the sub-agent's hand-back) because both funnel through this
+        method (#72). Skipping the second registration skips a record, its
+        ``artifact_created`` event and a redundant ``add_document`` call — the
+        knowledge base is already idempotent per resolved path, so what a
+        duplicate used to cost is a spurious product row, not a double index.
+
+        Two settled semantics callers rely on: the key is per **task**, so a
+        subtask handing its file back to the parent registers once under each
+        owner; and a hit returns the record as first registered, i.e. its
+        ``size`` / ``created_at`` are the ones from the initial write (completion
+        verification re-stats the disk, so S1 is unaffected). A task with no
+        active state has no registry to dedupe against and registers as before.
         """
         resolved = str(Path(path).resolve())
         st = self._active_states.get(task_id)

@@ -7,7 +7,7 @@
   ``read`` of a file the task already wrote registers nothing;
 * :meth:`TaskManager.add_artifact` is deduplicated per task by **resolved** path,
   so a re-write of the same file lands as one record, one ``artifact_created``
-  event and one knowledge-base ingest.
+  event and one knowledge-base ingest call.
 
 The KB ingest count is asserted because the issue's acceptance list requires the
 event and ingest counts to track the registration count — that is the contract,
@@ -17,9 +17,11 @@ not an implementation detail.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from backend.core.llm.client import MockLLMClient
+from backend.core.tools.mcp_tool import McpTool
+from backend.core.tools.openapi_tool import OpenAPITool
 from backend.core.tools.registry import build_tools
 from backend.services.event_bus import EventBus
 from backend.tests.conftest import make_manager, make_settings
@@ -28,6 +30,15 @@ from backend.tests.test_graph import _run_until_done
 
 def _tool_call(call_id: str, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     return {"id": call_id, "name": name, "arguments": arguments}
+
+
+def _outcome(task: Any) -> List[Tuple[str, str]]:
+    """``(tool_name, status)`` per tool call the run actually made — the guard
+    that keeps a "one artifact" assertion from passing on a call that never ran.
+    Attribute access because the persisted record is a ``ToolCallRecord`` model."""
+    return [
+        (tc.tool_name, tc.status) for step in task.steps for tc in (step.tool_calls or [])
+    ]
 
 
 def _manager(tmp_path, tool_calls: List[Dict[str, Any]], event_bus: EventBus, monkeypatch):
@@ -66,6 +77,8 @@ def test_write_then_read_back_registers_one_artifact(tmp_path, event_bus, monkey
     task = _run_until_done(tm, task_id)
 
     assert task is not None and task.status.value == "COMPLETED"
+    assert [name for name, _ in _outcome(task)] == ["write", "read"]
+    assert all(status == "success" for _, status in _outcome(task))
     assert [a.filename for a in task.artifacts] == ["report.md"]
     events = [e for e in event_bus.replay(task_id) if e["type"] == "artifact_created"]
     assert len(events) == 1
@@ -87,6 +100,9 @@ def test_same_file_written_twice_registers_once(tmp_path, event_bus, monkeypatch
     task = _run_until_done(tm, task_id)
 
     assert task is not None and task.status.value == "COMPLETED"
+    assert [name for name, _ in _outcome(task)] == ["write", "write"]
+    assert all(status == "success" for _, status in _outcome(task))
+    assert (settings.artifacts_path / "report.md").read_text(encoding="utf-8") == "second"
     assert [a.filename for a in task.artifacts] == ["report.md"]
     events = [e for e in event_bus.replay(task_id) if e["type"] == "artifact_created"]
     assert len(events) == 1
@@ -96,6 +112,12 @@ def test_same_file_written_twice_registers_once(tmp_path, event_bus, monkeypatch
 def test_add_artifact_dedupes_by_resolved_path(tmp_path, event_bus):
     """Two spellings of the same file are one registration: the dedupe key is
     the resolved path, not the string the caller happened to pass.
+
+    ``sub/../out.txt`` is the cross-platform half of that claim — the lexical
+    collapse ``resolve()`` performs on every OS. What resolve adds on one
+    platform only (Windows case folding, symlink / junction targets) is not
+    asserted here, since a test that passes on one OS and fails on the other is
+    worse than a narrower lock.
 
     Driven on a hand-seated active state rather than ``create_task``, because
     ``create_task`` starts a background run that owns (and at the end drops)
@@ -128,13 +150,17 @@ def test_only_the_sandbox_write_tools_are_product_sources(tmp_path):
     default, and so do the wrappers that are appended dynamically rather than
     registered (MCP, OpenAPI, plugins): a product is a file the task wrote, so
     a wrapper that wants its output registered has to say so on its class.
+
+    Why the dynamic half is locked on the declaration rather than on a run:
+    ``McpTool`` / ``OpenAPITool`` never put a top-level ``path`` in their result
+    data, so a payload-driven test through them would pass with or without #72
+    and prove nothing. The behavioural half — a tool whose result *does* carry
+    ``path`` while declaring nothing — is locked in
+    ``test_qa_nodes.test_read_like_result_on_a_real_file_registers_nothing``.
     """
     settings = make_settings(tmp_path)
     mounted = build_tools(settings)
     assert sorted(t.name for t in mounted if t.registers_artifact) == ["edit", "write"]
-
-    from backend.core.tools.mcp_tool import McpTool
-    from backend.core.tools.openapi_tool import OpenAPITool
 
     assert McpTool.registers_artifact is False
     assert OpenAPITool.registers_artifact is False

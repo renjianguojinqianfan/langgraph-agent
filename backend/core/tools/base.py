@@ -1,10 +1,10 @@
 """Base tool contract.
 
 Every tool exposes ``name`` / ``description`` / ``args_schema`` (a JSON Schema
-fragment for the function-calling interface) / ``requires_confirm`` and
-implements :meth:`run`. Tools must return a :class:`ToolResult` and never raise
-an uncaught exception into the kernel — the kernel also wraps ``run`` in a
-try/except as a final safety net.
+fragment for the function-calling interface) / ``requires_confirm`` /
+``registers_artifact`` and implements :meth:`run`. Tools must return a
+:class:`ToolResult` and never raise an uncaught exception into the kernel — the
+kernel also wraps ``run`` in a try/except as a final safety net.
 """
 
 from __future__ import annotations
@@ -35,12 +35,14 @@ class BaseTool(ABC):
     description: str = ""
     args_schema: Dict[str, Any] = field(default_factory=dict)  # JSON Schema (parameters)
     requires_confirm: bool = False
-    # A tool whose successful result *produces* a file on disk, i.e. the source
-    # of a task artifact (issue #72: product = what the task wrote). Read-only
-    # tools keep this False even when their result carries a ``path`` — the
-    # kernel registers an artifact only from a tool declaring True. A wrapper
-    # around an external tool (MCP / OpenAPI / plugin) that does write files
-    # opts in by setting it True on the wrapper class.
+    # Whether this tool is a source of task products (issue #72: product = what
+    # the task wrote). Registration needs both halves: the class declares True
+    # *and* the result advertises the written file under ``data["path"]`` as a
+    # real file. Read-only tools keep this False even when their result carries
+    # a ``path`` (``read`` does). A tool that writes files without advertising
+    # one under ``path`` (``code_exec``, ``git_commit``) stays False too — it
+    # has no single deliverable to register. A wrapper around an external tool
+    # (MCP / OpenAPI / plugin) opts in by setting this True on its class.
     registers_artifact: bool = False
     # P0 resilience knobs (all optional; built-ins override as needed).
     retryable: bool = True  # whether transient failures may be retried
