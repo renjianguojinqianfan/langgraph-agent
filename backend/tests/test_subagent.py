@@ -17,6 +17,7 @@ covers three things:
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -963,6 +964,28 @@ class _KeepLoopingMock(MockLLMClient):
         )
 
 
+class _TimeoutLoopMock(_KeepLoopingMock):
+    """#71 版死循环：每轮再睡 ``per_round``，并可被 ``halt`` 提前放手。
+
+    轮数 × ``per_round`` 必须明显大于 ``subagent_timeout_sec``，否则折叠发生时
+    worker 早已自然跑完，收窗断言失去对象（测试用 ``at_fold`` 把这件事变成机械检查）。
+
+    ``halt`` 是给「红跑」留的阀：没收窗机制的那一侧会把 ``max_steps`` 轮一路跑满，
+    set 它让循环立刻收敛，测试不必真占着池位等一个坏行为跑完。
+    """
+
+    def __init__(self, per_round: float = 0.2, halt: threading.Event | None = None) -> None:
+        super().__init__()
+        self.per_round = per_round
+        self.halt = halt
+
+    def complete(self, messages, tools=None, **kwargs):
+        time.sleep(self.per_round)
+        if tools and self.halt is not None and self.halt.is_set():
+            return LLMResponse(content=self.final_answer)
+        return super().complete(messages, tools, **kwargs)
+
+
 def _run_stopped_subtask(tmp_path, stop_key: str, parent_task_id: str):
     settings = make_settings(tmp_path)
     mock = _KeepLoopingMock()
@@ -990,6 +1013,80 @@ def test_direct_stop_on_subtask_id_still_works(tmp_path):
     res, mock = _run_stopped_subtask(tmp_path, stop_key="p60:sub:1", parent_task_id="parent-1")
     assert res.status != "completed"
     assert mock.executor_calls < 5
+
+
+def test_timeout_fold_stops_the_worker_at_the_next_node_boundary(tmp_path):
+    """#71 AC：超时折 failed 之后，池 worker 必须真的退出，而不是继续烧轮次。
+
+    「旗标消失」是 worker 退出的**目击证人**而非定义：清旗挂在子任务 future 的 done
+    callback 上，回调在 ``_exec_one`` 返回后、同一池线程取下一件工作之前触发，所以
+    等到旗标不见 = 等到那次退出 = 池位归还。（反向不成立：callback 抛异常会被
+    concurrent.futures 吞掉，那时这里读到的是「还活着」。）
+
+    两条断言互为保险：置旗/清旗钉住所选机制，``executor_calls`` 的增量与机制无关，
+    单独就能证明窗口真收窄了，而不是「worker 恰好自己跑完了」。残余窗口按代码事实是
+    两段（在途那次 LLM 调用 + 已过 ``tool_node`` 入口检查的批次），本 mock 每轮只排
+    一个工具调用，走的是「旗标先于入口命中 ⇒ 整批跳过」这条更窄的路径。
+    """
+    sid = "timeout71:sub:1"
+    settings = make_settings(tmp_path, subagent_timeout_sec=1, max_steps=15)
+    halt = threading.Event()
+    mock = _TimeoutLoopMock(per_round=0.2, halt=halt)
+    tm = make_manager(settings, mock)
+    ex = SubAgentExecutor(tm, settings)
+    try:
+        res = ex.run_subtask(_spec(subtask_id=sid, instruction="keep looping"))
+        assert res.status == "failed"
+        assert "timeout" in res.error
+
+        at_fold = mock.executor_calls
+        assert at_fold < settings.max_steps, (
+            f"折叠前死循环就自己跑满了 {settings.max_steps} 轮，收窗断言失去对象"
+        )
+        assert tm.is_stop_flagged(sid), (
+            "超时分支没置子任务自身的 stop 标志："
+            "worker 只能在 max_steps 处自己收场，池位一路被占着"
+        )
+
+        deadline = time.time() + 3.0
+        while tm.is_stop_flagged(sid) and time.time() < deadline:
+            time.sleep(0.02)
+        assert not tm.is_stop_flagged(sid), (
+            "旗标没被清：worker 还没退出（done callback 没跑），"
+            "或子任务 id 泄漏在进程级 _stop_flags 里没人 pop"
+        )
+        # 在途那一轮的宽限；口径对齐 #60 的 `executor_calls < 5`。
+        extra = mock.executor_calls - at_fold
+        assert extra <= 2, f"折叠后又烧了 {extra} 轮，窗口没收窄到下一个节点边界"
+    finally:
+        halt.set()
+
+
+def test_a_queued_subtask_that_never_starts_leaves_no_stop_flag(tmp_path):
+    """``future.cancel()`` 成功 = 从未开跑：既不置旗，也不在进程级字典里留脏 key。"""
+    sid = "queue71:sub:1"
+    settings = make_settings(
+        tmp_path, subagent_timeout_sec=1, subagent_max_concurrency=1
+    )
+    mock = _CountingMock()
+    tm = make_manager(settings, mock)
+    ex = SubAgentExecutor(tm, settings)
+    gate = threading.Event()
+
+    def _hold_the_only_slot() -> str:
+        gate.wait(10)
+        return "released"
+
+    holder = ex._pool.submit(_hold_the_only_slot)  # 占住唯一池位 → 下面的 spec 只能排队
+    try:
+        res = ex.run_subtask(_spec(subtask_id=sid, instruction="never starts"))
+        assert res.status == "failed"
+        assert "timeout" in res.error
+        assert not tm.is_stop_flagged(sid), "排队未启动的 future 被误置旗"
+        assert mock.turns == 0, "被取消的排队项不该跑过一轮"
+    finally:
+        gate.set()
+        holder.result(timeout=10)
 
 
 def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
