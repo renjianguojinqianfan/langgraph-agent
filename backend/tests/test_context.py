@@ -161,3 +161,41 @@ def test_summarize_messages_direct():
     summary = summarize_messages(llm, _many_messages(10), max_tokens=50)
     assert summary == "压缩结果"
     assert llm.calls == 1
+
+
+# ── in-band squeeze (#49: the protected band itself outgrows the budget) ──
+def test_ticket_49_repro_converges_below_budget():
+    """票面复现：预算 1000 / keep_recent 10 / 12 条 4000 字符消息，跑三轮。
+
+    固定 keep_recent 的旧实现每轮只能丢掉上一轮的 placeholder、再放一条新的，
+    压缩比恒为 1（context_tokens 恒 10015），永远压不到预算以下，于是每轮都发一
+    次 ``context_compressed``。修后必须收敛到预算以下，且收敛之后不再空转。
+    """
+    msgs = [
+        _msg("user" if i % 2 == 0 else "assistant", "x" * 4000) for i in range(12)
+    ]
+    assert estimate_tokens(msgs) == 12012  # 起点：超预算 12 倍
+
+    current = msgs
+    rounds: list = []
+    for _ in range(3):
+        current, meta = compress_messages(current, budget=1000, keep_recent=10)
+        rounds.append(
+            {
+                "tokens": meta["context_tokens"],
+                "compressed": meta["compressed"],
+                "dropped": meta["dropped"],
+                "band_evicted": meta.get("band_evicted", 0),
+            }
+        )
+
+    # 票面 AC：压到预算以下（旧实现恒 10015，这一条先红，红的就是症状本身）。
+    assert rounds[-1]["tokens"] <= 1000, rounds
+    # 收敛：每一轮真正改写消息的，token 都必须严格变小（不收敛就是恒定的旧症状）。
+    for i in range(1, len(rounds)):
+        if rounds[i]["compressed"]:
+            assert rounds[i]["tokens"] < rounds[i - 1]["tokens"], rounds
+    assert rounds[0]["tokens"] < 12012
+    assert rounds[0]["band_evicted"] > 0  # 保护带被挤过，这才有了增量
+    # 事件不再刷屏：一旦到位，后续轮次不得再自称压缩过。
+    assert [r["compressed"] for r in rounds] == [True, False, False], rounds
