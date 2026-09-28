@@ -182,11 +182,17 @@ def _squeeze_band(
     """Squeeze the band ``keep_recent`` protects when that band alone outgrows the budget.
 
     Mutates ``result`` (index 0 is the truncation placeholder, everything after it
-    is the band). Runs oldest-first so the newest messages survive verbatim; the
-    newest :data:`_BAND_PROTECT_NEWEST` give way only at the last notch, after every
-    other band message is already marker-only. The budget is the only threshold: the
-    first layout that fits ends the squeeze, and a message that cannot shrink
-    strictly is skipped, so the pass is bounded by the band size and can never spin.
+    is the band). Runs oldest-first so the newest messages survive verbatim. The
+    budget is the only threshold: the first layout that fits ends the squeeze, and a
+    message that cannot shrink strictly is skipped, so the pass is bounded by the band
+    size and can never spin.
+
+    The last notch is role-gated (#49 review): only ``tool`` results may be demoted to
+    a bare marker, newest-first, because their full text still sits in the trace
+    behind the ``#tool_call_id`` anchor. A user/assistant preview is the last copy
+    that exists — no event carries their text — so their notes keep their preview.
+    When the tool candidates run out and the budget is still out of reach, the squeeze
+    stops and :func:`compress_messages` reports ``converged=False``.
 
     ``names`` is the ``tool_call_id`` → tool name map of the **whole** history, not
     just the band: truncation drops the oldest messages, and a band tool result
@@ -198,13 +204,16 @@ def _squeeze_band(
     """
     if len(result) <= 1 or estimate_tokens(result) <= int(budget):
         return 0
-    # Pass 1 keeps a preview and stops short of the newest; pass 2 demotes to
-    # marker-only and runs all the way through, so the newest only gives way last.
+    # Pass 1 keeps a preview and stops short of the newest; pass 2 is the last notch
+    # and only ever touches tool results, so the newest message gives way last.
     newest = max(1, len(result) - _BAND_PROTECT_NEWEST)
     squeezed_idx: set[int] = set()
     fits = False
-    for with_preview, stop in ((True, newest), (False, len(result))):
-        for i in range(1, stop):
+    passes = ((True, range(1, newest)), (False, range(len(result) - 1, 0, -1)))
+    for with_preview, indices in passes:
+        for i in indices:
+            if not with_preview and result[i].get("role") != "tool":
+                continue  # A′: a non-tool note never loses its preview
             prefix, label, anchor = _note_form(result[i], names)
             squeezed = _squeeze_content(
                 result[i].get("content"),
@@ -372,7 +381,9 @@ def _compress_truncate(
     ``keep_recent`` is fixed, so a band of oversized messages can outgrow the budget
     all by itself (#49): truncation then just recycles its own placeholder and the
     compression ratio stays at 1 forever. :func:`_squeeze_band` gives the band way
-    under exactly that condition, oldest-first, until the budget is met.
+    under exactly that condition, oldest-first, as far as it lawfully can — the budget
+    is reached when the notes can carry it, and reported as ``converged=False`` when
+    they cannot.
 
     Convergence guard (#49): on the token trigger, a round that leaves the context no
     smaller than it was is not a compression. It reports ``compressed=False``, leaves
@@ -464,6 +475,9 @@ def compress_messages(
     * ``dropped`` — number of messages removed;
     * ``band_evicted`` — number of still-protected messages squeezed to a note
       (only the ``truncate`` strategy squeezes, so ``summarize`` reports ``0``);
+    * ``converged`` — whether the returned context fits ``budget``. ``False`` means the
+      squeeze ran out of what it may lawfully give way (see the role gate in
+      :func:`_squeeze_band`) and the context is still oversized;
     * ``context_tokens`` — estimate of the returned list;
     * ``strategy`` — the effective strategy (``summarize`` falls back to
       ``truncate`` when no LLM is available);
@@ -473,13 +487,17 @@ def compress_messages(
     token trigger when a compression round would leave the context no smaller (see
     ``compressed``).
     """
+    tokens_in = estimate_tokens(messages)
     meta_base: Meta = {
         "compressed": False,
         "dropped": 0,
         "band_evicted": 0,
-        "context_tokens": estimate_tokens(messages),
+        "context_tokens": tokens_in,
         "strategy": "truncate",
         "trigger": "none",
+        # Whether the context we hand back fits the budget. This default is honest for
+        # the two early returns below, which only fire when it already does.
+        "converged": tokens_in <= int(budget),
     }
     if not messages:
         return messages, meta_base
@@ -493,15 +511,21 @@ def compress_messages(
 
     if strategy == "summarize" and llm is not None:
         meta_base["strategy"] = "summarize"
-        return _compress_summarize(messages, keep_recent, llm, summary_max_tokens, meta_base)
-
-    meta_base["strategy"] = "truncate"
-    return _compress_truncate(
-        messages,
-        keep_recent,
-        budget,
-        meta_base,
-        head_chars=head_chars,
-        tail_chars=tail_chars,
-        trace_ref=trace_ref,
-    )
+        out, meta = _compress_summarize(
+            messages, keep_recent, llm, summary_max_tokens, meta_base
+        )
+    else:
+        meta_base["strategy"] = "truncate"
+        out, meta = _compress_truncate(
+            messages,
+            keep_recent,
+            budget,
+            meta_base,
+            head_chars=head_chars,
+            tail_chars=tail_chars,
+            trace_ref=trace_ref,
+        )
+    # One definition, both strategies: converged means the result fits the budget,
+    # whether or not this round managed to rewrite anything.
+    meta["converged"] = meta["context_tokens"] <= int(budget)
+    return out, meta

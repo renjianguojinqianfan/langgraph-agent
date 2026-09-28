@@ -65,8 +65,9 @@ def _note_markers(content: str) -> int:
 def _mixed_band() -> List[Dict[str, Any]]:
     """带内既有工具结果也有 user / assistant 轮次的一组消息（#49 评审 F1/F2）。
 
-    首条会被截断挤到带外，剩下四条进保护带：assistant 调用（content 空，无可挤）、
-    工具结果、user、assistant——两种前缀、两种指针形态正好同框。
+    首条会被截断挤到带外，剩下四条进保护带：工具结果、user、assistant、末尾再垫一条短
+    user——A′ 之后最新一条永不降级，不垫这条就挤不出 assistant 便签，两种前缀与两种指针
+    形态就不同框了。
     """
     return [
         _msg("user", "任务：把这几段读完"),
@@ -74,6 +75,7 @@ def _mixed_band() -> List[Dict[str, Any]]:
         _tool("t" * 4000, "c0"),
         _msg("user", "u" * 4000),
         _msg("assistant", "a" * 4000),
+        _msg("user", "就按这个继续"),
     ]
 
 
@@ -298,7 +300,7 @@ def test_tool_only_band_reaches_the_budget_at_marker_only():
     与票面复现同一量级，差别只在角色。tool 便签带 ``{trace_ref}#{tool_call_id}`` 锚点，
     零预览不丢信息，所以数值 AC（压进预算）留在这条上，而不是硬塞给 user/assistant。
     """
-    msgs: List[Dict[str, Any]] = []
+    msgs = []
     for i in range(12):
         msgs.append(_assistant_call(f"c{i}", "read"))
         msgs.append(_tool("x" * 4000, f"c{i}"))
@@ -320,7 +322,7 @@ def test_last_notch_demotes_tool_only_and_reports_not_converged():
     带内既有 4000 字符的 user 消息又有 tool 结果，预算小到不可能满足。tool 降到
     marker-only 之后必须停手——不许把 user 削成裸 marker，也不许每轮自称压缩。
     """
-    msgs: List[Dict[str, Any]] = [
+    msgs = [
         _msg("system", "old" * 40),  # 被截到带外
         _assistant_call("c0", "read"),
         _tool("t" * 4000, "c0"),
@@ -361,7 +363,7 @@ def test_band_squeeze_not_gated_by_the_evict_char_threshold():
 
     票面复现的消息就是 4000 整——带内挤压一旦复用那个跳过条件，空转立刻复发。
     """
-    msgs: List[Dict[str, Any]] = []
+    msgs = []
     for i in range(3):
         msgs.append(_assistant_call(f"c{i}", "read"))
         msgs.append(_tool("x" * 4000, f"c{i}"))

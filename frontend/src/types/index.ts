@@ -176,7 +176,7 @@ export type SSEventType =
   | "tool_call"
   | "tool_result"
   | "tool_circuit_open" // P0: {tool_name, cooldown_sec}
-  | "context_compressed" // P0: {step_index, dropped, band_evicted, context_tokens, strategy}
+  | "context_compressed" // P0: {step_index, dropped, band_evicted, converged, context_tokens, strategy}
   | "human_confirm_required"
   | "artifact_created"
   | "final_answer"
@@ -219,6 +219,9 @@ export interface ContextCompressedData {
   dropped: number;
   /** Absent on events persisted before the in-band squeeze (#49). */
   band_evicted?: number;
+  /** False when the squeeze ran out of what it may give way and the context is still
+   * oversized. Absent on events persisted before #49's A′ role gate. */
+  converged?: boolean;
   context_tokens: number;
   strategy: string;
 }

@@ -182,6 +182,7 @@ class AgentRuntime:
                         "step_index": state.get("step_index", 0),
                         "dropped": meta["dropped"],
                         "band_evicted": meta["band_evicted"],
+                        "converged": meta["converged"],
                         "context_tokens": meta["context_tokens"],
                         "strategy": meta["strategy"],
                     },
