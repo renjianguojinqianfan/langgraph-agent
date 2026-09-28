@@ -24,6 +24,11 @@ class LLMResponse:
 
     content: str = ""
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    # Issue #45: thinking-mode providers (DeepSeek official endpoint) return the
+    # model's reasoning trace *and* require it back on the next turn — a request
+    # without it is a 400. Empty string means "this provider does not report
+    # reasoning content", so every other provider's wire format stays as-is.
+    reasoning_content: str = ""
     raw: Dict[str, Any] = field(default_factory=dict)
 
 

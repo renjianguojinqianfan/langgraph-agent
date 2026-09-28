@@ -415,9 +415,18 @@ class AgentRuntime:
                 }
                 for r in tcs
             ]
-            state.setdefault("messages", []).append(
-                {"role": "assistant", "content": resp.content or "", "tool_calls": openai_tool_calls}
-            )
+            assistant_turn: Dict[str, Any] = {
+                "role": "assistant",
+                "content": resp.content or "",
+                "tool_calls": openai_tool_calls,
+            }
+            # Issue #45: thinking-mode endpoints (DeepSeek official) reject the
+            # *next* request when the previous turn's reasoning trace is missing.
+            # Written only when non-empty — providers that never report it must
+            # keep sending exactly the same message shape as before.
+            if resp.reasoning_content:
+                assistant_turn["reasoning_content"] = resp.reasoning_content
+            state.setdefault("messages", []).append(assistant_turn)
             for rec in tcs:
                 if step is not None:
                     step["tool_calls"].append(rec)
@@ -429,7 +438,10 @@ class AgentRuntime:
         else:
             answer = resp.content or "(no content)"
             state["final_answer"] = answer
-            state.setdefault("messages", []).append({"role": "assistant", "content": answer})
+            final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
+            if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn
+                final_turn["reasoning_content"] = resp.reasoning_content
+            state.setdefault("messages", []).append(final_turn)
             if step is not None:
                 step["thought"] = answer
             self._publish("final_answer", {"answer": answer})

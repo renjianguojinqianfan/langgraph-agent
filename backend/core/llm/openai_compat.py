@@ -70,6 +70,10 @@ class OpenAICompatibleClient(LLMClient):
         return LLMResponse(
             content=msg.content or "",
             tool_calls=tool_calls,
+            # Issue #45: ``reasoning_content`` is not on the OpenAI schema, so it
+            # arrives as an extra SDK attribute (or not at all). ``or ""`` folds
+            # both "attribute missing" and explicit null into the empty string.
+            reasoning_content=getattr(msg, "reasoning_content", None) or "",
             raw=resp.model_dump() if hasattr(resp, "model_dump") else {},
         )
 

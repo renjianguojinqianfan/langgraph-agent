@@ -1,16 +1,23 @@
 """Tests for the LLM abstraction layer.
 
-Covers :class:`MockLLMClient` behaviour and the :func:`create_llm_client`
-factory returning the correct implementation for each provider configuration.
+Covers :class:`MockLLMClient` behaviour, the :func:`create_llm_client` factory
+returning the correct implementation for each provider configuration, and the
+``reasoning_content`` round-trip (#45) — which drives the executor node so the
+field is asserted on the request actually sent, not just on the response parsed.
 All of this runs offline (no API keys, no network).
 """
 
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from typing import Any, Dict, List
 
 from backend.config import Settings
+from backend.core.agent.nodes import AgentRuntime
+from backend.core.agent.state import AgentState
 from backend.core.llm.client import (
+    LLMClient,
     LLMResponse,
     MockLLMClient,
     make_default_mock_client,
@@ -19,6 +26,7 @@ from backend.core.llm.openai_compat import (
     OpenAICompatibleClient,
     create_llm_client,
 )
+from backend.services.event_bus import EventBus
 
 
 # ── LLMResponse ──
@@ -139,3 +147,156 @@ def test_llm_client_passes_bounded_request_timeout(monkeypatch):
     create_llm_client(s)
     assert captured.get("timeout") == s.llm_request_timeout_sec
     assert 0 < s.llm_request_timeout_sec < 600, "must stay below the SDK default"
+
+
+# ── Issue #45 A：reasoning_content 回传 ──
+# DeepSeek 官方端点在 thinking 模式下**强制**要求把上一轮 assistant 的
+# ``reasoning_content`` 原样带回，否则第二轮起 400。下面三条路径全部离线：
+# 假 ``chat.completions.create`` / 假 LLM 逐轮记录请求，不联网、零 Key。
+
+_TOOL_CALL: Dict[str, Any] = {
+    "id": "c1",
+    "name": "write",
+    "arguments": {"path": "a.txt", "content": "x"},
+}
+
+
+class _RecordingLLM(LLMClient):
+    """按轮返回脚本化响应，并把每次收到的 messages 记下来。"""
+
+    def __init__(self, responses: List[LLMResponse]) -> None:
+        self._responses = list(responses)
+        self.requests: List[List[Dict[str, Any]]] = []
+
+    def complete(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        self.requests.append([dict(m) for m in messages])
+        return self._responses.pop(0)
+
+    def stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ):
+        yield self.complete(messages, tools, **kwargs)
+
+
+def _runtime(settings: Settings, llm: LLMClient) -> AgentRuntime:
+    """A runtime whose executor can be driven directly (no tools, no confirm gate)."""
+    tm = SimpleNamespace(settings=settings, event_bus=EventBus(), add_artifact=lambda *a: None)
+    return AgentRuntime(
+        task_id="t45",
+        task_manager=tm,
+        llm=llm,
+        tools=[],
+        tool_schemas=[],
+        confirm_enabled=False,
+    )
+
+
+def _state() -> AgentState:
+    return {
+        "step_index": 1,
+        "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
+        "messages": [{"role": "user", "content": "写一个文件"}],
+    }
+
+
+def _assistants(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [m for m in messages if m.get("role") == "assistant"]
+
+
+def _stub_completion(monkeypatch, client: OpenAICompatibleClient, message: SimpleNamespace) -> None:
+    """Replace the SDK call so ``complete()`` sees exactly ``message`` back."""
+
+    def _create(**_kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)], model_dump=lambda: {})
+
+    monkeypatch.setattr(client._client.chat.completions, "create", _create)
+
+
+def test_llm_response_reasoning_content_defaults_to_empty():
+    """基线：默认构造为 ``""``，现役构造点与 nodes.py 的组装都不必改。"""
+    assert LLMResponse().reasoning_content == ""
+
+
+def test_openai_compat_complete_reads_reasoning_content(monkeypatch):
+    client = OpenAICompatibleClient(
+        base_url="https://api.deepseek.com/v1", api_key="sk-test", model="deepseek-flash"
+    )
+    _stub_completion(
+        monkeypatch,
+        client,
+        SimpleNamespace(content="答案", tool_calls=None, reasoning_content="先拆解任务"),
+    )
+    resp = client.complete([{"role": "user", "content": "hi"}])
+    assert resp.reasoning_content == "先拆解任务"
+
+
+def test_openai_compat_complete_normalises_missing_reasoning_content(monkeypatch):
+    """属性缺失与显式 null 两种形态都归一成 ``""``（DashScope / OpenAI 现状）。"""
+    client = OpenAICompatibleClient(
+        base_url="https://dashscope/v1", api_key="sk-test", model="deepseek-v4.1-flash"
+    )
+
+    _stub_completion(monkeypatch, client, SimpleNamespace(content="答案", tool_calls=None))
+    assert client.complete([{"role": "user", "content": "hi"}]).reasoning_content == ""
+
+    _stub_completion(
+        monkeypatch, client, SimpleNamespace(content="答案", tool_calls=None, reasoning_content=None)
+    )
+    assert client.complete([{"role": "user", "content": "hi"}]).reasoning_content == ""
+
+
+def test_executor_sends_previous_reasoning_content_back(settings):
+    """本 bug 的回归测试：第 2 轮请求里的 assistant 消息带上第 1 轮的思考内容。"""
+    llm = _RecordingLLM(
+        [
+            LLMResponse(content="", tool_calls=[_TOOL_CALL], reasoning_content="先想清楚写什么"),
+            LLMResponse(content="已经写好了"),
+        ]
+    )
+    rt = _runtime(settings, llm)
+    state = _state()
+    rt.executor(state)  # turn 1 -> tool call
+    rt.executor(state)  # turn 2
+
+    assert _assistants(llm.requests[1])[-1]["reasoning_content"] == "先想清楚写什么"
+
+
+def test_executor_final_answer_turn_carries_reasoning_content(settings):
+    """executor 的两处 assistant 组装（工具轮 / 最终答案轮）都回传。"""
+    llm = _RecordingLLM(
+        [
+            LLMResponse(content="", tool_calls=[_TOOL_CALL], reasoning_content="思考一"),
+            LLMResponse(content="已经写好了", reasoning_content="思考二"),
+        ]
+    )
+    rt = _runtime(settings, llm)
+    state = _state()
+    rt.executor(state)
+    rt.executor(state)
+
+    assert [a.get("reasoning_content") for a in _assistants(state["messages"])] == ["思考一", "思考二"]
+
+
+def test_executor_omits_reasoning_content_key_when_provider_has_none(settings):
+    """护栏：不回该字段的端点必须逐字节保持现状——请求里不出现这个键。"""
+    llm = _RecordingLLM(
+        [
+            LLMResponse(content="", tool_calls=[_TOOL_CALL]),
+            LLMResponse(content="已经写好了"),
+        ]
+    )
+    rt = _runtime(settings, llm)
+    state = _state()
+    rt.executor(state)
+    rt.executor(state)
+
+    assert "reasoning_content" not in _assistants(llm.requests[1])[-1]
+    assert all("reasoning_content" not in a for a in _assistants(state["messages"]))
