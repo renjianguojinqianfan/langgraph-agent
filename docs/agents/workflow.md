@@ -46,7 +46,8 @@
 - **claim 走 GitHub**：开工先 `gh issue edit <N> --add-assignee @me` 防并发会话撞车；子代理共享的父任务清单只认含本票号的条目
 - **工具链共享**：worktree 是干净检出、没有 `.venv311`——门禁一律用绝对路径 `E:\code\demo\langgraph-agent\.venv311\Scripts\python.exe`；前端可 junction 主检出 `node_modules` 免 `npm ci`（CI 仍以 `npm ci` 口径终裁）
 - **brief 纪律**：委托 prompt 要短，且显式授权「依据缺失就停下问，不许猜」——试水中两次源头截断都靠这条救回
-- **派活前按 AC 跨层数估工作量**：一条 AC 动一层，五条 AC 动五层（判定→协议→配置→事件→测试）≈ 顶到一轮子代理预算上限——#57 就这么中断的（AC1-4 完成、AC5-7 半路，WIP 靠 patch 续命）。超三层先拆再派，或按语义边界直接拆两张 PR
+- **派活前按 AC 跨层数估工作量**：一条 AC 动一层，五条 AC 动五层（判定→协议→配置→事件→测试）≈ 顶到一轮子代理预算上限——#57 就这么中断的（AC1-4 完成、AC5-7 半路）。超三层先拆再派，或按语义边界直接拆两张 PR
+- **子代理中断的 WIP 靠 scratch 分支续，不靠 patch**：撞轮次上限时树里往往是几个文件的**未提交**改动。正确起手是 `git switch -c wip/<slug>`（脏改动跟着过去）→ `git add -A` → 单 commit，再切回特性分支做干净态评审；续做时**从新 master 切分支只 `git cherry-pick` 那个单 commit**。别只导 `.patch`——未跟踪文件容易漏、patch 不带身份也不能直接跑门禁；patch 至多当备份。⚠️ 若特性分支后来 rebase 过，scratch 分支的父提交是**旧链**，直接 checkout 续做会把已被替换的提交带回来，必须先 cherry-pick 重接
 - **边界靠机械断言，不靠任务卡**：试水实证卡守不住文件面（禁了文档，agent 第二轮还是写了）；有效闸门是 push 前四断言——`git status` 空 / worktree 只有主树+本票 / 冻结区 diff 空 / 远端无此分支
 - **分离评审不是仪式**：agent 自评全绿之后，步 5 独立评审仍抓到了人漏读的真 bug（无可再挤时仍自称压缩）——不因自评绿而免
 
