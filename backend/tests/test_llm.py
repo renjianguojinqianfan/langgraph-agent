@@ -1,7 +1,9 @@
 """Tests for the LLM abstraction layer.
 
-Covers :class:`MockLLMClient` behaviour and the :func:`create_llm_client`
-factory returning the correct implementation for each provider configuration.
+Covers :class:`MockLLMClient` behaviour, the :func:`create_llm_client` factory
+returning the correct implementation for each provider configuration, and the
+``reasoning_content`` round-trip (#45) — which drives the executor node so the
+field is asserted on the request actually sent, not just on the response parsed.
 All of this runs offline (no API keys, no network).
 """
 
@@ -192,7 +194,7 @@ def _runtime(settings: Settings, llm: LLMClient) -> AgentRuntime:
         task_manager=tm,
         llm=llm,
         tools=[],
-        tool_schemas=[{"type": "function"}],
+        tool_schemas=[],
         confirm_enabled=False,
     )
 
