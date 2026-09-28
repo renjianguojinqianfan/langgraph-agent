@@ -38,6 +38,17 @@
 - 评审提出返工 → qoder 在**同一分支**修 → push → CI 复绿。
 - 复核口径分两档：**纯注释 / docs 返工** → 评审读返工 diff + 新 head CI 全绿 + `mergeable` 即可收口合并；**含代码的返工** → 回到步 5 完整口径（受影响面的门禁 + 相关测试至少重跑一轮）。
 
+## 并行实施（多 worktree，2026-09-28 #49 试水首证）
+
+单票仍走上面七步；多票同时开工时叠加以下约定：
+
+- **一票一 worktree**：`qoder --worktree <票号-短名>`（落 `.qoder/worktrees/`，已 gitignore）。AGENTS.md 在子路径自动注入，规则层不用向子代理复述
+- **claim 走 GitHub**：开工先 `gh issue edit <N> --add-assignee @me` 防并发会话撞车；子代理共享的父任务清单只认含本票号的条目
+- **工具链共享**：worktree 是干净检出、没有 `.venv311`——门禁一律用绝对路径 `E:\code\demo\langgraph-agent\.venv311\Scripts\python.exe`；前端可 junction 主检出 `node_modules` 免 `npm ci`（CI 仍以 `npm ci` 口径终裁）
+- **brief 纪律**：委托 prompt 要短，且显式授权「依据缺失就停下问，不许猜」——试水中两次源头截断都靠这条救回
+- **边界靠机械断言，不靠任务卡**：试水实证卡守不住文件面（禁了文档，agent 第二轮还是写了）；有效闸门是 push 前四断言——`git status` 空 / worktree 只有主树+本票 / 冻结区 diff 空 / 远端无此分支
+- **分离评审不是仪式**：agent 自评全绿之后，步 5 独立评审仍抓到了人漏读的真 bug（无可再挤时仍自称压缩）——不因自评绿而免
+
 ## 备注
 
 - 该分工自 2026-09-26 起为现役约定（#58 的单工具交付是此前形态，非本工作流的样板）。

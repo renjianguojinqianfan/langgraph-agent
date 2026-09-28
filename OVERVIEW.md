@@ -425,3 +425,34 @@ README 新增第 4 节，与 [`interview-agent-py`](https://github.com/renjiangu
   注：§2 里那三条迁移硬规则（依赖三包同钉 / `mode=ro` 检测 / `durability` 只经 `_invoke_kwargs`）
   是 Phase 1 就已写入的，本轮未动。
 
+
+# Issue #49 上下文压缩收敛：保护带挤压 + 角色闸门（PR #82，2026-09-28）
+
+## TL;DR
+
+固定 `keep_recent` 的截断路径在「最近 N 条自身就超预算」时**空转不收敛**：每轮只能回收上一轮的 placeholder，压缩比恒为 1，`context_compressed` 逐轮刷屏（2026-09-22 架构审计发现 5；评测台 T069 实测一轮 20 次并自崩）。#82 落地三件事：**带内挤压**（保护带超预算时从最旧一条换成便签，两档）、**收敛判据**（每步必须严格变小，否则停手，永不空转）、**角色闸门 A′**（无预览 marker 只许用于 tool 结果——全文在 trace 可回读；user/assistant 的预览是最后一份信息，永不归零；够不到预算如实报 `converged=false`）。不开新事件类型，`band_evicted` / `converged` 搭载现有 `context_compressed`，前端类型同步。
+
+## 交付状态（2026-09-28）
+
+- PR #82 已合并（merge commit `ec9996c`），master CI 全绿；#49 CLOSED(completed)
+- 改动 4 文件：`context.py` / `nodes.py` / `test_context.py` / `frontend/src/types/index.ts`；零新增配置键；冻结区零触（全 diff `_needs_confirm` 0 命中，CI guard job 绿）
+- 离线 660 passed；真实模型双场景按 `scripts/LIVE_E2E.md` 留发布前（本票是离线逻辑修复）
+
+## 关键工程决策
+
+1. **选 B（占位化挤压）不选 A（停手 + 新事件）**：A 治症状——事件不刷了但上下文依然超预算、模型继续扛 oversized context，还要多付一个事件类型 + SSE/前端/文档权威面
+2. **对标四家后细化出 A′**：codex 的 trim 只降 tool 输出（三类 output item，`_ => return None`）、永不碰 user/assistant；opencode v1 的 splitTurn/prune 与 pi 的 split-span 同样只在安全边界动手；opencode v2 是唯一的「不挤 recent、压不动就报错」流派。A′ = 与 codex 同形的角色闸门——可恢复的才许归零，不可恢复的永远留预览
+3. **`converged` 单一定义**：截断/摘要两种策略共用「结果是否进预算」，早退场景用 `tokens_in` 兜底——诚实优先于好看
+4. **便签契约统一**：evict 与挤压共用 `_note_form` 一族（全系统一种便签格式）；tool 带 `{trace_ref}#{tool_call_id}` 锚点，非 tool 如实写「无（trace 不落该条原文）」——`trace.py` 只镜像事件，指过去就是失实
+5. **票面 AC 启用预写退路**：user/assistant fixture 改判「严格递减 + 不刷屏 + 最新一条逐字 + `converged=False`」；数值 AC（≤1000）移到 tool 角色用例上保留
+
+## 并行实施首证（`docs/agents/workflow.md`「并行实施」节的来源）
+
+本票是「多 agent + worktree 隔离」工作方式的试水：五轮 agent 实施 + 独立双轴评审 + 一轮 A′ 返工，全程主检出只读。捞到并固化的四条一手证据：worktree 隔离成立且 AGENTS.md 在子路径自动注入（规则层不用复述）；claim 必须走 GitHub assign（子代理共享父任务清单会互相看见）；委托 prompt 要短且显式授权「依据不全就停下问」（两次源头截断靠这条救回）；**边界不靠任务卡、靠 push 前机械断言；分离评审不是仪式**——agent 自评全绿之后，独立评审仍抓到了人漏读的真 bug（无可再挤时仍每轮自称压缩）。
+
+## 踩坑
+
+- **指针架构晚发现**：`trace_ref` 由 nodes.py 调用方算好传入，「只动 context.py」与「便签必须带指针」先天冲突——任务卡的文件面约束动手前要先核数据流再写死
+- **opencode v1/v2 张冠李戴**：两套是相反行为（v1 = tail-turn + prune，v2 = summary-only），对标时误引过一次，以官方文档 Migration 段 + `packages/core` 源码校正
+- **越界一次**：第二轮 agent 超出批准文件面写 README/architecture.md，已 revert；由此定下「文档权威段由父侧合并门单点发号」——本章及本轮各权威段修订即该机制的首次执行
+

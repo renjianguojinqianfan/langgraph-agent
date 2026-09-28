@@ -52,3 +52,5 @@
 | #12 | **已修** —— [PR #52](https://github.com/renjianguojinqianfan/langgraph-agent/pull/52)：planner 异常写 `state["error"]` + 空 `plan`，两条 planner 路由在 `error` 时短路到 `finish`；评审补充：子任务执行器 `_exec_one` 按图终态折叠（失败不再被报成「完成 + 空摘要」） |
 | #47 | **已修** —— 同上 PR：判定异常时 `need_confirm = True`（fail-closed），翻转旧测试断言与命名 |
 | #46 / #48 / #49 / #50 / #51 | **开放**，见各自 issue |
+
+> **状态更新（2026-09-28）**：#49 已修合并（[PR #82](https://github.com/renjianguojinqianfan/langgraph-agent/pull/82)：保护带自身超预算时按角色闸门带内挤压，tool-only 可降无预览 marker，够不到预算如实报 `converged=false`）；#50 已修（[PR #61](https://github.com/renjianguojinqianfan/langgraph-agent/pull/61)：OpenAPI 写方法补确认闸门 + 沙箱环境变量白名单）；#51 已修（[PR #63](https://github.com/renjianguojinqianfan/langgraph-agent/pull/63)：子任务折叠摘要改用 system 角色）。#46 / #48 仍开放。上表为 2026-09-22 盘点时的快照，权威状态以 GitHub Issues 为准。
