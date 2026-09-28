@@ -129,16 +129,16 @@ class AgentRuntime:
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
         messages = state.get("messages", []) or []
+        # Trace pointer shared by eviction and the in-band squeeze (#49), so both
+        # write the same 留痕 contract.
+        trace_ref = (
+            str(settings.trace_path / f"{self.task_id}.jsonl") if settings.trace_enabled else ""
+        )
         # T1.4: move the bulky stuff out first (mechanical, zero LLM calls), then
         # decide whether compression is still needed — evict → compress is a
         # fixed order. Failures degrade to "no eviction" and never block the run.
         if settings.context_evict_enabled:
             try:
-                trace_ref = (
-                    str(settings.trace_path / f"{self.task_id}.jsonl")
-                    if settings.trace_enabled
-                    else ""
-                )
                 messages, evictions = evict_tool_results(
                     messages,
                     threshold_chars=settings.context_evict_threshold_chars,
@@ -167,6 +167,9 @@ class AgentRuntime:
             strategy=settings.context_compress_strategy,
             llm=llm_for_summary if settings.context_compress_strategy == "summarize" else None,
             summary_max_tokens=settings.context_summary_max_tokens,
+            trace_ref=trace_ref,
+            head_chars=settings.context_evict_head_chars,
+            tail_chars=settings.context_evict_tail_chars,
         )
         state["context_tokens"] = meta["context_tokens"]
         if meta["compressed"]:
@@ -178,6 +181,8 @@ class AgentRuntime:
                     {
                         "step_index": state.get("step_index", 0),
                         "dropped": meta["dropped"],
+                        "band_evicted": meta["band_evicted"],
+                        "converged": meta["converged"],
                         "context_tokens": meta["context_tokens"],
                         "strategy": meta["strategy"],
                     },

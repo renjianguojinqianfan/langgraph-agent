@@ -12,7 +12,10 @@ context window. This module provides:
 * :func:`compress_messages` — the single entry point the kernel calls *before*
   every LLM invocation; it either returns the messages untouched (under the
   budget) or rewrites the early history into a truncation placeholder / an LLM
-  summary while always keeping the most recent ``keep_recent`` raw messages;
+  summary, keeping the most recent ``keep_recent`` messages verbatim — unless the
+  protected band alone still outgrows the budget, in which case it is squeezed
+  oldest-first into a note of the same shape as :func:`evict_tool_results`' (its
+  marker names the role that gave way);
 * :func:`summarize_messages` — optional LLM-based summarisation of the dropped
   early messages (only used when ``strategy="summarize"`` and an LLM is given).
 
@@ -72,9 +75,167 @@ def estimate_tokens(messages: List[Dict[str, Any]]) -> int:
     return max(1, total // 4)
 
 
-# T1.4 tool-result eviction: the marker every placeholder starts with (also the
+# T1.4 tool-result eviction: the marker a tool note starts with (also part of the
 # idempotency guard — an already-evicted message is never evicted twice).
 EVICT_PLACEHOLDER_PREFIX = "[tool result 已移除"
+# A squeezed user / assistant / system message is not a tool result, so its note
+# says so (#49 review F1): the marker names what actually went away.
+MESSAGE_PLACEHOLDER_PREFIX = "[消息原文已移除"
+# Every note header, for the idempotency guards — a note is never re-wrapped.
+NOTE_PREFIXES = (EVICT_PLACEHOLDER_PREFIX, MESSAGE_PLACEHOLDER_PREFIX)
+# In-band squeeze (#49): how many trailing messages stay verbatim before the band
+# starts giving way. One, because the last reply is what the model answers against;
+# pi keeps the newest suffix verbatim and opencode v1 only protects a couple of
+# turns — neither protects the whole band. It is not a settings key: tuning the band
+# width is ``context_keep_recent``'s job, this is the squeeze's own floor.
+_BAND_PROTECT_NEWEST = 1
+
+
+def _note_ref(trace_ref: str, anchor: str) -> str:
+    """Trace pointer of a note: ``<file>#<tool_call_id>``, honest when unavailable.
+
+    Only a tool result has an anchor to point at. ``trace.py`` mirrors **events**, and
+    ``tool_result`` is the one event kind that carries a message's full text; a user /
+    assistant turn is in no event at all, so pointing such a note at the trace file
+    would promise text that was never written there (#49 review F2).
+    """
+    if not anchor:
+        return "无（trace 不落该条原文）"
+    if not trace_ref:
+        return "无（trace 未开启）"
+    return f"{trace_ref}#{anchor}"
+
+
+def _note_marker(text: str, *, prefix: str, label: str, ref: str) -> str:
+    """The single-line header every note starts with (``原文`` size included)."""
+    return f"{prefix} | {label} | 原文 {len(text)} 字符 | 留痕: {ref}]"
+
+
+def _note_preview(text: str, head_chars: int, tail_chars: int) -> str:
+    """Head/tail preview body appended under a note marker."""
+    return (
+        f"\n--- 头部预览（前 {head_chars} 字符）---\n{text[:head_chars]}\n"
+        f"--- 尾部预览（后 {tail_chars} 字符）---\n"
+        f"{text[-tail_chars:] if tail_chars > 0 else ''}"
+    )
+
+
+def _note_form(msg: Dict[str, Any], names: Dict[str, str]) -> Tuple[str, str, str]:
+    """Note marker prefix + label + trace anchor for one message.
+
+    ``tool`` results keep the T1.4 contract verbatim (its marker, tool name,
+    ``tool_call_id`` pointer). Other roles have no marker claiming a tool result and
+    no per-call anchor in the trace, so their note just says what it folded away
+    (``消息: <role>``).
+    """
+    role = str(msg.get("role") or "unknown")
+    if role == "tool":
+        call_id = str(msg.get("tool_call_id") or "?")
+        return EVICT_PLACEHOLDER_PREFIX, f"工具: {names.get(call_id, '?')}", call_id
+    return MESSAGE_PLACEHOLDER_PREFIX, f"消息: {role}", ""
+
+
+def _squeeze_content(
+    content: Any,
+    *,
+    prefix: str,
+    label: str,
+    anchor: str,
+    trace_ref: str,
+    head_chars: int,
+    tail_chars: int,
+    with_preview: bool,
+) -> Optional[str]:
+    """Shrink one message's content by a notch, or ``None`` when it cannot shrink.
+
+    Notches: full text → note with head/tail preview → marker-only note. A note is
+    only ever demoted to its own header, never re-wrapped, so notes cannot nest and
+    re-running the pass is a no-op (``compress_messages`` runs before every LLM call).
+    """
+    if not isinstance(content, str) or not content:
+        return None  # non-text / empty content is left alone (same as T1.4)
+    if content.startswith(NOTE_PREFIXES):
+        if with_preview:
+            return None  # already a note at this notch: idempotent skip
+        header, sep, rest = content.partition("\n")
+        if not sep or not rest:
+            return None  # marker-only already: no notch left
+        return header
+    marker = _note_marker(content, prefix=prefix, label=label, ref=_note_ref(trace_ref, anchor))
+    if with_preview and int(head_chars) + int(tail_chars) < len(content):
+        candidate = marker + _note_preview(content, head_chars, tail_chars)
+    else:
+        candidate = marker  # preview would swallow the saving: go marker-only
+    # Only a strictly smaller content is accepted — the squeeze can never spin.
+    return candidate if len(candidate) < len(content) else None
+
+
+def _squeeze_band(
+    result: List[Dict[str, Any]],
+    budget: int,
+    *,
+    names: Dict[str, str],
+    head_chars: int,
+    tail_chars: int,
+    trace_ref: str,
+) -> int:
+    """Squeeze the band ``keep_recent`` protects when that band alone outgrows the budget.
+
+    Mutates ``result`` (index 0 is the truncation placeholder, everything after it
+    is the band). Runs oldest-first so the newest messages survive verbatim. The
+    budget is the only threshold: the first layout that fits ends the squeeze, and a
+    message that cannot shrink strictly is skipped, so the pass is bounded by the band
+    size and can never spin.
+
+    The last notch is role-gated (#49 review): only ``tool`` results may be demoted to
+    a bare marker, newest-first, because their full text still sits in the trace
+    behind the ``#tool_call_id`` anchor. A user/assistant preview is the last copy
+    that exists — no event carries their text — so their notes keep their preview.
+    When the tool candidates run out and the budget is still out of reach, the squeeze
+    stops and :func:`compress_messages` reports ``converged=False``.
+
+    ``names`` is the ``tool_call_id`` → tool name map of the **whole** history, not
+    just the band: truncation drops the oldest messages, and a band tool result
+    whose assistant call just went out of the band still has to be named in its
+    note (T1.4 contract), not degraded to ``?``.
+
+    Returns how many band messages gave way (0 = nothing squeezed). A message
+    demoted at both notches counts once.
+    """
+    if len(result) <= 1 or estimate_tokens(result) <= int(budget):
+        return 0
+    # Pass 1 keeps a preview and stops short of the newest; pass 2 is the last notch
+    # and only ever touches tool results, so the newest message gives way last.
+    newest = max(1, len(result) - _BAND_PROTECT_NEWEST)
+    squeezed_idx: set[int] = set()
+    fits = False
+    passes = ((True, range(1, newest)), (False, range(len(result) - 1, 0, -1)))
+    for with_preview, indices in passes:
+        for i in indices:
+            if not with_preview and result[i].get("role") != "tool":
+                continue  # A′: a non-tool note never loses its preview
+            prefix, label, anchor = _note_form(result[i], names)
+            squeezed = _squeeze_content(
+                result[i].get("content"),
+                prefix=prefix,
+                label=label,
+                anchor=anchor,
+                trace_ref=trace_ref,
+                head_chars=head_chars,
+                tail_chars=tail_chars,
+                with_preview=with_preview,
+            )
+            if squeezed is None:
+                continue
+            # role / tool_call_id / tool_calls ride on untouched — pairings survive.
+            result[i] = {**result[i], "content": squeezed}
+            squeezed_idx.add(i)
+            if estimate_tokens(result) <= int(budget):
+                fits = True
+                break
+        if fits:
+            break
+    return len(squeezed_idx)
 
 
 def _tool_names_by_call_id(messages: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -133,19 +294,19 @@ def evict_tool_results(
         content = msg.get("content")
         if not isinstance(content, str) or len(content) <= int(threshold_chars):
             continue
-        if content.startswith(EVICT_PLACEHOLDER_PREFIX):
+        if content.startswith(NOTE_PREFIXES):
             continue  # idempotent: every LLM call re-runs this pass
         if int(head_chars) + int(tail_chars) >= len(content):
             continue  # degenerate preview: no space would be saved
         call_id = str(msg.get("tool_call_id") or "?")
         name = names.get(call_id, "?")
-        ref = f"{trace_ref}#{call_id}" if trace_ref else "无（trace 未开启）"
-        placeholder = (
-            f"{EVICT_PLACEHOLDER_PREFIX} | 工具: {name} | 原文 {len(content)} 字符 | 留痕: {ref}]\n"
-            f"--- 头部预览（前 {head_chars} 字符）---\n{content[:head_chars]}\n"
-            f"--- 尾部预览（后 {tail_chars} 字符）---\n"
-            f"{content[-tail_chars:] if tail_chars > 0 else ''}"
+        placeholder = _note_marker(
+            content,
+            prefix=EVICT_PLACEHOLDER_PREFIX,
+            label=f"工具: {name}",
+            ref=_note_ref(trace_ref, call_id),
         )
+        placeholder += _note_preview(content, head_chars, tail_chars)
         new_msg = dict(msg)
         new_msg["content"] = placeholder
         out[i] = new_msg  # fresh dict; untouched messages keep their identity
@@ -208,9 +369,29 @@ def summarize_messages(
 def _compress_truncate(
     messages: List[Dict[str, Any]],
     keep_recent: int,
+    budget: int,
     meta_base: Meta,
+    *,
+    head_chars: int = 800,
+    tail_chars: int = 400,
+    trace_ref: str = "",
 ) -> Tuple[List[Dict[str, Any]], Meta]:
-    """Drop the early messages and insert a deterministic placeholder."""
+    """Drop the early messages, insert a deterministic placeholder, then squeeze the band.
+
+    ``keep_recent`` is fixed, so a band of oversized messages can outgrow the budget
+    all by itself (#49): truncation then just recycles its own placeholder and the
+    compression ratio stays at 1 forever. :func:`_squeeze_band` gives the band way
+    under exactly that condition, oldest-first, as far as it lawfully can — the budget
+    is reached when the notes can carry it, and reported as ``converged=False`` when
+    they cannot.
+
+    Convergence guard (#49): on the token trigger, a round that leaves the context no
+    smaller than it was is not a compression. It reports ``compressed=False``, leaves
+    the notes/placeholder bookkeeping at zero and returns the input list untouched —
+    that is what stops the per-round ``context_compressed`` flood once the band has
+    nothing left to give. The count trigger keeps truncating unconditionally (bounding
+    the message count is its job, token size is not).
+    """
     n = len(messages)
     keep = max(_MIN_KEEP_RECENT, min(int(keep_recent), n))
     if keep >= n:
@@ -224,10 +405,26 @@ def _compress_truncate(
         "content": f"{PLACEHOLDER_PREFIX}{dropped}{PLACEHOLDER_SUFFIX}",
     }
     result = [placeholder, *keep_msgs]
+    band_evicted = _squeeze_band(
+        result,
+        budget,
+        names=_tool_names_by_call_id(messages),
+        head_chars=head_chars,
+        tail_chars=tail_chars,
+        trace_ref=trace_ref,
+    )
+    tokens = estimate_tokens(result)
+    if meta_base["trigger"] == "token" and tokens >= int(meta_base["context_tokens"]):
+        # Nothing strictly smaller (band gave way nowhere, truncation only recycled the
+        # previous placeholder): no rewrite to report and no event to flood the stream.
+        meta = dict(meta_base)
+        meta["band_evicted"] = 0
+        return messages, meta
     meta = dict(meta_base)
     meta["compressed"] = True
     meta["dropped"] = dropped
-    meta["context_tokens"] = estimate_tokens(result)
+    meta["band_evicted"] = band_evicted
+    meta["context_tokens"] = tokens
     return result, meta
 
 
@@ -264,26 +461,43 @@ def compress_messages(
     strategy: str = "truncate",
     llm: Optional[Any] = None,
     summary_max_tokens: int = 300,
+    *,
+    trace_ref: str = "",
+    head_chars: int = 800,
+    tail_chars: int = 400,
 ) -> Tuple[List[Dict[str, Any]], Meta]:
     """Compress ``messages`` when they exceed the configured thresholds.
 
     Returns ``(messages, meta)`` where ``meta`` carries:
 
-    * ``compressed`` — whether a rewrite happened;
+    * ``compressed`` — whether the context actually got smaller (a round that saves
+      nothing reports ``False``, the convergence guard of #49);
     * ``dropped`` — number of messages removed;
+    * ``band_evicted`` — number of still-protected messages squeezed to a note
+      (only the ``truncate`` strategy squeezes, so ``summarize`` reports ``0``);
+    * ``converged`` — whether the returned context fits ``budget``. ``False`` means the
+      squeeze ran out of what it may lawfully give way (see the role gate in
+      :func:`_squeeze_band`) and the context is still oversized;
     * ``context_tokens`` — estimate of the returned list;
     * ``strategy`` — the effective strategy (``summarize`` falls back to
       ``truncate`` when no LLM is available);
     * ``trigger`` — ``"token"`` | ``"count"`` | ``"none"``.
 
-    Under the budget the input list is returned unchanged (identity).
+    Under the budget the input list is returned unchanged (identity) — as it is on the
+    token trigger when a compression round would leave the context no smaller (see
+    ``compressed``).
     """
+    tokens_in = estimate_tokens(messages)
     meta_base: Meta = {
         "compressed": False,
         "dropped": 0,
-        "context_tokens": estimate_tokens(messages),
+        "band_evicted": 0,
+        "context_tokens": tokens_in,
         "strategy": "truncate",
         "trigger": "none",
+        # Whether the context we hand back fits the budget. This default is honest for
+        # the two early returns below, which only fire when it already does.
+        "converged": tokens_in <= int(budget),
     }
     if not messages:
         return messages, meta_base
@@ -297,7 +511,21 @@ def compress_messages(
 
     if strategy == "summarize" and llm is not None:
         meta_base["strategy"] = "summarize"
-        return _compress_summarize(messages, keep_recent, llm, summary_max_tokens, meta_base)
-
-    meta_base["strategy"] = "truncate"
-    return _compress_truncate(messages, keep_recent, meta_base)
+        out, meta = _compress_summarize(
+            messages, keep_recent, llm, summary_max_tokens, meta_base
+        )
+    else:
+        meta_base["strategy"] = "truncate"
+        out, meta = _compress_truncate(
+            messages,
+            keep_recent,
+            budget,
+            meta_base,
+            head_chars=head_chars,
+            tail_chars=tail_chars,
+            trace_ref=trace_ref,
+        )
+    # One definition, both strategies: converged means the result fits the budget,
+    # whether or not this round managed to rewrite anything.
+    meta["converged"] = meta["context_tokens"] <= int(budget)
+    return out, meta
