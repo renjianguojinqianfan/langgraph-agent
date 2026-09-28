@@ -99,6 +99,9 @@ def classify_annotations(annotations: Any) -> str:
 
     ``is True`` / ``is False`` on purpose: a dirty ``0`` / ``"yes"`` must not be
     read as a settled bool.
+
+    This is the **gate's** view (whether to bother a human). Retry policy does not
+    read it — see :func:`_read_only_claim`.
     """
     if not isinstance(annotations, dict):
         return DANGER_UNKNOWN
@@ -109,6 +112,18 @@ def classify_annotations(annotations: Any) -> str:
     if destructive is False or read_only is True:
         return DANGER_SAFE
     return DANGER_UNKNOWN
+
+
+def _read_only_claim(annotations: Any) -> bool:
+    """Whether the server positively says this tool is read-only.
+
+    Retry policy keys off this rather than off :func:`classify_annotations`,
+    because the two questions are different: ``destructiveHint=False`` is the
+    protocol's words for an **append-only write** — the gate may skip the human
+    for it, but retrying it would repeat a side effect. README's
+    「写类工具 ``retryable=False``」 is the invariant being protected here.
+    """
+    return isinstance(annotations, dict) and annotations.get("readOnlyHint") is True
 
 
 class McpTool(BaseTool):
@@ -140,20 +155,21 @@ class McpTool(BaseTool):
         #: nothing — is NOT read as safe.
         self.danger_signal: str = classify_annotations(annotations)
 
-        if self.danger_signal != DANGER_SAFE:
-            # Dangerous or unreported: after confirmation execute exactly once —
-            # never retry (would repeat side effects). The circuit breaker is
-            # preserved so consecutive failures still open the tool circuit
-            # (PRD 1.5).
-            self.retryable = False
-            self.max_retries = 0
-            self.circuit_breaker = True
-        else:
+        if _read_only_claim(annotations):
             # Read-only by the server's own words: keep the BaseTool defaults
             # (retry + breaker) so transient network failures are retried by
             # the existing executor.
             self.retryable = True
             self.max_retries = None
+            self.circuit_breaker = True
+        else:
+            # Dangerous, unreported, **or an append-only write**
+            # (``destructiveHint=False``): after confirmation execute exactly
+            # once — never retry (would repeat side effects). The circuit breaker
+            # is preserved so consecutive failures still open the tool circuit
+            # (PRD 1.5).
+            self.retryable = False
+            self.max_retries = 0
             self.circuit_breaker = True
 
     # ── schema / judgement helpers ──

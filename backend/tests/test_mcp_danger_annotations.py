@@ -199,19 +199,29 @@ def test_verb_heuristic_table_is_gone():
     assert not hasattr(McpTool, "_write_like")
 
 
-# ── 韧性旋钮跟着自报走（同一判定的第二处消费者）─────────────────────────────
-def test_retry_knobs_follow_the_self_report():
-    """safe 保留重试；dangerous / unknown 关重试——「确认过一次再重试副作用」不能复发。"""
+# ── 韧性旋钮跟「只读自报」走，不跟闸门判定走（#57 评审）──────────────────────
+def test_retry_knobs_follow_the_read_only_claim_not_the_gate():
+    """免问与重试是两件事。
+
+    `destructiveHint=False` 在协议里的意思是「只做追加式写入」——闸门可以不为它
+    打扰人，但它仍然是写类工具：重试会把副作用做第二遍，所以 `retryable=False`。
+    旧实现按 `danger_signal != SAFE` 分重试，等于让一个自报标注越到安全属性那一层，
+    与 README「写类工具 `retryable=False`」直接冲突。
+    """
     s = _settings(Path("."))
-    safe = _tool(s, annotations={"readOnlyHint": True})
+    read_only = _tool(s, annotations={"readOnlyHint": True})
+    append_only = _tool(s, annotations={"destructiveHint": False})
     dangerous = _tool(s, annotations={"destructiveHint": True})
     unknown = _tool(s, annotations=None)
 
-    assert (safe.retryable, safe.max_retries) == (True, None)
+    assert (read_only.retryable, read_only.max_retries) == (True, None)
+    assert (append_only.retryable, append_only.max_retries) == (False, 0)
     assert (dangerous.retryable, dangerous.max_retries) == (False, 0)
     assert (unknown.retryable, unknown.max_retries) == (False, 0)
+    # 追加式写入在闸门这一侧仍然是 SAFE（免问），被改的只有重试。
+    assert append_only.danger_signal == "safe"
     # 熔断面不动（ADR-0003 的按运行记账语义与 resilience.py 一样不碰）。
-    assert (safe.circuit_breaker, dangerous.circuit_breaker) == (True, True)
+    assert (read_only.circuit_breaker, append_only.circuit_breaker) == (True, True)
 
 
 # ── 闸门侧端到端：未自报的 MCP 工具必须停在闸门前 ─────────────────────────────
