@@ -445,6 +445,9 @@ class TaskManager:
                 input_schema=item.get("input_schema") or {},
                 manager=manager,
                 settings=settings,
+                # #57: the server's own danger report; a missing key here would
+                # silently turn every tool into "unknown" (= always ask).
+                annotations=item.get("annotations") or {},
             )
             if tool.name in existing:
                 logger.warning(

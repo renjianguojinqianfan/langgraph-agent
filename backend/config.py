@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     mcp_servers: str = "[]"  # JSON array: [{name, command, args[], env{}, enabled, cwd?, transport?, url?}]
     mcp_timeout_sec: float = 30.0  # single call_tool timeout
     mcp_connect_timeout_sec: float = 15.0  # initialize + list_tools timeout per server
-    mcp_force_confirm: str = "[]"  # JSON array of mcp__{server}__{tool} names that always confirm
+    mcp_force_confirm: str = "[]"  # JSON array: exact names, `mcp__{server}__*`, or `!`-prefixed to mute
 
     # ── Git tools (P2 item 2) ──
     git_enabled: bool = True  # master switch (false -> zero Git tools)
@@ -252,7 +252,8 @@ class Settings(BaseSettings):
 
     @property
     def mcp_force_confirm_list(self) -> List[str]:
-        """``mcp_force_confirm`` as a parsed list of tool full names."""
+        """``mcp_force_confirm`` as entries of ``mcp__{server}__{tool}`` / ``mcp__{server}__*``,
+        each optionally ``!``-prefixed to mean "never confirm" (#57 AC3)."""
         return [str(x) for x in self._parse_json_list(self.mcp_force_confirm, [])]
 
     @property

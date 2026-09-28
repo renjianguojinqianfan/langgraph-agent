@@ -356,8 +356,9 @@ class McpClientManager:
     def connect_all(self) -> List[Dict[str, Any]]:
         """Connect every enabled server and return the discovered tool list.
 
-        Each tool dict has ``{server, name, description, input_schema}`` ready
-        for :class:`~backend.core.tools.mcp_tool.McpTool` construction. A
+        Each tool dict has ``{server, name, description, input_schema,
+        annotations}`` ready for :class:`~backend.core.tools.mcp_tool.McpTool`
+        construction (``annotations`` is ``{}`` when the server reports none). A
         failing server is recorded as ``error`` and skipped (startup continues).
         """
         if not self._settings.mcp_enabled:
@@ -427,6 +428,11 @@ class McpClientManager:
                             "name": str(t.get("name") or ""),
                             "description": str(t.get("description") or ""),
                             "input_schema": t.get("inputSchema") or _EMPTY_SCHEMA,
+                            # Issue #57: the tool annotations (destructiveHint /
+                            # readOnlyHint) are the danger judgement's only data
+                            # source. They used to be dropped here, which left
+                            # the wrapper nothing to read but the tool's name.
+                            "annotations": t.get("annotations") or {},
                         }
                     )
         return tools

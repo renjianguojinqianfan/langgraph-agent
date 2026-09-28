@@ -316,6 +316,13 @@ if tool and getattr(tool, "needs_per_call_confirm", False):
 > 抛异常时置 `need_confirm = True`（无法判定即要求确认），不再退回静态 `requires_confirm` 放行。
 > 理由：确认闸门是安全边界，判定失败不得静默绕过（架构审计发现 3）。§9.3 同步修正。
 
+> **2026-09-29 修正（Issue #57）**：上面引用的注释已过期——per-call 判定不再走「write-like 启发式」，
+> 改读 MCP 协议自报的 `destructiveHint` / `readOnlyHint`，两个 hint 都没给即 **必问**（fail-closed 方向
+> 不变，只是判据从猜测换成自报）；`mcp_force_confirm` 从「全名强制必问」扩成精确名 / `mcp__{server}__*`
+> 通覆 / `!` 前缀取反三种形状。上面那段历史代码块按交付时点原样保留。**另**：重试策略
+> （`retryable` / `max_retries`）自本票起按 `readOnlyHint` 判，**不**跟闸门结论走——
+> `destructiveHint=False` 是「追加式写入」，可以免问，但重试会把副作用做第二遍。
+
 - `need_confirm=True` 后完全走现有 `_needs_confirm → human_confirm → tool` 流程；`_needs_confirm` 重算逻辑（P0 已修死循环）**不得改动**。
 - Git 工具确认**不需要** per-call 分支：`GitCommitTool`/`GitCheckoutTool`/`GitInitTool` 用静态 `requires_confirm=True`（与 `CodeExecTool` 同款，executor 现有第一行分支天然覆盖）。
 - 黑名单拒绝不经过确认流程：`GitToolRunner` 在校验阶段直接返回 `success=False + 明确错误`（§4.3）。
@@ -566,7 +573,7 @@ graph TD
 
 1. **配置命名与解析**：`mcp_*` / `git_*` 前缀；`mcp_servers`/`mcp_force_confirm` 是 JSON **字符串**字段，经 `Settings._parse_json_list` 派生为 `mcp_servers_list` / `mcp_force_confirm_list`；路径统一走派生属性 `git_repo_path`（相对 PROJECT_ROOT 解析）。业务代码禁止硬编码，一律 `get_settings()`。
 2. **MCP 工具命名**：`mcp__{server}__{tool}`；`sanitize` 把非 `[A-Za-z0-9_]` 替换为 `_`；跨 server 冲突靠命名天然避免；与内置工具冲突 → **保留先注册者 + warning**（复用 OpenAPI 追加模式，`registry.py` 零改动）。
-3. **MCP 确认策略**：`McpTool._needs_confirm(args)` = 方法名/描述写类启发式（`write/create/delete/update/edit/insert/remove/send/push/upload/execute/add/set/put/post/patch/modify/rename/move/copy/append/clear/reset/format/drop/truncate` 等，命中即写类）+ `mcp_force_confirm_list` 全名覆盖（强制 True）；executor 用 `needs_per_call_confirm` 标记触发 per-call 分支（§4.1）；`_needs_confirm` 判定异常 **fail-closed**：warning 且 `need_confirm=True`（Issue #47；2026-09-22 修正，原为「只 warning 不阻塞执行」）。
+3. **MCP 确认策略**：`McpTool._needs_confirm(args)` = 读 server 自报 annotations 的三态判定（`destructiveHint=True` → 必问；`readOnlyHint=True` 或 `destructiveHint=False` → 免问；两个 hint 都没给、或值不是干净 bool → **必问**）+ `mcp_force_confirm_list` 覆盖（精确名 / `mcp__{server}__*` 通覆 / `!` 前缀取反，精确名压通覆）；executor 用 `needs_per_call_confirm` 标记触发 per-call 分支（§4.1）；`_needs_confirm` 判定异常 **fail-closed**：warning 且 `need_confirm=True`（Issue #47；2026-09-22 修正，原为「只 warning 不阻塞执行」）。（Issue #57；2026-09-29 修正：原「方法名/描述写类启发式（`write/create/delete/…`）」**整表删除**，判定改读协议自报标注——自报标注只决定要不要打扰人，不作为安全边界，真边界在子代理收窄与隔离那一侧。）
 4. **Git 确认与黑名单**：`git_commit`/`git_checkout`/`git_init` 静态 `requires_confirm=True`；危险命令/参数**一律拒绝**（不放行确认）：`push/pull/fetch/clone/remote/reset/clean/rebase/merge/cherry-pick/revert/rm/branch -D/tag -d` 及 `--force/-f/--hard/-D/-fdx`；拒绝以 `-` 开头的 branch 参数（选项注入防护）；commit message 作为单个 `-m` argv 传递（字面量，天然无注入）。
 5. **Git 正交**：Git 工具只经 `GitToolRunner`（参数化 subprocess、`shell=False`、`-C repo`），**绝不**走 `code_exec`/`sandbox.run_code`；工作目录仅在 `git_repo_path` 内，`path` 参数 resolve 后必须 `is_relative_to`，越界拒绝。
 6. **生命周期**：`McpClientManager` 在 `TaskManager.__init__` 连接、`TaskManager.shutdown()` 幂等 cleanup、`main.py` lifespan 退出调用；重复构造 `TaskManager` 前先 `shutdown()` 旧实例（防子进程泄漏）；单 server 连接失败仅 warning + `status=error`，不中断启动。
