@@ -246,12 +246,18 @@ def test_summarize_messages_direct():
 
 
 # ── in-band squeeze (#49: the protected band itself outgrows the budget) ──
-def test_ticket_49_repro_converges_below_budget():
-    """票面复现：预算 1000 / keep_recent 10 / 12 条 4000 字符消息，跑三轮。
+def test_ticket_49_repro_shrinks_then_stalls_without_flood():
+    """票面复现（评审裁定 A′ 后的读法）：预算 1000 / keep_recent 10 / 12 条 4000 字符。
 
-    固定 keep_recent 的旧实现每轮只能丢掉上一轮的 placeholder、再放一条新的，
-    压缩比恒为 1（context_tokens 恒 10015），永远压不到预算以下，于是每轮都发一
-    次 ``context_compressed``。修后必须收敛到预算以下，且收敛之后不再空转。
+    固定 keep_recent 的旧实现每轮只能丢掉上一轮的 placeholder、再放一条新的，压缩比恒
+    为 1（context_tokens 恒 10015），永远压不到预算以下，于是每轮都发一次
+    ``context_compressed``。
+
+    A′ 把 marker-only 那一档只留给 tool 结果（全文在 trace 里，锚点读得回），user/assistant
+    的预览是它们的最后一份信息（没有任何事件承载原文）。所以这组 user/assistant fixture
+    启用 PR 取舍①预写的退路：不再要求「压进预算」，改要求四件事——真变小、到位后不再
+    自称压缩、最新一条原文没被削掉、以及如实报 ``converged=False``。数值 AC 留在
+    :func:`test_tool_only_band_reaches_the_budget_at_marker_only` 那条 tool 角色用例上。
     """
     msgs = [
         _msg("user" if i % 2 == 0 else "assistant", "x" * 4000) for i in range(12)
@@ -266,24 +272,74 @@ def test_ticket_49_repro_converges_below_budget():
             {
                 "tokens": meta["context_tokens"],
                 "compressed": meta["compressed"],
-                "dropped": meta["dropped"],
                 "band_evicted": meta.get("band_evicted", 0),
+                "converged": meta.get("converged"),
             }
         )
 
-    # 票面 AC：压到预算以下（旧实现恒 10015，这一条先红，红的就是症状本身）。
-    assert rounds[-1]["tokens"] <= 1000, rounds
-    # 收敛：每一轮真正改写消息的，token 都必须严格变小（不收敛就是恒定的旧症状）。
-    for i in range(1, len(rounds)):
-        if rounds[i]["compressed"]:
-            assert rounds[i]["tokens"] < rounds[i - 1]["tokens"], rounds
-    assert rounds[0]["tokens"] < 12012
+    # (a) 压缩比 <1：真正改写的那一轮必须严格变小（旧实现恒 10015，这一条先红）。
+    assert rounds[0]["tokens"] < 12012, rounds
     assert rounds[0]["band_evicted"] > 0  # 保护带被挤过，这才有了增量
-    # 事件不再刷屏：一旦到位，后续轮次不得再自称压缩过。
+    # (b) 事件不刷屏：到位之后不得再每轮自称压缩过。
     assert [r["compressed"] for r in rounds] == [True, False, False], rounds
+    # (c) 不可恢复的内容不归零：最新一条保持逐字。
+    assert current[-1]["content"] == "x" * 4000, current[-1]
+    # (d) 够不到预算要如实说，不许用「已压缩」糊过去。
+    assert rounds[-1]["converged"] is False, rounds
+    assert rounds[-1]["tokens"] > 1000, rounds
 
 
 TRACE_REF = "/tmp/traces/t49.jsonl"
+
+
+def test_tool_only_band_reaches_the_budget_at_marker_only():
+    """A′ 的正面侧：全文在 trace 里的 tool 结果可以一路降到 marker-only，真收敛。
+
+    与票面复现同一量级，差别只在角色。tool 便签带 ``{trace_ref}#{tool_call_id}`` 锚点，
+    零预览不丢信息，所以数值 AC（压进预算）留在这条上，而不是硬塞给 user/assistant。
+    """
+    msgs: List[Dict[str, Any]] = []
+    for i in range(12):
+        msgs.append(_assistant_call(f"c{i}", "read"))
+        msgs.append(_tool("x" * 4000, f"c{i}"))
+
+    out, meta = compress_messages(msgs, budget=1000, keep_recent=10, trace_ref=TRACE_REF)
+
+    assert meta["compressed"] is True
+    assert meta["context_tokens"] <= 1000, meta
+    assert meta["converged"] is True
+    assert meta["band_evicted"] > 0
+    # 挤过的都还是可回读的便签，不是裸删除。
+    for note in _notes(out):
+        assert f"留痕: {TRACE_REF}#" in note, note
+
+
+def test_last_notch_demotes_tool_only_and_reports_not_converged():
+    """A′ 的角色闸门：最后 notch 只准削 tool 结果，user 的预览是它最后一份信息。
+
+    带内既有 4000 字符的 user 消息又有 tool 结果，预算小到不可能满足。tool 降到
+    marker-only 之后必须停手——不许把 user 削成裸 marker，也不许每轮自称压缩。
+    """
+    msgs: List[Dict[str, Any]] = [
+        _msg("system", "old" * 40),  # 被截到带外
+        _assistant_call("c0", "read"),
+        _tool("t" * 4000, "c0"),
+        _msg("user", "v" * 4000),
+        _msg("assistant", "w" * 4000),  # 最新一条，逐字
+    ]
+
+    out, meta = compress_messages(msgs, budget=100, keep_recent=4, trace_ref=TRACE_REF)
+
+    assert meta["converged"] is False, meta
+    user_notes = [m["content"] for m in out if m["role"] == "user" and _notes([m])]
+    tool_notes = [m["content"] for m in out if m["role"] == "tool" and _notes([m])]
+    assert user_notes and all("头部预览" in c for c in user_notes), out  # 预览不归零
+    assert tool_notes and all("头部预览" not in c for c in tool_notes), out  # tool 降到底
+    assert out[-1] is msgs[-1]  # 最新一条连对象都没换
+    # 停手不空转：同一输入再来一轮，不再自称压缩、原样返回。
+    again, meta2 = compress_messages(out, budget=100, keep_recent=4, trace_ref=TRACE_REF)
+    assert meta2["compressed"] is False, meta2
+    assert again is out
 
 
 def test_band_squeeze_from_oldest_keeps_the_newest_verbatim():
@@ -445,16 +501,15 @@ def test_band_squeeze_is_idempotent_across_rounds():
 
     out, meta = compress_messages(msgs, budget=1000, keep_recent=5, trace_ref=TRACE_REF)
 
-    assert meta["context_tokens"] <= 1000
+    # A′ 之后这组纯 user/assistant 的带压不进预算（预览不许归零），但它照样在变小。
+    assert meta["context_tokens"] < estimate_tokens(msgs)
     # 带 = msgs[1:]，第一条就是上轮留下的 marker-only → 没 notch 可走，对象都不变。
     assert out[1] is marker_only
     assert _note_markers(out[1]["content"]) == 1
     for content in _notes(out):
         assert _note_markers(content) == 1  # 绝不打第二层便签
-    # 没被挤的仍是原对象（身份约定与 evict_tool_results 一致）。
-    assert out[-1] is not msgs[-1]  # 最新这条被降到了 marker-only（见卡 6 的读法）
-    assert out[-1]["role"] == "assistant"
-    assert out[-1]["content"].startswith(MESSAGE_PLACEHOLDER_PREFIX)
+    # A′：最新一条是 assistant，最后 notch 不许碰它（预览是它最后一份信息）——连对象都是同一个。
+    assert out[-1] is msgs[-1]
 
 
 def test_band_squeeze_stops_when_nothing_left_to_squeeze():
@@ -576,7 +631,10 @@ def test_compressed_event_carries_band_evicted(tmp_path: Path):
     assert len(compressed) == 1, events
     assert compressed[0]["data"]["band_evicted"] > 0
     assert compressed[0]["data"]["dropped"] == 2  # 截断计数如实报，没被挤压污染
-    assert compressed[0]["data"]["context_tokens"] <= 1000
-    assert state["context_tokens"] <= 1000
+    # A′ 接线：收敛标志随同一个事件出，不开新事件类型。这组 fixture 是 user/assistant，
+    # 预览不许归零，所以够不到预算——如实报 False。
+    assert compressed[0]["data"]["converged"] is False
+    assert compressed[0]["data"]["context_tokens"] < 12012
+    assert state["context_tokens"] < 12012
     # 没有新事件类型混进来。
     assert {e["type"] for e in events} == {"context_compressed"}
