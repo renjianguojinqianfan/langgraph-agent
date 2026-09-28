@@ -148,8 +148,15 @@ def test_result_json_contract(tmp_path: Path) -> None:
     assert result["steps"] >= 1
 
 
-# ── confirmation-gate bypass ─────────────────────────────────────────────────
+# ── confirmation-gate behaviour under --auto-approve ─────────────────────────
 def test_auto_approve_bypasses_confirm_gate(tmp_path: Path) -> None:
+    """#57 AC6：不 parking，但判定照算、闸门照进，终态是 ``auto_approved``。
+
+    改名前这条只断言 COMPLETED ——「整块旁路」时代那就足够。旁路换成自动放行之后，
+    「跑完了」不再是证据（判定被跳开也能跑完）；证据在 trace 里：``tool_call`` 带
+    need_confirm（判定算了）、``human_confirm_resolved`` 带 auto_approved（闸门进了），
+    而 ``human_confirm_required`` 一条都不许有（没人被问，也不许发假 ask）。
+    """
     work = tmp_path / "work"
     settings = _settings(tmp_path, work)
     result = _run_once(
@@ -159,6 +166,24 @@ def test_auto_approve_bypasses_confirm_gate(tmp_path: Path) -> None:
     )
     assert result["status"] == "COMPLETED"
     assert result["exit_code"] == EXIT_COMPLETED
+
+    events = [
+        json.loads(line)
+        for line in Path(str(result["trace_path"])).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    calls = [e for e in events if e["type"] == "tool_call"]
+    resolved = [e for e in events if e["type"] == "human_confirm_resolved"]
+    asked = [e for e in events if e["type"] == "human_confirm_required"]
+    # 判定确实算了（记录体带 need_confirm），闸门确实进了。
+    assert calls and calls[-1]["data"]["need_confirm"] is True, "评测态把判定整块跳开了"
+    assert len(resolved) == 1
+    assert resolved[0]["data"]["outcome"] == "auto_approved"
+    # 「向一个人发问」这件事没发生——真人不在，不许发假 ask 事件。
+    assert asked == []
+    # 自动放行确实放行：这一次调用跑了，且不是被跳过。
+    results = [e for e in events if e["type"] == "tool_result"]
+    assert results and results[-1]["data"]["status"] == "success"
 
 
 def test_gate_parks_without_auto_approve(tmp_path: Path) -> None:

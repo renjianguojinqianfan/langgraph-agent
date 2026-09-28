@@ -22,6 +22,7 @@ export interface ToolCallRecord {
   error?: string | null;
   need_confirm: boolean;
   confirmed: boolean;
+  confirm_outcome?: string; // #57: approved | denied | timed_out | aborted | auto_approved（"" = 未进闸门）
   circuit_open?: boolean; // P0: short-circuited by the circuit breaker
   retries?: number; // P0: retries performed by the tool executor
 }
@@ -178,6 +179,7 @@ export type SSEventType =
   | "tool_circuit_open" // P0: {tool_name, cooldown_sec}
   | "context_compressed" // P0: {step_index, dropped, band_evicted, converged, context_tokens, strategy}
   | "human_confirm_required"
+  | "human_confirm_resolved" // #57: {tool_call_id, tool_name, outcome, input}（outcome 见 ToolCallRecord.confirm_outcome）
   | "artifact_created"
   | "final_answer"
   | "task_completed"

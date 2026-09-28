@@ -11,6 +11,7 @@ const EVENT_TYPES: SSEventType[] = [
   "tool_circuit_open",
   "context_compressed",
   "human_confirm_required",
+  "human_confirm_resolved",
   "artifact_created",
   "final_answer",
   "task_completed",

@@ -9,8 +9,9 @@ declared in :mod:`backend.core.agent.graph`.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, cast
 
 from ...config import get_settings
 from ...utils.logging import get_logger
@@ -22,6 +23,34 @@ from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
 from .state import AgentState
 
 logger = get_logger("agent.runtime")
+
+# ── confirmation terminal states (issue #57 AC5) ─────────────────────────────
+#
+# Before #57 the gate had ONE failure state: ``consume_confirm`` answered False
+# and that meant「未批准即拒绝」, so an explicit "no", a human who never answered
+# and a stop() that woke the wait all folded into the same record and the same
+# ``rejected by user`` text. Codex models these as an enum (Denied / TimedOut /
+# Abort) rather than a bool's shadow; these are the same three names.
+#
+# The bucket is written onto the tool-call record itself (``confirm_outcome``),
+# which is what the ``tool_result`` event, the trace, the run manifest and the
+# persisted ``ToolCallRecord`` all carry.
+CONFIRM_APPROVED = "approved"
+CONFIRM_DENIED = "denied"
+CONFIRM_TIMED_OUT = "timed_out"
+CONFIRM_ABORTED = "aborted"
+#: Evaluation mode (#57 AC6): the gate still fires, an armed verdict is simply
+#: pre-supplied by the harness. Distinct from ``approved`` — no human said so.
+CONFIRM_AUTO_APPROVED = "auto_approved"
+
+#: Wall-clock bound on waiting for a human verdict (seconds). #57 AC5 asks for
+#: 超时未答 to be a distinguishable terminal state, and a state nobody can reach
+#: is a vocabulary, not a state — without a bound the only ways out of the wait
+#: are a verdict or a stop. 30 minutes is far past a human actually looking at
+#: the dialog, and past it the run is an abandoned one. Deliberately NOT a
+#: settings key: the ticket converges the config面 onto ``mcp_force_confirm``
+#: alone (and #45 owns the neighbouring region).
+CONFIRM_TIMEOUT_SEC = 1800.0
 
 
 class AgentRuntime:
@@ -37,6 +66,8 @@ class AgentRuntime:
         max_steps: int = 15,
         aux_llm: Any = None,
         confirm_enabled: bool = True,
+        auto_approve: bool = False,
+        confirm_timeout_sec: Optional[float] = None,
         parent_task_id: str = "",
     ) -> None:
         self.task_id = task_id
@@ -51,6 +82,14 @@ class AgentRuntime:
         self.tool_schemas = tool_schemas
         self.max_steps = max_steps
         self.confirm_enabled = confirm_enabled  # False for subtask graphs (no human_confirm)
+        # Issue #57 AC6: 评测态只把「必问」换成放行（终态记成 auto_approved），
+        # 判定面、事件面、显式拒绝一概照旧。与 confirm_enabled 是两件事：
+        # 后者是「这台 runtime 根本没有闸门」（子任务图），前者是「有人不在」。
+        self.auto_approve = auto_approve
+        # Issue #57 AC5: 等一个判决要有上界，否则「超时未答」这一档不可达。
+        self.confirm_timeout_sec = (
+            CONFIRM_TIMEOUT_SEC if confirm_timeout_sec is None else float(confirm_timeout_sec)
+        )
         self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
         self._aux = aux_llm  # injected aux client (may be None)
         self._aux_computed = aux_llm is not None
@@ -309,7 +348,15 @@ class AgentRuntime:
         return state
 
     def _plan_confirm(self, state: AgentState, items: List[Dict[str, Any]]) -> bool:
-        """Blocking plan-level confirmation used by ``risk_policy=pause``."""
+        """Blocking plan-level confirmation used by ``risk_policy=pause``.
+
+        #57 的终态分档只覆盖 per-call 闸门：这里的返回值只有 plan 一个消费者，
+        没有可标注的 tool-call 记录，也就没有「事件与状态里可区分」的落点。
+        #57 AC6 的评测态在这里同样成立——不等人，但也不冒充人批过。
+        """
+        if self.auto_approve:
+            # 评测态：不向一个不在场的人发问（#57 AC6 的「必问 → 放行」）。
+            return True
         if self.tm is None:
             return False
         key = "risk_plan"
@@ -463,7 +510,7 @@ class AgentRuntime:
         for rec in tcs:
             if rec["need_confirm"] and rec["id"] in rejected:
                 rec["status"] = "skipped"
-                rec["error"] = "rejected by user"
+                rec["error"] = self._confirm_skip_text(rec)
                 self._publish("tool_result", rec)
                 continue
             if rec["need_confirm"] and rec["id"] not in confirmed:
@@ -517,7 +564,67 @@ class AgentRuntime:
             step["status"] = "done"
         return state
 
+    def _confirm_skip_text(self, rec: Dict[str, Any]) -> str:
+        """三档未批准各自的文案（#57 AC5）。
+
+        只有 ``denied`` 留着 ``rejected by user`` ——那是唯一一句真话。从前三种
+        情形共用这一句，于是「人没答」「人说不」「被 stop 折回来」在日志里同形，
+        事后无法复原是哪一种（同 #57 取证里子任务那侧的合并捕获）。
+        没有 ``confirm_outcome`` 的记录（从未进过闸门）按旧文案走，不凭空安新终态。
+        """
+        outcome = rec.get("confirm_outcome") or CONFIRM_DENIED
+        if outcome == CONFIRM_TIMED_OUT:
+            return f"no human verdict before the {self.confirm_timeout_sec:g}s confirm timeout"
+        if outcome == CONFIRM_ABORTED:
+            return "interrupted by stop while awaiting confirmation"
+        return "rejected by user"
+
+    def _ask_human(self, state: AgentState, target: Dict[str, Any]) -> str:
+        """Wait for one verdict on ``target`` and name the terminal state.
+
+        分档的判据顺序是这张表的骨架：**先问「人给没给过判决」，再问「是被谁
+        打断的」**。``consume_confirm`` 回 None 表示人不在这个点上答过——它不是
+        一次拒绝，也不该冒充拒绝（#57 之前正是这一步折成了「未批准即拒绝」）。
+        """
+        event = self.tm.request_confirm(self.task_id, target["id"])
+        self._publish(
+            "human_confirm_required",
+            {"tool_call_id": target["id"], "tool_name": target["tool_name"], "input": target["input"]},
+        )
+        # Block until the user decides, the wait expires, or the task is stopped
+        # (≤2s responsiveness). Issue #4: poll the manager-level flag as well —
+        # ``state`` is a per-superstep copy under a checkpointer, so a stop() that
+        # mutates the legacy dict is invisible here unless refreshed from the source.
+        deadline = time.monotonic() + self.confirm_timeout_sec
+        while not event.is_set() and not state.get("stop_requested"):
+            if self._stopped(state):
+                break
+            if time.monotonic() >= deadline:
+                break
+            event.wait(0.2)
+        verdict = self.tm.consume_confirm(self.task_id, target["id"])
+        if verdict:
+            return CONFIRM_APPROVED
+        if verdict is False:
+            return CONFIRM_DENIED
+        # No verdict: whoever ended the wait owns the bucket. The authoritative
+        # manager flag decides, because ``state`` may be a stale copy (#4).
+        stop_checker = getattr(getattr(self, "tm", None), "is_stop_flagged", None)
+        stop_forced = state.get("stop_requested") or (
+            callable(stop_checker) and stop_checker(self.task_id)
+        )
+        return CONFIRM_ABORTED if stop_forced else CONFIRM_TIMED_OUT
+
     def human_confirm_node(self, state: AgentState) -> AgentState:
+        """Ask about one un-confirmed gated call, then record the terminal state.
+
+        #57 AC5: 拒绝 / 超时未答 / 停止打断 是三档，不是一个布尔的影子。分档写回
+        记录体（``confirm_outcome``），事件、状态、持久化三面同源。
+
+        #57 AC6: 评测态（``auto_approve``）不再整块旁路判定 —— 判定照算、闸门照进、
+        事件照发，只有「等一个不出现的人」换成 ``auto_approved``。显式拒绝与
+        ``_needs_confirm`` 重算块都不经过这条路。
+        """
         tcs = state.get("_current_tool_calls", []) or []
         confirmed = state.get("_confirmed_ids", []) or []
         rejected = state.get("_rejected_ids", []) or []
@@ -529,33 +636,44 @@ class AgentRuntime:
             state["_last_action"] = "tool_done"
             return state
 
-        event = self.tm.request_confirm(self.task_id, target["id"])
+        if self.auto_approve:
+            outcome = CONFIRM_AUTO_APPROVED
+        else:
+            outcome = self._ask_human(state, target)
+
+        # Written on the record itself: the tool_result event, the trace, the run
+        # manifest and the persisted ToolCallRecord all carry this dict (#57 AC5).
+        target["confirm_outcome"] = outcome
+        # The asked/replied pair (opencode names its two events the same way):
+        # the outcome needs its own event because a 停止打断 run never reaches the
+        # tool node, so no ``tool_result`` would ever carry the label.
         self._publish(
-            "human_confirm_required",
-            {"tool_call_id": target["id"], "tool_name": target["tool_name"], "input": target["input"]},
+            "human_confirm_resolved",
+            {
+                "tool_call_id": target["id"],
+                "tool_name": target.get("tool_name", ""),
+                "outcome": outcome,
+                "input": target.get("input", {}),
+            },
         )
-        # Block until the user decides or the task is stopped (≤2s responsiveness).
-        # Issue #4: poll the manager-level flag as well — ``state`` is a
-        # per-superstep copy under a checkpointer, so a stop() that mutates the
-        # legacy dict is invisible here unless refreshed from the source.
-        while not event.is_set() and not state.get("stop_requested"):
-            if self._stopped(state):
-                break
-            event.wait(0.2)
-        approved = self.tm.consume_confirm(self.task_id, target["id"])
-        if approved:
+        if outcome != CONFIRM_APPROVED and outcome != CONFIRM_AUTO_APPROVED:
+            logger.warning(
+                "confirmation for %s ended %s (task %s)",
+                target["tool_name"],
+                outcome,
+                self.task_id,
+            )
+        if outcome in (CONFIRM_APPROVED, CONFIRM_AUTO_APPROVED):
             state.setdefault("_confirmed_ids", []).append(target["id"])
         else:
             state.setdefault("_rejected_ids", []).append(target["id"])
-            # Issue #4: record when the decision was forced by a stop (no
-            # human verdict). The event is shared between approvals and
-            # stop-wakeups and ``state`` may be a stale copy under a
-            # checkpointer, so the authoritative manager flag decides.
-            stop_checker = getattr(getattr(self, "tm", None), "is_stop_flagged", None)
-            stop_forced = state.get("stop_requested") or (
-                callable(stop_checker) and stop_checker(self.task_id)
-            )
-            if not approved and stop_forced:
+            if outcome in (CONFIRM_TIMED_OUT, CONFIRM_ABORTED):
+                # Issue #4: record when the decision was forced by a stop (no
+                # human verdict). The event is shared between approvals and
+                # stop-wakeups and ``state`` may be a stale copy under a
+                # checkpointer, so the authoritative manager flag decides. A
+                # timeout is the same kind of "nobody said no" (#57), so it
+                # keeps the resume guard treating the task as parked on the gate.
                 state["pending_confirm"] = {
                     "tool_call_id": target["id"],
                     "tool_name": target.get("tool_name", ""),

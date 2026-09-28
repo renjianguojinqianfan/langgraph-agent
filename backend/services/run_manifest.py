@@ -85,6 +85,7 @@ def _capability_lines(
     settings: Settings,
     tool_names: List[str],
     confirm_enabled: bool,
+    auto_approve: bool = False,
 ) -> List[Dict[str, Any]]:
     """The «件清单» — one deterministic line per capability.
 
@@ -128,7 +129,8 @@ def _capability_lines(
             "type": "capability",
             "name": "confirm_gate",
             "enabled": confirm_enabled,
-            "params": {},
+            # #57 AC6: 评测态是「闸门 armed + 自动放行」，不是关掉闸门。
+            "params": {"auto_approve": auto_approve},
         },
         {
             "type": "capability",
@@ -307,12 +309,15 @@ class RunManifest:
         settings: Settings,
         tool_names: List[str],
         confirm_enabled: bool = True,
+        auto_approve: bool = False,
         max_bytes: Optional[int] = None,
     ) -> None:
         self._dir: Path = settings.run_manifest_path
         self._dir.mkdir(parents=True, exist_ok=True)
         self._secrets = [s for s in _secret_values(settings) if s]
-        self._cap_lines = _capability_lines(settings, tool_names, confirm_enabled)
+        self._cap_lines = _capability_lines(
+            settings, tool_names, confirm_enabled, auto_approve
+        )
         self._max_bytes = (
             max_bytes if max_bytes is not None else settings.run_manifest_max_mb * 1024 * 1024
         )
