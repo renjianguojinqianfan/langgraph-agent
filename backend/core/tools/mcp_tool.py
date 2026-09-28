@@ -10,14 +10,26 @@ instance registered into the kernel tool set:
   JSON Schema — compatible with :meth:`BaseTool.to_openai_schema`);
 * ``run()`` forwards to ``McpClientManager.call_tool`` and maps the result to a
   :class:`ToolResult` with ``data={server, tool, content, text, structured}``;
-* write-like tools (heuristic on name/description + ``mcp_force_confirm``
-  override) set ``needs_per_call_confirm=True`` so the executor performs a
-  per-call confirmation via the existing P0 ``human_confirm`` flow.
+* danger is what the **server self-reports** in the MCP tool annotations
+  (``destructiveHint`` / ``readOnlyHint``), with ``mcp_force_confirm`` as the
+  operator-level override; tools that set nothing are asked about rather than
+  waved through (issue #57). The verdict sets ``needs_per_call_confirm=True`` so
+  the executor performs a per-call confirmation via the existing P0
+  ``human_confirm`` flow.
+
+Issue #57 replaced a verb table here (name/description matched against
+``write``/``delete``/``send``/...). That was a guess sitting next to a field the
+protocol already fills in, and it could only guess at *absence* — a tool named
+``db_run_sql`` looked read-like to the table. The self-report is now the only
+signal, and "no self-report" asks instead of passing. Per the settled boundary,
+the annotation decides **whether to bother a human**, nothing else: it is not a
+security boundary (that is the sub-agent narrowing and isolation side).
 
 Resilience: ``McpTool`` is a standard :class:`BaseTool` subclass — the kernel's
 ``ToolExecutor.dispatch`` automatically applies the P0 circuit breaker + retry
-(``resilience.py`` is untouched). Write-like tools disable retry at the
-instance level to avoid repeating side effects after a user confirmation.
+(``resilience.py`` is untouched). Anything not known to be read-only disables
+retry at the instance level to avoid repeating side effects after a user
+confirmation.
 """
 
 from __future__ import annotations
@@ -31,20 +43,72 @@ from .base import BaseTool, ToolResult
 
 logger = get_logger("tool.mcp")
 
-#: Write-like verbs (matched against the MCP tool name / description).
-_WRITE_VERBS = (
-    "write", "create", "delete", "update", "edit", "insert", "remove",
-    "send", "push", "upload", "execute", "add", "set", "put", "post",
-    "patch", "modify", "rename", "move", "copy", "append", "clear",
-    "reset", "format", "drop", "truncate",
-)
+#: The server says this tool changes state (or the override says so).
+DANGER_DANGEROUS = "dangerous"
+#: The server positively said this tool is read-only / non-destructive.
+DANGER_SAFE = "safe"
+#: The server said nothing usable — treated the same as ``dangerous`` by the gate.
+DANGER_UNKNOWN = "unknown"
 
 _SANITIZE_RE = re.compile(r"[^A-Za-z0-9_]")
+
+#: Prefix of a ``mcp_force_confirm`` entry that says "never bother a human".
+MUTE_PREFIX = "!"
 
 
 def sanitize_name(value: str) -> str:
     """Replace characters outside ``[A-Za-z0-9_]`` with ``_``."""
     return _SANITIZE_RE.sub("_", str(value or ""))
+
+
+def _override_verdict(
+    entries: List[str], full_name: str, server_prefix: str
+) -> Optional[bool]:
+    """What ``mcp_force_confirm`` says about this tool (``None`` = says nothing).
+
+    Entry shapes (#57 AC3 — one config key, no per-tool registry UI):
+
+    * ``mcp__{server}__{tool}`` — that one tool (the P2 shape, unchanged);
+    * ``mcp__{server}__*``      — **every** tool of that server;
+    * either shape prefixed with ``!`` — the opposite verdict (免问).
+
+    An exact-name entry wins over a server wildcard no matter what order the
+    operator wrote them in, so ``["!mcp__echo__*", "mcp__echo__purge"]`` mutes
+    the server and still asks for ``purge``. Unparseable entries (blank, a
+    non-string coerced to something that matches nothing) simply do not match —
+    the annotation then decides, exactly as if the list were empty.
+    """
+    wanted = [str(e).strip() for e in entries]
+    for shape in (full_name, f"{server_prefix}*"):
+        if shape in wanted:
+            return True
+        if f"{MUTE_PREFIX}{shape}" in wanted:
+            return False
+    return None
+
+
+def classify_annotations(annotations: Any) -> str:
+    """Read the server's self-reported hints into a three-state danger signal.
+
+    * ``destructiveHint is True``  -> :data:`DANGER_DANGEROUS`;
+    * ``destructiveHint is False`` or ``readOnlyHint is True`` -> :data:`DANGER_SAFE`
+      — a *positive* safety claim, not the absence of a danger claim;
+    * anything else (neither hint given, only ``readOnlyHint=False`` which says
+      "not read-only" without saying "destructive", a non-bool value, a
+      non-dict payload) -> :data:`DANGER_UNKNOWN`, which the gate asks about.
+
+    ``is True`` / ``is False`` on purpose: a dirty ``0`` / ``"yes"`` must not be
+    read as a settled bool.
+    """
+    if not isinstance(annotations, dict):
+        return DANGER_UNKNOWN
+    destructive = annotations.get("destructiveHint")
+    read_only = annotations.get("readOnlyHint")
+    if destructive is True:
+        return DANGER_DANGEROUS
+    if destructive is False or read_only is True:
+        return DANGER_SAFE
+    return DANGER_UNKNOWN
 
 
 class McpTool(BaseTool):
@@ -63,6 +127,7 @@ class McpTool(BaseTool):
         input_schema: Dict[str, Any],
         manager: Any,
         settings: Optional[Settings] = None,
+        annotations: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(settings)
         self._server_name = server_name
@@ -71,25 +136,27 @@ class McpTool(BaseTool):
         self.description = description or f"MCP tool {server_name}.{tool_name}"
         self.args_schema = self._normalise_schema(input_schema)
         self._manager = manager
-        #: A pre-resolved per-call confirmation decision for an empty argument
-        #: set — write-like tools must be confirmed even with no args.
-        self._write_like = self._heuristic_write_like()
+        #: The server's own verdict (#57). ``unknown`` — i.e. the server said
+        #: nothing — is NOT read as safe.
+        self.danger_signal: str = classify_annotations(annotations)
 
-        if self._write_like:
-            # Write-like: after confirmation execute exactly once — never retry
-            # (would repeat side effects). The circuit breaker is preserved so
-            # consecutive failures still open the tool circuit (PRD 1.5).
+        if self.danger_signal != DANGER_SAFE:
+            # Dangerous or unreported: after confirmation execute exactly once —
+            # never retry (would repeat side effects). The circuit breaker is
+            # preserved so consecutive failures still open the tool circuit
+            # (PRD 1.5).
             self.retryable = False
             self.max_retries = 0
             self.circuit_breaker = True
         else:
-            # Read-like: keep the BaseTool defaults (retry + breaker) so
-            # transient network failures are retried by the existing executor.
+            # Read-only by the server's own words: keep the BaseTool defaults
+            # (retry + breaker) so transient network failures are retried by
+            # the existing executor.
             self.retryable = True
             self.max_retries = None
             self.circuit_breaker = True
 
-    # ── schema / heuristic helpers ──
+    # ── schema / judgement helpers ──
     @staticmethod
     def _normalise_schema(input_schema: Any) -> Dict[str, Any]:
         if isinstance(input_schema, dict) and input_schema.get("type") == "object":
@@ -99,27 +166,29 @@ class McpTool(BaseTool):
             return schema
         return {"type": "object", "properties": {}, "required": []}
 
-    def _heuristic_write_like(self) -> bool:
-        """True when the tool name/description suggests a state-changing op."""
-        hay = f"{self._tool_name} {self.description}".lower()
-        return any(v in hay for v in _WRITE_VERBS)
-
     def _needs_confirm(self, args: Dict[str, Any]) -> bool:
         """Per-call confirmation judgement.
 
-        * ``mcp_force_confirm`` (settings) lists the full tool name
-          (``mcp__{server}__{tool}``) -> always True;
-        * otherwise the write-like heuristic decides.
+        * ``mcp_force_confirm`` (settings) first — exact tool name or the
+          ``mcp__{server}__*`` server wildcard, either optionally muted with
+          ``!`` (#57 AC3);
+        * otherwise the server's self-reported annotation decides — only a
+          positive safety claim (:data:`DANGER_SAFE`) stays quiet, and both
+          ``dangerous`` and ``unknown`` ask (#57 AC2: 不再默认放行).
 
         The executor calls this only when ``needs_per_call_confirm`` is set and
         wraps the call in a try/except — a judgement failure fails **closed**
-        (the executor requires confirmation), never leaking an unconfirmed
-        write-like call through.
+        (the executor requires confirmation), never leaking an ungated call
+        through (#47).
         """
-        force = getattr(getattr(self, "settings", None), "mcp_force_confirm_list", None) or []
-        if self.name in force:
-            return True
-        return self._write_like
+        settings = getattr(self, "settings", None)
+        entries = getattr(settings, "mcp_force_confirm_list", None) or []
+        verdict = _override_verdict(
+            list(entries), self.name, f"mcp__{sanitize_name(self._server_name)}__"
+        )
+        if verdict is not None:
+            return verdict
+        return self.danger_signal != DANGER_SAFE
 
     # ── run ──
     def run(self, **kwargs: Any) -> ToolResult:
@@ -158,5 +227,5 @@ class McpTool(BaseTool):
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (
             f"<McpTool name={self.name!r} server={self._server_name!r} "
-            f"tool={self._tool_name!r} write_like={self._write_like}>"
+            f"tool={self._tool_name!r} danger={self.danger_signal}>"
         )

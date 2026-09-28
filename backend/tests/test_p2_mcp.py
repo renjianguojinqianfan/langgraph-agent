@@ -9,7 +9,8 @@ Covers:
 * call forwarding (``call_tool``) and ToolResult mapping;
 * failure isolation: bad command, killed server -> ``success=False`` not crash;
 * circuit breaker reuse via ``ToolExecutor.dispatch``;
-* per-call confirmation (write-like heuristic + ``mcp_force_confirm`` override);
+* per-call confirmation (the server's self-reported ``destructiveHint`` /
+  ``readOnlyHint``, plus the ``mcp_force_confirm`` override — issue #57);
 * idempotent cleanup (no leaked child processes).
 """
 
@@ -265,8 +266,9 @@ def test_mcp_circuit_breaker_opens_after_failures(tmp_path):
         manager=mgr,
         settings=s,
     )
-    # write-like tools must not retry (retryable=False) so each dispatch is a
-    # single attempt — deterministic circuit counting.
+    # Anything the server did not positively report as read-only must not retry
+    # (retryable=False) so each dispatch is a single attempt — deterministic
+    # circuit counting.
     assert tool.retryable is False
     assert tool.max_retries == 0
 
@@ -298,21 +300,42 @@ def test_mcp_circuit_breaker_opens_after_failures(tmp_path):
 
 
 # ─────────────────── confirmation ───────────────────
-def test_mcp_write_like_tool_requires_confirm(tmp_path):
+def test_mcp_self_reported_danger_requires_confirm(tmp_path):
+    """判定读 server 自报标注（#57），不再猜动词。
+
+    原来这条靠 ``echo`` / ``write_file`` 的名字过动词表得出「读类免问 / 写类必问」；
+    AC2 把「什么都没说」的默认从放行翻成必问，所以免问只可能来自自报——这里直接拿
+    ``connect_all`` 透传上来的 annotations 建工具，语义与旧断言一致，机制换了。
+    """
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
-    mgr.connect_all()
+    discovered = {t["name"]: t for t in mgr.connect_all()}
     read_tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
         input_schema={}, manager=mgr, settings=s,
+        annotations=discovered["echo"]["annotations"],
     )
     write_tool = McpTool(
         server_name="echo", tool_name="write_file", description="Write a file.",
         input_schema={}, manager=mgr, settings=s,
+        annotations=discovered["write_file"]["annotations"],
     )
     assert read_tool.needs_per_call_confirm is True
     assert read_tool._needs_confirm({}) is False
     assert write_tool._needs_confirm({}) is True
+    mgr.cleanup()
+
+
+def test_mcp_unreported_tool_requires_confirm(tmp_path):
+    """AC2：server 两个 hint 都没给 → 必问（旧默认可是不打扰人）。"""
+    s = _echo_settings(tmp_path)
+    mgr = McpClientManager(s)
+    mgr.connect_all()
+    unreported = McpTool(
+        server_name="echo", tool_name="quiet", description="Nobody knows.",
+        input_schema={}, manager=mgr, settings=s,
+    )
+    assert unreported._needs_confirm({}) is True
     mgr.cleanup()
 
 

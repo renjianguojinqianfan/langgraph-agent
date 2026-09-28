@@ -373,11 +373,13 @@ class AgentRuntime:
                     need_confirm = bool(tool.requires_confirm) if tool else False
                     if tool and tool.name == "http_request" and str(args.get("method", "")).upper() in WRITE_METHODS:
                         need_confirm = True
-                    # P2 item 1: MCP tools run a per-call risk judgement (write-
-                    # like heuristic + mcp_force_confirm override). Duck-typed on
-                    # `needs_per_call_confirm` so this node never imports McpTool.
-                    # A judgement that cannot run fails CLOSED — it requires
-                    # confirmation rather than silently bypassing the gate.
+                    # P2 item 1: MCP tools run a per-call risk judgement (the
+                    # server's self-reported destructiveHint / readOnlyHint, with
+                    # mcp_force_confirm as the override — issue #57). Duck-typed
+                    # on `needs_per_call_confirm` so this node never imports
+                    # McpTool. A judgement that cannot run fails CLOSED — it
+                    # requires confirmation rather than silently bypassing the
+                    # gate.
                     if tool and getattr(tool, "needs_per_call_confirm", False):
                         try:
                             # cast 在运行时是恒等函数：BaseTool 不声明 _needs_confirm

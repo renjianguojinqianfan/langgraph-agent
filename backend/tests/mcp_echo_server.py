@@ -2,9 +2,16 @@
 
 A minimal Model Context Protocol server over stdio exposing two tools:
 
-* ``echo(text)``       -> ``TextContent("echo:<text>")``   (read-like)
-* ``write_file(...)``  -> ``TextContent("wrote:<path>")``  (write-like, used by
-  the per-call confirmation tests)
+* ``echo(text)``       -> ``TextContent("echo:<text>")``   (self-reported
+  read-only: ``readOnlyHint=True``)
+* ``write_file(...)``  -> ``TextContent("wrote:<path>")``  (self-reported
+  destructive: ``destructiveHint=True``, used by the per-call confirmation
+  tests)
+
+The annotations are what issue #57 made the danger judgement read — the server
+reporting them is the point, not the tool names. ``Tool`` carries them straight
+into ``list_tools`` results, so tests can cover both the reported and the
+un-reported shape (a tool built by hand with no annotations asks).
 
 The test suite launches this file with ``sys.executable`` (an absolute path, so
 it works on Windows without resolving ``python`` from PATH).
@@ -19,7 +26,13 @@ import anyio
 from mcp.server.lowlevel import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.types import ServerCapabilities, TextContent, Tool, ToolsCapability
+from mcp.types import (
+    ServerCapabilities,
+    TextContent,
+    Tool,
+    ToolAnnotations,
+    ToolsCapability,
+)
 
 server = Server("echo-server")
 
@@ -44,10 +57,17 @@ async def list_tools() -> list[Tool]:
                 "properties": {"text": {"type": "string", "description": "Text to echo."}},
                 "required": ["text"],
             },
+            annotations=ToolAnnotations(
+                title="Echo",
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
         ),
         Tool(
             name="write_file",
-            description="Write a file (write-like, requires confirmation).",
+            description="Write a file (destructive, requires confirmation).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -56,6 +76,11 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["path", "content"],
             },
+            annotations=ToolAnnotations(
+                title="Write file",
+                readOnlyHint=False,
+                destructiveHint=True,
+            ),
         ),
     ]
 

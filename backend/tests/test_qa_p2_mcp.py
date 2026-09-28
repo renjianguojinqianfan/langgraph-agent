@@ -7,13 +7,13 @@ independent perspective. Coverage gaps addressed here:
   cases (valid array / invalid JSON / non-list / non-dict entries / missing
   required fields);
 * ``McpTool`` normalisation: name sanitisation, description fallback,
-  ``args_schema`` fallback for missing / non-object schemas, and the
-  read/write resilience knobs;
+  ``args_schema`` fallback for missing / non-object schemas, and the resilience
+  knobs as they follow the server's self-reported danger hints (issue #57);
 * ``McpTool.run`` result mapping: ``isError=true`` -> ``success=False``;
   structured content extraction; empty content;
-* executor per-call confirmation end-to-end (write-like tool -> confirm ->
-  reject -> skipped with NO execution; read tool executes directly; force
-  confirm overrides a read tool);
+* executor per-call confirmation end-to-end (destructive or un-reported tool ->
+  confirm -> reject -> skipped with NO execution; a self-reported read-only tool
+  executes directly; force confirm overrides a read-only report);
 * REST ``GET /api/mcp/servers`` via TestClient (disabled -> empty list;
   connected -> connected + tools_count; failure -> error);
 * TaskManager integration: MCP tools actually land in ``_tools`` and
@@ -182,14 +182,15 @@ def test_mcp_tool_args_schema_fallback(tmp_path):
 
 
 def test_mcp_tool_resilience_knobs(tmp_path):
-    """Read-like tools keep retry; write-like tools disable retry (no repeat)."""
+    """自报只读保留重试；自报破坏性 / 什么都没报 关重试（不重复副作用）。"""
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
     read = McpTool(
         server_name="s", tool_name="read_thing", description="Read something.",
         input_schema={}, manager=mgr, settings=s,
+        annotations={"readOnlyHint": True},
     )
-    assert read._write_like is False
+    assert read.danger_signal == "safe"
     assert read.retryable is True
     assert read.max_retries is None
     assert read.circuit_breaker is True
@@ -197,11 +198,20 @@ def test_mcp_tool_resilience_knobs(tmp_path):
     write = McpTool(
         server_name="s", tool_name="delete_thing", description="Delete something.",
         input_schema={}, manager=mgr, settings=s,
+        annotations={"destructiveHint": True},
     )
-    assert write._write_like is True
+    assert write.danger_signal == "dangerous"
     assert write.retryable is False
     assert write.max_retries == 0
     assert write.circuit_breaker is True
+
+    # #57 AC2：没自报 = 未知 = 按可能带副作用对待（与 dangerous 同一组旋钮）。
+    unreported = McpTool(
+        server_name="s", tool_name="mystery", description="No hints at all.",
+        input_schema={}, manager=mgr, settings=s,
+    )
+    assert unreported.danger_signal == "unknown"
+    assert unreported.retryable is False
     mgr.cleanup()
 
 
@@ -281,7 +291,8 @@ def test_mcp_tool_manager_exception_maps_to_failure():
 
 # ─────────────────── executor per-call confirm (end-to-end) ───────────────────
 def test_executor_write_tool_confirm_rejected_not_executed(tmp_path):
-    """A write-like MCP tool must go through human_confirm; rejection skips."""
+    """A tool the server did not report as read-only must go through
+    human_confirm; rejection skips."""
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
     mgr.connect_all()
@@ -349,13 +360,14 @@ def test_executor_write_tool_confirm_rejected_not_executed(tmp_path):
 
 
 def test_executor_read_tool_executes_directly(tmp_path):
-    """A read-like MCP tool executes without confirmation."""
+    """A tool the server self-reports as read-only executes without confirmation."""
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
     mgr.connect_all()
     tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
         input_schema={}, manager=mgr, settings=s,
+        annotations={"readOnlyHint": True},
     )
 
     from backend.core.agent.nodes import AgentRuntime
@@ -406,16 +418,17 @@ def test_executor_read_tool_executes_directly(tmp_path):
 
 
 def test_executor_force_confirm_overrides_read_tool(tmp_path):
-    """mcp_force_confirm forces confirmation even for read-like tools."""
+    """mcp_force_confirm forces confirmation even for a self-reported read tool."""
     s = _echo_settings(tmp_path, mcp_force_confirm=json.dumps(["mcp__echo__echo"]))
     mgr = McpClientManager(s)
     mgr.connect_all()
     tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
         input_schema={}, manager=mgr, settings=s,
+        annotations={"readOnlyHint": True},
     )
     assert tool._needs_confirm({}) is True  # force override
-    assert tool._write_like is False          # but still read-like at construction
+    assert tool.danger_signal == "safe"     # but the report still says read-only
     mgr.cleanup()
 
 
