@@ -51,6 +51,11 @@ const TYPE_META: Record<string, TraceMeta> = {
     badge: "bg-amber-500/15 text-amber-300 border-amber-500/40",
     category: "task",
   },
+  human_confirm_resolved: {
+    label: "确认终态",
+    badge: "bg-amber-500/15 text-amber-300 border-amber-500/40",
+    category: "task",
+  },
   artifact_created: {
     label: "产物",
     badge: "bg-green-500/15 text-green-300 border-green-500/40",
@@ -88,6 +93,15 @@ const TYPE_META: Record<string, TraceMeta> = {
   },
 };
 
+/** #83（#57 AC5）五档终态，与后端 nodes.py 的 CONFIRM_* 常量一一对应。 */
+const CONFIRM_OUTCOME_LABEL: Record<string, string> = {
+  approved: "人已批准",
+  denied: "人明确拒绝",
+  timed_out: "超时未答",
+  aborted: "被停止打断",
+  auto_approved: "评测态自动放行",
+};
+
 const FILTERS: { key: TraceCategory; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "tool", label: "工具" },
@@ -116,6 +130,12 @@ function summarize(ev: SSEvent): string {
       return `步骤 #${String(d.index ?? "?")}`;
     case "human_confirm_required":
       return typeof d.tool_name === "string" ? String(d.tool_name) : "";
+    case "human_confirm_resolved": {
+      const tool = typeof d.tool_name === "string" ? String(d.tool_name) : "";
+      const outcome = typeof d.outcome === "string" ? d.outcome : "";
+      // 认不出的档照原样显示，别把新终态又折成一句通用文案——那正是 #83 要修的。
+      return `${tool} → ${CONFIRM_OUTCOME_LABEL[outcome] ?? outcome}`;
+    }
     case "artifact_created":
       return typeof d.filename === "string" ? String(d.filename) : "";
     case "plan_update":
