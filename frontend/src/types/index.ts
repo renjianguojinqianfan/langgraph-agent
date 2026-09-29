@@ -78,6 +78,7 @@ export interface RiskReportData {
 
 // --- P1 item 2: sub-agent ---
 
+/** 子任务快照：只来自 REST 的 `Task.subtasks`；#56 起子任务没有独立事件流。 */
 export interface SubTask {
   subtask_id: string;
   name: string;
@@ -85,27 +86,6 @@ export interface SubTask {
   summary: string;
   artifacts: string[];
   error?: string | null;
-}
-
-export interface SubtaskStartData {
-  subtask_id: string;
-  name: string;
-  status: string;
-  parent_task_id: string;
-}
-
-export interface SubtaskResultData {
-  subtask_id: string;
-  name: string;
-  status: string;
-  summary: string;
-  artifacts: string[];
-}
-
-export interface SubtaskFailedData {
-  subtask_id: string;
-  name: string;
-  error: string;
 }
 
 // --- P1 item 3: knowledge base ---
@@ -170,6 +150,15 @@ export interface ApiResponse<T = any> {
   message: string;
 }
 
+/**
+ * SSE 事件词汇表。现役清单的唯一权威是 `docs/architecture.md` §3.4 的事件表，
+ * 与 `hooks/useSSE.ts` 的订阅表 `EVENT_TYPES` 逐条相同（漏一条 = 前端静默收不到），
+ * 由 `scripts/check-sse-event-registry.mjs` 机械断言。
+ * `trace_end` 是唯一多出来的成员：`TraceRecorder.close()` 把它直写进 trace JSONL、
+ * 从不进 EventBus，所以 trace 回放面要认它，而 SSE 订阅表里没有它。
+ * #56 起退役、后端零发布点的 `subtask_start` / `subtask_result` / `subtask_failed`
+ * 已从本联合与订阅表删除（子任务的失败改由一条失败的 tool call 带回）。
+ */
 export type SSEventType =
   | "task_created"
   | "plan_update"
@@ -178,19 +167,20 @@ export type SSEventType =
   | "tool_result"
   | "tool_circuit_open" // P0: {tool_name, cooldown_sec}
   | "context_compressed" // P0: {step_index, dropped, band_evicted, converged, context_tokens, strategy}
+  | "task_rollback" // P1-B: {task_id, ok, files, already_original}
   | "human_confirm_required"
   | "human_confirm_resolved" // #57: {tool_call_id, tool_name, outcome}（outcome 见 ToolCallRecord.confirm_outcome；入参不带，同 id 的 tool_call 事件已有且 trace 不脱敏）
   | "artifact_created"
+  | "verification" // P0-B: {task_id, passed, failures, attempts, degraded, loop_back?}
   | "final_answer"
   | "task_completed"
   | "task_failed"
   | "task_interrupted"
+  | "task_resumed" // P3: {task_id, status}
+  | "tool_result_evicted" // T1.4: {tool_call_id, tool_name, original_chars, step_index}
   | "risk_report" // P1: {items, policy, semantic_enabled}
   | "risk_found" // P1: RiskItem
-  | "subtask_start" // P1: {subtask_id, name, status, parent_task_id}
-  | "subtask_result" // P1: {subtask_id, name, status, summary, artifacts}
-  | "subtask_failed" // P1: {subtask_id, name, error}
-  | "trace_end"
+  | "trace_end" // 仅 trace 回放面（见上方说明）
   | "heartbeat";
 
 export interface SSEvent {
