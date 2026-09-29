@@ -23,6 +23,7 @@ the guard is missing.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -142,3 +143,22 @@ def test_offline_slice_with_langsmith_tracing_exported_opens_no_connections() ->
         f"LANGSMITH_TRACING + a key were inherited from the shell — the conftest guard is not holding "
         f"(issue #84).\ninner output:\n{proc.stdout[-2000:]}"
     )
+
+
+# Imports the conftest the way pytest does, then reports what survived in the
+# environment. Names come in as argv so the list stays single-sourced here.
+_PROBE = (
+    "import json, os, sys, backend.tests.conftest;"
+    "print(json.dumps({name: os.environ.get(name) for name in sys.argv[1:]}))"
+)
+
+
+def test_importing_the_suite_conftest_leaves_no_langsmith_switch_or_key() -> None:
+    """The guard is a conftest-import side effect, not a per-test accident."""
+    names = list(TRACING_SWITCHES + CREDENTIALS)
+    proc = _run([sys.executable, "-c", _PROBE, *names], poisoned_env())
+
+    assert proc.returncode == 0, f"probe failed to import the conftest:\n{proc.stderr[-2000:]}"
+    survived = {name: value for name, value in json.loads(proc.stdout).items() if value is not None}
+    assert survived == {}, f"the conftest let these LangSmith variables through: {sorted(survived)}"
+

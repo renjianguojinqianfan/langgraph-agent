@@ -8,7 +8,9 @@ Environment isolation: the suite must be deterministic regardless of a local
 for ``scripts/live_e2e.py``). Since pydantic-settings resolves *environment
 variables* before ``.env``, we neutralise the live-provider keys here so the
 process-wide :func:`get_settings` singleton (used by the smoke test) never
-picks up a real endpoint.
+picks up a real endpoint. LangSmith is neutralised the same way and more
+strictly (issue #84): the SDK's own tracing switches are *removed*, so a shell
+that exports them cannot make the suite dial out.
 """
 
 from __future__ import annotations
@@ -34,6 +36,31 @@ os.environ.setdefault(
 os.environ.setdefault("CONTEXT_INJECT_ENABLED", "false")  # P1-A′: isolate the injection chain
 os.environ.setdefault("CONTEXT_EVICT_ENABLED", "false")  # T1.4: isolate tool-result eviction
 os.environ.setdefault("SNAPSHOT_ENABLED", "false")  # P1-B: no rollback ledger unless a test opts in
+
+# ── LangSmith tracing is off for the offline suite (Issue #84) ──
+# The block above zeroes *this repo's* settings; it cannot zero what the SDK
+# reads for itself. langsmith/langchain-core resolve their own tracing switches
+# from the process environment (langsmith.utils.tracing_is_enabled walks
+# LANGSMITH_/LANGCHAIN_ x TRACING_V2/TRACING), so a developer shell exporting
+# LANGSMITH_TRACING=true + a key makes this "offline" suite POST real runs to
+# LangSmith — tests still pass, they just silently stop being offline (429 spam,
+# slower runs, and any future "no network" assertion quietly bypassed). The
+# repo's own ``trace_enabled`` gates backend/services/trace.py (JSONL recorder)
+# and never reaches the SDK, so the switch has to leave the environment here —
+# at conftest import, i.e. before the first callback manager is configured,
+# which happens per graph run inside a test. pop, not setdefault: an inherited
+# "true" must lose. Dropping the credentials along with the switches keeps the
+# suite's claim (零网络、零 Key) literally true in the test process.
+for _k in (
+    "LANGSMITH_TRACING",
+    "LANGSMITH_TRACING_V2",
+    "LANGCHAIN_TRACING",
+    "LANGCHAIN_TRACING_V2",
+    "LANGCHAIN_HANDLER",
+    "LANGSMITH_API_KEY",
+    "LANGCHAIN_API_KEY",
+):
+    os.environ.pop(_k, None)
 
 # ── Git identity for test repos ──────────────────────────────────────────────
 # git_commit 类测试在临时仓库里真实执行 git commit：CI runner 与部分全新环境没有
