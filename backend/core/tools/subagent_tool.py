@@ -67,8 +67,9 @@ class SpawnSubagentTool(BaseTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Optional tool names to restrict the sub-agent "
-                "to. Narrows the chosen tier only: a name outside it is "
-                "rejected instead of silently dropped.",
+                "to. Narrows the chosen tier only: a name outside the tier, or "
+                "one the tier declares but this run does not mount, is refused "
+                "with the usable names rather than silently dropped.",
             },
         },
         "required": ["name", "instruction"],
@@ -118,9 +119,11 @@ class SpawnSubagentTool(BaseTool):
             tier=tier,
             tools=subset,
         )
-        # Resolved here rather than inside the executor so an out-of-tier
-        # request is refused before anything runs (issue #56: no side effect
-        # without an approved cause, and the model gets the reason back).
+        # Resolved here rather than inside the executor so a request this run
+        # cannot honor is refused before anything runs (issue #56: no side
+        # effect without an approved cause, and the model gets the reason back;
+        # #74 covers the second shape of that — a tier member that is not
+        # mounted, which used to narrow the subtask down to nothing in silence).
         try:
             executor.check_face(spec)
         except TierError as exc:

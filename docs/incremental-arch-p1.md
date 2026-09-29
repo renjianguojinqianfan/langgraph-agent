@@ -200,7 +200,7 @@ def kb_path(self) -> Path:
 
 > **现状修正（#56，2026-09-26）——本节以下五条为准；本文其余章节（§文件变更清单、SSE 事件表、隔离对照表、时序图、T03 / Q6 交付表）里与它冲突的描述，都是 P1 交付当时的形态，保留不改以存当时的判断。**
 > 1. **入口只剩一个**：`spawn_subagent` 工具（`requires_confirm=True`，先经人批准）。内置「调研+报告」关键词自动拆分（entry B：`subagent_split` 节点、`DEFAULT_SPLIT_SCENARIOS`、`split_plan_for_scenario`、`run_plan_with_subtasks`）已删除——话术里带「报告」两个字不等于批准了一次带副作用的派生。
-> 2. **能力面 = 代码内置两档**，取代「父工具集减 `spawn_subagent`」：`explore`（11 件只读）/ `execute`（= explore + `write` + `edit`，默认档）；档位是名字集合、与实际装载面取交集（`git_enabled=false` 时 git 四件自然不在档）。`spawn_subagent` 的 `tools` 参数生效但**只能收窄**，越界即拒并回理由。两档都不含 `code_exec` / `http_request` / git 写类 / MCP / OpenAPI 生成工具 / legacy `file_io`，即危险面在子任务里**结构性不可达**。为让子任务能落盘写报告而不带上不可拆的 `file_io`，新增独立 `write` 工具（`file_io.py`，`requires_confirm=False`）。
+> 2. **能力面 = 代码内置两档**，取代「父工具集减 `spawn_subagent`」：`explore`（11 件只读）/ `execute`（= explore + `write` + `edit`，默认档）；档位是名字集合、与实际装载面取交集（`git_enabled=false` 时 git 四件自然不在档）。`spawn_subagent` 的 `tools` 参数生效但**只能收窄**，两种「收窄不进去」的名字一律即拒并回理由：档外名字，和档位声明了但本次没装载的名字（#74 补上后半句；此前后者被静默交集掉，探子带空面跑完仍回 `completed`，父模型收到假成功），理由尾部只列本次该档实际可用的名字。两档都不含 `code_exec` / `http_request` / git 写类 / MCP / OpenAPI 生成工具 / legacy `file_io`，即危险面在子任务里**结构性不可达**。为让子任务能落盘写报告而不带上不可拆的 `file_io`，新增独立 `write` 工具（`file_io.py`，`requires_confirm=False`）。
 > 3. **`subagent_enabled` 语义收窄**：只控制 `spawn_subagent` 工具是否装载（不再挂节点）。
 > 4. **归档与可回看**：档位实装面进 #58 运行流水的 `subagent` 能力行，每次派生再落一行 `subtask_face`（tier + 实际工具名）。
 > 5. **已知缺口（未拍板，见 PR/后续 issue）**：entry B 是 `subtask_start`/`subtask_result`/`subtask_failed` 与 `state["subtasks"]`→`Task.subtasks` 的唯一生产者，删除后 `Task.subtasks` 恒空、前端 `SubtaskList` 面板无数据来源（`_is_subtask` 亦变为只写不读）。spawn 路径的可见性走普通 `tool_call`/`tool_result` 事件。

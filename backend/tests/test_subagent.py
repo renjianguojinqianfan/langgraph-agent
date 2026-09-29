@@ -326,6 +326,27 @@ def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
         resolve_tool_face(tools, "oracle")
 
 
+def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(tmp_path):
+    """#74: 档内但未装载的名字与档外名字同等即拒，不再静默交集成空面。
+
+    ``Loaded:`` 钉的是「档∩实装面」：既不含被拒的那个名字（列了等于让模型照着
+    清单再递一次、第二次撞档外拒绝），也不含 ``write`` / ``code_exec`` 这些永远
+    收窄不进去的档外名。清单是字面量，不用 ``tier_face_names`` 自算。
+    """
+    tm = make_manager(make_settings(tmp_path), _CountingMock())  # git_enabled=False
+    names = [t.name for t in tm._tools]
+    assert "git_log" in TOOL_TIERS[EXPLORE_TIER] and "git_log" not in names
+
+    with pytest.raises(TierError) as excinfo:
+        resolve_tool_face(tm._tools, EXPLORE_TIER, ["git_log"])
+    message = str(excinfo.value)
+    assert "git_log" in message
+    assert "not mounted" in message
+    assert message.endswith(
+        "Loaded: glob, grep, kb_query, load_skill, ls, memory_search, read, web_search"
+    )
+
+
 def test_check_face_resolves_without_running_anything(tmp_path):
     mock = _CountingMock()
     tm = make_manager(make_settings(tmp_path), mock)
@@ -525,6 +546,117 @@ def test_spawn_subagent_refuses_a_widening_request_before_running(
     assert "code_exec" in (res.error or "") and "read" in (res.error or "")
     assert started == []
     assert mock.turns == 0
+    assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
+
+
+def test_spawn_subagent_refuses_an_unmounted_tier_member_before_running(
+    tmp_path, monkeypatch
+):
+    """#74: 档内但本次没装载的名字与档外同等处理——预检即拒，探子都不派。
+
+    与上一条同形，只是被拒的名字这次**在档内**：`git_enabled=false` 下 `git_log`
+    是档位声明的成员、却不在实装面上。改前这里静默交集出空面、子任务照跑照
+    `completed`，父模型收到的是假成功。
+    """
+    settings = make_settings(tmp_path)
+    mock = _CountingMock(plan=["p"], final_answer="never")
+    tm = make_manager(settings, mock)
+    tool = next(t for t in tm._tools if t.name == "spawn_subagent")
+    started: List[SubTaskSpec] = []
+    assert tm._subagent is not None
+    monkeypatch.setattr(tm._subagent, "run_subtask", _recording_run(started))
+
+    res = tool.run(name="probe", instruction="try it", tier=EXPLORE_TIER, tools=["git_log"])
+
+    assert res.success is False
+    assert "git_log" in (res.error or "") and "not mounted" in (res.error or "")
+    assert started == []
+    assert mock.turns == 0
+    assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
+
+
+def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path):
+    """双路径一致（#74 AC3）：不经工具层直调 ``run_subtask``，理由逐字相同。"""
+    settings = make_settings(tmp_path)
+    mock = _CountingMock(plan=["p"], final_answer="never")
+    tm = make_manager(settings, mock)
+    ex = SubAgentExecutor(tm, settings)
+    tool = next(t for t in tm._tools if t.name == "spawn_subagent")
+
+    direct = ex.run_subtask(
+        _spec(subtask_id="um:sub:1", tier=EXPLORE_TIER, tools=["git_log"])
+    )
+    via_tool = tool.run(
+        name="um", instruction="i", tier=EXPLORE_TIER, tools=["git_log"]
+    )
+
+    assert direct.status == "failed" and direct.tool_face == []
+    assert via_tool.success is False
+    assert direct.error == (via_tool.error or "")
+    assert "git_log" in direct.error and "not mounted" in direct.error
+    assert mock.turns == 0
+
+
+class _UnmountedAskMock(MockLLMClient):
+    """父模型递一个「档位声明了、本次却没装载」的名字（git 关时的 ``git_log``）。
+
+    只在第一轮递 spawn，之后一律直接答——所以「探子有没有被派出去」由事件频道
+    分辨，不由轮次分辨（父任务被完成验证弹回几轮是验证器的事，与本票无关）。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(plan=["委托"], final_answer="父任务自己收场")
+        self.rounds = 0
+
+    def complete(self, messages, tools=None, **kwargs):
+        if not tools:
+            return LLMResponse(content=json.dumps(self.plan))
+        self.rounds += 1
+        if self.rounds == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "um-spawn",
+                        "name": "spawn_subagent",
+                        "arguments": {
+                            "name": "probe",
+                            "instruction": "查一下提交历史",
+                            "tier": EXPLORE_TIER,
+                            "tools": ["git_log"],
+                        },
+                    }
+                ],
+            )
+        return LLMResponse(content=self.final_answer)
+
+
+def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
+    tmp_path, event_bus
+):
+    """票面「观测」条：不新增 manifest 行，失败走 ``tool_result`` 事件——这里钉住事件。
+
+    件清单裁判的两条断言常驻化：被拒的 spawn 在事件里带 error 文本；它没有派出
+    探子，所以父频道上连一条 subtask 事件都没有（拒绝点在 ``attach_subtask``
+    之前，manifest 的 ``subtask_face`` 行同样无从产生）。
+    """
+    settings = make_settings(tmp_path)
+    mock = _UnmountedAskMock()
+    tm = make_manager(settings, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="t", user_input="派个子任务查提交历史")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
+    _run_until_done(tm, task_id)
+
+    events = event_bus.replay(task_id)
+    spawn = [
+        e["data"]
+        for e in events
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
+    ]
+    assert len(spawn) == 1  # 父模型没有被同一个拒绝反复放行
+    assert spawn[0]["status"] == "failed"
+    assert "git_log" in spawn[0]["error"] and "not mounted" in spawn[0]["error"]
+    assert not [e for e in events if "subtask" in e["type"]]
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
 
 
