@@ -5,7 +5,7 @@
  * 为什么要有这个脚本：EventSource 只把带 `event:` 字段的消息派发给 `addEventListener`
  * 注册过的类型，没注册的类型浏览器直接丢。所以注册表漂了不报错、不告警，只是时间线
  * 静默少一类事件（`verification` / `task_resumed` / `task_rollback` / `tool_result_evicted`
- * 就这么漂了整整数周）。此前唯一的对照手段是 docs/architecture.md §3.4 旁边那句
+ * 就这么漂了数周）。此前唯一的对照手段是 docs/architecture.md §3.4 旁边那句
  * 「未知类型自然忽略」，靠人自觉，于是没人对照。这里把「对照」变成一条机械断言。
  *
  * 权威源：`docs/architecture.md` §3.4 的事件表（以表为准、不写计数）。
@@ -18,6 +18,8 @@
  *   3. `frontend/src/types/index.ts` 的 `SSEventType` 联合 == `EVENT_TYPES` ∪ trace 文件独有类型
  *      —— `trace_end` 由 `TraceRecorder.close()` 直写 JSONL、不经 EventBus，所以它进联合
  *         （trace 回放面要认它）、不进订阅表（SSE 流上永远不会出现它）。
+ *   4. 两张表各自无重复条目 —— 挂两次就派发两次，时间线里会出现两行，正踩「出现一次」；
+ *      Set 与 tsc 都会静默去重，只能在这儿明说。
  *
  * 发布点怎么认：grep 三种现役写法的字符串字面量——
  *   `self._publish("x", …)` / `….publish(task_id, "x", …)` / `sse_format({"type": "x", …})`
