@@ -124,6 +124,14 @@ def resolve_tool_face(
                 f"tier {tier!r} does not include {outside}; the tools argument "
                 f"can only narrow, never widen. Members: {sorted(members)}"
             )
+        loaded = {t.name for t in tools}
+        unmounted = sorted(set(subset) - loaded)
+        if unmounted:
+            raise TierError(
+                f"tier {tier!r} declares {unmounted} but it is not mounted in "
+                f"this run; the tools argument can only narrow to the loaded "
+                f"face. Loaded: {', '.join(sorted(members & loaded))}"
+            )
         members &= set(subset)
     return [t for t in tools if t.name in members]
 

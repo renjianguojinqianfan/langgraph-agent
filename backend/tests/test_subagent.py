@@ -326,6 +326,27 @@ def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
         resolve_tool_face(tools, "oracle")
 
 
+def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(tmp_path):
+    """#74: 档内但未装载的名字与档外名字同等即拒，不再静默交集成空面。
+
+    ``Loaded:`` 钉的是「档∩实装面」：既不含被拒的那个名字（列了等于让模型照着
+    清单再递一次、第二次撞档外拒绝），也不含 ``write`` / ``code_exec`` 这些永远
+    收窄不进去的档外名。清单是字面量，不用 ``tier_face_names`` 自算。
+    """
+    tm = make_manager(make_settings(tmp_path), _CountingMock())  # git_enabled=False
+    names = [t.name for t in tm._tools]
+    assert "git_log" in TOOL_TIERS[EXPLORE_TIER] and "git_log" not in names
+
+    with pytest.raises(TierError) as excinfo:
+        resolve_tool_face(tm._tools, EXPLORE_TIER, ["git_log"])
+    message = str(excinfo.value)
+    assert "git_log" in message
+    assert "not mounted" in message
+    assert message.endswith(
+        "Loaded: glob, grep, kb_query, load_skill, ls, memory_search, read, web_search"
+    )
+
+
 def test_check_face_resolves_without_running_anything(tmp_path):
     mock = _CountingMock()
     tm = make_manager(make_settings(tmp_path), mock)
@@ -526,6 +547,54 @@ def test_spawn_subagent_refuses_a_widening_request_before_running(
     assert started == []
     assert mock.turns == 0
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
+
+
+def test_spawn_subagent_refuses_an_unmounted_tier_member_before_running(
+    tmp_path, monkeypatch
+):
+    """#74: 档内但本次没装载的名字与档外同等处理——预检即拒，探子都不派。
+
+    与上一条同形，只是被拒的名字这次**在档内**：`git_enabled=false` 下 `git_log`
+    是档位声明的成员、却不在实装面上。改前这里静默交集出空面、子任务照跑照
+    `completed`，父模型收到的是假成功。
+    """
+    settings = make_settings(tmp_path)
+    mock = _CountingMock(plan=["p"], final_answer="never")
+    tm = make_manager(settings, mock)
+    tool = next(t for t in tm._tools if t.name == "spawn_subagent")
+    started: List[SubTaskSpec] = []
+    assert tm._subagent is not None
+    monkeypatch.setattr(tm._subagent, "run_subtask", _recording_run(started))
+
+    res = tool.run(name="probe", instruction="try it", tier=EXPLORE_TIER, tools=["git_log"])
+
+    assert res.success is False
+    assert "git_log" in (res.error or "") and "not mounted" in (res.error or "")
+    assert started == []
+    assert mock.turns == 0
+    assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
+
+
+def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path):
+    """双路径一致（#74 AC3）：不经工具层直调 ``run_subtask``，理由逐字相同。"""
+    settings = make_settings(tmp_path)
+    mock = _CountingMock(plan=["p"], final_answer="never")
+    tm = make_manager(settings, mock)
+    ex = SubAgentExecutor(tm, settings)
+    tool = next(t for t in tm._tools if t.name == "spawn_subagent")
+
+    direct = ex.run_subtask(
+        _spec(subtask_id="um:sub:1", tier=EXPLORE_TIER, tools=["git_log"])
+    )
+    via_tool = tool.run(
+        name="um", instruction="i", tier=EXPLORE_TIER, tools=["git_log"]
+    )
+
+    assert direct.status == "failed" and direct.tool_face == []
+    assert via_tool.success is False
+    assert direct.error == (via_tool.error or "")
+    assert "git_log" in direct.error and "not mounted" in direct.error
+    assert mock.turns == 0
 
 
 def test_spawn_subagent_rejects_an_unknown_tier(tmp_path, monkeypatch):
