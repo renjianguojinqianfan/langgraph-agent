@@ -44,6 +44,10 @@
 
 - **一票一 worktree**：`qoder --worktree <票号-短名>`（落 `.qoder/worktrees/`，已 gitignore）。AGENTS.md 在子路径自动注入，规则层不用向子代理复述
 - **claim 走 GitHub**：开工先 `gh issue edit <N> --add-assignee @me` 防并发会话撞车；子代理共享的父任务清单只认含本票号的条目
+- **开票前先现查一次 open 清单**：claim 只防「两张会话实施同一张既有票」，**不防「同时新造一张同内容票」**——opencode 与 qoder 共用同一个 GitHub 账号，连作者不同这个信号都没有。实证：2026-09-30 同一轮里 qoder 开 #101、评审侧早 5 分钟为同一 bug 开了 #100。撞了就把自己那张独有的东西搬进对方票的评论，再 `close` + 打 `duplicate`，并在关闭评论里写清**对方为什么赢**（本次：对方根因钉到 `rec["status"]` 原地变更，所以 AC 全机械可裁，我判的 `needs-info` 是没核到那一步）
+- **并行段只到步 3**：步 3.5 文档收尾、开 PR、评审、合并一律**串行**（由主会话逐张做）。撞车面从来不在源文件，在权威文档面
+- **ADR 发号由合并门统一**：两个 agent 各建 `docs/adr/0005-<不同slug>.md` 时路径不同 → git 不报冲突、rebase 也不报，合出来就是两个 0005，而 AGENTS.md/README 里所有 `docs/adr/0005` 指向同时失效。这条对机械门禁**隐形**，只能靠发号顺序
+- **master 在并行批中间前进会造「幽灵 hunk」**：各票分支都起于当时的 master，此后任何先落地的小改（docs-only 直推、先合的 PR）都会让**两点** diff（`git diff master <head>`）比出一条「本分支回退了那行」的假改动——分支是**没带**那个 commit，不是改了它。实证：#96 被要求「拿掉 p1.md 的 hunk」，而 `/pulls/96/files` 只有 2 个文件、`mergeable_state=clean`。**diff 一律走三点口径**（`git diff master...<head>` / `gh pr diff <n> --name-only`），报返工前先核 `gh api repos/<owner>/<repo>/pulls/<n>/files`
 - **工具链共享**：worktree 是干净检出、没有 `.venv311`——门禁一律用绝对路径 `E:\code\demo\langgraph-agent\.venv311\Scripts\python.exe`；前端可 junction 主检出 `node_modules` 免 `npm ci`（CI 仍以 `npm ci` 口径终裁）
 - **brief 纪律**：委托 prompt 要短，且显式授权「依据缺失就停下问，不许猜」——试水中两次源头截断都靠这条救回
 - **派活前按 AC 跨层数估工作量**：一条 AC 动一层，五条 AC 动五层（判定→协议→配置→事件→测试）≈ 顶到一轮子代理预算上限——#57 就这么中断的（AC1-4 完成、AC5-7 半路）。超三层先拆再派，或按语义边界直接拆两张 PR
