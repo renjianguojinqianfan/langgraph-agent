@@ -526,9 +526,17 @@ class AgentRuntime:
             rec["retries"] = result.retries
             self._publish("tool_result", rec)
 
-            # Feed the tool result back into the conversation.
+            # Feed the tool result back into the conversation. On success the
+            # payload is ``result.data`` verbatim; on failure it is the reason
+            # (#95) — a bare ``null`` told the model nothing, so every next turn
+            # guessed at what went wrong.
+            content = (
+                json.dumps(result.data, ensure_ascii=False, default=str)
+                if result.success
+                else self._tool_failure_content(result.error)
+            )
             state.setdefault("messages", []).append(
-                {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(result.data, ensure_ascii=False, default=str)}
+                {"role": "tool", "tool_call_id": rec["id"], "content": content}
             )
 
             # Register an artifact when a producing tool wrote a file on disk.
@@ -552,6 +560,16 @@ class AgentRuntime:
         if step is not None:
             step["status"] = "done"
         return state
+
+    @staticmethod
+    def _tool_failure_content(reason: str) -> str:
+        """The tool message the model reads when a call did not succeed (#95).
+
+        The same reason the ``tool_result`` event carries, in a shape that says
+        outright it is a failure — the success payload has no ``ok`` key, so the
+        model cannot tell the two apart by looking for one.
+        """
+        return json.dumps({"ok": False, "error": reason}, ensure_ascii=False, default=str)
 
     def _confirm_skip_text(self, rec: Dict[str, Any]) -> str:
         """三档未批准各自的文案（#57 AC5）。

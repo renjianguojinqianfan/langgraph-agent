@@ -40,25 +40,36 @@ class _FailTool(BaseTool):
         return ToolResult(success=False, error="boom")
 
 
-def _state_with_call(tool_name: str = "qa_fail") -> AgentState:
+def _state_with_call(
+    tool_name: str = "qa_fail",
+    *,
+    call_id: str = "call_1",
+    need_confirm: bool = False,
+) -> AgentState:
     return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
+        "messages": [{"role": "user", "content": "hi"}],
         "_current_tool_calls": [
             {
-                "id": "call_1",
+                "id": call_id,
                 "tool_name": tool_name,
                 "input": {},
                 "output": None,
                 "status": "pending",
                 "error": "",
-                "need_confirm": False,
+                "need_confirm": need_confirm,
                 "confirmed": False,
             }
         ],
         "_confirmed_ids": [],
         "_rejected_ids": [],
     }
+
+
+def _tool_messages(state: AgentState) -> list:
+    """The conversation face: what the model reads on its next turn."""
+    return [m for m in state.get("messages", []) if m.get("role") == "tool"]
 
 
 def test_tool_node_writes_circuit_open_and_retries():
@@ -200,3 +211,39 @@ def test_read_like_result_on_a_real_file_registers_nothing(tmp_path):
     target.write_text("body", encoding="utf-8")
     settings = make_settings(tmp_path)
     assert _run_tool_node(tmp_path, target, _ReadLikePathTool(settings, target)) == []
+
+
+# ─────────── #95: the reason a tool failed reaches the model ───────────
+#
+# Seam: ``AgentRuntime.tool_node``. Observed on the conversation face
+# (``state["messages"]``) — what the executor LLM reads on its next turn — and
+# on the event face (``tool_result``), which must keep carrying the same fields.
+
+
+def _bus_runtime(tools: list, task_id: str = "t95") -> tuple:
+    """An ``AgentRuntime`` plus the list its events land in."""
+    settings = Settings(tool_failure_threshold=3, tool_max_retries=0, tool_cooldown_sec=30)
+    bus = EventBus()
+    events: list = []
+    bus.subscribe(task_id, lambda e: events.append(e))
+    tm = SimpleNamespace(settings=settings, event_bus=bus, add_artifact=lambda *a: None)
+    rt = AgentRuntime(task_id, tm, llm=SimpleNamespace(), tools=tools, tool_schemas=[])
+    return rt, events
+
+
+def test_failed_tool_message_carries_the_reason():
+    """The model used to read the literal ``null``: ``ToolResult.error`` went to
+    ``rec["error"]`` (human-facing events only), never into ``messages`` (#95)."""
+    rt, events = _bus_runtime([_FailTool(Settings(tool_failure_threshold=3, tool_max_retries=0))])
+    state = _state_with_call()
+    rt.tool_node(state)
+
+    assert _tool_messages(state) == [
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok": false, "error": "boom"}'}
+    ]
+    # The event face keeps every field it had: the model is a NEW reader of the
+    # reason, not a replacement for the human one.
+    rec = state["_current_tool_calls"][0]
+    assert rec["status"] == "failed"
+    assert rec["error"] == "boom"
+    assert [e["data"]["error"] for e in events if e["type"] == "tool_result"] == ["boom"]
