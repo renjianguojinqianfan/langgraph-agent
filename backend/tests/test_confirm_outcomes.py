@@ -31,10 +31,10 @@ from backend.core.agent.nodes import (
     CONFIRM_APPROVED,
     CONFIRM_AUTO_APPROVED,
     CONFIRM_DENIED,
-    CONFIRM_TIMEOUT_SEC,
     CONFIRM_TIMED_OUT,
     AgentRuntime,
 )
+from backend.core.agent.state import AgentState
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.services.event_bus import EventBus
@@ -97,7 +97,7 @@ class _GateTM:
         return None
 
 
-def _state() -> Dict[str, Any]:
+def _state() -> AgentState:
     return {
         "task_id": TASK_ID,
         "step_index": 1,
@@ -118,14 +118,18 @@ def _run_gate(
     stop: bool = False,
     confirm_timeout_sec: Optional[float] = None,
     answered: Optional[bool] = None,
-) -> tuple[AgentRuntime, Dict[str, Any], _GateTM]:
+) -> tuple[AgentRuntime, AgentState, _GateTM]:
     """One full gate pass: executor -> human_confirm -> tool (skipped or executed).
 
     ``answered`` 默认跟着 ``verdict`` 走（给了判决就等于按过按钮）；只有「答案卡在
-    截止点上」那一条需要把两者拆开，才显式传。
+    截止点上」那一条需要把两者拆开，才显式传。``confirm_timeout_sec`` 注在 Setting
+    上而不是构造参数上，因为生产路径就是 runtime 读 ``tm.settings``——注入点与生效
+    路径同一条，才测得到「配置改了就真的变」。
     """
     if answered is None:
         answered = verdict is not None
+    if confirm_timeout_sec is not None:
+        settings = settings.model_copy(update={"confirm_timeout_sec": confirm_timeout_sec})
     tool = _Gated(settings)
     tm = _GateTM(settings, verdict=verdict, stop=stop, answered=answered)
     rt = AgentRuntime(
@@ -133,7 +137,7 @@ def _run_gate(
             tool_calls=[{"id": "c1", "name": tool.name, "arguments": {}}]
         ),
         tools=[tool], tool_schemas=[tool.to_openai_schema()],
-        confirm_enabled=True, confirm_timeout_sec=confirm_timeout_sec,
+        confirm_enabled=True,
     )
     state = _state()
     rt.executor(state)
@@ -143,7 +147,7 @@ def _run_gate(
     return rt, state, tm
 
 
-def _rec(state: Dict[str, Any]) -> Dict[str, Any]:
+def _rec(state: AgentState) -> Dict[str, Any]:
     return state["_current_tool_calls"][0]
 
 
@@ -262,11 +266,11 @@ def test_a_verdict_arriving_at_the_deadline_wins(settings):
     assert state["pending_confirm"] == {}
 
 
-def test_no_bound_means_no_timeout_bucket(settings):
-    """默认上界是模块常量，不是 0：没到点就不许凭空长出「超时未答」。"""
+def test_default_bound_comes_from_settings(settings):
+    """上界是配置项、不是 0：没到点就不许凭空长出「超时未答」。"""
     rt = AgentRuntime("t", _GateTM(settings), llm=None, tools=[], tool_schemas=[])
-    assert rt.confirm_timeout_sec == CONFIRM_TIMEOUT_SEC
-    assert CONFIRM_TIMEOUT_SEC > 60, "上界短到会把在场的人判成超时"
+    assert rt.confirm_timeout_sec == settings.confirm_timeout_sec
+    assert settings.confirm_timeout_sec > 60, "上界短到会把在场的人判成超时"
 
 
 # ── AC6：评测态 --auto-approve 只把「必问」变放行 ──────────────────────────────
@@ -280,7 +284,7 @@ class _NeverAsksTM(_GateTM):
         raise AssertionError("auto-approve must not read a human verdict")
 
 
-def _auto_runtime(settings: Settings, tm: _GateTM) -> tuple[AgentRuntime, Dict[str, Any]]:
+def _auto_runtime(settings: Settings, tm: _GateTM) -> tuple[AgentRuntime, AgentState]:
     tool = _Gated(settings)
     rt = AgentRuntime(
         TASK_ID, tm, llm=MockLLMClient(

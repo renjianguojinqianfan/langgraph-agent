@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     risk_scan_enabled: bool = True  # master switch (false -> skip, zero regression)
     risk_semantic_enabled: bool = False  # LLM semantic analysis (needs aux/main model)
     risk_policy: str = "confirm"  # confirm | pause (default: per-call human confirm)
+    confirm_timeout_sec: float = 1800.0  # wall clock bound on a human verdict -> timed_out (#57 AC5)
     risk_danger_keywords: str = ""  # optional JSON array override of the built-in table
 
     # ── Sub-agent (P1 item 2) ──

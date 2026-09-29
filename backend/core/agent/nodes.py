@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, cast
 
 from ...config import get_settings
 from ...utils.logging import get_logger
@@ -43,15 +43,6 @@ CONFIRM_ABORTED = "aborted"
 #: pre-supplied by the harness. Distinct from ``approved`` — no human said so.
 CONFIRM_AUTO_APPROVED = "auto_approved"
 
-#: Wall-clock bound on waiting for a human verdict (seconds). #57 AC5 asks for
-#: 超时未答 to be a distinguishable terminal state, and a state nobody can reach
-#: is a vocabulary, not a state — without a bound the only ways out of the wait
-#: are a verdict or a stop. 30 minutes is far past a human actually looking at
-#: the dialog, and past it the run is an abandoned one. Deliberately NOT a
-#: settings key: the ticket converges the config面 onto ``mcp_force_confirm``
-#: alone (and #45 owns the neighbouring region).
-CONFIRM_TIMEOUT_SEC = 1800.0
-
 
 class AgentRuntime:
     """Per-task runtime that backs the LangGraph nodes."""
@@ -67,7 +58,6 @@ class AgentRuntime:
         aux_llm: Any = None,
         confirm_enabled: bool = True,
         auto_approve: bool = False,
-        confirm_timeout_sec: Optional[float] = None,
         parent_task_id: str = "",
     ) -> None:
         self.task_id = task_id
@@ -86,10 +76,6 @@ class AgentRuntime:
         # 判定面、事件面、显式拒绝一概照旧。与 confirm_enabled 是两件事：
         # 后者是「这台 runtime 根本没有闸门」（子任务图），前者是「有人不在」。
         self.auto_approve = auto_approve
-        # Issue #57 AC5: 等一个判决要有上界，否则「超时未答」这一档不可达。
-        self.confirm_timeout_sec = (
-            CONFIRM_TIMEOUT_SEC if confirm_timeout_sec is None else float(confirm_timeout_sec)
-        )
         self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
         self._aux = aux_llm  # injected aux client (may be None)
         self._aux_computed = aux_llm is not None
@@ -97,6 +83,9 @@ class AgentRuntime:
         # to AGENTS.md intentionally do not take effect. Subtask graphs share this
         # __init__, so they receive the same block with no extra code.
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        # Issue #57 AC5: 等一个判决要有上界，否则「超时未答」这一档不可达。和下面的
+        # 注入块一样按任务快照一次——任务中途改 confirm_timeout_sec 不生效。
+        self.confirm_timeout_sec: float = settings.confirm_timeout_sec
         self._inject_block: str = (
             inject.build_inject_block(settings)
             if getattr(settings, "context_inject_enabled", True)
