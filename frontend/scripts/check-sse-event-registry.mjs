@@ -52,10 +52,14 @@ function* backendPyFiles(dir) {
   }
 }
 
-/** 三种现役发布写法（见文件头「发布点怎么认」）。 */
+/**
+ * 三种现役发布写法（见文件头「发布点怎么认」）。
+ * 第 2 条要求类型字面量紧跟逗号：EventBus.publish 的第一个形参是 task_id，类型永远在第二位，
+ * 锚在逗号上才不会把「第一个字符串」当成类型（否则 task_id 一旦写成字面量就抓错）。
+ */
 const PUBLISH_PATTERNS = [
   /\b_publish\(\s*"([a-z_]+)"/g,
-  /\bpublish\(\s*[^)]*?"([a-z_]+)"/g,
+  /\bpublish\(\s*[^)]*?,\s*"([a-z_]+)"/g,
   /\bsse_format\(\s*\{\s*"type":\s*"([a-z_]+)"/g,
 ];
 
@@ -111,6 +115,17 @@ function unionTypes() {
 
 const onlyIn = (a, b) => [...a].filter((x) => !b.has(x)).sort();
 
+/**
+ * 成集前先抓重复：同一个类型挂两次，`addEventListener` 就会派发两次，
+ * 时间线里那条事件会出现两行——正踩 #92 完成判据「出现一次」。Set 会把它吞掉，
+ * 类型检查也看不出来（联合成员重复 TS 同样静默去重），所以只能在这里明说。
+ */
+function unique(name, list) {
+  const dup = list.filter((t, i) => list.indexOf(t) !== i);
+  if (dup.length > 0) fail(`${name} 有重复条目：${dup.join(", ")}`);
+  return new Set(list);
+}
+
 function fail(message) {
   console.error(`\nFATAL: ${message}`);
   process.exit(1);
@@ -132,11 +147,11 @@ function diff(name, left, right, leftLabel, rightLabel, hint) {
 
 // ── 采集 ────────────────────────────────────────────────────────────────────
 const publish = backendSsePublishPoints();
-const backend = new Set(publish.keys());
-const doc = new Set(docTableTypes());
-const listen = new Set(subscribedTypes());
-const union = new Set(unionTypes());
-const traceOnly = new Set(traceFileOnlyTypes());
+const backend = new Set(publish.keys()); // 同一类型多个发布点是常态（如 verification），不报重复
+const doc = unique("§3.4 表", docTableTypes());
+const listen = unique("EVENT_TYPES", subscribedTypes());
+const union = unique("SSEventType 联合", unionTypes());
+const traceOnly = unique("trace 文件独有类型", traceFileOnlyTypes());
 
 console.log(`后端 SSE 发布点 ${backend.size} 条 / §3.4 表 ${doc.size} 条 / ` +
   `EVENT_TYPES ${listen.size} 条 / SSEventType 联合 ${union.size} 条 / ` +
