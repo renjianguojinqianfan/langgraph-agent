@@ -354,7 +354,10 @@ classDiagram
 > **已退役、后端无发布点**（#56 起）：`subtask_start` / `subtask_result` /
 > `subtask_failed` —— 子任务失败改由一条失败的 tool call 带回、父任务不死；旧文档里
 > 还列着它们，别照抄计数。
-> 前端联合类型见 `frontend/src/types/index.ts`（未知类型自然忽略）。
+> 前端两处注册表：`frontend/src/hooks/useSSE.ts` 的 `EVENT_TYPES`（EventSource **只派发注册过的
+> 类型**——漏注册不是「显示不全」，是静默收不到）与 `frontend/src/types/index.ts` 的
+> `SSEventType` 联合。本表、两处注册表与后端发布点由 `npm run check:sse` 逐条对齐，已接进 CI 的
+> frontend job（#92）。唯一不对称是 `trace_end`：只写 trace JSONL、不经 EventBus，故进联合不进订阅表。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
