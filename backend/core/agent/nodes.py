@@ -512,6 +512,7 @@ class AgentRuntime:
                 rec["status"] = "failed"
                 rec["error"] = f"unknown tool: {rec['tool_name']}"
                 self._publish("tool_result", rec)
+                self._feed_tool_failure(state, rec)
                 continue
 
             try:

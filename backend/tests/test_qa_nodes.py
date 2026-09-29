@@ -305,3 +305,20 @@ def test_a_timeout_is_answered_as_a_timeout_not_as_a_refusal():
     assert "rejected" not in content
     # 同一条文案，两个读者：事件面与对话面同源。
     assert state["_current_tool_calls"][0]["error"] in content
+
+
+def test_unknown_tool_answers_the_model():
+    """The other branch that answered nothing: the name is not in the registry,
+    and the conversation kept a silent ``tool_call_id`` (#95)."""
+    rt, events = _bus_runtime([])
+    state = _state_with_call("ghost_tool")
+    rt.tool_node(state)
+
+    assert _tool_messages(state) == [
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok": false, "error": "unknown tool: ghost_tool"}'}
+    ]
+    rec = state["_current_tool_calls"][0]
+    assert rec["status"] == "failed"
+    assert [e["data"]["error"] for e in events if e["type"] == "tool_result"] == [
+        "unknown tool: ghost_tool"
+    ]
