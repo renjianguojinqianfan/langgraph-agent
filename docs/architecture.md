@@ -8,7 +8,7 @@
 >
 > 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、REST
 > 端点表、SSE 事件表、类图与时序图均为**当时的计划态**，与现状差两代（本文：4 个工具 /
-> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 16 个端点 / 23 种事件 / 14 个组件）。
+> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 16 个端点 / 24 种事件 / 14 个组件）。
 >
 > **现役事实请查这里**：
 > - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
@@ -348,12 +348,12 @@ classDiagram
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 
-> ⚠️ **v0.1：12 种。现役 23 种**（已核：22 个经 EventBus publish + `heartbeat` 由
-> `api/sse.py` 直发）。新增 11 种：`risk_report` / `risk_found`（P1 风险扫描）、
+> ⚠️ **v0.1：12 种。现役 24 种**（已核：23 个经 EventBus publish + `heartbeat` 由
+> `api/sse.py` 直发）。新增 12 种：`risk_report` / `risk_found`（P1 风险扫描）、
 > `subtask_start` / `subtask_result` / `subtask_failed`（P1 子 agent）、
 > `context_compressed` / `tool_circuit_open`（P0 压缩与熔断）、`task_resumed`（P3）、
 > `verification`（P0-B 完成验证）、`tool_result_evicted`（T1.4 工具结果逐出）、
-> `task_rollback`（P1-B 工作区回滚）。
+> `task_rollback`（P1-B 工作区回滚）、`human_confirm_resolved`（#57 AC5 确认终态）。
 > 前端联合类型见 `frontend/src/types/index.ts`（未知类型自然忽略）。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：

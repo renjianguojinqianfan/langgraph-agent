@@ -3,7 +3,7 @@
 Everything runs on a scripted mock LLM over ``make_settings(tmp_path)`` — no
 network, no key, no real ``data/``. Covers: a run reaching COMPLETED with the
 artifact dropped in ``--dir``; the JSON result contract; the ``--auto-approve``
-confirmation-gate bypass (and its contrast: without it the run parks and is
+confirmation-gate auto-clear (and its contrast: without it the run parks and is
 stopped -> INTERRUPTED); exit-code mapping; FAILED propagation; settings
 building; the arg parser; and the ``--check`` offline smoke.
 """
@@ -39,7 +39,7 @@ from backend.tests.conftest import make_settings
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 class _Probe(BaseTool):
-    """A ``requires_confirm`` tool: parks the run unless the gate is bypassed."""
+    """A ``requires_confirm`` tool: parks the run until a verdict, or auto-clears."""
 
     name = "probe_danger"
     description = "confirm-requiring probe (test only)"
@@ -149,7 +149,7 @@ def test_result_json_contract(tmp_path: Path) -> None:
 
 
 # ── confirmation-gate behaviour under --auto-approve ─────────────────────────
-def test_auto_approve_bypasses_confirm_gate(tmp_path: Path) -> None:
+def test_auto_approve_auto_clears_confirm_gate(tmp_path: Path) -> None:
     """#57 AC6：不 parking，但判定照算、闸门照进，终态是 ``auto_approved``。
 
     改名前这条只断言 COMPLETED ——「整块旁路」时代那就足够。旁路换成自动放行之后，

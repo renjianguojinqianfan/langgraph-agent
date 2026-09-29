@@ -628,8 +628,7 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
-                # #57 AC6: 闸门永远 armed；评测态只是让它自动放行。
-                confirm_enabled=True,
+                confirm_enabled=True,  # gate always armed (#57 AC6)
                 auto_approve=self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
@@ -946,8 +945,7 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
-                # #57 AC6: 闸门永远 armed；评测态只是让它自动放行。
-                confirm_enabled=True,
+                confirm_enabled=True,  # gate always armed (#57 AC6)
                 auto_approve=self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)

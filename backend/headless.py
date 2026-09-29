@@ -21,11 +21,14 @@ Two modes:
 Gate behaviour (evaluation mode != production mode): ``--auto-approve`` builds
 ``TaskManager(auto_approve=True)`` -> ``AgentRuntime(auto_approve=True)``, which
 since Issue #57 AC6 is **not** a whole-gate bypass: the executor still runs every
-per-call judgement, the gate still fires and still publishes
-``human_confirm_required`` / ``human_confirm_resolved``, and the terminal state is
-recorded as ``auto_approved`` instead of waiting for a human who is not there. An
-explicit deny (``_rejected_ids``) is never outvoted by it — same split as
-opencode's ``--auto`` (ask becomes a pass, an explicit deny still applies). The
+per-call judgement, the gate is still entered, and the terminal state is recorded
+as ``auto_approved`` instead of waiting for a human who is not there. Only the
+resolved half of the event pair is published (``human_confirm_resolved``) —
+asking a person who is absent would be a fabricated event, so
+``human_confirm_required`` never appears under this switch (``test_headless``
+pins exactly that). An explicit deny (``_rejected_ids``) is never outvoted by it
+— same split as opencode's ``--auto`` (ask becomes a pass, an explicit deny still
+applies). The
 headless ``Settings`` also disables ``risk_scan`` so ``risk_policy=pause`` can
 never block on a human who is not there. The FastAPI service path never sets
 ``auto_approve``, so there is no global "disable the gate" switch.
@@ -442,9 +445,10 @@ def run_check() -> int:
     step("result JSON contract + artifact in --dir + non-empty trace", _assert_result)
 
     # #57 AC6: --auto-approve is not a whole-gate bypass. A requires_confirm tool
-    # still trips the gate (judgement runs, both events land in the trace), the
-    # terminal state is auto_approved, and the run completes instead of parking
-    # on a human who is not there.
+    # still trips the gate (judgement runs, the resolved event lands in the trace,
+    # and no ask is faked for the absent human), the terminal state is
+    # auto_approved, and the run completes instead of parking on a human who is
+    # not there.
     class _Probe(BaseTool):
         name = "probe_danger"
         description = "confirm-requiring probe (headless smoke only)"
