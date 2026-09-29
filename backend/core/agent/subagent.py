@@ -126,26 +126,27 @@ def resolve_tool_face(
     Both refusals end with the same list, and it is the tier's mounted face
     (``tier_face_names(loaded, tier)``) — the names the model can actually
     narrow to on its next try. The declared tier membership stays out of the
-    message on purpose (#94; it used to be listed here, which put
-    declared-but-unmounted names in front of a model that was being told what it
-    may ask for, costing it a second refusal round).
+    message on purpose (#94): listing it tells the model to narrow to a name
+    this run cannot mount, so the first refusal costs it a second round trip.
     """
     members = set(tier_names(tier))
     if subset is not None:
         loaded = {t.name for t in tools}
+        # One list built once and interpolated into both refusal messages, so the
+        # two reasons can never drift into two different promises (#94).
+        narrowable = ", ".join(tier_face_names(loaded, tier))
         outside = sorted(set(subset) - members)
         if outside:
             raise TierError(
                 f"tier {tier!r} does not include {outside}; the tools argument "
-                f"can only narrow, never widen. Loaded: "
-                f"{', '.join(tier_face_names(loaded, tier))}"
+                f"can only narrow, never widen. Loaded: {narrowable}"
             )
         unmounted = sorted(set(subset) - loaded)
         if unmounted:
             raise TierError(
                 f"tier {tier!r} declares {unmounted} but it is not mounted in "
                 f"this run; the tools argument can only narrow to the loaded "
-                f"face. Loaded: {', '.join(tier_face_names(loaded, tier))}"
+                f"face. Loaded: {narrowable}"
             )
         members &= set(subset)
     return [t for t in tools if t.name in members]
