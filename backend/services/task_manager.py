@@ -168,13 +168,14 @@ class TaskManager:
         self.settings = settings
         self.event_bus = event_bus
         self.persistence = persistence
-        # P0-C headless: instance-scoped confirmation-gate bypass. Only the
+        # P0-C headless: instance-scoped confirmation-gate behaviour. Only the
         # headless entry (backend/headless.py) passes auto_approve=True; the
         # FastAPI service path (main.py lifespan) never does, so there is no
         # global "disable the gate" switch (roadmap v2 / AGENTS.md「跨任务安全边界」:
-        # 评测态 ≠ 生产态). When True, AgentRuntime is built with confirm_enabled=False
-        # — a branch nodes.py already honours for subtask graphs, so the
-        # protected _needs_confirm logic is untouched.
+        # 评测态 ≠ 生产态). Since #57 AC6 it no longer means「整块旁路」: the runtime
+        # keeps computing need_confirm, keeps publishing the ask, and records the
+        # terminal state as ``auto_approved`` instead of waiting for a human who
+        # is not there. An explicit deny (``_rejected_ids``) is never outvoted.
         self._auto_approve = auto_approve
         # P0 item 3: auto-discover plugin tools before building the tool list.
         if settings.plugins_autoload:
@@ -215,7 +216,10 @@ class TaskManager:
             RunManifest(
                 settings,
                 [t.name for t in self._tools],
-                confirm_enabled=not self._auto_approve,
+                # #57 AC6: 评测态下闸门是**armed 且自动放行**，不是关掉——
+                # 件清单要说的是这个区别（auto_approve 单独一列，可 diff）。
+                confirm_enabled=True,
+                auto_approve=self._auto_approve,
             )
             if settings.run_manifest_enabled
             else None
@@ -624,7 +628,8 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
-                confirm_enabled=not self._auto_approve,
+                confirm_enabled=True,  # gate always armed (#57 AC6)
+                auto_approve=self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -940,7 +945,8 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
-                confirm_enabled=not self._auto_approve,
+                confirm_enabled=True,  # gate always armed (#57 AC6)
+                auto_approve=self._auto_approve,
             )
             graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
 
@@ -1039,11 +1045,17 @@ class TaskManager:
         }
         return ev
 
-    def consume_confirm(self, task_id: str, tool_call_id: str) -> bool:
+    def consume_confirm(self, task_id: str, tool_call_id: str) -> Optional[bool]:
+        """The human verdict: True/False = 答了，``None`` = **没答**（#57 AC5）。
+
+        从前这里把「没答」和「答了个不」都折成 False，闸门因此只有一种失败终态。
+        调用方（``human_confirm_node``）先按判决分档，再问是谁打断了等待；
+        ``_plan_confirm`` 那侧仍按 ``bool(...)`` 用（None 依旧是「没批」）。
+        """
         cs = self._confirm_state.get(task_id)
         if cs and cs["tool_call_id"] == tool_call_id:
-            return bool(cs["result"])
-        return False
+            return cs["result"]
+        return None
 
     def confirm(self, task_id: str, tool_call_id: str, approved: bool) -> bool:
         cs = self._confirm_state.get(task_id)

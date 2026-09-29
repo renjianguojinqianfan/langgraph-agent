@@ -18,13 +18,20 @@ Two modes:
 * **--check** — offline smoke (mock LLM, temp paths, no network / no key),
   safe for CI, mirroring ``scripts/live_e2e.py --check``.
 
-Gate bypass (evaluation mode != production mode): ``--auto-approve`` builds
-``TaskManager(auto_approve=True)`` -> ``AgentRuntime(confirm_enabled=False)``,
-which the executor already honours to skip ``need_confirm`` for every tool
-(nodes.py is untouched). The headless ``Settings`` also disables ``risk_scan``
-so ``risk_policy=pause`` can never block on a human who is not there. The
-FastAPI service path never sets ``auto_approve``, so there is no global
-"disable the gate" switch.
+Gate behaviour (evaluation mode != production mode): ``--auto-approve`` builds
+``TaskManager(auto_approve=True)`` -> ``AgentRuntime(auto_approve=True)``, which
+since Issue #57 AC6 is **not** a whole-gate bypass: the executor still runs every
+per-call judgement, the gate is still entered, and the terminal state is recorded
+as ``auto_approved`` instead of waiting for a human who is not there. Only the
+resolved half of the event pair is published (``human_confirm_resolved``) —
+asking a person who is absent would be a fabricated event, so
+``human_confirm_required`` never appears under this switch (``test_headless``
+pins exactly that). An explicit deny (``_rejected_ids``) is never outvoted by it
+— same split as opencode's ``--auto`` (ask becomes a pass, an explicit deny still
+applies). The
+headless ``Settings`` also disables ``risk_scan`` so ``risk_policy=pause`` can
+never block on a human who is not there. The FastAPI service path never sets
+``auto_approve``, so there is no global "disable the gate" switch.
 
 Result contract: with ``--output json`` the parsed result object is the ONLY
 thing on stdout (agent logs are repointed at stderr); diagnostics/logs live on
@@ -437,8 +444,11 @@ def run_check() -> int:
     step("headless run reaches COMPLETED (mock, auto_approve)", _run)
     step("result JSON contract + artifact in --dir + non-empty trace", _assert_result)
 
-    # auto_approve bypass: a requires_confirm tool runs to COMPLETED instead of
-    # parking on the (absent) human gate.
+    # #57 AC6: --auto-approve is not a whole-gate bypass. A requires_confirm tool
+    # still trips the gate (judgement runs, the resolved event lands in the trace,
+    # and no ask is faked for the absent human), the terminal state is
+    # auto_approved, and the run completes instead of parking on a human who is
+    # not there.
     class _Probe(BaseTool):
         name = "probe_danger"
         description = "confirm-requiring probe (headless smoke only)"
@@ -470,11 +480,21 @@ def run_check() -> int:
         result = probe_holder.get("result")
         assert result is not None, "no probe result"
         assert result["status"] == "COMPLETED", (
-            f"auto_approve did not bypass the gate: status={result['status']}"
+            f"auto_approve did not clear the gate: status={result['status']}"
+        )
+        events = [
+            json.loads(line)
+            for line in Path(str(result["trace_path"])).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        resolved = [e for e in events if e.get("type") == "human_confirm_resolved"]
+        assert resolved, "the gate never fired under --auto-approve (整块旁路 回来了)"
+        assert resolved[0]["data"].get("outcome") == "auto_approved", (
+            f"unexpected terminal state for the auto-approved gate: {resolved[0]['data']}"
         )
 
-    step("--auto-approve bypasses the confirm gate (requires_confirm tool)", _run_probe)
-    step("bypassed run completes", _assert_probe)
+    step("--auto-approve auto-clears the confirm gate (requires_confirm tool)", _run_probe)
+    step("gated run completes with an auto_approved terminal state in the trace", _assert_probe)
 
     ok = True
     for name, passed, err in results:
@@ -500,8 +520,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-approve",
         "--yolo",
         action="store_true",
-        help="bypass the confirmation gate (evaluation mode; NOT the production default). "
-        "--yolo is the cross-agent harness alias (roadmap-pawbench §四 unified form)",
+        help="auto-clear the confirmation gate (evaluation mode; the per-call judgement "
+        "still runs and the gate still fires — only the wait for a human verdict goes "
+        "away, recorded as auto_approved). NOT a gate disable, and NOT the production "
+        "default. --yolo is the cross-agent harness alias (roadmap-pawbench §四 unified form)",
     )
     parser.add_argument("--model", help="override LLM model (else env/.env)")
     parser.add_argument("--base-url", help="override LLM base_url (else env/.env)")

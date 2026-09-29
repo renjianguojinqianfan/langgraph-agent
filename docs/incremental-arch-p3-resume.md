@@ -76,6 +76,7 @@ TaskManager 构造器尾部单次执行：持久化里 status ∈ {RUNNING, PEND
 | 场景 | 行为 |
 |---|---|
 | 任务停在人工确认闸口被 stop | human_confirm_node 用 manager 权威 flag 判定 stop-forced，将 `pending_confirm` 标记写入 state 并随快照落盘 |
+| 闸口等到 `confirm_timeout_sec` 仍无人判决（#57 AC5 追加） | 记 `timed_out`（不再是 `denied` 的影子），但**不写** `pending_confirm`：那一格已进 `_rejected_ids`、运行继续往下走，闸口不再等人。而该标记的语义正是「仍停在闸口」——写上就等于让一次没人答把任务永久锁成不可续跑，且拒绝文案会假称「被 stop 打断」。三档里只有 `aborted` 真停在闸口，只有它写标记；`denied` 是人给的真判决，同样不写 |
 | resume 读取到该标记 / 未决 require_confirm 调用 | **同步拒绝**（409）："awaiting human confirmation"——闸门永不被静默绕过 |
 | 已决确认历史（_confirmed_ids/_rejected_ids） | 随快照保留；续跑后的新高危调用因 id 新鲜必然重新触发闸门（story #13 契约验证） |
 | COMPLETED / FAILED 终态 resume | 409 幂等拒绝 |

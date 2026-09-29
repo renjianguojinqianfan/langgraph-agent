@@ -107,6 +107,7 @@ function applyToTask(task: Task, ev: SSEvent): Task {
                   // The backend attaches these flags on the tool_result event.
                   circuit_open: rec.circuit_open ?? tc.circuit_open,
                   retries: rec.retries ?? tc.retries,
+                  confirm_outcome: rec.confirm_outcome ?? tc.confirm_outcome,
                 }
               : tc
           ),
@@ -234,6 +235,16 @@ export const useTaskStore = create<TaskState>((set) => ({
           input: ev.data.input,
           task_id: id,
         };
+      }
+      // #83: 后端自行收口的三种终态（超时未答 / 停止打断 / 评测态自动放行）不会
+      // 有人来点这个按钮。不在这儿关掉，就留一具僵尸弹窗——用户还能对一格已有
+      // 终态的调用点按「批准」，那是一次打到已判完的调用上的假操作。
+      if (
+        ev.type === "human_confirm_resolved" &&
+        confirm.open &&
+        confirm.tool_call_id === ev.data.tool_call_id
+      ) {
+        confirm = { open: false };
       }
 
       // Track flow markers (circuit open / context compressed) per task so the

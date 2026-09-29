@@ -8,7 +8,7 @@
 >
 > 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、REST
 > 端点表、SSE 事件表、类图与时序图均为**当时的计划态**，与现状差两代（本文：4 个工具 /
-> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 16 个端点 / 23 种事件 / 14 个组件）。
+> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 16 个端点 / 事件清单见 §3.4 表 / 14 个组件）。
 >
 > **现役事实请查这里**：
 > - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
@@ -348,12 +348,12 @@ classDiagram
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 
-> ⚠️ **v0.1：12 种。现役 23 种**（已核：22 个经 EventBus publish + `heartbeat` 由
-> `api/sse.py` 直发）。新增 11 种：`risk_report` / `risk_found`（P1 风险扫描）、
-> `subtask_start` / `subtask_result` / `subtask_failed`（P1 子 agent）、
-> `context_compressed` / `tool_circuit_open`（P0 压缩与熔断）、`task_resumed`（P3）、
-> `verification`（P0-B 完成验证）、`tool_result_evicted`（T1.4 工具结果逐出）、
-> `task_rollback`（P1-B 工作区回滚）。
+> ⚠️ **现役清单以下表为准，本文不写计数**（计数每次增删都要重推一遍，23→24 连续两代
+> 都错在这里；同 `AGENTS.md`「文档不写现役测试计数（数字必腐，以实跑为准）」一个道理）。
+> v0.1 只有 12 种，此后新增的都在下表行内标了来源。
+> **已退役、后端无发布点**（#56 起）：`subtask_start` / `subtask_result` /
+> `subtask_failed` —— 子任务失败改由一条失败的 tool call 带回、父任务不死；旧文档里
+> 还列着它们，别照抄计数。
 > 前端联合类型见 `frontend/src/types/index.ts`（未知类型自然忽略）。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
@@ -362,15 +362,20 @@ classDiagram
 |------------|-----------|------|
 | `task_created` | `{task_id, title, status}` | 任务已创建 |
 | `plan_update` | `{plan: PlanStep[]}` | 规划步骤更新 |
+| `risk_report` | `{items: RiskItem[], policy, semantic_enabled}` | 规划期风险扫描一轮结果（P1）；`policy` = 现役 `risk_policy`，`semantic_enabled` = 本轮是否走了语义分析 |
+| `risk_found` | `RiskItem` | 上表里 `level` ∈ {high, medium} 的**单条**命中，逐条发（P1） |
 | `step_start` | `{index, thought}` | 某 step 开始（LLM 思考文本） |
 | `tool_call` | `ToolCallRecord`（含 `need_confirm`） | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
 | `human_confirm_required` | `{tool_call_id, tool_name, input}` | 需用户确认（P1） |
+| `human_confirm_resolved` | `{tool_call_id, tool_name, outcome}` | 闸门收口的那一档终态：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（#57 AC5-AC6）。被 stop 打断的运行走不到 tool 节点、没有 `tool_result` 可挂标签，故终态必须单独播报一次。刻意不带 `input`：trace 不脱敏，同 id 的 `tool_call` 事件里已有入参 |
 | `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
+| `verification` | `{task_id, passed, failures, attempts, degraded, loop_back?}` | 完成验证结论（P0-B）：`degraded=true` = 重试耗尽仍降级 COMPLETED 而不是误杀；带 `loop_back` = 未达标、已注入证据回环 planner |
 | `final_answer` | `{answer:str}` | 最终答案 |
 | `task_completed` | `{task_id, status}` | 完成 |
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 被停止 |
+| `task_resumed` | `{task_id, status}` | 从检查点续跑启动（P3） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |
 | `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 |
@@ -467,7 +472,7 @@ sequenceDiagram
 4. **事件/消息协议**：后端 → 前端仅通过 SSE 事件（见 3.4）通信；事件 `data` 为 JSON，字段名与后端模型一致；前端 `types/index.ts` 必须与后端 schema 保持字段对齐（单一事实来源：后端 `schemas.py`）。
 5. **错误与重试约定**：工具失败返回 `ToolResult(success=False, error=...)`；`code_exec`/`http_api` 支持按 `Settings` 重试（P1-4，默认退避 2s×2）。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。
 6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在每轮开头检测，为真则提前 `END` 并发布 `task_interrupted`（P0-9：2s 内生效）。
-7. **人工介入**：`requires_confirm=True` 的工具（代码执行、HTTP 写操作）在 `executor` 后插入 `human_confirm` 中断（P1-2）；前端 `ConfirmDialog` 提交 `POST /confirm`。
+7. **人工介入**：`requires_confirm=True` 的工具（代码执行、HTTP 写操作）在 `executor` 后插入 `human_confirm` 中断（P1-2）；前端 `ConfirmDialog` 提交 `POST /confirm`。未批准的收口不是一个布尔而是三档可辨的终态（#57 AC5）：`denied`（人明确拒了）/ `timed_out`（等满 `confirm_timeout_sec`，默认 1800s，没人答）/ `aborted`（被 stop 打断），连同 `approved` 写进记录体 `confirm_outcome`，事件 / trace / 持久化三面同源。文案只有 `denied` 保留 `rejected by user`——那才是唯一一句真话。
 8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
 9. **成功判定（Q8）**：任务进入最终反思并产出 `final_answer`、期间无未捕获致命异常 → 记 `COMPLETED`（成功）；达到 `max_steps` 未产出或抛出异常 → `FAILED`。
 10. **日志**：统一经 `utils/logging.py`，结构化输出到控制台 + `data_dir/logs/`；不打印明文 API Key。

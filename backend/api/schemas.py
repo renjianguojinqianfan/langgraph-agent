@@ -34,6 +34,9 @@ class ToolCallRecord(BaseModel):
     error: Optional[str] = None
     need_confirm: bool = False
     confirmed: bool = False
+    # #57 AC5: 进过闸门的调用带终态分档（approved | denied | timed_out | aborted |
+    # auto_approved）；空串是「没进过闸门」，不是某种失败。
+    confirm_outcome: str = ""
     circuit_open: bool = False  # P0: short-circuited by the circuit breaker
     retries: int = 0  # P0: retries performed by the tool executor
 
