@@ -123,26 +123,30 @@ def resolve_tool_face(
     silent drop would read as success to the parent — the subtask would go out
     with a narrowed-to-nothing face and still fold back ``completed``.
 
-    The second refusal lists the tier's mounted face — the names the model can
-    actually narrow to on its next try. The first one still lists the declared
-    members, which is a known shortcoming (a declared-but-unmounted name shows
-    up there too); tightening it is deliberately out of #74's scope.
+    Both refusals end with the same list, and it is the tier's mounted face
+    (``tier_face_names(loaded, tier)``) — the names the model can actually
+    narrow to on its next try. The declared tier membership stays out of the
+    message on purpose (#94): listing it tells the model to narrow to a name
+    this run cannot mount, so the first refusal costs it a second round trip.
     """
     members = set(tier_names(tier))
     if subset is not None:
+        loaded = {t.name for t in tools}
+        # One list built once and interpolated into both refusal messages, so the
+        # two reasons can never drift into two different promises (#94).
+        narrowable = ", ".join(tier_face_names(loaded, tier))
         outside = sorted(set(subset) - members)
         if outside:
             raise TierError(
                 f"tier {tier!r} does not include {outside}; the tools argument "
-                f"can only narrow, never widen. Members: {sorted(members)}"
+                f"can only narrow, never widen. Loaded: {narrowable}"
             )
-        loaded = {t.name for t in tools}
         unmounted = sorted(set(subset) - loaded)
         if unmounted:
             raise TierError(
                 f"tier {tier!r} declares {unmounted} but it is not mounted in "
                 f"this run; the tools argument can only narrow to the loaded "
-                f"face. Loaded: {', '.join(tier_face_names(loaded, tier))}"
+                f"face. Loaded: {narrowable}"
             )
         members &= set(subset)
     return [t for t in tools if t.name in members]
