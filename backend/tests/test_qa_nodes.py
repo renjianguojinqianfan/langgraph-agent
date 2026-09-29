@@ -51,6 +51,16 @@ class _SilentFailTool(_FailTool):
         return ToolResult(success=False)
 
 
+class _EchoTool(_FailTool):
+    """A success carrying a real payload — the shape the failure fix must not touch."""
+
+    name = "qa_echo"
+
+    def run(self, **kwargs) -> ToolResult:
+        self.calls += 1
+        return ToolResult(success=True, data={"note": "ok 中文", "n": 3})
+
+
 def _state_with_call(
     tool_name: str = "qa_fail",
     *,
@@ -321,4 +331,49 @@ def test_unknown_tool_answers_the_model():
     assert rec["status"] == "failed"
     assert [e["data"]["error"] for e in events if e["type"] == "tool_result"] == [
         "unknown tool: ghost_tool"
+    ]
+
+
+def test_a_call_parked_at_the_gate_stays_unanswered():
+    """#95 deliberately leaves this branch alone: parking at the gate is an
+    intermediate state — the verdict re-enters this node, and answering early
+    would put two tool messages on one ``tool_call_id``."""
+    rt, _events = _bus_runtime([_EchoTool()])
+    state = _state_with_call("gate_probe", need_confirm=True)
+    state["_current_tool_calls"].append(
+        {
+            "id": "call_2", "tool_name": "qa_echo", "input": {}, "output": None,
+            "status": "pending", "error": "", "need_confirm": False, "confirmed": False,
+        }
+    )
+    rt.tool_node(state)
+
+    assert [m["tool_call_id"] for m in _tool_messages(state)] == ["call_2"]
+    assert state["_current_tool_calls"][0]["status"] == "pending"
+
+
+def test_the_verdict_answers_once_on_the_re_entry():
+    """One gate pass parks the call, the next (the static ``human_confirm ->
+    tool`` edge) answers it exactly once — never two messages for one id (#95)."""
+    rt, _events = _bus_runtime([])
+    state = _state_with_call("gate_probe", need_confirm=True)
+    rt.tool_node(state)
+    assert _tool_messages(state) == []
+
+    state["_rejected_ids"] = ["call_1"]
+    rt.tool_node(state)
+
+    ids = [m["tool_call_id"] for m in _tool_messages(state)]
+    assert ids == ["call_1"]
+
+
+def test_success_content_stays_the_payload_verbatim():
+    """Only the failure branches changed: a successful payload is dumped exactly
+    as before — same bytes, no ``ok`` / ``error`` wrapper keys (#95)."""
+    rt, _events = _bus_runtime([_EchoTool()])
+    state = _state_with_call("qa_echo")
+    rt.tool_node(state)
+
+    assert _tool_messages(state) == [
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"note": "ok 中文", "n": 3}'}
     ]
