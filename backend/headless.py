@@ -516,8 +516,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-approve",
         "--yolo",
         action="store_true",
-        help="bypass the confirmation gate (evaluation mode; NOT the production default). "
-        "--yolo is the cross-agent harness alias (roadmap-pawbench §四 unified form)",
+        help="auto-clear the confirmation gate (evaluation mode; the per-call judgement "
+        "still runs and the gate still fires — only the wait for a human verdict goes "
+        "away, recorded as auto_approved). NOT a gate disable, and NOT the production "
+        "default. --yolo is the cross-agent harness alias (roadmap-pawbench §四 unified form)",
     )
     parser.add_argument("--model", help="override LLM model (else env/.env)")
     parser.add_argument("--base-url", help="override LLM base_url (else env/.env)")
