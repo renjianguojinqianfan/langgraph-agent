@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getTaskTrace, TraceFetchError } from "../api/client";
-import { SSEvent } from "../types";
+import { CONFIRM_OUTCOME_LABEL, SSEvent } from "../types";
 
 type TraceCategory = "all" | "tool" | "circuit" | "compress" | "task";
 
@@ -93,14 +93,8 @@ const TYPE_META: Record<string, TraceMeta> = {
   },
 };
 
-/** #83（#57 AC5）五档终态，与后端 nodes.py 的 CONFIRM_* 常量一一对应。 */
-const CONFIRM_OUTCOME_LABEL: Record<string, string> = {
-  approved: "人已批准",
-  denied: "人明确拒绝",
-  timed_out: "超时未答",
-  aborted: "被停止打断",
-  auto_approved: "评测态自动放行",
-};
+// #83（#57 AC5）五档终态文案表已上收到 `types.CONFIRM_OUTCOME_LABEL`——StepDetail（#91 AC2
+// 的新消费者）与本文件的 summarize 共用那一张，别在这儿造第二张。
 
 const FILTERS: { key: TraceCategory; label: string }[] = [
   { key: "all", label: "全部" },
