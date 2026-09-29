@@ -366,7 +366,7 @@ classDiagram
 | `tool_call` | `ToolCallRecord`（含 `need_confirm`） | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
 | `human_confirm_required` | `{tool_call_id, tool_name, input}` | 需用户确认（P1） |
-| `human_confirm_resolved` | `{tool_call_id, tool_name, outcome, input}` | 闸门收口的那一档终态：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（#57 AC5-AC6）。被 stop 打断的运行走不到 tool 节点、没有 `tool_result` 可挂标签，故终态必须单独播报一次 |
+| `human_confirm_resolved` | `{tool_call_id, tool_name, outcome}` | 闸门收口的那一档终态：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（#57 AC5-AC6）。被 stop 打断的运行走不到 tool 节点、没有 `tool_result` 可挂标签，故终态必须单独播报一次。刻意不带 `input`：trace 不脱敏，同 id 的 `tool_call` 事件里已有入参 |
 | `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
 | `final_answer` | `{answer:str}` | 最终答案 |
 | `task_completed` | `{task_id, status}` | 完成 |

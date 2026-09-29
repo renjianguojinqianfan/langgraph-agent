@@ -179,7 +179,7 @@ export type SSEventType =
   | "tool_circuit_open" // P0: {tool_name, cooldown_sec}
   | "context_compressed" // P0: {step_index, dropped, band_evicted, converged, context_tokens, strategy}
   | "human_confirm_required"
-  | "human_confirm_resolved" // #57: {tool_call_id, tool_name, outcome, input}（outcome 见 ToolCallRecord.confirm_outcome）
+  | "human_confirm_resolved" // #57: {tool_call_id, tool_name, outcome}（outcome 见 ToolCallRecord.confirm_outcome；入参不带，同 id 的 tool_call 事件已有且 trace 不脱敏）
   | "artifact_created"
   | "final_answer"
   | "task_completed"

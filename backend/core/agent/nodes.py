@@ -636,14 +636,16 @@ class AgentRuntime:
         target["confirm_outcome"] = outcome
         # The asked/replied pair (opencode names its two events the same way):
         # the outcome needs its own event because a 停止打断 run never reaches the
-        # tool node, so no ``tool_result`` would ever carry the label.
+        # tool node, so no ``tool_result`` would ever carry the label. No ``input``
+        # here on purpose: the trace does not redact, and the arguments are already
+        # on the ``tool_call`` event under the same id — a second copy would only
+        # double the sensitive surface with no reader.
         self._publish(
             "human_confirm_resolved",
             {
                 "tool_call_id": target["id"],
                 "tool_name": target.get("tool_name", ""),
                 "outcome": outcome,
-                "input": target.get("input", {}),
             },
         )
         if outcome != CONFIRM_APPROVED and outcome != CONFIRM_AUTO_APPROVED:
