@@ -1,5 +1,5 @@
 import { useTaskStore } from "../store/taskStore";
-import { Task, ToolCallRecord } from "../types";
+import { CONFIRM_OUTCOME_LABEL, Task, ToolCallRecord } from "../types";
 
 function pretty(v: any): string {
   try {
@@ -50,7 +50,13 @@ function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
         </div>
       </div>
       {tc.need_confirm && (
-        <div className="text-amber-400">需人工确认 {tc.confirmed ? "（已确认）" : "（待确认）"}</div>
+        <div className="text-amber-400">
+          需人工确认（
+          {tc.confirm_outcome
+            ? CONFIRM_OUTCOME_LABEL[tc.confirm_outcome] ?? tc.confirm_outcome
+            : "待确认"}
+          ）
+        </div>
       )}
       <div>
         <div className="text-slate-500">入参</div>
