@@ -567,9 +567,13 @@ class AgentRuntime:
 
         The same reason the ``tool_result`` event carries, in a shape that says
         outright it is a failure — the success payload has no ``ok`` key, so the
-        model cannot tell the two apart by looking for one.
+        model cannot tell the two apart by looking for one. A tool that failed
+        without saying anything still gets a word: an empty ``error`` reads as
+        little as the old ``null`` did.
         """
-        return json.dumps({"ok": False, "error": reason}, ensure_ascii=False, default=str)
+        return json.dumps(
+            {"ok": False, "error": reason or "tool failed"}, ensure_ascii=False, default=str
+        )
 
     def _confirm_skip_text(self, rec: Dict[str, Any]) -> str:
         """三档未批准各自的文案（#57 AC5）。

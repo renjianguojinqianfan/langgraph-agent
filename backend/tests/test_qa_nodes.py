@@ -40,6 +40,17 @@ class _FailTool(BaseTool):
         return ToolResult(success=False, error="boom")
 
 
+class _SilentFailTool(_FailTool):
+    """A failure that carries no message at all — the case the fallback wording
+    exists for, since an empty ``error`` tells the model as little as ``null`` did."""
+
+    name = "qa_silent_fail"
+
+    def run(self, **kwargs) -> ToolResult:
+        self.calls += 1
+        return ToolResult(success=False)
+
+
 def _state_with_call(
     tool_name: str = "qa_fail",
     *,
@@ -247,3 +258,15 @@ def test_failed_tool_message_carries_the_reason():
     assert rec["status"] == "failed"
     assert rec["error"] == "boom"
     assert [e["data"]["error"] for e in events if e["type"] == "tool_result"] == ["boom"]
+
+
+def test_failed_tool_without_a_reason_still_says_it_failed():
+    """``ToolResult(success=False)`` with no message at all: the model must not
+    fall back to reading nothing — the wording says 「failed」, that is the floor."""
+    rt, _events = _bus_runtime([_SilentFailTool()])
+    state = _state_with_call("qa_silent_fail")
+    rt.tool_node(state)
+
+    assert _tool_messages(state) == [
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok": false, "error": "tool failed"}'}
+    ]
