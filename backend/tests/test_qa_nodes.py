@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from backend.config import Settings
-from backend.core.agent.nodes import AgentRuntime
+from backend.core.agent.nodes import CONFIRM_TIMED_OUT, AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.services.event_bus import EventBus
@@ -270,3 +270,38 @@ def test_failed_tool_without_a_reason_still_says_it_failed():
     assert _tool_messages(state) == [
         {"role": "tool", "tool_call_id": "call_1", "content": '{"ok": false, "error": "tool failed"}'}
     ]
+
+
+def test_rejected_call_answers_the_model_with_the_verdict():
+    """A call a human said no to used to get no tool message at all: the
+    ``tool_call_id`` stayed unanswered in the conversation while the reason only
+    reached the event face (#95)."""
+    rt, events = _bus_runtime([])
+    state = _state_with_call("gate_probe", need_confirm=True)
+    state["_rejected_ids"] = ["call_1"]
+    rt.tool_node(state)
+
+    assert _tool_messages(state) == [
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok": false, "error": "rejected by user"}'}
+    ]
+    # Event face untouched: same record, same status, same one tool_result.
+    rec = state["_current_tool_calls"][0]
+    assert rec["status"] == "skipped"
+    assert rec["error"] == "rejected by user"
+    assert [e["data"]["error"] for e in events if e["type"] == "tool_result"] == ["rejected by user"]
+
+
+def test_a_timeout_is_answered_as_a_timeout_not_as_a_refusal():
+    """The three un-approved buckets stay three (#95 reuses ``_confirm_skip_text``,
+    it does not fold them back into one「rejected by user」boolean)."""
+    rt, _events = _bus_runtime([])
+    state = _state_with_call("gate_probe", need_confirm=True)
+    state["_rejected_ids"] = ["call_1"]
+    state["_current_tool_calls"][0]["confirm_outcome"] = CONFIRM_TIMED_OUT
+    rt.tool_node(state)
+
+    content = _tool_messages(state)[0]["content"]
+    assert "timeout" in content
+    assert "rejected" not in content
+    # 同一条文案，两个读者：事件面与对话面同源。
+    assert state["_current_tool_calls"][0]["error"] in content

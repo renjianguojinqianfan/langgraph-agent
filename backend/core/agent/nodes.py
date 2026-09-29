@@ -501,6 +501,7 @@ class AgentRuntime:
                 rec["status"] = "skipped"
                 rec["error"] = self._confirm_skip_text(rec)
                 self._publish("tool_result", rec)
+                self._feed_tool_failure(state, rec)
                 continue
             if rec["need_confirm"] and rec["id"] not in confirmed:
                 # Not yet authorised; skip (should be reached via human_confirm first).
@@ -526,18 +527,16 @@ class AgentRuntime:
             rec["retries"] = result.retries
             self._publish("tool_result", rec)
 
-            # Feed the tool result back into the conversation. On success the
-            # payload is ``result.data`` verbatim; on failure it is the reason
-            # (#95) — a bare ``null`` told the model nothing, so every next turn
-            # guessed at what went wrong.
-            content = (
-                json.dumps(result.data, ensure_ascii=False, default=str)
-                if result.success
-                else self._tool_failure_content(result.error)
-            )
-            state.setdefault("messages", []).append(
-                {"role": "tool", "tool_call_id": rec["id"], "content": content}
-            )
+            # Feed the tool result back into the conversation: the payload
+            # verbatim on success, the reason on failure (#95 — a bare ``null``
+            # told the model nothing, so every next turn guessed at what went
+            # wrong).
+            if result.success:
+                state.setdefault("messages", []).append(
+                    {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(result.data, ensure_ascii=False, default=str)}
+                )
+            else:
+                self._feed_tool_failure(state, rec)
 
             # Register an artifact when a producing tool wrote a file on disk.
             # Two guards, one per axis: only a ``registers_artifact`` tool is a
@@ -561,18 +560,27 @@ class AgentRuntime:
             step["status"] = "done"
         return state
 
-    @staticmethod
-    def _tool_failure_content(reason: str) -> str:
-        """The tool message the model reads when a call did not succeed (#95).
+    def _feed_tool_failure(self, state: AgentState, rec: Dict[str, Any]) -> None:
+        """Answer one un-successful call on the conversation face (issue #95).
 
-        The same reason the ``tool_result`` event carries, in a shape that says
-        outright it is a failure — the success payload has no ``ok`` key, so the
-        model cannot tell the two apart by looking for one. A tool that failed
-        without saying anything still gets a word: an empty ``error`` reads as
-        little as the old ``null`` did.
+        All three buckets share this line — human-rejected, unknown tool,
+        executed and failed — and each has just written its reason onto
+        ``rec["error"]``, the very field the ``tool_result`` event publishes: the
+        model and the human read one text from one source. A tool that failed
+        without saying anything still gets a word, because an empty reason reads
+        as little as the old bare ``null`` did. The success path never comes
+        through here.
         """
-        return json.dumps(
-            {"ok": False, "error": reason or "tool failed"}, ensure_ascii=False, default=str
+        state.setdefault("messages", []).append(
+            {
+                "role": "tool",
+                "tool_call_id": rec["id"],
+                "content": json.dumps(
+                    {"ok": False, "error": rec["error"] or "tool failed"},
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            }
         )
 
     def _confirm_skip_text(self, rec: Dict[str, Any]) -> str:
