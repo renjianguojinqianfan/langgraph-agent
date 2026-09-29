@@ -51,7 +51,7 @@ class _Gated(BaseTool):
     args_schema: Dict[str, Any] = {"type": "object", "properties": {}}
     requires_confirm = True
 
-    def run(self, **kwargs: Any) -> ToolResult:  # pragma: no cover - covered by skipped path
+    def run(self, **kwargs: Any) -> ToolResult:
         return ToolResult(success=True, data="ran")
 
 
@@ -169,6 +169,25 @@ def test_explicit_rejection_is_denied(settings):
     # 这是一次真判决：续跑闸门不必再把它当「等人答」拦下来。
     assert state["pending_confirm"] == {}
     assert tm.asked == ["c1"]
+
+
+def test_a_real_verdict_outranks_a_concurrent_stop(settings):
+    """判据顺序的骨架两问同时命中时，判决赢：先问「人答没答」，再问「被谁打断」。
+
+    人答了「不」的同一刻 stop 也落下来 —— 这一格是 ``denied``（一次真判决，不写
+    ``pending_confirm``），不是 ``aborted``。缺了这条，``_ask_human`` docstring 自称
+    的那根骨架只钉了一半。
+    """
+    _rt, state, tm = _run_gate(settings, verdict=False, stop=True)
+    rec = _rec(state)
+
+    assert tm.is_stop_flagged(TASK_ID) is True, "stop 没真在场，这条就没测到优先级"
+    assert rec["confirm_outcome"] == CONFIRM_DENIED
+    assert state["_rejected_ids"] == ["c1"]
+    assert state["pending_confirm"] == {}
+    # 记录体上此刻还没有分档文案：stop 让 tool_node 在入口就短路（与 aborted 那条
+    # 断言 status=="pending" 同源），文案要等运行真走到 tool 节点才写。
+    assert rec["status"] == "pending"
 
 
 def test_approval_is_approved(settings):
@@ -323,6 +342,9 @@ def test_auto_approve_runs_the_gate_and_records_auto_approved(settings):
     assert state["_confirmed_ids"] == ["c1"]
     assert state["_rejected_ids"] == []
     assert state["_needs_confirm"] is False
+    # 「五档里只有 aborted 写 pending_confirm」这句话此前缺第五档的断言：评测态自动
+    # 放行同样不许在状态里留下「还停在闸口」的标记。
+    assert state["pending_confirm"] == {}
     types = [e["type"] for e in tm.event_bus.replay(TASK_ID)]
     assert types.count("human_confirm_resolved") == 1
     # 真人不在，就不许发「已向人发问」这种事件（评测态不伪造 ask）。

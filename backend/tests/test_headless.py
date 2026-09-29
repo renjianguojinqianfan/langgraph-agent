@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from backend.config import Settings
+from backend.core.agent.nodes import CONFIRM_AUTO_APPROVED
 from backend.core.llm.client import LLMClient, LLMResponse, MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.headless import (
@@ -178,7 +179,7 @@ def test_auto_approve_auto_clears_confirm_gate(tmp_path: Path) -> None:
     # 判定确实算了（记录体带 need_confirm），闸门确实进了。
     assert calls and calls[-1]["data"]["need_confirm"] is True, "评测态把判定整块跳开了"
     assert len(resolved) == 1
-    assert resolved[0]["data"]["outcome"] == "auto_approved"
+    assert resolved[0]["data"]["outcome"] == CONFIRM_AUTO_APPROVED
     # 「向一个人发问」这件事没发生——真人不在，不许发假 ask 事件。
     assert asked == []
     # 自动放行确实放行：这一次调用跑了，且不是被跳过。
