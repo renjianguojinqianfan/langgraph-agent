@@ -8,6 +8,9 @@ short-circuited dispatch publishes ``tool_circuit_open`` — end to end through
 
 Also covers the node's artifact-extraction guard: a tool result whose ``path``
 is a directory registers no artifact (#17).
+
+And the conversation face of a call that did not succeed: the reason has to land
+in the tool message the model reads, not only in the events a human reads (#95).
 """
 
 from __future__ import annotations
@@ -61,19 +64,14 @@ class _EchoTool(_FailTool):
         return ToolResult(success=True, data={"note": "ok 中文", "n": 3})
 
 
-def _state_with_call(
-    tool_name: str = "qa_fail",
-    *,
-    call_id: str = "call_1",
-    need_confirm: bool = False,
-) -> AgentState:
+def _state_with_call(tool_name: str = "qa_fail", *, need_confirm: bool = False) -> AgentState:
     return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
         "messages": [{"role": "user", "content": "hi"}],
         "_current_tool_calls": [
             {
-                "id": call_id,
+                "id": "call_1",
                 "tool_name": tool_name,
                 "input": {},
                 "output": None,
@@ -255,7 +253,7 @@ def _bus_runtime(tools: list, task_id: str = "t95") -> tuple:
 def test_failed_tool_message_carries_the_reason():
     """The model used to read the literal ``null``: ``ToolResult.error`` went to
     ``rec["error"]`` (human-facing events only), never into ``messages`` (#95)."""
-    rt, events = _bus_runtime([_FailTool(Settings(tool_failure_threshold=3, tool_max_retries=0))])
+    rt, events = _bus_runtime([_FailTool()])
     state = _state_with_call()
     rt.tool_node(state)
 
@@ -313,7 +311,7 @@ def test_a_timeout_is_answered_as_a_timeout_not_as_a_refusal():
     content = _tool_messages(state)[0]["content"]
     assert "timeout" in content
     assert "rejected" not in content
-    # 同一条文案，两个读者：事件面与对话面同源。
+    # One text, two readers: the conversation repeats the event's own reason.
     assert state["_current_tool_calls"][0]["error"] in content
 
 
