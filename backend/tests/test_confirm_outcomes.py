@@ -7,7 +7,8 @@ Codex 的 ``Denied`` / ``TimedOut`` / ``Abort`` 是三个枚举值，不是一�
 这里钉住的是**判据**：先问「有没有人给过判决」，再问「是被谁打断的」。
 
 * 人明确拒了 → ``denied``，不写 ``pending_confirm``（这是一次真判决）；
-* 到点没人答 → ``timed_out``，写 ``pending_confirm``（没有判决 ≠ 判决为否）；
+* 到点没人答 → ``timed_out``，**不**写 ``pending_confirm``（闸口自己收口了、运行已
+  继续，那个标记的意思是「还停在闸口等人」）；
 * stop 打断 → ``aborted``，写 ``pending_confirm``（同上，#4 的语义保持）；
 * 人批了 → ``approved``。
 
@@ -204,8 +205,11 @@ def test_no_verdict_before_the_deadline_is_timed_out(settings):
     assert rec["status"] == "skipped"
     assert "timeout" in rec["error"]
     assert "rejected" not in rec["error"]
-    # 没有判决 ≠ 判决为否：与 aborted 一样把待确认项留在状态里。
-    assert state["pending_confirm"]["tool_call_id"] == "c1"
+    # 超时不等于「停在闸口」：调用已进 _rejected_ids、运行已经往下走，所以不写
+    # 续跑闸门读的那个标记（task_manager._raise_if_parked_on_gate 的通道 1）。
+    # 写了就等于一次没人答把任务永久锁成不可 resume，还配上「was stopped」的假原因。
+    assert state["pending_confirm"] == {}
+    assert state["_rejected_ids"] == ["c1"]  # 通道 2 靠这条判「已有交代」
     assert tm.asked == ["c1"]
 
 
@@ -229,9 +233,11 @@ def test_the_three_failure_states_are_pairwise_distinguishable(settings):
     texts = [_rec(s[1])["error"] for s in (denied, timed)]
     assert len(set(texts)) == 2, f"错误文案仍混写：{texts}"
     assert "rejected" not in _rec(timed[1])["error"]
-    # denied 是人给的判决，另两档不是。
+    # 只有「被 stop 折回来」那一档还停在闸口（该写 pending_confirm）：denied 是人
+    # 给的真判决，timed_out 是闸口自己收口并继续跑——两者都不该拦续跑。
     assert denied[1]["pending_confirm"] == {}
-    assert timed[1]["pending_confirm"] and aborted[1]["pending_confirm"]
+    assert timed[1]["pending_confirm"] == {}
+    assert aborted[1]["pending_confirm"]
 
 
 def test_outcome_rides_the_tool_result_event(settings):

@@ -611,7 +611,8 @@ class AgentRuntime:
         记录体（``confirm_outcome``），事件、状态、持久化三面同源。
 
         #57 AC6: 评测态（``auto_approve``）不再整块旁路判定 —— 判定照算、闸门照进、
-        事件照发，只有「等一个不出现的人」换成 ``auto_approved``。显式拒绝与
+        终态照播（只播 ``human_confirm_resolved``；向一个不在场的人发问是伪造事件），
+        换掉的只有「等一个不出现的人」这一格，记成 ``auto_approved``。显式拒绝与
         ``_needs_confirm`` 重算块都不经过这条路。
         """
         tcs = state.get("_current_tool_calls", []) or []
@@ -656,13 +657,20 @@ class AgentRuntime:
             state.setdefault("_confirmed_ids", []).append(target["id"])
         else:
             state.setdefault("_rejected_ids", []).append(target["id"])
-            if outcome in (CONFIRM_TIMED_OUT, CONFIRM_ABORTED):
+            if outcome == CONFIRM_ABORTED:
                 # Issue #4: record when the decision was forced by a stop (no
                 # human verdict). The event is shared between approvals and
                 # stop-wakeups and ``state`` may be a stale copy under a
-                # checkpointer, so the authoritative manager flag decides. A
-                # timeout is the same kind of "nobody said no" (#57), so it
-                # keeps the resume guard treating the task as parked on the gate.
+                # checkpointer, so the authoritative manager flag decides.
+                #
+                # ``timed_out`` deliberately does NOT set this marker (#57 AC5):
+                # it is the resume guard's channel 1, and its documented meaning
+                # is "parked at the gate awaiting a verdict" — a timed-out gate
+                # is no longer awaiting anything, the run moved on and the call
+                # landed in ``_rejected_ids`` (which is exactly what guard
+                # channel 2 checks, and it says *not parked*). Writing it would
+                # turn one unanswered dialog into a task that can never be
+                # resumed, with a message blaming a stop that never happened.
                 state["pending_confirm"] = {
                     "tool_call_id": target["id"],
                     "tool_name": target.get("tool_name", ""),
