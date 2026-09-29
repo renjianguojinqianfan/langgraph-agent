@@ -79,7 +79,11 @@ DEFAULT_TIER = EXECUTE_TIER
 
 
 class TierError(ValueError):
-    """Unknown tier, or a ``tools`` narrowing that reaches outside the tier."""
+    """Unknown tier, or a ``tools`` narrowing that this run cannot honor.
+
+    Two shapes of the same refusal (#74): a name outside the tier, and a tier
+    member that is not mounted in this run.
+    """
 
 
 def tier_names(tier: str) -> List[str]:
@@ -111,10 +115,17 @@ def resolve_tool_face(
     """The tool instances one subtask may use.
 
     ``tier`` selects the declared capability tier; ``subset`` (the
-    ``spawn_subagent`` ``tools`` argument) may only **narrow** it — a name
-    outside the tier is refused with a reason instead of being silently
-    dropped, because a silent drop would let the model believe it had handed
-    the subtask a capability it never got.
+    ``spawn_subagent`` ``tools`` argument) may only **narrow** it. Every name
+    the model hands in is checked, and both ways of not being narrowable are
+    refused with a reason rather than silently dropped (#74): a name outside
+    the tier, and a tier member that is not mounted in this run
+    (``git_enabled=false`` leaves ``git_log`` declared but unavailable). A
+    silent drop would read as success to the parent — the subtask would go out
+    with a narrowed-to-nothing face and still fold back ``completed``.
+
+    The refusal lists the tier members for the first case and the tier's
+    mounted face for the second: the names the model can actually narrow to on
+    its next try.
     """
     members = set(tier_names(tier))
     if subset is not None:
@@ -224,8 +235,9 @@ class SubAgentExecutor:
     def check_face(self, spec: SubTaskSpec) -> List[str]:
         """The tool names ``spec`` would get, without running anything.
 
-        Lets the ``spawn_subagent`` tool reject a widening request (and hand the
-        model the reason) before an LLM round or a tool call exists.
+        Lets the ``spawn_subagent`` tool reject a request it cannot honor — a
+        name outside the tier, or a tier member this run does not mount —
+        before an LLM round or a tool call exists.
         """
         return sorted(t.name for t in self._subtask_tools(spec))
 
