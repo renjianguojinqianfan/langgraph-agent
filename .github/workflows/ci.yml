@@ -7,7 +7,7 @@
 #   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
 #                   + pytest 离线全量回归（backend/tests/，549 用例）
 #                   + live_e2e.py --check 与 backend.headless --check 离线冒烟（无 Key/无网络）
-#   frontend-build  npm ci + tsc 类型检查 + vite 生产构建（产物上传为 artifact）
+#   frontend-build  npm ci + tsc 类型检查 + SSE 事件词汇表断言（#92）+ vite 生产构建（产物上传为 artifact）
 #   docker-build    验证 backend/Dockerfile 可构建（不 push）
 #   live-e2e        真实 LLM 端到端验证（push master 自动 + 手动；key gate——secrets 为空则跳过、job 仍绿）
 #
@@ -160,6 +160,11 @@ jobs:
 
       - name: TypeScript typecheck
         run: npm run typecheck
+
+      # #92：SSE 事件词汇表防漂移。EventSource 只派发注册过的类型，漂了不报错、
+      # 只是前端静默收不到，所以拿后端发布点 / §3.4 表 / 前端两处注册表逐条比一次。
+      - name: SSE event registry drift check
+        run: npm run check:sse
 
       - name: Production build
         run: npm run build

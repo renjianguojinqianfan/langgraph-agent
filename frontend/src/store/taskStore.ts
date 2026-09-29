@@ -5,7 +5,6 @@ import {
   RiskItem,
   SSEvent,
   StepRecord,
-  SubTask,
   Task,
   ToolCallRecord,
   TraceMarker,
@@ -133,46 +132,6 @@ function applyToTask(task: Task, ev: SSEvent): Task {
     case "risk_report": {
       const items = (ev.data.items ?? []) as RiskItem[];
       return { ...task, risk_report: items };
-    }
-    case "subtask_start": {
-      const st = ev.data as SubTask & { parent_task_id?: string };
-      const subtasks = [...(task.subtasks ?? [])];
-      const idx = subtasks.findIndex((s) => s.subtask_id === st.subtask_id);
-      const entry: SubTask = {
-        subtask_id: st.subtask_id,
-        name: st.name ?? "",
-        status: st.status ?? "running",
-        summary: st.summary ?? "",
-        artifacts: st.artifacts ?? [],
-        error: st.error ?? null,
-      };
-      if (idx >= 0) subtasks[idx] = entry;
-      else subtasks.push(entry);
-      return { ...task, subtasks };
-    }
-    case "subtask_result": {
-      const st = ev.data as SubTask;
-      const subtasks = (task.subtasks ?? []).map((s) =>
-        s.subtask_id === st.subtask_id
-          ? {
-              ...s,
-              status: st.status ?? "completed",
-              summary: st.summary ?? s.summary,
-              artifacts: st.artifacts ?? s.artifacts,
-              error: st.error ?? null,
-            }
-          : s
-      );
-      return { ...task, subtasks };
-    }
-    case "subtask_failed": {
-      const st = ev.data as { subtask_id: string; name: string; error: string };
-      const subtasks = (task.subtasks ?? []).map((s) =>
-        s.subtask_id === st.subtask_id
-          ? { ...s, status: "failed", error: st.error ?? "subtask failed" }
-          : s
-      );
-      return { ...task, subtasks };
     }
     case "final_answer":
       return { ...task, final_answer: ev.data.answer ?? task.final_answer };

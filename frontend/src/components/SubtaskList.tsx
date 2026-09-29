@@ -7,7 +7,7 @@ const STATUS_STYLES: Record<string, string> = {
   pending: "bg-slate-500/15 text-slate-300",
 };
 
-/** P1 item 2: aggregated sub-agent cards (subtask_start/result/failed). */
+/** P1 item 2: aggregated sub-agent cards, fed from `Task.subtasks` (REST). */
 export function SubtaskList({ subtasks }: { subtasks: SubTask[] }) {
   if (!subtasks || subtasks.length === 0) {
     return (
