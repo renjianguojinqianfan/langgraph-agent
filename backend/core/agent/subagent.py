@@ -123,9 +123,10 @@ def resolve_tool_face(
     silent drop would read as success to the parent — the subtask would go out
     with a narrowed-to-nothing face and still fold back ``completed``.
 
-    The refusal lists the tier members for the first case and the tier's
-    mounted face for the second: the names the model can actually narrow to on
-    its next try.
+    The second refusal lists the tier's mounted face — the names the model can
+    actually narrow to on its next try. The first one still lists the declared
+    members, which is a known shortcoming (a declared-but-unmounted name shows
+    up there too); tightening it is deliberately out of #74's scope.
     """
     members = set(tier_names(tier))
     if subset is not None:
@@ -141,7 +142,7 @@ def resolve_tool_face(
             raise TierError(
                 f"tier {tier!r} declares {unmounted} but it is not mounted in "
                 f"this run; the tools argument can only narrow to the loaded "
-                f"face. Loaded: {', '.join(sorted(members & loaded))}"
+                f"face. Loaded: {', '.join(tier_face_names(loaded, tier))}"
             )
         members &= set(subset)
     return [t for t in tools if t.name in members]
@@ -431,8 +432,9 @@ class SubAgentExecutor:
                 tool_face=sorted(face),
             )
         except TierError as exc:
-            # A bad tier / a widening request never started a run: no LLM call,
-            # no tool, no side effect.
+            # A refusal the face can never honor (bad tier, out-of-tier name,
+            # unmounted tier member) never started a run: no LLM call, no tool,
+            # no side effect.
             logger.warning("subtask %s refused: %s", spec.subtask_id, exc)
             return SubTaskResult(
                 subtask_id=spec.subtask_id,

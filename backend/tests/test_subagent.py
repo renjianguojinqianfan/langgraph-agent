@@ -597,6 +597,69 @@ def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path):
     assert mock.turns == 0
 
 
+class _UnmountedAskMock(MockLLMClient):
+    """父模型递一个「档位声明了、本次却没装载」的名字（git 关时的 ``git_log``）。
+
+    只在第一轮递 spawn，之后一律直接答——所以「探子有没有被派出去」由事件频道
+    分辨，不由轮次分辨（父任务被完成验证弹回几轮是验证器的事，与本票无关）。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(plan=["委托"], final_answer="父任务自己收场")
+        self.rounds = 0
+
+    def complete(self, messages, tools=None, **kwargs):
+        if not tools:
+            return LLMResponse(content=json.dumps(self.plan))
+        self.rounds += 1
+        if self.rounds == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "um-spawn",
+                        "name": "spawn_subagent",
+                        "arguments": {
+                            "name": "probe",
+                            "instruction": "查一下提交历史",
+                            "tier": EXPLORE_TIER,
+                            "tools": ["git_log"],
+                        },
+                    }
+                ],
+            )
+        return LLMResponse(content=self.final_answer)
+
+
+def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
+    tmp_path, event_bus
+):
+    """票面「观测」条：不新增 manifest 行，失败走 ``tool_result`` 事件——这里钉住事件。
+
+    件清单裁判的两条断言常驻化：被拒的 spawn 在事件里带 error 文本；它没有派出
+    探子，所以父频道上连一条 subtask 事件都没有（拒绝点在 ``attach_subtask``
+    之前，manifest 的 ``subtask_face`` 行同样无从产生）。
+    """
+    settings = make_settings(tmp_path)
+    mock = _UnmountedAskMock()
+    tm = make_manager(settings, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="t", user_input="派个子任务查提交历史")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
+    _run_until_done(tm, task_id)
+
+    events = event_bus.replay(task_id)
+    spawn = [
+        e["data"]
+        for e in events
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
+    ]
+    assert len(spawn) == 1  # 父模型没有被同一个拒绝反复放行
+    assert spawn[0]["status"] == "failed"
+    assert "git_log" in spawn[0]["error"] and "not mounted" in spawn[0]["error"]
+    assert not [e for e in events if "subtask" in e["type"]]
+    assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
+
+
 def test_spawn_subagent_rejects_an_unknown_tier(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     mock = _CountingMock(plan=["p"], final_answer="never")
