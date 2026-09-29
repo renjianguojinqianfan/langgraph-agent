@@ -16,9 +16,9 @@ The seam is the test **process** and its environment, observed from outside:
   end up holding neither the switch nor the credential.
 
 Both tests bring their own poisoned environment, so they behave identically on a
-machine that exports the pair and on CI that exports nothing. The endpoint is
-forced to 127.0.0.1, which means neither test can leak a real trace even while
-the guard is missing.
+machine that exports the pair and on CI that exports nothing. The slice test also
+forces the ingest endpoint to 127.0.0.1, which means a red run dials the loopback
+sink instead of leaking a real trace.
 """
 
 from __future__ import annotations
@@ -39,6 +39,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # The switches the SDK resolves for itself: langsmith.utils.tracing_is_enabled
 # walks (LANGSMITH, LANGCHAIN) x (TRACING_V2, TRACING), and langchain-core
 # additionally raises when the legacy v1 switch is set without its v2 twin.
+# Spelled out again instead of imported from the conftest guard on purpose: the
+# test has to say what the contract *is*, otherwise it would pass whatever the
+# guard happens to pop and could never disagree with it.
 TRACING_SWITCHES = (
     "LANGSMITH_TRACING",
     "LANGSMITH_TRACING_V2",
