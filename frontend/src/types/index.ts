@@ -7,6 +7,27 @@ export type TaskStatus =
   | "FAILED"
   | "INTERRUPTED";
 
+/**
+ * 确认闸门的五档终态，与后端 `nodes.py` 的 `CONFIRM_*` 常量一一对应（#57 AC5/AC6）。
+ * 空串 `""` 不是其中一档：它是「这条调用没进过闸门」，被单列在下面的类型里，
+ * 以免把「没进闸门」误当成某一种失败（那正是 #57 之前折成「未批准即拒绝」的老坑）。
+ */
+export type ConfirmOutcome =
+  | "approved"
+  | "denied"
+  | "timed_out"
+  | "aborted"
+  | "auto_approved";
+
+/** 五档终态的中文文案表。显示面的唯一来源（StepDetail / TraceTab 都读这张，别造第二张）。 */
+export const CONFIRM_OUTCOME_LABEL: Record<string, string> = {
+  approved: "人已批准",
+  denied: "人明确拒绝",
+  timed_out: "超时未答",
+  aborted: "被停止打断",
+  auto_approved: "评测态自动放行",
+};
+
 export interface PlanStep {
   index: number;
   description: string;
@@ -22,7 +43,7 @@ export interface ToolCallRecord {
   error?: string | null;
   need_confirm: boolean;
   confirmed: boolean;
-  confirm_outcome?: string; // #57: approved | denied | timed_out | aborted | auto_approved（"" = 未进闸门）
+  confirm_outcome?: ConfirmOutcome | ""; // #57: 五档终态；"" = 未进闸门（backend schemas.py 同源）
   circuit_open?: boolean; // P0: short-circuited by the circuit breaker
   retries?: number; // P0: retries performed by the tool executor
 }
@@ -195,6 +216,26 @@ export interface ConfirmDialogState {
   tool_name?: string;
   input?: any;
   task_id?: string;
+}
+
+// --- #91 AC3: 确认面事件载荷的类型接口 ---
+// 参照 `ContextCompressedData` 的先例：给「在发」的 confirm 事件载荷建命名类型，
+// 让 store 消费侧有编译期落点，后端改字段名时不至于全靠人肉对齐。这里只收口确认
+// 相关的两个事件 + tool_result 上的 `confirm_outcome`（已并入 `ToolCallRecord`），
+// 不做全事件判别联合——那是另一张票的体量（`docs/architecture.md` §3.4 全表逐条建模）。
+
+/** Payload of the ``human_confirm_required`` event（nodes.py `_ask_human` / risk_plan 两处发布）。 */
+export interface HumanConfirmRequiredData {
+  tool_call_id: string;
+  tool_name: string;
+  input: Record<string, any>;
+}
+
+/** Payload of the ``human_confirm_resolved`` event（#57 AC5 五档终态）。 */
+export interface HumanConfirmResolvedData {
+  tool_call_id: string;
+  tool_name: string;
+  outcome: ConfirmOutcome;
 }
 
 // --- P1: trace replay / live markers ---
