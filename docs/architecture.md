@@ -470,7 +470,7 @@ sequenceDiagram
    - 工具务必返回 `ToolResult`，**禁止**抛未捕获异常导致进程崩溃（外层统一 try/except 兜底）；
    - 新工具在 `registry.py` 中 `@register` 即被 Agent 自动发现（满足 SC4 上手 <30min）。
 4. **事件/消息协议**：后端 → 前端仅通过 SSE 事件（见 3.4）通信；事件 `data` 为 JSON，字段名与后端模型一致；前端 `types/index.ts` 必须与后端 schema 保持字段对齐（单一事实来源：后端 `schemas.py`）。
-5. **错误与重试约定**：工具失败返回 `ToolResult(success=False, error=...)`；`code_exec`/`http_api` 支持按 `Settings` 重试（P1-4，默认退避 2s×2）。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。
+5. **错误与重试约定**：工具失败返回 `ToolResult(success=False, error=...)`；`code_exec`/`http_api` 支持按 `Settings` 重试（P1-4，默认退避 2s×2）。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`，所以模型不必再靠猜。此前对话面只灌 `result.data`，失败时是字面量 `null`，「一轮内自愈」无从谈起。成功路径仍灌 payload 原样。
 6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在每轮开头检测，为真则提前 `END` 并发布 `task_interrupted`（P0-9：2s 内生效）。
 7. **人工介入**：`requires_confirm=True` 的工具（代码执行、HTTP 写操作）在 `executor` 后插入 `human_confirm` 中断（P1-2）；前端 `ConfirmDialog` 提交 `POST /confirm`。未批准的收口不是一个布尔而是三档可辨的终态（#57 AC5）：`denied`（人明确拒了）/ `timed_out`（等满 `confirm_timeout_sec`，默认 1800s，没人答）/ `aborted`（被 stop 打断），连同 `approved` 写进记录体 `confirm_outcome`，事件 / trace / 持久化三面同源。文案只有 `denied` 保留 `rejected by user`——那才是唯一一句真话。
 8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
