@@ -347,6 +347,30 @@ def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(tmp_path):
     )
 
 
+def test_out_of_tier_refusal_lists_the_loaded_face_too(tmp_path):
+    """#94: 档外拒绝的理由清单与上面 ``Loaded:`` 同源同口径——档位 ∩ 实装面。
+
+    这份清单的承诺是「供你改投」，所以档位全貌里那些声明了却没装载的名字（git 四件）
+    不能进消息：模型照单改投 `git_log`，会再吃一次未装载拒绝、白跳一轮。被拒的名字
+    照旧点名，清单也照旧是字面量，不用 ``tier_face_names`` 自算。
+    """
+    tm = make_manager(make_settings(tmp_path), _CountingMock())  # git_enabled=False
+    names = [t.name for t in tm._tools]
+    assert {"git_status", "git_diff", "git_log", "git_branch"} <= set(TOOL_TIERS[EXPLORE_TIER])
+    assert not [n for n in names if n.startswith("git_")]
+
+    with pytest.raises(TierError) as excinfo:
+        resolve_tool_face(tm._tools, EXPLORE_TIER, ["read", "code_exec"])
+    message = str(excinfo.value)
+
+    assert "code_exec" in message  # 拒的还是拒，被拒的名照旧在
+    for unmounted in ("git_status", "git_diff", "git_log", "git_branch"):
+        assert unmounted not in message  # 但清单里没有改投不进去的名字
+    assert message.endswith(
+        "Loaded: glob, grep, kb_query, load_skill, ls, memory_search, read, web_search"
+    )
+
+
 def test_check_face_resolves_without_running_anything(tmp_path):
     mock = _CountingMock()
     tm = make_manager(make_settings(tmp_path), mock)
