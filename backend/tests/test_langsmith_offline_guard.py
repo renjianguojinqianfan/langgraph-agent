@@ -29,6 +29,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -133,11 +134,16 @@ def test_offline_slice_with_langsmith_tracing_exported_opens_no_connections() ->
             [sys.executable, "-m", "pytest", SUITE_SLICE, "-q", "-p", "no:cacheprovider"],
             poisoned_env(sink.url),
         )
+        # A socket the inner process opened can still sit in the accept backlog
+        # after it exits; reading too early would hide exactly the failure this
+        # test is written to catch.
+        time.sleep(1.0)
         hits = sink.hits
 
-    # Anti-vacuity: zero connections only means something if the slice ran.
+    # Anti-vacuity: zero connections only means something if the slice ran. An
+    # empty selection would exit 5 ("no tests ran"), so the pair is airtight.
     assert proc.returncode == 0, f"inner slice failed ({proc.returncode}):\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
-    assert "1 passed" in proc.stdout, f"inner slice collected nothing:\n{proc.stdout[-2000:]}"
+    assert "passed" in proc.stdout, f"inner slice ran nothing:\n{proc.stdout[-2000:]}"
     assert hits == 0, (
         f"the offline suite opened {hits} connection(s) to the LangSmith ingest endpoint while only "
         f"LANGSMITH_TRACING + a key were inherited from the shell — the conftest guard is not holding "
@@ -155,8 +161,11 @@ _PROBE = (
 
 def test_importing_the_suite_conftest_leaves_no_langsmith_switch_or_key() -> None:
     """The guard is a conftest-import side effect, not a per-test accident."""
-    names = list(TRACING_SWITCHES + CREDENTIALS)
-    proc = _run([sys.executable, "-c", _PROBE, *names], poisoned_env())
+    env = poisoned_env()
+    # The probe imports `backend.tests.conftest` by package name, so the repo
+    # root has to be importable without leaning on how `-c` resolves sys.path[0].
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
+    proc = _run([sys.executable, "-c", _PROBE, *TRACING_SWITCHES + CREDENTIALS], env)
 
     assert proc.returncode == 0, f"probe failed to import the conftest:\n{proc.stderr[-2000:]}"
     survived = {name: value for name, value in json.loads(proc.stdout).items() if value is not None}
