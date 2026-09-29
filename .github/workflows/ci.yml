@@ -5,7 +5,7 @@
 # 内容：
 #   guard-protected-files  受保护文件守卫（resilience.py/registry.py，[OVERRIDE] 逃生舱）
 #   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
-#                   + pytest 离线全量回归（backend/tests/，549 用例）
+#                   + pytest 离线全量回归（backend/tests/，计数以实跑为准、不写进注释）
 #                   + live_e2e.py --check 与 backend.headless --check 离线冒烟（无 Key/无网络）
 #   frontend-build  npm ci + tsc 类型检查 + SSE 事件词汇表断言（#92）+ 确认框判据断言（#91）+ vite 生产构建（产物上传为 artifact）
 #   docker-build    验证 backend/Dockerfile 可构建（不 push）
