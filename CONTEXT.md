@@ -19,7 +19,7 @@ planner 声明的意图条目（一句短描述 + 状态），可以有多个，
 _Avoid_: 步骤
 
 **tool call（工具调用）**：
-executor 要求执行的一次工具动作；终态是 `pending | success | failed | skipped` 之一。
+executor 要求执行的一次工具动作；状态是 `pending | success | failed | skipped` 之一。`pending` = 未收口（不是终态；同 :48 的 dangling 判据）——已执行/已失败/已被闸门跳过三档才是终态，见 `nodes.py` 的 `TERMINAL_TOOL_CALL_STATUSES`（#100）
 _Avoid_: 动作
 
 ### 完成与验收
