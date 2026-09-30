@@ -506,17 +506,18 @@ class AgentRuntime:
 
         for rec in tcs:
             if rec["status"] in TERMINAL_TOOL_CALL_STATUSES:
-                # 第三道守卫：已经交代过的调用不再动（issue #100）。一轮里 ≥2 个
-                # 待确认项时，人逐个批准会让图沿 ``human_confirm -> tool`` 那条静态边
-                # 重入本节点（graph.py ``_after_tool`` 只要还有没判决的就回闸门），而
-                # ``rec["status"]`` 是上一轮原地写成的终态、``_current_tool_calls``
-                # 全程活着。少了这一道，前两道守卫（已拒绝 / 尚未批准）都拦不住那个
-                # 已经批过并跑完的调用：它会被原样再 dispatch 一次 —— 写类工具写两遍、
-                # 命令跑两遍，同一 ``tool_call_id`` 长出两条 tool message，「批准一次」
-                # 成了「执行 N 次」，闸门反把自己要保的那件事破掉。
-                # 幂等按 ``rec`` 记，与调用是否过闸门无关；重试不在这里 —— retryable
-                # 的账在 ``ToolExecutor.dispatch`` 里由 ``with_retry`` 闭环，从不借道
-                # 图重入（resilience.py，本票零触碰）。
+                # Third guard: a call this node already dealt with is left alone
+                # (issue #100). Approving a round that carries >=2 gated calls one
+                # by one re-enters this node along the static ``human_confirm ->
+                # tool`` edge, and ``rec["status"]`` was written in place last time
+                # while ``_current_tool_calls`` stayed live — so the two older
+                # guards (rejected / not yet authorised) let the already-run call
+                # through and it dispatches a second time: writers write twice, one
+                # ``tool_call_id`` grows two tool messages, and 「批准一次」 becomes
+                # 「执行 N 次」 — the promise the gate exists to keep. Idempotency
+                # here is per ``rec``, gated or not; retries are a different
+                # ledger, closed inside ``ToolExecutor.dispatch`` by ``with_retry``
+                # and never routed through a graph re-entry.
                 continue
             if rec["need_confirm"] and rec["id"] in rejected:
                 rec["status"] = "skipped"

@@ -45,7 +45,6 @@ class _Probe(BaseTool):
 
     description = "probe (test only)"
     args_schema: Dict[str, Any] = {"type": "object", "properties": {}}
-    requires_confirm = True
     circuit_breaker = False
 
     def __init__(
@@ -281,12 +280,9 @@ def test_retries_stay_inside_dispatch_and_reentry_never_redispatches(tmp_path):
     只测 run 次数会把 ToolExecutor 自己的重试误判成双跑，只测 dispatch 次数又
     证明不了重试确实发生在同一扇门里。
 
-    ``tool_backoff_base=0.0`` 只是别让测试真睡退避；``confirm_timeout_sec`` 压小
-    是防我自己在某个判决上漏键，让 ``_ask_human`` 干等 30 分钟。
+    ``tool_backoff_base=0.0`` 只是别让测试真去睡那 1 秒退避。
     """
-    settings = make_settings(
-        tmp_path, tool_backoff_base=0.0, tool_max_retries=1, confirm_timeout_sec=0.05
-    )
+    settings = make_settings(tmp_path, tool_backoff_base=0.0)
     gate_a = _Probe(settings, "gate_a", fail=True, retryable=True, max_retries=1)
     gate_b = _Probe(settings, "gate_b")
     _rt, state, ex, tm = _run_round(
@@ -302,15 +298,12 @@ def test_retries_stay_inside_dispatch_and_reentry_never_redispatches(tmp_path):
 
 
 # ── 非 gated 调用同样吃重入：守卫是按 rec 幂等，不是按闸门 ────────────────────
-def test_ungated_call_in_a_gated_round_also_dispatches_once(tmp_path):
+def test_ungated_call_in_a_gated_round_also_dispatches_once(settings):
     """同一回合里混一个不要确认的调用：它在第一次进门就跑完，第二次进门不许再跑。
 
     守卫放在循环入口、按 ``rec`` 的终态判，所以它管的是「每个调用」而不是
     「每个过闸门的调用」——这条钉住那个覆盖面。
     """
-    settings = make_settings(
-        tmp_path, tool_backoff_base=0.0, tool_max_retries=1, confirm_timeout_sec=0.05
-    )
     gate_a = _Probe(settings, "gate_a")
     gate_b = _Probe(settings, "gate_b")
     open_probe = _Probe(settings, "open_probe", gated=False)
@@ -319,7 +312,9 @@ def test_ungated_call_in_a_gated_round_also_dispatches_once(tmp_path):
         {"id": "c1", "name": "gate_a", "arguments": {}},
         {"id": "c2", "name": "gate_b", "arguments": {}},
     ]
-    _rt, state, ex, tm = _run_round(settings, [open_probe, gate_a, gate_b], calls, {"c1": True, "c2": True})
+    _rt, state, ex, tm = _run_round(
+        settings, [open_probe, gate_a, gate_b], calls, {"c1": True, "c2": True}
+    )
 
     assert ex.dispatched == ["open_probe", "gate_a", "gate_b"]
     assert len(open_probe.calls) == 1
