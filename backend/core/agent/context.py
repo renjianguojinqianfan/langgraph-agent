@@ -15,7 +15,9 @@ context window. This module provides:
   summary, keeping the most recent ``keep_recent`` messages verbatim — unless the
   protected band alone still outgrows the budget, in which case it is squeezed
   oldest-first into a note of the same shape as :func:`evict_tool_results`' (its
-  marker names the role that gave way);
+  marker names the role that gave way). The squeeze lives at this entry point, so
+  it runs under both strategies and over the whole history when ``keep_recent``
+  covers every message (#85);
 * :func:`summarize_messages` — optional LLM-based summarisation of the dropped
   early messages (only used when ``strategy="summarize"`` and an LLM is given).
 
@@ -174,6 +176,7 @@ def _squeeze_band(
     result: List[Dict[str, Any]],
     budget: int,
     *,
+    head: int,
     names: Dict[str, str],
     head_chars: int,
     tail_chars: int,
@@ -181,11 +184,13 @@ def _squeeze_band(
 ) -> int:
     """Squeeze the band ``keep_recent`` protects when that band alone outgrows the budget.
 
-    Mutates ``result`` (index 0 is the truncation placeholder, everything after it
-    is the band). Runs oldest-first so the newest messages survive verbatim. The
-    budget is the only threshold: the first layout that fits ends the squeeze, and a
-    message that cannot shrink strictly is skipped, so the pass is bounded by the band
-    size and can never spin.
+    Mutates ``result``. The first ``head`` entries are the head block laid over the
+    band (the truncation placeholder / the summary) and are never squeezed; with
+    nothing dropped there is no head block, so the band is the whole list and
+    ``head`` is 0 (#85). Runs oldest-first so the newest messages survive verbatim.
+    The budget is the only threshold: the first layout that fits ends the squeeze,
+    and a message that cannot shrink strictly is skipped, so the pass is bounded by
+    the band size and can never spin.
 
     The last notch is role-gated (#49 review): only ``tool`` results may be demoted to
     a bare marker, newest-first, because their full text still sits in the trace
@@ -202,14 +207,14 @@ def _squeeze_band(
     Returns how many band messages gave way (0 = nothing squeezed). A message
     demoted at both notches counts once.
     """
-    if len(result) <= 1 or estimate_tokens(result) <= int(budget):
+    if len(result) <= head or estimate_tokens(result) <= int(budget):
         return 0
     # Pass 1 keeps a preview and stops short of the newest; pass 2 is the last notch
     # and only ever touches tool results, so the newest message gives way last.
-    newest = max(1, len(result) - _BAND_PROTECT_NEWEST)
+    newest = max(head, len(result) - _BAND_PROTECT_NEWEST)
     squeezed_idx: set[int] = set()
     fits = False
-    passes = ((True, range(1, newest)), (False, range(len(result) - 1, 0, -1)))
+    passes = ((True, range(head, newest)), (False, range(len(result) - 1, head - 1, -1)))
     for with_preview, indices in passes:
         for i in indices:
             if not with_preview and result[i].get("role") != "tool":
@@ -366,91 +371,52 @@ def summarize_messages(
         return f"[上下文摘要失败({exc})，已省略早期消息]"
 
 
-def _compress_truncate(
-    messages: List[Dict[str, Any]],
-    keep_recent: int,
-    budget: int,
-    meta_base: Meta,
-    *,
-    head_chars: int = 800,
-    tail_chars: int = 400,
-    trace_ref: str = "",
-) -> Tuple[List[Dict[str, Any]], Meta]:
-    """Drop the early messages, insert a deterministic placeholder, then squeeze the band.
+def _truncate_candidate(
+    messages: List[Dict[str, Any]], keep_recent: int
+) -> Tuple[List[Dict[str, Any]], int]:
+    """The ``truncate`` layout: placeholder for the early history + the protected band.
 
-    ``keep_recent`` is fixed, so a band of oversized messages can outgrow the budget
-    all by itself (#49): truncation then just recycles its own placeholder and the
-    compression ratio stays at 1 forever. :func:`_squeeze_band` gives the band way
-    under exactly that condition, oldest-first, as far as it lawfully can — the budget
-    is reached when the notes can carry it, and reported as ``converged=False`` when
-    they cannot.
+    Returns ``(candidate, dropped)``. ``keep`` is clamped to at least
+    ``_MIN_KEEP_RECENT``, so a history that fits inside the band comes back as the
+    input list with ``dropped == 0`` — the band then *is* the whole history, which
+    :func:`compress_messages` still squeezes when it outgrows the budget (#85 残窗一:
+    the count-based early exit used to leave that band uncompressed, which is the
+    #82 symptom surviving at that boundary without even flooding events).
 
-    Convergence guard (#49): on the token trigger, a round that leaves the context no
-    smaller than it was is not a compression. It reports ``compressed=False``, leaves
-    the notes/placeholder bookkeeping at zero and returns the input list untouched —
-    that is what stops the per-round ``context_compressed`` flood once the band has
-    nothing left to give. The count trigger keeps truncating unconditionally (bounding
-    the message count is its job, token size is not).
+    Whether the round counts as a compression is the entry point's call (the
+    convergence guard), not this function's.
     """
     n = len(messages)
     keep = max(_MIN_KEEP_RECENT, min(int(keep_recent), n))
     if keep >= n:
-        meta = dict(meta_base)
-        meta["compressed"] = False
-        return messages, meta
-    keep_msgs = messages[-keep:]
+        return messages, 0
     dropped = n - keep
     placeholder = {
         "role": "system",
         "content": f"{PLACEHOLDER_PREFIX}{dropped}{PLACEHOLDER_SUFFIX}",
     }
-    result = [placeholder, *keep_msgs]
-    band_evicted = _squeeze_band(
-        result,
-        budget,
-        names=_tool_names_by_call_id(messages),
-        head_chars=head_chars,
-        tail_chars=tail_chars,
-        trace_ref=trace_ref,
-    )
-    tokens = estimate_tokens(result)
-    if meta_base["trigger"] == "token" and tokens >= int(meta_base["context_tokens"]):
-        # Nothing strictly smaller (band gave way nowhere, truncation only recycled the
-        # previous placeholder): no rewrite to report and no event to flood the stream.
-        meta = dict(meta_base)
-        meta["band_evicted"] = 0
-        return messages, meta
-    meta = dict(meta_base)
-    meta["compressed"] = True
-    meta["dropped"] = dropped
-    meta["band_evicted"] = band_evicted
-    meta["context_tokens"] = tokens
-    return result, meta
+    return [placeholder, *messages[-keep:]], dropped
 
 
-def _compress_summarize(
+def _summarize_candidate(
     messages: List[Dict[str, Any]],
     keep_recent: int,
     llm: Any,
     summary_max_tokens: int,
-    meta_base: Meta,
-) -> Tuple[List[Dict[str, Any]], Meta]:
-    """Replace dropped early messages with a single LLM summary block."""
+) -> Tuple[List[Dict[str, Any]], int]:
+    """The ``summarize`` layout: one LLM summary block in place of the early history.
+
+    Same ``(candidate, dropped)`` contract as :func:`_truncate_candidate`. Its early
+    exit matters twice over: with nothing dropped there is no early history to
+    summarise, so a squeeze-only round must never spend an LLM call.
+    """
     n = len(messages)
     keep = max(_MIN_KEEP_RECENT, min(int(keep_recent), n))
     if keep >= n:
-        meta = dict(meta_base)
-        meta["compressed"] = False
-        return messages, meta
+        return messages, 0
     early = messages[:-keep]
-    keep_msgs = messages[-keep:]
     summary = summarize_messages(llm, early, summary_max_tokens)
-    result = [{"role": "system", "content": summary}, *keep_msgs]
-    meta = dict(meta_base)
-    meta["compressed"] = True
-    meta["dropped"] = len(early)
-    meta["context_tokens"] = estimate_tokens(result)
-    return result, meta
+    return [{"role": "system", "content": summary}, *messages[-keep:]], len(early)
 
 
 def compress_messages(
@@ -473,8 +439,10 @@ def compress_messages(
     * ``compressed`` — whether the context actually got smaller (a round that saves
       nothing reports ``False``, the convergence guard of #49);
     * ``dropped`` — number of messages removed;
-    * ``band_evicted`` — number of still-protected messages squeezed to a note
-      (only the ``truncate`` strategy squeezes, so ``summarize`` reports ``0``);
+    * ``band_evicted`` — number of still-protected messages squeezed to a note.
+      Both strategies squeeze (#85), and with ``keep_recent`` covering the whole
+      history the band *is* that history: ``band_evicted`` can be non-zero while
+      ``dropped`` stays ``0``;
     * ``converged`` — whether the returned context fits ``budget``. ``False`` means the
       squeeze ran out of what it may lawfully give way (see the role gate in
       :func:`_squeeze_band`) and the context is still oversized;
@@ -511,21 +479,43 @@ def compress_messages(
 
     if strategy == "summarize" and llm is not None:
         meta_base["strategy"] = "summarize"
-        out, meta = _compress_summarize(
-            messages, keep_recent, llm, summary_max_tokens, meta_base
-        )
+        candidate, dropped = _summarize_candidate(messages, keep_recent, llm, summary_max_tokens)
     else:
-        meta_base["strategy"] = "truncate"
-        out, meta = _compress_truncate(
-            messages,
-            keep_recent,
-            budget,
-            meta_base,
-            head_chars=head_chars,
-            tail_chars=tail_chars,
-            trace_ref=trace_ref,
-        )
+        candidate, dropped = _truncate_candidate(messages, keep_recent)
+
+    # The squeeze runs here, not inside one strategy's happy path (#85 残窗二): an
+    # oversized protected band is the same failure whichever block was laid over it.
+    # The candidate is copied first when nothing was dropped, because the squeeze
+    # rewrites entries in place and a round that converges nowhere must hand the
+    # caller its own list back untouched.
+    band = candidate if candidate is not messages else list(messages)
+    band_evicted = _squeeze_band(
+        band,
+        budget,
+        head=1 if dropped else 0,
+        names=_tool_names_by_call_id(messages),
+        head_chars=head_chars,
+        tail_chars=tail_chars,
+        trace_ref=trace_ref,
+    )
+    tokens = estimate_tokens(band)
+    if not (dropped or band_evicted):
+        # No head block to insert and nothing in the band gave way: no rewrite, so
+        # nothing to report and no event to flood the stream.
+        return messages, meta_base
+    if over_token and tokens >= tokens_in:
+        # Convergence guard (#49), now one definition for both strategies: on the token
+        # trigger a round that leaves the context no smaller is not a compression — the
+        # head block merely recycled the previous placeholder / summary. The count
+        # trigger keeps truncating unconditionally (bounding the message count is its
+        # job, token size is not).
+        return messages, meta_base
+    meta = dict(meta_base)
+    meta["compressed"] = True
+    meta["dropped"] = dropped
+    meta["band_evicted"] = band_evicted
     # One definition, both strategies: converged means the result fits the budget,
     # whether or not this round managed to rewrite anything.
-    meta["converged"] = meta["context_tokens"] <= int(budget)
-    return out, meta
+    meta["context_tokens"] = tokens
+    meta["converged"] = tokens <= int(budget)
+    return band, meta
