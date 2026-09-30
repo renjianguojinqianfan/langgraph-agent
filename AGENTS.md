@@ -20,7 +20,7 @@
 | 确认闸门 | 危险工具执行前经 `human_confirm`，批准 / 拒绝后重算待确认项；未批准的收口是**三档**（人明确拒绝 / 超时未答 / 停止打断），随 `confirm_outcome` 与 `human_confirm_resolved` 事件可分辨，不得折回「未批准即拒绝」那一个布尔；评测态例外：`--auto-approve` 仅 `backend/headless.py` 实例级、服务端永不传，且**只**把「等人判决」换成 `auto_approved`——判定照算、闸门照进、显式拒绝不翻案 | `README.md`「能力」危险操作闸门 + 「无人值守执行」评测态说明 |
 | 产物登记语义 | 产物 = 本任务（含子任务）**写出的文件**：只有 `registers_artifact=True` 的工具（现役仅 `write` / `edit`）是产物源，`read` / `ls` / `glob` / `grep` 带的 `path` 与动态包装面一律不登记；去重按「任务内 resolved path」收口在 `add_artifact`。读到同文件不新增产物、重写只一条，都是**定居决策不是 bug**，别照旧直觉「修回去」 | `docs/adr/0004`（判据、影响面与重开条件） |
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
-| 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部覆盖块（`setdefault` 语义）保持原样 | `backend/tests/conftest.py` 顶部（代码即权威） |
+| 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部覆盖块（`setdefault` 语义）保持原样；SDK **自读**的 LangSmith / LangChain 开关与 Key 另由同文件的 pop 块摘除（#84）——「离线全绿」不靠开发者 shell 恰好没设变量 | `backend/tests/conftest.py` 顶部两块（代码即权威）+ 复现测试 `test_langsmith_offline_guard.py` |
 | 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn / starlette 区间不动 | `requirements.txt` 注释（三包理由 / mcp `--no-deps`） |
 | 真实模型验证 | 发布前 / 换供应商必须跑 `live_e2e.py` 双场景 + `live_skill_test.py` 两腿；CI live job 有 key gate——绿 ≠ 真实模型跑过 | `scripts/LIVE_E2E.md`（唯一权威） |
 | 提交边界 | 副作用可逆或事先说明；提交只含本次意图内的源码与文档（`.env` / `data/` / `frontend/dist` 是本地态）；`push --force` 类默认拒绝 | `.gitignore` + 全局 `~/.agents/AGENTS.md` |
