@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
@@ -21,6 +23,7 @@ from backend.core.agent.nodes import CONFIRM_AUTO_APPROVED
 from backend.core.llm.client import LLMClient, LLMResponse, MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.headless import (
+    _RESULT_KEYS,
     DEFAULT_TIMEOUT,
     EXIT_COMPLETED,
     EXIT_FAILED,
@@ -353,3 +356,133 @@ def test_force_utf8_stdio_swallows_reconfigure_error(monkeypatch: Any) -> None:
     monkeypatch.setattr(sys, "stdout", boom)
     monkeypatch.setattr(sys, "stderr", boom)
     _force_utf8_stdio()  # must not raise
+
+
+# ── Issue #90 (seam): the console-stream indirection ─────────────────────────
+def test_set_console_stream_covers_later_created_loggers(monkeypatch: Any, tmp_path: Path) -> None:
+    """The indirection seam: a flip before creation reaches a lazy logger.
+
+    ``set_console_stream`` is the headless-side fix for the leak class the
+    cold-start test below reproduces end-to-end; this pins the mechanism itself
+    in-process (cheap, and it documents that loggers created *after* the flip
+    honor it — the old direct ``sys.stdout`` binding did not).
+    """
+    import backend.utils.logging as agent_logging
+
+    monkeypatch.setattr(agent_logging, "get_settings", lambda: Settings(data_dir=str(tmp_path)))
+    buf = io.StringIO()
+    monkeypatch.setattr(agent_logging, "_console_stream", buf)
+    logger = agent_logging.get_logger("issue90_late_probe")
+    logger.info("late-logger-marker")
+    assert "late-logger-marker" in buf.getvalue()
+
+
+# ── Issue #90: cold-start subprocess contract — ONLY the result on stdout ────
+# Why a real subprocess and not an in-process assertion: every in-process test
+# shares the interpreter, so the ``agent.*`` loggers were created during earlier
+# imports and the entry's stream-flip catches them. The production bug is an
+# ordering one — :func:`backend.utils.logging.get_logger` bound each lazily
+# created ``agent.*`` logger to ``sys.stdout`` at *first use*, i.e. after
+# ``__main__`` had already redirected the then-existing handlers (the ticket's
+# repro lines: ``agent.tool.resilience`` / ``agent.mcp.client``). Only a cold
+# ``python -m backend.headless`` process reproduces that sequence, so this test
+# spawns one and asserts the stdout contract itself: first char ``{``, whole
+# stdout parses as the result JSON — and the lazy logs still arrive, on stderr.
+def _cold_start_env() -> Dict[str, str]:
+    """Child-process env: mirrors conftest's offline isolation, then adds the
+    Issue #90 trigger (a lazily imported MCP client manager that logs).
+
+    The LangSmith / LangChain self-read switches are *removed* (same policy as
+    ``conftest.py``'s pop block): an inherited ``LANGSMITH_TRACING=true`` must
+    not turn this cold run into a real egress. ``SEARCH_PROVIDER=serpapi`` with
+    no key keeps the default mock's web_search call offline-deterministic.
+    ``MCP_SERVERS`` points at a command that cannot exist: ``agent.mcp.client``
+    is imported lazily by ``TaskManager._load_mcp_tools`` — after the entry's
+    redirect — and logs during the run, which is exactly the leak face.
+    """
+    env = os.environ.copy()
+    for key in (
+        "LANGSMITH_TRACING",
+        "LANGSMITH_TRACING_V2",
+        "LANGCHAIN_TRACING",
+        "LANGCHAIN_TRACING_V2",
+        "LANGCHAIN_HANDLER",
+        "LANGSMITH_API_KEY",
+        "LANGCHAIN_API_KEY",
+    ):
+        env.pop(key, None)
+    env.update(
+        {
+            "USE_MOCK_LLM": "true",
+            "LLM_API_KEY": "",
+            "LLM_BASE_URL": "",
+            "AUX_LLM_ENABLED": "false",
+            "AUTH_ENABLED": "false",
+            "OPENAPI_ENABLED": "false",
+            "GIT_ENABLED": "false",
+            "CHECKPOINT_ENABLED": "false",
+            "CONTEXT_INJECT_ENABLED": "false",
+            "CONTEXT_EVICT_ENABLED": "false",
+            "SNAPSHOT_ENABLED": "false",
+            "SEARCH_PROVIDER": "serpapi",
+            "SERPAPI_KEY": "",
+            "MCP_ENABLED": "true",
+            "MCP_SERVERS": json.dumps(
+                [
+                    {
+                        "name": "issue90-ghost",
+                        "command": "issue90-ghost-mcp-server-not-installed",
+                        "args": [],
+                        "enabled": True,
+                    }
+                ]
+            ),
+            "PYTHONIOENCODING": "utf-8",
+        }
+    )
+    return env
+
+
+def test_cold_start_output_json_stdout_is_only_the_result(tmp_path: Path) -> None:
+    """AC (#90): real CLI, ``--output json`` — stdout is pure parseable JSON."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    root = Path(__file__).resolve().parents[2]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "backend.headless",
+            "-p",
+            "write a small report",
+            "--dir",
+            str(workdir),
+            "--auto-approve",
+            "--output",
+            "json",
+            "--timeout",
+            "60",
+        ],
+        cwd=str(root),
+        env=_cold_start_env(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=240,
+    )
+    # The contract, literally: the result object is the ONLY thing on stdout.
+    assert proc.stdout.startswith("{"), (
+        f"stdout is not pure JSON — first line: {proc.stdout.splitlines()[:3]!r}"
+    )
+    result = json.loads(proc.stdout)
+    for key in _RESULT_KEYS:
+        assert key in result, f"result missing key {key}"
+    assert result["status"] == "COMPLETED", result
+    assert result["exit_code"] == EXIT_COMPLETED
+    assert proc.returncode == EXIT_COMPLETED
+
+    # Review-side note (#90): a clean stdout must not cost us the logs — the
+    # lazily created MCP logger's lines have to surface on stderr instead.
+    assert "agent.mcp" in proc.stderr, (
+        "agent.* logs were dropped instead of repointed at stderr"
+    )
