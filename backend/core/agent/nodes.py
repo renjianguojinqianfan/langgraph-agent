@@ -43,6 +43,14 @@ CONFIRM_ABORTED = "aborted"
 #: pre-supplied by the harness. Distinct from ``approved`` — no human said so.
 CONFIRM_AUTO_APPROVED = "auto_approved"
 
+# ── settled tool-call statuses (issue #100) ─────────────────────────────────
+#
+# The three statuses a call can carry once ``tool_node`` has finished dealing
+# with it — executed, failed, or skipped by the gate. ``_current_tool_calls``
+# lives across a whole round and these are written in place on the record, so
+# this set is what「已执行」means on the loop entry: no second ledger needed.
+TERMINAL_TOOL_CALL_STATUSES = frozenset({"success", "failed", "skipped"})
+
 
 class AgentRuntime:
     """Per-task runtime that backs the LangGraph nodes."""
@@ -497,6 +505,20 @@ class AgentRuntime:
         rejected = state.get("_rejected_ids", []) or []
 
         for rec in tcs:
+            if rec["status"] in TERMINAL_TOOL_CALL_STATUSES:
+                # Third guard: a call this node already dealt with is left alone
+                # (issue #100). Approving a round that carries >=2 gated calls one
+                # by one re-enters this node along the static ``human_confirm ->
+                # tool`` edge, and ``rec["status"]`` was written in place last time
+                # while ``_current_tool_calls`` stayed live — so the two older
+                # guards (rejected / not yet authorised) let the already-run call
+                # through and it dispatches a second time: writers write twice, one
+                # ``tool_call_id`` grows two tool messages, and 「批准一次」 becomes
+                # 「执行 N 次」 — the promise the gate exists to keep. Idempotency
+                # here is per ``rec``, gated or not; retries are a different
+                # ledger, closed inside ``ToolExecutor.dispatch`` by ``with_retry``
+                # and never routed through a graph re-entry.
+                continue
             if rec["need_confirm"] and rec["id"] in rejected:
                 rec["status"] = "skipped"
                 rec["error"] = self._confirm_skip_text(rec)
