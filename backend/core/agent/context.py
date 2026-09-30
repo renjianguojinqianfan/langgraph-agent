@@ -371,31 +371,38 @@ def summarize_messages(
         return f"[上下文摘要失败({exc})，已省略早期消息]"
 
 
+def _droppable_count(messages: List[Dict[str, Any]], keep_recent: int) -> int:
+    """How many of the oldest messages ``keep_recent`` lets a strategy drop (0 = none).
+
+    ``keep`` is clamped to at least :data:`_MIN_KEEP_RECENT`, so one assistant+tool
+    round always survives. A history that fits inside the band yields 0 — the band
+    then *is* the whole history, which is no licence to leave it uncompressed (#85).
+    """
+    keep = max(_MIN_KEEP_RECENT, min(int(keep_recent), len(messages)))
+    return max(0, len(messages) - keep)
+
+
 def _truncate_candidate(
     messages: List[Dict[str, Any]], keep_recent: int
 ) -> Tuple[List[Dict[str, Any]], int]:
     """The ``truncate`` layout: placeholder for the early history + the protected band.
 
-    Returns ``(candidate, dropped)``. ``keep`` is clamped to at least
-    ``_MIN_KEEP_RECENT``, so a history that fits inside the band comes back as the
-    input list with ``dropped == 0`` — the band then *is* the whole history, which
-    :func:`compress_messages` still squeezes when it outgrows the budget (#85 残窗一:
-    the count-based early exit used to leave that band uncompressed, which is the
-    #82 symptom surviving at that boundary without even flooding events).
+    Returns ``(candidate, dropped)``. With nothing dropped the input list comes back
+    as-is, and :func:`compress_messages` still squeezes it when it outgrows the budget
+    (#85 残窗一: the count-based early exit used to leave that band uncompressed —
+    the #82 symptom surviving at that boundary without even flooding events).
 
     Whether the round counts as a compression is the entry point's call (the
     convergence guard), not this function's.
     """
-    n = len(messages)
-    keep = max(_MIN_KEEP_RECENT, min(int(keep_recent), n))
-    if keep >= n:
+    dropped = _droppable_count(messages, keep_recent)
+    if not dropped:
         return messages, 0
-    dropped = n - keep
     placeholder = {
         "role": "system",
         "content": f"{PLACEHOLDER_PREFIX}{dropped}{PLACEHOLDER_SUFFIX}",
     }
-    return [placeholder, *messages[-keep:]], dropped
+    return [placeholder, *messages[dropped:]], dropped
 
 
 def _summarize_candidate(
@@ -410,13 +417,11 @@ def _summarize_candidate(
     exit matters twice over: with nothing dropped there is no early history to
     summarise, so a squeeze-only round must never spend an LLM call.
     """
-    n = len(messages)
-    keep = max(_MIN_KEEP_RECENT, min(int(keep_recent), n))
-    if keep >= n:
+    dropped = _droppable_count(messages, keep_recent)
+    if not dropped:
         return messages, 0
-    early = messages[:-keep]
-    summary = summarize_messages(llm, early, summary_max_tokens)
-    return [{"role": "system", "content": summary}, *messages[-keep:]], len(early)
+    summary = summarize_messages(llm, messages[:dropped], summary_max_tokens)
+    return [{"role": "system", "content": summary}, *messages[dropped:]], dropped
 
 
 def compress_messages(
