@@ -204,11 +204,45 @@ export type SSEventType =
   | "trace_end" // 仅 trace 回放面（见上方说明）
   | "heartbeat";
 
-export interface SSEvent {
-  type: SSEventType;
+/**
+ * 确认面两个事件的具名成员（#91 AC3 返工）。
+ *
+ * `SSEvent` 过去是 `{ type: SSEventType; data: any }`——`data` 永远是 `any`，所谓「按 type
+ * 收窄」在编译期不存在：后端把字段名改掉，`tsc` 一声不响（正是票面第 3 条要治的病）。
+ * 现在按 `type` 可判别，消费侧拿到的是具名载荷。
+ */
+export interface HumanConfirmRequiredEvent {
+  type: "human_confirm_required";
+  data: HumanConfirmRequiredData;
+  ts?: number;
+}
+
+export interface HumanConfirmResolvedEvent {
+  type: "human_confirm_resolved";
+  data: HumanConfirmResolvedData;
+  ts?: number;
+}
+
+/** 除确认面两个之外的事件类型（含只进联合、不进订阅表的 `trace_end` 与无载荷的 `heartbeat`）。 */
+export type OtherSSEventType = Exclude<
+  SSEventType,
+  "human_confirm_required" | "human_confirm_resolved"
+>;
+
+/**
+ * 其余事件的宽松成员：载荷仍是 `any`。范围就到票面要的「至少覆盖确认面两个事件」为止，
+ * 全事件判别联合是 #104 那条线（发布点 AST 枚举）落地后的事，不在本票扩面。
+ */
+export interface LooseSSEvent {
+  type: OtherSSEventType;
   data: any;
   ts?: number;
 }
+
+export type SSEvent =
+  | HumanConfirmRequiredEvent
+  | HumanConfirmResolvedEvent
+  | LooseSSEvent;
 
 export interface ConfirmDialogState {
   open: boolean;

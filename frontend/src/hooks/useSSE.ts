@@ -45,7 +45,10 @@ export function useSSE(taskId: string | null, onEvent: (ev: SSEvent) => void) {
     const es = new EventSource(eventsUrl(taskId));
     const handler = (e: MessageEvent) => {
       try {
-        onEvent({ type: e.type as SSEventType, data: JSON.parse(e.data) });
+        // wire → `SSEvent` 的唯一折点：EventSource 只给字符串 `type` 与未校验的 JSON，
+        // 判别联合保证的是消费侧，这里保证不了——显式断言一次，字段名对不对由
+        // `src/types/sse-narrowing.assert.ts` 的类型级断言在 `npm run typecheck` 上兜。
+        onEvent({ type: e.type as SSEventType, data: JSON.parse(e.data) } as SSEvent);
       } catch {
         /* ignore malformed frames */
       }

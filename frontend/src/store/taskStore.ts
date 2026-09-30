@@ -2,8 +2,6 @@ import { create } from "zustand";
 import {
   Artifact,
   ConfirmDialogState,
-  HumanConfirmRequiredData,
-  HumanConfirmResolvedData,
   RiskItem,
   SSEvent,
   StepRecord,
@@ -121,7 +119,7 @@ function applyToTask(task: Task, ev: SSEvent): Task {
       return { ...task, steps };
     }
     case "human_confirm_required": {
-      const tcId = (ev.data as HumanConfirmRequiredData).tool_call_id;
+      const tcId = ev.data.tool_call_id;
       const steps = task.steps.map((s) => ({
         ...s,
         tool_calls: s.tool_calls.map((tc) =>
@@ -200,7 +198,7 @@ export const useTaskStore = create<TaskState>((set) => ({
 
       let confirm = state.confirm;
       if (ev.type === "human_confirm_required") {
-        const d = ev.data as HumanConfirmRequiredData;
+        const d = ev.data;
         confirm = {
           open: true,
           tool_call_id: d.tool_call_id,
@@ -219,7 +217,7 @@ export const useTaskStore = create<TaskState>((set) => ({
         shouldCloseConfirmOnResolved(
           confirm,
           id,
-          (ev.data as HumanConfirmResolvedData).tool_call_id
+          ev.data.tool_call_id
         )
       ) {
         confirm = { open: false };
