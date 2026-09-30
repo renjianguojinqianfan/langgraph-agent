@@ -383,7 +383,7 @@ classDiagram
 | `task_resumed` | `{task_id, status}` | 从检查点续跑启动（P3） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |
-| `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 |
+| `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|
 | `task_rollback` | `{task_id, ok, files, already_original}` | 工作区回滚完成（P1-B，`files` = 实际变动的沙箱内路径） |
 | `heartbeat` | `{}` | 保活（每 15s） |
 

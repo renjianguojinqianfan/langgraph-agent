@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { compressFaceParts } from "../types";
 import { getTaskTrace, TraceFetchError } from "../api/client";
 import { SSEvent } from "../types";
 
@@ -123,9 +124,9 @@ function summarize(ev: SSEvent): string {
         d.cooldown_sec ?? "?"
       )}s`;
     case "context_compressed":
-      return `步骤 #${String(d.step_index ?? "?")} 丢弃 ${String(
-        d.dropped ?? "?"
-      )} 条早期消息，策略 ${String(d.strategy ?? "?")}`;
+      return `步骤 #${String(d.step_index ?? "?")} ${compressFaceParts(d)}，策略 ${String(
+        d.strategy ?? "?"
+      )}`;
     case "step_start":
       return `步骤 #${String(d.index ?? "?")}`;
     case "human_confirm_required":
