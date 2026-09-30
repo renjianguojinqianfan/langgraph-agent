@@ -27,7 +27,8 @@ on:
     # 这里是 paths 白名单、不是 paths-ignore：`!` 写进 paths-ignore 不生效（ignore 只排除、
     # 不放行，见 GitHub 官方口径与 #103 的复核）。顺序敏感——`**` 全收 → 排掉 docs/ 与根级
     # *.md → 末尾那条正模式再把 docs/architecture.md（§3.4 事件表，check:sse 的权威源）收回来，
-    # 于是改这张表的 PR 当次就红、不用等下一张不相干的前端 PR（#103）。删末尾项前先读该票。
+    # 于是改这张表的 PR 当次就跑 frontend job：表与代码真漂了才当次变红，不再红在下一张
+    # 不相干的前端 PR 上（#103）。删末尾项前先读该票。
     paths: ["**", "!docs/**", "!*.md", "docs/architecture.md"]
   pull_request:
     branches: [master]
