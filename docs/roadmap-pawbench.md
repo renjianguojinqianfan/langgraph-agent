@@ -144,7 +144,7 @@
    是现成的复盘教材，也是「学习资产」落袋之处。警惕「读过了但没写进手感」。
 4. 评测代码不进 pytest（天然 live），但 ruff/mypy 同闸。
 5. **分支策略（分级）**：功能/依赖/代码改动永远在 feature 分支做、master 只接
-   PR 合入（护「全绿」简历主张）；docs/收尾小修因 `ci.yml` 的 `paths-ignore:
+   PR 合入（护「全绿」简历主张）；docs/收尾小修因 `ci.yml` 的 `paths-ignore:（#103 后改为 `paths` 白名单，唯一例外 `docs/architecture.md` 会进全套 CI；现行规则以 `docs/agents/issue-tracker.md`「Release conventions」为准，此处不存第二份事实）
    docs/**、*.md` 不进 CI、不影响全绿，单人自用可直接 commit+push master、免 PR
    仪式（2026-09-14 architecture.md 依赖同步实例：push 时 admin bypass 了 guard
    required check）。沙箱 git push 走 OAuth 回落（清空 `GITHUB_TOKEN` +

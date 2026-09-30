@@ -1,7 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # CI workflow for langgraph-agent
 #
-# 触发：push / PR 到 master（docs/ 与 *.md 变更不触发）；workflow_dispatch 手动
+# 触发：push / PR 到 master；workflow_dispatch 手动。
+#       docs/ 与根级 *.md 的变更不触发——唯一例外是 docs/architecture.md：§3.4 事件表
+#       是 `npm run check:sse` 的权威源，改本表的 PR 会触发全套 CI（#103）。
 # 内容：
 #   guard-protected-files  受保护文件守卫（resilience.py/registry.py，[OVERRIDE] 逃生舱）
 #   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
@@ -22,10 +24,16 @@ name: CI
 on:
   push:
     branches: [master]
-    paths-ignore: ["docs/**", "*.md"]
+    # 这里是 paths 白名单、不是 paths-ignore：`!` 写进 paths-ignore 不生效（ignore 只排除、
+    # 不放行，见 GitHub 官方口径与 #103 的复核）。顺序敏感——`**` 全收 → 排掉 docs/ 与根级
+    # *.md → 末尾那条正模式再把 docs/architecture.md（§3.4 事件表，check:sse 的权威源）收回来，
+    # 于是改这张表的 PR 当次就跑 frontend job：表与代码真漂了才当次变红，不再红在下一张
+    # 不相干的前端 PR 上（#103）。删末尾项前先读该票。
+    paths: ["**", "!docs/**", "!*.md", "docs/architecture.md"]
   pull_request:
     branches: [master]
-    paths-ignore: ["docs/**", "*.md"]
+    # 与 push 的 paths 逐字一致：两侧各自独立求值，只改一侧会让另一侧继续漏检
+    paths: ["**", "!docs/**", "!*.md", "docs/architecture.md"]
   workflow_dispatch:
     inputs:
       run_live_e2e:

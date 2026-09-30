@@ -14,8 +14,10 @@ past practice — not a standing authorization to commit or push**; whether to c
 still decided by the user in the moment.
 
 - **分级**：功能 / 依赖 / 代码改动走 feature 分支 + PR + CI 全绿才合（护「master 全绿」主张）；
-  docs/ 收尾小修因 `ci.yml` 的 `paths-ignore: docs/**, *.md` 不进 CI、不影响全绿，
-  可直接 commit + push master、免 PR 仪式。
+  docs/ 收尾小修因 `ci.yml` 触发面的 `paths` 白名单排掉 `docs/**` 与根级 `*.md`、不进 CI、
+  不影响全绿，可直接 commit + push master、免 PR 仪式。**唯一例外**：`docs/architecture.md`
+  被白名单末尾的正模式单独收回——改它会触发全套 CI，因为 §3.4 事件表是 `npm run check:sse`
+  的权威源（#103）。
 - **实证优先、不盲信状态标签**：合并前本地复现 CI 的**确切命令**（前端 `npm ci` 而非
   `npm install`）；`BLOCKED` / 无 checks / CI 红 ≠ 可绕过或强合——先深挖根因，必要时弃
   自动分支手动接管（先例：PR #6→#15，dependabot rebase 漏升配套 plugin-react 致
@@ -24,7 +26,7 @@ still decided by the user in the moment.
   与抬版纪律见 `AGENTS.md`「跨任务安全边界」。
 - **合并方式**：`[OVERRIDE]` PR 用 squash（免 guard 变红）；合并后删远程分支前先
   `git ls-remote --heads origin <branch>` 核对；docs-only PR 无 checks / admin bypass
-  属已知现象，不等于强合。
+  属已知现象，不等于强合——但 `docs/architecture.md` 除外，#103 之后它照理会跑全套 CI。
 
 ## Conventions
 

@@ -59,6 +59,7 @@ from .core.tools.registry import build_tools
 from .services.event_bus import EventBus
 from .services.persistence import Persistence
 from .services.task_manager import TaskManager
+from .utils.logging import set_console_stream
 
 _TERMINAL = ("COMPLETED", "FAILED", "INTERRUPTED")
 
@@ -121,11 +122,14 @@ def _force_utf8_stdio() -> None:
 def _redirect_agent_logs_to_stderr() -> None:
     """Keep stdout clean for the machine-readable result.
 
-    :mod:`backend.utils.logging` binds every ``agent.*`` logger to a stdout
-    ``StreamHandler`` at import time. Under ``--output json`` the harness parses
-    stdout as JSON, so repoint those stream handlers at stderr (result on
-    stdout, diagnostics on stderr — the usual CLI contract). File handlers and
-    ``print()`` are left alone.
+    :mod:`backend.utils.logging` binds every ``agent.*`` logger to a console
+    ``StreamHandler`` at first use. Under ``--output json`` the harness parses
+    stdout as JSON, so the console stream goes to stderr two ways (Issue #90):
+    :func:`set_console_stream` flips the indirection for loggers created *from
+    now on* (the lazy ones — e.g. ``agent.mcp.client``, imported by
+    ``TaskManager`` mid-run — used to capture stdout and leak past a sweep),
+    and the handler loop repoints the loggers that already exist. File handlers
+    and ``print()`` are left alone.
 
     Targets ``sys.__stderr__`` (the stable process stderr) rather than
     ``sys.stderr`` so the handlers never capture a caller's temporarily-swapped
@@ -133,6 +137,7 @@ def _redirect_agent_logs_to_stderr() -> None:
     trip over a stream it does not own).
     """
     target = sys.__stderr__ or sys.stderr
+    set_console_stream(target)
     for name in list(logging.Logger.manager.loggerDict):
         if not name.startswith("agent."):
             continue
