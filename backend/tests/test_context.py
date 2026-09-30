@@ -348,6 +348,44 @@ def test_ticket_85_window1_keep_recent_covering_everything_still_squeezes():
     assert again is out
 
 
+def test_ticket_85_window1_short_non_tool_message_keeps_its_copy():
+    """#85 评审 F1：window-1 这一档不许把短 user/assistant 降成无预览的裸 marker。
+
+    评审侧实测的复现形态：两条 300 字符的 user/assistant + 10 条 4000 字符，budget 1000、
+    ``keep_recent=20``（n=12 ≤ keep_recent，正是本票新开的档）。``_squeeze_content`` 的
+    「预览装不下就 marker-only」回退过去**只受 pass 2 的角色门保护**，pass 1 绕过它——
+    那条 300 字符的 user 原文（唯一一份、trace 不落）被换成 54 字符裸 marker，marker 自己
+    还写着「留痕: 无」。那是丢，不是缩，与 A′ 约束直接冲突。既有 4000 字符级测试全绿不能
+    替代这条：短消息才走得到「装不下」那一支。
+    """
+    short = ["u" * 300, "a" * 300]
+    msgs = [_msg("user", short[0]), _msg("assistant", short[1])] + [
+        _msg("user", "x" * 4000) for _ in range(10)
+    ]
+    tokens_in = estimate_tokens(msgs)
+
+    out, meta = compress_messages(msgs, budget=1000, keep_recent=20, trace_ref=TRACE_REF)
+
+    # 本票的语义不动：长消息照挤、一条不截、够不到预算如实报 False。
+    assert meta["compressed"] is True, meta
+    assert meta["dropped"] == 0, meta
+    assert meta["band_evicted"] > 0, meta
+    assert meta["converged"] is False, meta
+    assert estimate_tokens(out) < tokens_in, "挤了却没变小 = 空转"
+
+    # A′：非 tool 短消息宁可原样不动，也不许降成裸 marker。
+    assert out[0]["content"] == short[0], "user 的唯一一份原文被丢了"
+    assert out[1]["content"] == short[1], "assistant 的唯一一份原文被丢了"
+    assert out[-1]["content"] == "x" * 4000, "最新一条逐字（A′ 不变）"
+
+    # 凡是被挤过的，都必须还带着预览。
+    notes = [m for m in out if m["content"].startswith(NOTE_PREFIXES)]
+    assert len(notes) == meta["band_evicted"], (len(notes), meta)
+    assert notes, "一条都没挤，本条测试就没测到东西"
+    for m in notes:
+        assert "\n" in m["content"], "便签只剩 header = 预览归零"
+
+
 def test_ticket_85_window2_summarize_shares_the_band_squeeze():
     """残窗二（#85）：挤压从 truncate 路径上提到 ``compress_messages``，summarize 也吃到。
 

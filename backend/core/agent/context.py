@@ -147,12 +147,21 @@ def _squeeze_content(
     head_chars: int,
     tail_chars: int,
     with_preview: bool,
+    allow_marker_only: bool,
 ) -> Optional[str]:
     """Shrink one message's content by a notch, or ``None`` when it cannot shrink.
 
     Notches: full text → note with head/tail preview → marker-only note. A note is
     only ever demoted to its own header, never re-wrapped, so notes cannot nest and
     re-running the pass is a no-op (``compress_messages`` runs before every LLM call).
+
+    ``allow_marker_only`` is the A′ role gate, and it gates **both** ways a note can
+    end up bare: the last notch (``with_preview=False``) and a message too short to
+    hold a preview at all. Only ``tool`` results may go bare — their full text still
+    sits in the trace behind ``anchor``. For anything else a preview is the last copy
+    that exists, so "the preview does not fit" means *leave it alone*, not "drop it to
+    a marker that itself says 留痕: 无" (#85 review F1: pass 1 used to bypass the gate
+    that only lived in pass 2, and the squeeze then lost text instead of shrinking it).
     """
     if not isinstance(content, str) or not content:
         return None  # non-text / empty content is left alone (same as T1.4)
@@ -164,10 +173,13 @@ def _squeeze_content(
             return None  # marker-only already: no notch left
         return header
     marker = _note_marker(content, prefix=prefix, label=label, ref=_note_ref(trace_ref, anchor))
-    if with_preview and int(head_chars) + int(tail_chars) < len(content):
+    preview_fits = int(head_chars) + int(tail_chars) < len(content)
+    if with_preview and preview_fits:
         candidate = marker + _note_preview(content, head_chars, tail_chars)
+    elif preview_fits or allow_marker_only:
+        candidate = marker  # tool results may go bare; a demotion never re-wraps
     else:
-        candidate = marker  # preview would swallow the saving: go marker-only
+        return None  # A′: too short for a preview and no trace copy — skip, don't lose it
     # Only a strictly smaller content is accepted — the squeeze can never spin.
     return candidate if len(candidate) < len(content) else None
 
@@ -196,8 +208,11 @@ def _squeeze_band(
     a bare marker, newest-first, because their full text still sits in the trace
     behind the ``#tool_call_id`` anchor. A user/assistant preview is the last copy
     that exists — no event carries their text — so their notes keep their preview.
-    When the tool candidates run out and the budget is still out of reach, the squeeze
-    stops and :func:`compress_messages` reports ``converged=False``.
+    The gate covers **both** ways a note can end up bare: the last notch, and a
+    message too short to hold a preview at all (#85 review F1 — the latter used to
+    bypass the gate in pass 1 and lose the only copy). When the tool candidates run
+    out and the budget is still out of reach, the squeeze stops and
+    :func:`compress_messages` reports ``converged=False``.
 
     ``names`` is the ``tool_call_id`` → tool name map of the **whole** history, not
     just the band: truncation drops the oldest messages, and a band tool result
@@ -217,7 +232,8 @@ def _squeeze_band(
     passes = ((True, range(head, newest)), (False, range(len(result) - 1, head - 1, -1)))
     for with_preview, indices in passes:
         for i in indices:
-            if not with_preview and result[i].get("role") != "tool":
+            role = str(result[i].get("role") or "unknown")
+            if not with_preview and role != "tool":
                 continue  # A′: a non-tool note never loses its preview
             prefix, label, anchor = _note_form(result[i], names)
             squeezed = _squeeze_content(
@@ -229,6 +245,7 @@ def _squeeze_band(
                 head_chars=head_chars,
                 tail_chars=tail_chars,
                 with_preview=with_preview,
+                allow_marker_only=role == "tool",  # A′ covers pass 1 too (#85 F1)
             )
             if squeezed is None:
                 continue
