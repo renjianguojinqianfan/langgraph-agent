@@ -358,6 +358,8 @@ classDiagram
 > 类型**——漏注册不是「显示不全」，是静默收不到）与 `frontend/src/types/index.ts` 的
 > `SSEventType` 联合。本表、两处注册表与后端发布点由 `npm run check:sse` 逐条对齐，已接进 CI 的
 > frontend job（#92）。唯一不对称是 `trace_end`：只写 trace JSONL、不经 EventBus，故进联合不进订阅表。
+> **改本表的 PR 会触发全套 CI**（#103）：`ci.yml` 的触发面是 `paths` 白名单，末尾的正模式把本文件
+> 单独收了回来——表与代码一漂就红在本次 PR 上，不用等下一张不相干的前端 PR。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
