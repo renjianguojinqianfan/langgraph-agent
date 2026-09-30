@@ -32,7 +32,7 @@
 |---|---|---|
 | 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：qoder 实施 + `code-review` 自评审 + `neat-freak` 文档收尾（步 3.5，能力面/接口/配置语义变了必须同步文档）+ 提 PR；opencode 独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
-| 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到 SSE 事件面**（发布点 / 注册表 / §3.4 表）再加 `npm run check:sse` |
+| 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse`，确认框面（关框 / 切任务 / 五档终态）→ `npm run check:confirm` |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；三类 409 拒绝逐条仍成立 |
 | 熔断层零改动（冻结区）/ 确认逻辑 | `ci.yml` 的 guard job | guard 全绿 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
@@ -59,9 +59,10 @@
 LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_e2e.py
 LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_skill_test.py
 
-# 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm run check:sse → npm run build
+# 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm run check:sse → npm run check:confirm → npm run build
 npx tsc --noEmit     # 本地快检，0 错误
 npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面必跑，细则见 docs/architecture.md §3.4
+npm run check:confirm # 确认框关框 / 切任务 / 五档终态判据（#91）；无测试框架，断言以 plain-Node 脚本落 frontend/scripts/
 ```
 
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。

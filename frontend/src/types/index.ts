@@ -7,6 +7,27 @@ export type TaskStatus =
   | "FAILED"
   | "INTERRUPTED";
 
+/**
+ * 确认闸门的五档终态，与后端 `nodes.py` 的 `CONFIRM_*` 常量一一对应（#57 AC5/AC6）。
+ * 空串 `""` 不是其中一档：它是「这条调用没进过闸门」，被单列在下面的类型里，
+ * 以免把「没进闸门」误当成某一种失败（那正是 #57 之前折成「未批准即拒绝」的老坑）。
+ */
+export type ConfirmOutcome =
+  | "approved"
+  | "denied"
+  | "timed_out"
+  | "aborted"
+  | "auto_approved";
+
+/** 五档终态的中文文案表。显示面的唯一来源（StepDetail / TraceTab 都读这张，别造第二张）。 */
+export const CONFIRM_OUTCOME_LABEL: Record<string, string> = {
+  approved: "人已批准",
+  denied: "人明确拒绝",
+  timed_out: "超时未答",
+  aborted: "被停止打断",
+  auto_approved: "评测态自动放行",
+};
+
 export interface PlanStep {
   index: number;
   description: string;
@@ -22,7 +43,7 @@ export interface ToolCallRecord {
   error?: string | null;
   need_confirm: boolean;
   confirmed: boolean;
-  confirm_outcome?: string; // #57: approved | denied | timed_out | aborted | auto_approved（"" = 未进闸门）
+  confirm_outcome?: ConfirmOutcome | ""; // #57: 五档终态；"" = 未进闸门（backend schemas.py 同源）
   circuit_open?: boolean; // P0: short-circuited by the circuit breaker
   retries?: number; // P0: retries performed by the tool executor
 }
@@ -183,11 +204,45 @@ export type SSEventType =
   | "trace_end" // 仅 trace 回放面（见上方说明）
   | "heartbeat";
 
-export interface SSEvent {
-  type: SSEventType;
+/**
+ * 确认面两个事件的具名成员（#91 AC3 返工）。
+ *
+ * `SSEvent` 过去是 `{ type: SSEventType; data: any }`——`data` 永远是 `any`，所谓「按 type
+ * 收窄」在编译期不存在：后端把字段名改掉，`tsc` 一声不响（正是票面第 3 条要治的病）。
+ * 现在按 `type` 可判别，消费侧拿到的是具名载荷。
+ */
+export interface HumanConfirmRequiredEvent {
+  type: "human_confirm_required";
+  data: HumanConfirmRequiredData;
+  ts?: number;
+}
+
+export interface HumanConfirmResolvedEvent {
+  type: "human_confirm_resolved";
+  data: HumanConfirmResolvedData;
+  ts?: number;
+}
+
+/** 除确认面两个之外的事件类型（含只进联合、不进订阅表的 `trace_end` 与无载荷的 `heartbeat`）。 */
+export type OtherSSEventType = Exclude<
+  SSEventType,
+  "human_confirm_required" | "human_confirm_resolved"
+>;
+
+/**
+ * 其余事件的宽松成员：载荷仍是 `any`。范围就到票面要的「至少覆盖确认面两个事件」为止，
+ * 全事件判别联合是 #104 那条线（发布点 AST 枚举）落地后的事，不在本票扩面。
+ */
+export interface LooseSSEvent {
+  type: OtherSSEventType;
   data: any;
   ts?: number;
 }
+
+export type SSEvent =
+  | HumanConfirmRequiredEvent
+  | HumanConfirmResolvedEvent
+  | LooseSSEvent;
 
 export interface ConfirmDialogState {
   open: boolean;
@@ -195,6 +250,26 @@ export interface ConfirmDialogState {
   tool_name?: string;
   input?: any;
   task_id?: string;
+}
+
+// --- #91 AC3: 确认面事件载荷的类型接口 ---
+// 参照 `ContextCompressedData` 的先例：给「在发」的 confirm 事件载荷建命名类型，
+// 让 store 消费侧有编译期落点，后端改字段名时不至于全靠人肉对齐。这里只收口确认
+// 相关的两个事件 + tool_result 上的 `confirm_outcome`（已并入 `ToolCallRecord`），
+// 不做全事件判别联合——那是另一张票的体量（`docs/architecture.md` §3.4 全表逐条建模）。
+
+/** Payload of the ``human_confirm_required`` event（nodes.py `_ask_human` / risk_plan 两处发布）。 */
+export interface HumanConfirmRequiredData {
+  tool_call_id: string;
+  tool_name: string;
+  input: Record<string, any>;
+}
+
+/** Payload of the ``human_confirm_resolved`` event（#57 AC5 五档终态）。 */
+export interface HumanConfirmResolvedData {
+  tool_call_id: string;
+  tool_name: string;
+  outcome: ConfirmOutcome;
 }
 
 // --- P1: trace replay / live markers ---

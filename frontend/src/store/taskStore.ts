@@ -9,6 +9,10 @@ import {
   ToolCallRecord,
   TraceMarker,
 } from "../types";
+import {
+  confirmAfterSwitch,
+  shouldCloseConfirmOnResolved,
+} from "./confirmSlot";
 
 interface TaskState {
   tasks: Task[];
@@ -115,7 +119,7 @@ function applyToTask(task: Task, ev: SSEvent): Task {
       return { ...task, steps };
     }
     case "human_confirm_required": {
-      const tcId = ev.data.tool_call_id as string;
+      const tcId = ev.data.tool_call_id;
       const steps = task.steps.map((s) => ({
         ...s,
         tool_calls: s.tool_calls.map((tc) =>
@@ -157,7 +161,14 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   setTasks: (tasks) => set({ tasks }),
 
-  setCurrentTask: (id) => set({ currentTaskId: id, selectedStep: null }),
+  setCurrentTask: (id) =>
+    set((state) => ({
+      currentTaskId: id,
+      selectedStep: null,
+      // #91 AC1：确认框是全局单格，切换任务时把「属于别的任务」的开着的框清掉，
+      // 否则 A 的僵尸框会盖在 B 上（切走 A、后端才收口那一格残留的正面收口）。
+      confirm: confirmAfterSwitch(state.confirm, id),
+    })),
 
   upsertTask: (task) =>
     set((state) => {
@@ -187,21 +198,27 @@ export const useTaskStore = create<TaskState>((set) => ({
 
       let confirm = state.confirm;
       if (ev.type === "human_confirm_required") {
+        const d = ev.data;
         confirm = {
           open: true,
-          tool_call_id: ev.data.tool_call_id,
-          tool_name: ev.data.tool_name,
-          input: ev.data.input,
+          tool_call_id: d.tool_call_id,
+          tool_name: d.tool_name,
+          input: d.input,
           task_id: id,
         };
       }
       // #83: 后端自行收口的三种终态（超时未答 / 停止打断 / 评测态自动放行）不会
       // 有人来点这个按钮。不在这儿关掉，就留一具僵尸弹窗——用户还能对一格已有
       // 终态的调用点按「批准」，那是一次打到已判完的调用上的假操作。
+      // #91 AC1：关框再加 `confirm.task_id === id`（判据在 shouldCloseConfirmOnResolved），
+      // 消掉「切走任务 A、在 B 视图收到 A 的 resolved」把 B 的框误收 / A 的框残留盖在 B 上。
       if (
         ev.type === "human_confirm_resolved" &&
-        confirm.open &&
-        confirm.tool_call_id === ev.data.tool_call_id
+        shouldCloseConfirmOnResolved(
+          confirm,
+          id,
+          ev.data.tool_call_id
+        )
       ) {
         confirm = { open: false };
       }
