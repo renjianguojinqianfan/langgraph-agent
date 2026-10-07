@@ -39,7 +39,7 @@
 | live / 换模型 | `scripts/LIVE_E2E.md` + `ci.yml` 的 live-e2e job | 先核免费额度 |
 | headless / 评测台 | `README.md`「无人值守执行（P0-C headless）」 | 四级退出码 0/1/2/3 语义不变；`degraded` 标记不丢 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
-| 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆） | 调研总结（含文件级引用）落进票面评论，再拍板 |
+| 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆）；读料可交后台代理跑 `research` skill | 调研产物落 `docs/`（按 domain「文档归属」表，带文件级引用），票面只留结论 + 链接，再拍板 |
 
 ## 验证入口与完成证据
 
@@ -72,6 +72,8 @@ npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面�
 
 > 本节由 `setup-matt-pocock-skills` 技能生成（2026-09-15），供 mattpocock 工程技能组读取；
 > 下面四个 `###` 标题是它们的读取入口。细节改 `docs/agents/*.md` 即可，不必重跑技能。
+> 技能组来源 `mattpocock/skills`：本地克隆 `E:\code\mattpocock-skills`（HEAD `6fd9479`，
+> 2026-10-07 同步）。上游有更新先 diff 克隆再改本仓文档，别照记忆改。
 
 ### Issue tracker
 
@@ -83,9 +85,9 @@ GitHub Issues（`renjianguojinqianfan/langgraph-agent`），走 `gh` CLI；Power
 
 ### Domain docs
 
-Single-context：根 `CONTEXT.md`（未建）+ `docs/adr/`（0001 / 0002 / 0003 / 0004）。词汇表在 `backend/core/agent/state.py`（节点名见 `graph.py`）。See `docs/agents/domain.md`.
+Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004）。See `docs/agents/domain.md`.
 
 ### Implementation workflow
 
-新票实施分工：qoder 切分支 + `implement` + `code-review` 自评审 + `neat-freak` 文档收尾 + 提 PR；opencode 独立评 PR（不改代码只提返工）；评审侧/用户合并。See `docs/agents/workflow.md`.
+新票实施分工：qoder 切分支 + `implement` + `code-review` 自评审 + `pr` 写 PR body + `neat-freak` 文档收尾 + 提 PR；合并后 `retro` 复盘；opencode 独立评 PR（不改代码只提返工）；评审侧/用户合并。多票大工程可整 spec 路由 `implement-spec`。See `docs/agents/workflow.md`.
 

@@ -4,17 +4,19 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root, or
-- **`CONTEXT-MAP.md`** at the repo root if it exists — it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
+- **`GLOSSARY.md`** at the repo root, or
+- **`GLOSSARY-MAP.md`** at the repo root if it exists — it points at one `GLOSSARY.md` per context. Read each one relevant to the topic.
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grilling` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-> **Current state (2026-09-18):** `CONTEXT.md` does not exist yet; `docs/adr/` **does** —
+> **Current state (2026-10-07):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
+> authority stays in `backend/core/agent/state.py`; follows upstream's `GLOSSARY.md` convention
+> since #876); `docs/adr/` **does** —
 > seeded with `0001-in-place-migration-and-resume-positioning.md` (migrated in from
 > `.qoder/specs/`) and `0002-moat-discipline-no-attention-reallocation.md`
-> (wayfinder #27/#30). This repo is **single-context** — one `CONTEXT.md` + one `docs/adr/`
-> at the root. No `CONTEXT-MAP.md`, no per-package context dirs.
+> (wayfinder #27/#30). This repo is **single-context** — one `GLOSSARY.md` + one `docs/adr/`
+> at the root. No `GLOSSARY-MAP.md`, no per-package context dirs.
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
 > dirs (`.qoder/`, `.trae/`, `.mimosa/`), which are untracked by design. Full rule table:
@@ -27,7 +29,7 @@ Single-context repo (this repo's layout):
 
 ```
 /
-├── CONTEXT.md                         ← glossary / ubiquitous language (not yet created)
+├── GLOSSARY.md                      ← glossary / ubiquitous language (pointer entry; authority in state.py)
 ├── AGENTS.md                          ← agent operating manual (exists; short entry: positioning /
 │                                        safety boundaries / task routing / verification / Agent skills)
 ├── docs/
@@ -52,31 +54,30 @@ Single-context repo (this repo's layout):
 └── frontend/                          ← React + Vite + TS: components / pages / store / hooks
 ```
 
-Multi-context repo (presence of `CONTEXT-MAP.md` at the root) — **not this repo**, kept for reference:
+Multi-context repo (presence of `GLOSSARY-MAP.md` at the root) — **not this repo**, kept for reference:
 
 ```
 /
-├── CONTEXT-MAP.md
+├── GLOSSARY-MAP.md
 ├── docs/adr/                          ← system-wide decisions
 └── src/
     ├── ordering/
-    │   ├── CONTEXT.md
+    │   ├── GLOSSARY.md
     │   └── docs/adr/                  ← context-specific decisions
     └── billing/
-        ├── CONTEXT.md
+        ├── GLOSSARY.md
         └── docs/adr/
 ```
 
 ## Use the glossary's vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
 
 If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 
-Until `CONTEXT.md` exists, the de-facto vocabulary lives in `backend/core/agent/state.py` /
-`graph.py` (node names) and the hard rules in `AGENTS.md`「跨任务安全边界」 — use those terms (`planner` / `executor` / `tool` /
-`reflect` / `risk_scan` / `human_confirm` / `finish`,
-`checkpoint` / `resume` / `confirm gate` / `熔断` / `沙箱根`) rather than coining new ones.
+The vocabulary's authority lives in `backend/core/agent/state.py` / `graph.py` (node names) and
+the hard rules in `AGENTS.md`「跨任务安全边界」; the root `GLOSSARY.md` is the pointer entry to both —
+read it first, then follow its pointers rather than coining new terms.
 
 ## Flag ADR conflicts
 

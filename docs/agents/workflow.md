@@ -11,7 +11,7 @@
 | 2 | **qoder** | 调用 `implement` skill 实施（TDD：约定的 seam 上先写红测试；常跑类型检查与单测） |
 | 3 | **qoder** | 调用 `code-review` skill **自评审**（双轴：规范轴 + 需求轴），返工发现后才进下一步 |
 | 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」 |
-| 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号（`Closes #N`）；验证状态四态如实写（通过/跳过/未运行/产物验收） |
+| 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号（`Closes #N`）；body 调 `pr` skill 写（Summary 最小可视化 / Before-After Evidence / Merge Danger）；验证状态四态如实写（通过/跳过/未运行/产物验收） |
 | 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest/`--check`）+ 冻结区检查 + live 视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
 | 6 | 评审侧/用户 | 合并：调 `verification-loop` skill 走收尾门（机械验证 + 端到端验收）→ CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
 
@@ -27,7 +27,7 @@
 
 > 2026-09-26 由 PR #69 评审→返工→复核→合并的首个完整循环补入：以下路由此前只活在临时交接文档（handoff）里，现在落进本体——handoff 是会话态，规则必须有持久家。
 
-- **双轴评审**：调 `code-review` skill（规范轴 + 需求轴**并行子代理**）。规范源 = `AGENTS.md` + `pyproject.toml` 注释 + 全局 `~/.agents/AGENTS.md` §7；需求源 = 票面 AC 逐条对照。
+- **双轴评审**：调 `code-review` skill（规范轴 + 需求轴**并行子代理**）。规范源 = `AGENTS.md` + `pyproject.toml` 注释 + 全局 `~/.agents/AGENTS.md` §7；需求源 = 票面 AC 逐条对照。规范轴另必带 **Fowler 坏味道基线**（`code-review` 技能内置 13 条）：repo 文档规范优先于基线；ruff/mypy 已机械覆盖的跳过；基线命中**一律是判断题**——不当硬违规打回，也不当 scope creep 放过。
 - **安全评审**：涉及**闸门 / 工具面 / 子代理权限**的 PR 必用 `security-review` skill；纯观测面（#58 件清单这类）可跳过。
 - **件清单裁判**：能力面 / 工具面 PR 要跑一个 mock 任务（headless 管线 + 自定义 MockLLM 脚本）后核对 run manifest 的 capability / `subtask_face` 行与票面意图一致——「这次子代理能干什么」必须可 diff、可回看。
 - **live 视票面**：口径唯一权威 `scripts/LIVE_E2E.md`（含「先 A/B 复跑再归因」）。
@@ -37,6 +37,7 @@
 
 - 评审提出返工 → qoder 在**同一分支**修 → push → CI 复绿。
 - 复核口径分两档：**纯注释 / docs 返工** → 评审读返工 diff + 新 head CI 全绿 + `mergeable` 即可收口合并；**含代码的返工** → 回到步 5 完整口径（受影响面的门禁 + 相关测试至少重跑一轮）。
+- **复盘**：合并后（或返工超一轮时）调 `retro` skill 会话复盘——机械错误变确定性检查、判断变编码规范，落点回写 `AGENTS.md` / `pyproject.toml` / 门禁（对应全局 AGENTS.md §5 反熵回路；上游主流程把 retro 放在 code-review 之后）。`diagnosing-bugs` 修完硬 bug 同样跑一次，问「什么检查本可以防住它」。
 
 ## 并行实施（多 worktree，2026-09-28 #49 试水首证）
 
@@ -54,6 +55,7 @@
 - **子代理中断的 WIP 靠 scratch 分支续，不靠 patch**：撞轮次上限时树里往往是几个文件的**未提交**改动。正确起手是 `git switch -c wip/<slug>`（脏改动跟着过去）→ `git add -A` → 单 commit，再切回特性分支做干净态评审；续做时**从新 master 切分支只 `git cherry-pick` 那个单 commit**。别只导 `.patch`——未跟踪文件容易漏、patch 不带身份也不能直接跑门禁；patch 至多当备份。⚠️ 若特性分支后来 rebase 过，scratch 分支的父提交是**旧链**，直接 checkout 续做会把已被替换的提交带回来，必须先 cherry-pick 重接
 - **边界靠机械断言，不靠任务卡**：试水实证卡守不住文件面（禁了文档，agent 第二轮还是写了）；有效闸门是 push 前四断言——`git status` 空 / worktree 只有主树+本票 / 冻结区 diff 空 / 远端无此分支
 - **分离评审不是仪式**：agent 自评全绿之后，步 5 独立评审仍抓到了人漏读的真 bug（无可再挤时仍自称压缩）——不因自评绿而免
+- **多票大工程可整 spec 路由 `implement-spec`**：整份 spec 单集成分支落地、ticket 当任务图、实施子代理各占 worktree/分支、frontier 并发、最后跑一次 `code-review`——本节手搓约定（claim 走 GitHub、ADR 发号统一、四断言、brief 纪律）继续有效，只是执行形态换成上游正式版
 
 ## 备注
 

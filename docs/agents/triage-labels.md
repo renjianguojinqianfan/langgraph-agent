@@ -49,6 +49,13 @@ implementing without further clarification.
 - 规划类刻意用「无标签即信号」：既不能直接开工，也不是在等人补资料。
 - 挂起票（如「只记录不实现」那类）保持原标签，**不要**误标 `needs-info`——它不缺信息，是不打算做。
 
+### 上游技能写标签的边界（2026-10-07 起）
+
+- `to-tickets` 拆出的 **ticket** 打 `ready-for-agent` 照旧——ticket 按构造就是 agent-grabbable。
+- `to-spec` 发布的**父 spec 不打** `ready-for-agent`，打 `spec`：上游 to-spec 自己给 spec 打该
+  标签并承认这是 its most-reported problem（AFK 抓票方会把整份 spec 当成实施票一把实施）；
+  本仓库 `ready-for-agent` 的语义是「修法唯一、可直接开工」（见上表执行类），只认 ticket。
+
 ### 摘标签必须留说明
 
 从票上摘掉 `ready-for-agent` 时，必须同时留一条评论写明**补什么即可恢复**。否则后来者看到一张规格齐全却没有该标签的票，会当成漏打而直接开工。
