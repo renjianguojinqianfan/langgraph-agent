@@ -1,4 +1,4 @@
-# 质量门禁工具链（CI backend-test job 与本地同一套版本）
+# 质量门禁工具链（ruff/mypy 与 CI backend-test job 同版本；pre-commit 仅本地 git 钩子框架，CI 从不跑钩子，钉版只为本地可复现）
 #
 # 为什么不并进 requirements.txt：backend/Dockerfile 只 COPY requirements.txt，
 # 运行期不需要 linter；并进去等于让每个镜像都多装两把工具。

@@ -19,14 +19,12 @@ from pathlib import Path
 
 _VALIDATOR_PATH = Path(__file__).resolve().parents[2] / "scripts" / "validate_commit_msg.py"
 
+# 文件缺失时这里就红（exec_module 抛 FileNotFoundError）——守卫在 import 期，
+# 不需要一个「永远到不了」的存在性测试（#115 评审 F5）。
 _spec = importlib.util.spec_from_file_location("validate_commit_msg", _VALIDATOR_PATH)
-assert _spec is not None and _spec.loader is not None  # 路径写错时立即失败，而非 AttributeError
+assert _spec is not None and _spec.loader is not None
 _validator = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_validator)
-
-
-def test_validator_file_exists() -> None:
-    assert _VALIDATOR_PATH.is_file(), f"validator 不在预期位置：{_VALIDATOR_PATH}"
 
 
 def test_accepts_conventional_subjects() -> None:

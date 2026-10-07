@@ -64,7 +64,7 @@ npx tsc --noEmit     # 本地快检，0 错误
 npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面必跑，细则见 docs/architecture.md §3.4
 ```
 
-- 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
+- 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。换位置克隆需同步改配置里的 `.venv311` 绝对路径 entry。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。
 - 既有测试只增不减、不得跳过或放宽；文档不写现役测试计数（数字必腐，以实跑为准）。
 - 改接口 / 配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。

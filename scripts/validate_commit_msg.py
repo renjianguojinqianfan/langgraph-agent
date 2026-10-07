@@ -57,21 +57,19 @@ def evaluate(message: str) -> tuple[bool, list[str], bool]:
 
 
 def main() -> int:
-    # 真实 commit-msg 调用：pre-commit 传入提交消息文件（.git 下）。
-    # `pre-commit run --all-files` 会把全仓文件列表当 argv——那不是消息文件，
-    # 找不到 .git 下的消息就跳过（全量模式的冒烟由真实提交承担，见 #114 AC6）。
+    # 真实 commit-msg 调用：pre-commit 把提交消息文件（.git 下）作为 argv 传入
+    # （#115 评审实证：坏消息提交会被拒，消息确实经 argv 到达）。
+    # 手动跑（pre-commit run <hook> / --all-files）时 argv 里没有消息文件——
+    # 此时没有「当前提交」可判，显式跳过；**不兜底读 .git/COMMIT_EDITMSG**
+    # （那是上一条提交的消息，#115 评审抓出的假判定路径）。
     candidates = [
         arg for arg in sys.argv[1:]
         if "COMMIT_EDITMSG" in arg or "/.git/" in arg or arg.startswith(".git" + os.sep)
     ]
-    if candidates:
-        msg_path = candidates[0]
-    elif os.path.isfile(".git/COMMIT_EDITMSG"):
-        msg_path = ".git/COMMIT_EDITMSG"  # 主检出（.git 是目录）
-    else:
-        print("commit-msg 钩子：未找到提交消息文件（pre-commit run --all-files 模式）— 跳过")
+    if not candidates:
+        print("commit-msg 钩子：argv 无提交消息文件（手动 run 模式）— 跳过；真实提交由 pre-commit 传入")
         return 0
-    with open(msg_path, encoding="utf-8") as f:
+    with open(candidates[0], encoding="utf-8") as f:
         message = f.read()
 
     ok, errors, remind = evaluate(message)
