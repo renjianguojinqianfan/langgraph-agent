@@ -140,7 +140,11 @@ python -m mypy                           # files=backend，生产与测试同一
 python -m pytest backend/tests/ -q       # 全量离线回归（唯一权威）
 python scripts/live_e2e.py --check       # 无 Key / 无网络的接线冒烟
 python -m backend.headless --check       # P0-C headless 入口离线冒烟
+python -m pre_commit install             # 提交前钩子（#114），每台机器一次；含 commit-msg 钩子
+python -m pre_commit run --all-files     # 手动全量跑所有钩子（SKIP=mypy 跳单个）
 ```
+
+提交前钩子（[#114](https://github.com/renjianguojinqianfan/langgraph-agent/issues/114)）：暂存 `.py` 跑 ruff、触及 `backend/` 跑 mypy、触及 SSE 事件面四址强跑 `check:sse`、前端 `ts/tsx` 跑 tsc；commit-msg 校验 conventional 前缀与主题长度（非 docs 类无票号只提醒）。钩子**只跑检查、不改文件**；pytest 全量实测 93s 不进钩子，由 CI backend-test 兜底。跳过：`SKIP=mypy` 跳单个、`--no-verify` 全跳（跳了写清理由）。配置与每条实测耗时数字见 [`.pre-commit-config.yaml`](.pre-commit-config.yaml) 头注。
 
 配置与每条「刻意不启用」的规则族（附实测数字与理由）在 [`pyproject.toml`](pyproject.toml)；
 离线套件禁 LangSmith 外发：`backend/tests/conftest.py` 会把 SDK 自己读的 tracing 开关与 Key 从测试进程里摘掉，

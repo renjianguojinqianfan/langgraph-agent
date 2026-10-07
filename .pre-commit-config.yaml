@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 提交前钩子（#114）：把文档纪律变成机械门。
+#
+# 为什么是 pre-commit 框架而不是 Husky（setup-pre-commit 技能原样是 Husky +
+# lint-staged + Prettier，这里按本仓库现实改造，偏离理由）：
+#   1. 根目录没有 package.json（唯一的在 frontend/），Python 侧才是主战场——
+#      Husky 装不整齐，lint-staged 也管不到 .py；
+#   2. Prettier 不在本仓闸门里（pyproject 的 ruff select 无 format，格式化从来
+#      不是闸门），配了等于把全部存量文件重排成噪声 diff。hook 只跑检查、
+#      不改文件——与 CI 同口径。
+#
+# 所有 hook 一律 language: system + .venv311 绝对路径：配置里零版本号，工具链
+# 只钉在 requirements-dev.txt 一处（该文件「抬版走人评估」红线不变）；worktree
+# 里没有 .venv311 时指向主检出——与 docs/agents/workflow.md「并行实施」节
+# 的约定一致。
+#
+# 实测（2026-10-07，本机，供后人调档位参考）：
+#   ruff ~1s · mypy 冷启 27s / 热 3s · check:sse 0.6s · tsc 1.7s ·
+#   pytest 全量 93s——pytest 因此不进钩子，由 CI backend-test 兜底。
+#   docs-only 提交（暂存全 .md）不会被任何 files: 正则命中，零等待。
+#
+# 逃生门：SKIP=<hook-id> 跳单个钩子；git commit --no-verify 全跳。
+# 技术开口不等于无记录——跳了要在 PR / 提交说明里写清为什么（[OVERRIDE] 文化）。
+#
+# 安装（每台机器一次；default_install_hook_types 已含 commit-msg）：
+#   .venv311\Scripts\python.exe -m pre_commit install
+# 手动全量：
+#   .venv311\Scripts\python.exe -m pre_commit run --all-files
+# ─────────────────────────────────────────────────────────────────────────────
+
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check（暂存 .py；与 CI 同命令）
+        entry: E:/code/demo/langgraph-agent/.venv311/Scripts/python.exe -m ruff check
+        language: system
+        types_or: [python]
+        pass_filenames: true
+        require_serial: true
+
+      - id: mypy
+        name: mypy（暂存触及 backend/ 时全量；files=backend）
+        entry: E:/code/demo/langgraph-agent/.venv311/Scripts/python.exe -m mypy
+        language: system
+        files: ^backend/
+        pass_filenames: false
+
+      - id: sse-event-gate
+        name: SSE 事件词汇表四址对齐（#92 的机械门；npm 包装在 git-bash 不可靠，直调同一脚本）
+        entry: node frontend/scripts/check-sse-event-registry.mjs
+        language: system
+        files: ^(backend/.*\.py|frontend/src/hooks/useSSE\.ts|frontend/src/types/index\.ts|docs/architecture\.md)$
+        pass_filenames: false
+
+      - id: frontend-tsc
+        name: 前端 tsc（暂存含 frontend ts/tsx；与 CI frontend-build 同命令）
+        entry: node frontend/node_modules/typescript/bin/tsc --noEmit -p frontend/tsconfig.json
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      - id: commit-msg-format
+        name: commit-msg 校验（前缀 / 长度阻断 + 票号提醒）
+        entry: E:/code/demo/langgraph-agent/.venv311/Scripts/python.exe scripts/validate_commit_msg.py
+        language: system
+        stages: [commit-msg]
+        pass_filenames: true

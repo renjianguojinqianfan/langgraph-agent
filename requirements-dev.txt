@@ -14,3 +14,5 @@
 #   .venv311\Scripts\python.exe -m mypy
 ruff==0.16.7
 mypy==2.3.1
+pre-commit==4.6.2   # 提交前钩子框架：配置在 .pre-commit-config.yaml（含 commit-msg 钩子）；
+                    # hook 内容一律 language: system 直调 .venv311，零第二版本源
