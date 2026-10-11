@@ -13,6 +13,7 @@ import {
   confirmAfterSwitch,
   shouldCloseConfirmOnResolved,
 } from "./confirmSlot";
+import { withConfirmOutcome } from "./confirmOutcome";
 
 interface TaskState {
   tasks: Task[];
@@ -127,6 +128,12 @@ function applyToTask(task: Task, ev: SSEvent): Task {
         ),
       }));
       return { ...task, steps };
+    }
+    case "human_confirm_resolved": {
+      // #91 AC2 实时面：终态并回 step 记录。approved / denied 走 tool_result 也能带上，
+      // 但 aborted 没有 tool_result，这条事件是它唯一的落点（判据在 confirmOutcome.ts）。
+      const steps = withConfirmOutcome(task.steps, ev.data.tool_call_id, ev.data.outcome);
+      return steps === task.steps ? task : { ...task, steps };
     }
     case "artifact_created": {
       const art = ev.data as Artifact;

@@ -2,10 +2,14 @@ import type { ConfirmDialogState } from "../types";
 
 /**
  * #91 AC1（G2 加固）：确认框是**全局单格**，收口 / 切任务都只动这一格。这两条纯函数
- * 是这条不变量的唯一判据，store 与 `scripts/check-confirm-face.mjs` 共用同一份，避免
- * 「测试跑一套、线上另一套」。之所以单拎出来：`taskStore.ts` 顶层 `create()` 带 zustand
- * 与浏览器态，无法在纯 Node 里跑；这两个函数只 `import type`（编译期擦除），可被
- * `node --experimental-strip-types` 直接执行，从而在没有测试框架的本仓给 AC1 一条真断言。
+ * 是这条不变量的唯一判据，store 与 `scripts/check-confirm-face.mjs` 跑的就是这一份，
+ * 所以不存在「测试一套、线上另一套」的判据分叉。之所以单拎出来：`taskStore.ts` 顶层
+ * `create()` 带 zustand 与浏览器态，无法在纯 Node 里跑；这两个函数只 `import type`
+ * （编译期擦除），可被 `node --experimental-strip-types` 直接执行，从而在没有测试框架的
+ * 本仓给 AC1 一条真断言。
+ *
+ * 覆盖范围的实话：断言盯的是这两个函数本身，**store 调用点这条接线盯不住**（删掉
+ * `taskStore.ts` 里的两处调用点，`check:confirm` 照样全绿）。接线那一环靠评审人工核。
  */
 
 /**
