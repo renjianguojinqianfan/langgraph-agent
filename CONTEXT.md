@@ -30,6 +30,11 @@ _Avoid_: 动作
 **verified（验证通过）**：
 完成验证对可机械判定的证据复核后判定通过。
 
+**UNVERIFIED（未通过验收）**：
+跑完了、声称完成了、但验证没通过时的终态。不是 `FAILED`（没崩），也不再是 `COMPLETED` 的脚注——
+原因记在 `verification.reason`（`retry_exhausted` / `max_steps` / `grader_error`）。
+_Avoid_: 降级完成、`degraded`、软失败（#46 / ADR-0005 退役了这三个说法）
+
 **informational task（信息型任务）**：
 交付物就是回答本身、不需要改动外部世界的任务。
 

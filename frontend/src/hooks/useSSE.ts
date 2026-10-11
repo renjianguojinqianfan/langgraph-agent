@@ -27,6 +27,7 @@ const EVENT_TYPES: SSEventType[] = [
   "task_completed",
   "task_failed",
   "task_interrupted",
+  "task_unverified", // #46 跑完并声称完成，但验收没通过
   "task_resumed", // P3 从检查点续跑启动
   "tool_result_evicted", // T1.4 旧的大段 tool 结果换成占位
   "risk_report", // P1: {items, policy, semantic_enabled}

@@ -5,7 +5,8 @@ export type TaskStatus =
   | "RUNNING"
   | "COMPLETED"
   | "FAILED"
-  | "INTERRUPTED";
+  | "INTERRUPTED"
+  | "UNVERIFIED"; // #46: 跑完并声称完成，但验收没通过（不是崩了，所以不并入 FAILED）
 
 export interface PlanStep {
   index: number;
@@ -57,6 +58,25 @@ export interface Task {
   updated_at: string;
   risk_report?: RiskItem[]; // P1: risk scan report
   subtasks?: SubTask[]; // P1: sub-agent results
+  verification?: Verification | null; // P0-B: 完成验证结论（#46 起 reason 取代 degraded）
+  expectations?: Expectation[]; // #46: 调用方声明的合格线；空 = 信息型任务
+}
+
+// --- #46: 声明式验收 ---
+
+export interface Expectation {
+  type: "artifact" | "tool_success";
+  target: string; // artifact: 沙箱根相对路径；tool_success: 工具名或 "*"
+}
+
+export interface Verification {
+  passed: boolean;
+  failures: string[];
+  attempts: number;
+  // "" 通过 | pending 回环中 | retry_exhausted 预算耗尽 | max_steps 被步数抢占
+  // | grader_error 裁判自身出错（#46 第二步）
+  reason: string;
+  loop_back?: boolean;
 }
 
 // --- P1 item 1: risk scan ---
@@ -171,11 +191,12 @@ export type SSEventType =
   | "human_confirm_required"
   | "human_confirm_resolved" // #57: {tool_call_id, tool_name, outcome}（outcome 见 ToolCallRecord.confirm_outcome；入参不带，同 id 的 tool_call 事件已有且 trace 不脱敏）
   | "artifact_created"
-  | "verification" // P0-B: {task_id, passed, failures, attempts, degraded, loop_back?}
+  | "verification" // P0-B: {task_id, passed, failures, attempts, reason, loop_back?}（#46：reason 取代 degraded）
   | "final_answer"
   | "task_completed"
   | "task_failed"
   | "task_interrupted"
+  | "task_unverified" // #46: {task_id, status, reason} —— 跑完但验收没过，与 interrupted 同构
   | "task_resumed" // P3: {task_id, status}
   | "tool_result_evicted" // T1.4: {tool_call_id, tool_name, original_chars, step_index}
   | "risk_report" // P1: {items, policy, semantic_enabled}

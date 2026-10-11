@@ -37,8 +37,12 @@ class AgentState(TypedDict, total=False):
     _needs_confirm: bool
 
     # ── P0-B: completion verification ──
-    _verification: Dict[str, Any]           # {passed, failures, attempts, degraded}
+    _verification: Dict[str, Any]           # {passed, failures, attempts, reason}
     _verify_attempts: int                   # bounded verify-fail loop-back counter
+
+    # ── #46: caller-declared completion contract ──
+    # [{type: artifact|tool_success, target}] — set at submission, read by reflect.
+    expectations: List[Dict[str, str]]
 
     # ── P1 item 1: risk scan ──
     risk_report: List[Dict[str, Any]]       # latest round of RiskItem dicts

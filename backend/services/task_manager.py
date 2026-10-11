@@ -20,6 +20,7 @@ from langgraph.types import Durability
 
 from ..api.schemas import (
     Artifact,
+    Expectation,
     PlanStep,
     RiskItem,
     StepRecord,
@@ -540,7 +541,18 @@ class TaskManager:
             return client
         return self._manifest.wrap_llm(task_id, owner, client, client_tag)
 
-    def create_task(self, title: Optional[str], user_input: str) -> str:
+    def create_task(
+        self,
+        title: Optional[str],
+        user_input: str,
+        expectations: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """Start one task. ``expectations`` is the caller's completion contract (#46).
+
+        Validated here, at the boundary: a declaration that is not one of the two
+        decidable kinds would otherwise surface as a mid-run failure the submitter
+        cannot tell apart from a task that genuinely missed its deliverable.
+        """
         task_id = uuid.uuid4().hex
         now = _now()
         task = Task(
@@ -550,6 +562,7 @@ class TaskManager:
             status=TaskStatus.PENDING,
             created_at=now,
             updated_at=now,
+            expectations=[Expectation(**e) for e in expectations or []],
         )
         # P0 item 4: attach the trace recorder before any event is published so
         # the JSONL captures task_created onwards.
@@ -616,6 +629,10 @@ class TaskManager:
             "_risk_blocked": False,
             "subtasks": [],
             "_is_subtask": False,
+            # #46: the contract the caller drew at submission — carried into the
+            # state so reflect judges against it, and restored with the checkpoint
+            # on resume (a resumed task is still held to the same line).
+            "expectations": [e.model_dump() for e in task.expectations],
         }
         self._active_states[task_id] = state
 
@@ -802,15 +819,31 @@ class TaskManager:
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         verification = final.get("_verification")
         if isinstance(verification, dict):
-            # P0-B §4.3 edge: a COMPLETED finish carrying a failed verification
-            # (e.g. max_steps preempted the retry budget) is a degraded completion.
-            if status == "COMPLETED" and verification.get("passed") is False:
-                verification = dict(verification, degraded=True)
+            # P0-B §4.3 edge, told straight (#46): a verify loop that ``max_steps``
+            # cut short still carries its open verdict (``reason: "pending"``), and a
+            # ``_verification`` restored from a pre-#46 checkpoint has no reason key
+            # at all. Either way, name the budget that ran out instead of persisting
+            # an UNVERIFIED whose cause cannot be read.
+            reason = verification.get("reason")
+            if status == "UNVERIFIED" and reason in ("", "pending", None):
+                verification = dict(verification, reason="max_steps")
             task.verification = verification
         task.updated_at = _now()
         if status == "COMPLETED":
             self.event_bus.publish(
                 task.id, "task_completed", {"task_id": task.id, "status": status}
+            )
+        elif status == "UNVERIFIED":
+            # #46: same shape as task_interrupted — a terminal state that is neither
+            # success nor crash has to be distinguishable on the event face alone.
+            self.event_bus.publish(
+                task.id,
+                "task_unverified",
+                {
+                    "task_id": task.id,
+                    "status": status,
+                    "reason": (task.verification or {}).get("reason", ""),
+                },
             )
         elif status == "FAILED":
             self.event_bus.publish(

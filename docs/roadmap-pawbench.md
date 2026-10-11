@@ -122,8 +122,9 @@
 - **切片口径**（[#36](https://github.com/renjianguojinqianfan/langgraph-agent/issues/36)，2026-09-16）：
   单维切片，Top-3 候选池 = 7 能力切片（复杂度只作副视图）；Top-3 = 覆盖题数 ×（逐切片最强可比赛手 −
   本 agent）降序取前三 + 人工定性确认，n<10 切片只进附录；每题总分沿用题带 grading_weights
-  （缺省 0.5/0.5），软分归一 0-1 + 一句话理由（模板 = 题面+产物+trace 摘要）；degraded 独立三态打标
-  （分数照算 + 每切片 degraded 率列）；M1 即用同一切片管道出报告（标「链路验证样本、不作归因解读」）。
+  （缺省 0.5/0.5），软分归一 0-1 + 一句话理由（模板 = 题面+产物+trace 摘要）；UNVERIFIED 独立三态打标
+  （分数照算 + 每切片 UNVERIFIED 率列）——字段随 #46 换轨：读 headless 的 `exit 4` 与
+  `verification.reason`，不再有 `degraded` 这一档；M1 即用同一切片管道出报告（标「链路验证样本、不作归因解读」）。
 - **验收**：一张跨-agent 对比表（同模型 deepseek-v4.1-flash 口径）+ 失败归因报告（本 agent 掉分在哪类
   原子能力/复杂度，Top 3 缺陷维度）。
 

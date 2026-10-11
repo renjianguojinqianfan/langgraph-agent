@@ -6,7 +6,7 @@ Frontend ``src/types/index.ts`` mirrors these field names exactly.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,25 @@ class TaskStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     INTERRUPTED = "INTERRUPTED"
+    # #46: ran to the end and claimed completion, but our verification did not
+    # pass. Not FAILED — nothing crashed (ADR 0005 keeps P0-B Q4 intact).
+    UNVERIFIED = "UNVERIFIED"
+
+
+class Expectation(BaseModel):
+    """A caller-declared, mechanically decidable completion condition (#46).
+
+    Declared at submission, never self-reported by the model: a condition the
+    model could declare would be one it could unsay (ADR 0006).
+    """
+
+    type: Literal["artifact", "tool_success"]
+    # ``artifact``: path relative to the sandbox root. ``tool_success``: tool
+    # name, or ``*`` for "at least one successful call of any tool".
+    # Required and non-empty: a declaration without a target is a condition
+    # nothing can be judged against, and letting it through would quietly mean
+    # "any tool" — the one shape of slack this contract exists to remove.
+    target: str = Field(min_length=1)
 
 
 class PlanStep(BaseModel):
@@ -116,13 +135,17 @@ class Task(BaseModel):
     updated_at: str = ""
     risk_report: List[RiskItem] = Field(default_factory=list)  # P1 item 1
     subtasks: List[SubTask] = Field(default_factory=list)  # P1 item 2
-    verification: Optional[Dict[str, Any]] = None  # P0-B: {passed, failures, attempts, degraded}
+    verification: Optional[Dict[str, Any]] = None  # P0-B: {passed, failures, attempts, reason}
+    # #46: the completion contract this run is judged against (persisted, so a
+    # resumed task is still held to what its caller declared).
+    expectations: List[Expectation] = Field(default_factory=list)
 
 
 # ── Request bodies ──
 class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
     input: str
+    expectations: List[Expectation] = Field(default_factory=list)  # #46
 
 
 class ConfirmRequest(BaseModel):

@@ -37,7 +37,8 @@
 | 熔断层零改动（冻结区）/ 确认逻辑 | `ci.yml` 的 guard job | guard 全绿 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
 | live / 换模型 | `scripts/LIVE_E2E.md` + `ci.yml` 的 live-e2e job | 先核免费额度 |
-| headless / 评测台 | `README.md`「无人值守执行（P0-C headless）」 | 四级退出码 0/1/2/3 语义不变；`degraded` 标记不丢 |
+| headless / 评测台 | `README.md`「无人值守执行（P0-C headless）」 | 四级退出码 0/1/2/3 语义不变 + 新增 `4 = UNVERIFIED`；`verification.reason` 三值不丢 |
+| 完成验收语义 | 状态六值（终态四个）：**验证没过 → `UNVERIFIED`**（不再是 `COMPLETED` 的 `degraded` 脚注，也不是 `FAILED`），原因在 `verification.reason`（`pending` 只在回环中，收口在 `_finalize_terminal`）；expectation **由调用方声明、不由模型自报**（「动作类步骤」已退役）；未声明 = 信息型任务 = Q9 no-op PASS 原样；`verify_enabled=false` 零回归 | `docs/adr/0005` + `docs/adr/0006` + `CONTEXT.md`「完成与验收」 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
 | 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆）；读料可交后台代理跑 `research` skill | 调研产物落 `docs/`（按 domain「文档归属」表，带文件级引用），票面只留结论 + 链接，再拍板 |
 
@@ -86,7 +87,7 @@ GitHub Issues（`renjianguojinqianfan/langgraph-agent`），走 `gh` CLI；Power
 
 ### Domain docs
 
-Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004）。See `docs/agents/domain.md`.
+Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004 / 0005 / 0006）。See `docs/agents/domain.md`.
 
 ### Implementation workflow
 
