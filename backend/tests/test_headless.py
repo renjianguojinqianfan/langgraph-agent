@@ -24,15 +24,18 @@ from backend.core.llm.client import LLMClient, LLMResponse, MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.headless import (
     _RESULT_KEYS,
+    _TERMINAL,
     DEFAULT_TIMEOUT,
     EXIT_COMPLETED,
     EXIT_FAILED,
     EXIT_INTERRUPTED,
+    EXIT_UNVERIFIED,
     EXIT_USAGE,
     _build_settings,
     _emit,
     _exit_code_for,
     _force_utf8_stdio,
+    _parse_expectations,
     _run_once,
     build_parser,
     main,
@@ -222,9 +225,87 @@ def test_exit_code_mapping() -> None:
     assert _exit_code_for("INTERRUPTED", False) == EXIT_INTERRUPTED
     assert _exit_code_for("COMPLETED", True) == EXIT_INTERRUPTED  # timeout wins
     assert _exit_code_for(None, False) == EXIT_FAILED
+    # #46: an unverified completion is its own code — `exit 0` was the whole problem.
+    assert _exit_code_for("UNVERIFIED", False) == EXIT_UNVERIFIED
+    assert "UNVERIFIED" in _TERMINAL  # without this the wait loop never settles
 
 
 # ── settings / parser ────────────────────────────────────────────────────────
+# ── #46：expectation 输入面 + 退出码 4 ───────────────────────────────────────
+def test_expectation_unmet_exits_unverified(tmp_path: Path) -> None:
+    """评测台的原始现象（T056）：声称完成、交付物没写出来，不能再拿 exit 0 收场。"""
+    work = tmp_path / "work"
+    settings = make_settings(
+        tmp_path,
+        artifacts_dir=str(work),
+        trace_dir=str(tmp_path / "traces"),
+        risk_scan_enabled=False,
+        checkpoint_enabled=False,
+        subagent_enabled=False,
+        verify_max_retries=0,
+    )
+    result = _run_once(
+        settings,
+        "把结论写成 report.md",
+        work,
+        auto_approve=True,
+        timeout=60.0,
+        llm_client=MockLLMClient(final_answer="结论如上（未写文件）"),
+        expectations=[{"type": "artifact", "target": "report.md"}],
+    )
+    assert result["status"] == "UNVERIFIED"
+    assert result["exit_code"] == EXIT_UNVERIFIED
+    assert result["verification"] is not None
+    assert result["verification"]["reason"] == "retry_exhausted"
+
+
+def test_expectation_met_still_exits_zero(tmp_path: Path) -> None:
+    """反向钉子：声明过且做到了仍 COMPLETED / exit 0（防「永远判未验过」的假绿）。"""
+    work = tmp_path / "work"
+    settings = _settings(tmp_path, work)
+    result = _run_once(
+        settings,
+        "write hello",
+        work,
+        auto_approve=True,
+        timeout=60.0,
+        llm_client=_write_mock(),
+        expectations=[{"type": "artifact", "target": "hello.txt"}],
+    )
+    assert result["status"] == "COMPLETED"
+    assert result["exit_code"] == EXIT_COMPLETED
+
+
+def test_parse_expectations_forms() -> None:
+    assert _parse_expectations(["artifact:report.md", "tool_success:write"]) == [
+        {"type": "artifact", "target": "report.md"},
+        {"type": "tool_success", "target": "write"},
+    ]
+    assert _parse_expectations([]) == []
+
+
+def test_parse_expectations_rejects_malformed() -> None:
+    for bad in ("artifact", "artifact:", "sha256:report.md", ""):
+        try:
+            _parse_expectations([bad])
+        except ValueError as exc:
+            assert "artifact:<path>" in str(exc)
+        else:
+            raise AssertionError(f"malformed --expect {bad!r} was accepted")
+
+
+def test_expect_flag_wired_into_parser() -> None:
+    args = build_parser().parse_args(
+        ["-p", "x", "--expect", "artifact:report.md", "--expect", "tool_success:*"]
+    )
+    assert args.expect == ["artifact:report.md", "tool_success:*"]
+    assert build_parser().parse_args(["-p", "x"]).expect == []
+
+
+def test_malformed_expect_flag_is_usage_error() -> None:
+    assert main(["-p", "x", "--expect", "oops"]) == EXIT_USAGE
+
+
 def test_build_settings_maps_workdir_and_disables(tmp_path: Path) -> None:
     work = tmp_path / "w"
     run_root = tmp_path / "r"

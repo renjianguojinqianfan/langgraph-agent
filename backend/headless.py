@@ -35,7 +35,9 @@ never block on a human who is not there. The FastAPI service path never sets
 
 Result contract: with ``--output json`` the parsed result object is the ONLY
 thing on stdout (agent logs are repointed at stderr); diagnostics/logs live on
-stderr. Exit codes: 0 COMPLETED, 1 FAILED, 2 INTERRUPTED/timeout, 3 usage/config.
+stderr. Exit codes: 0 COMPLETED, 1 FAILED, 2 INTERRUPTED/timeout, 3 usage/config,
+4 UNVERIFIED (#46 — ran and claimed completion, verification did not pass; the
+deliverable it owed is declared with ``--expect kind:target``).
 """
 
 from __future__ import annotations
@@ -61,12 +63,16 @@ from .services.persistence import Persistence
 from .services.task_manager import TaskManager
 from .utils.logging import set_console_stream
 
-_TERMINAL = ("COMPLETED", "FAILED", "INTERRUPTED")
+_TERMINAL = ("COMPLETED", "FAILED", "INTERRUPTED", "UNVERIFIED")
 
 EXIT_COMPLETED = 0
 EXIT_FAILED = 1
 EXIT_INTERRUPTED = 2
 EXIT_USAGE = 3
+#: #46: the run finished and claimed completion, but verification did not pass.
+#: A code of its own, because `exit 0` was exactly how a false completion reached
+#: a harness as success (eval-harness T056).
+EXIT_UNVERIFIED = 4
 
 DEFAULT_TIMEOUT = 600.0
 
@@ -154,7 +160,32 @@ def _exit_code_for(status: Optional[str], timed_out: bool) -> int:
         return EXIT_INTERRUPTED
     if status == "COMPLETED":
         return EXIT_COMPLETED
+    if status == "UNVERIFIED":
+        return EXIT_UNVERIFIED
     return EXIT_FAILED  # FAILED, or a missing/unreadable task record
+
+
+_EXPECTATION_KINDS = ("artifact", "tool_success")
+
+
+def _parse_expectations(values: Sequence[str]) -> List[Dict[str, str]]:
+    """Parse repeated ``--expect kind:target`` into expectation dicts (#46 §6).
+
+    Fail fast rather than drop: a declaration silently thrown away hands the
+    harness back exactly the false completion exit code 4 exists to catch.
+    """
+    parsed: List[Dict[str, str]] = []
+    for raw in values:
+        kind, sep, target = str(raw).partition(":")
+        kind, target = kind.strip(), target.strip()
+        if not sep or kind not in _EXPECTATION_KINDS or not target:
+            raise ValueError(
+                f"--expect 需要 'kind:target'（kind ∈ {' | '.join(_EXPECTATION_KINDS)}），"
+                f"收到 {raw!r}。写法例：--expect artifact:<path>、"
+                "--expect tool_success:<tool>、--expect tool_success:*（任一工具）"
+            )
+        parsed.append({"type": kind, "target": target})
+    return parsed
 
 
 def _build_settings(
@@ -252,13 +283,16 @@ def _run_once(
     timeout: float,
     llm_client: Optional[LLMClient] = None,
     tools: Optional[List[BaseTool]] = None,
+    expectations: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Drive one task to a terminal state and return the result object.
 
     ``llm_client`` / ``tools`` are injectable so tests (and ``--check``) can run
     a scripted mock offline; production passes neither and both are built from
-    ``settings``. ``__main__`` repoints agent logs to stderr before this runs,
-    so stdout stays clean for the result.
+    ``settings``. ``expectations`` is this run's completion contract (#46): the
+    harness declares what the task owes, and exit code 4 is what comes back when
+    the run claims otherwise. ``__main__`` repoints agent logs to stderr before
+    this runs, so stdout stays clean for the result.
     """
     settings.artifacts_path.mkdir(parents=True, exist_ok=True)
     event_bus = EventBus()
@@ -275,7 +309,9 @@ def _run_once(
     )
     timed_out = False
     try:
-        task_id = tm.create_task(title=prompt[:40], user_input=prompt)
+        task_id = tm.create_task(
+            title=prompt[:40], user_input=prompt, expectations=expectations or []
+        )
         task = _wait_terminal(tm, task_id, timeout)
         if task is None or task.status.value not in _TERMINAL:
             # Never reached a terminal state in budget: stop it (bounded unwind)
@@ -329,6 +365,12 @@ def run_task(args: argparse.Namespace) -> int:
         )
         return EXIT_USAGE
 
+    try:
+        expectations = _parse_expectations(args.expect or [])
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
     run_root = Path(tempfile.mkdtemp(prefix="headless_run_"))
     workdir = Path(args.dir).resolve() if args.dir else (run_root / "workdir")
     workdir.mkdir(parents=True, exist_ok=True)
@@ -348,6 +390,7 @@ def run_task(args: argparse.Namespace) -> int:
         workdir,
         auto_approve=bool(args.auto_approve),
         timeout=float(args.timeout),
+        expectations=expectations,
     )
     _emit(result, args.output)
     return int(result["exit_code"])
@@ -529,6 +572,16 @@ def build_parser() -> argparse.ArgumentParser:
         "still runs and the gate still fires — only the wait for a human verdict goes "
         "away, recorded as auto_approved). NOT a gate disable, and NOT the production "
         "default. --yolo is the cross-agent harness alias (roadmap-pawbench §四 unified form)",
+    )
+    parser.add_argument(
+        "--expect",
+        action="append",
+        default=[],
+        metavar="KIND:TARGET",
+        help="completion condition declared by the caller (#46), repeatable: "
+        "artifact:<path under --dir> | tool_success:<tool> | tool_success:* (any). "
+        "Declared but unmet -> exit 4 (UNVERIFIED) instead of 0; undeclared tasks "
+        "stay informational and are judged as before",
     )
     parser.add_argument("--model", help="override LLM model (else env/.env)")
     parser.add_argument("--base-url", help="override LLM base_url (else env/.env)")

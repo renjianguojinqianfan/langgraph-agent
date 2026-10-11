@@ -135,12 +135,18 @@ function applyToTask(task: Task, ev: SSEvent): Task {
     }
     case "final_answer":
       return { ...task, final_answer: ev.data.answer ?? task.final_answer };
+    case "verification":
+      // #46: 判定过程实时可见——失败项文本是「它卡在哪」的唯一来源（载荷含 task_id，
+      // 与后端 verification 事件同形，不在此裁剪）。
+      return { ...task, verification: ev.data };
     case "task_completed":
       return { ...task, status: "COMPLETED" };
     case "task_failed":
       return { ...task, status: "FAILED", error: ev.data.error ?? task.error };
     case "task_interrupted":
       return { ...task, status: "INTERRUPTED" };
+    case "task_unverified":
+      return { ...task, status: "UNVERIFIED" };
     default:
       return task;
   }

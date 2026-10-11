@@ -61,7 +61,11 @@ def create_task(
 ) -> ApiResponse:
     if not payload.input or not payload.input.strip():
         raise HTTPException(status_code=400, detail="`input` is required.")
-    task_id = _tm(request).create_task(payload.title, payload.input.strip())
+    task_id = _tm(request).create_task(
+        payload.title,
+        payload.input.strip(),
+        expectations=[e.model_dump() for e in payload.expectations],
+    )
     return _envelope(data={"task_id": task_id})
 
 

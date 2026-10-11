@@ -322,7 +322,13 @@ def test_no_channel_ever_publishes_the_removed_subtask_events(tmp_path, event_bu
 def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
     tmp_path, event_bus, monkeypatch
 ):
-    """子任务崩溃 -> 一次失败的 spawn 工具回传；父任务照常完成。"""
+    """子任务崩溃 -> 一次失败的 spawn 工具回传；父任务自己收场，不跟着崩。
+
+    #46 重裁（原断 COMPLETED）：这条父任务全程零成功工具调用却声称完成，正是 S2
+    那条证据式规则要拦的事。从前它降级成 COMPLETED+degraded，现在如实落成
+    UNVERIFIED——「活下来了」不等于「交付可信」，本用例的钉子（不崩、失败经工具
+    面回传）一条没少。
+    """
     settings = make_settings(tmp_path)
     mock = _SpawnOnceMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -336,7 +342,7 @@ def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
     _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "UNVERIFIED"
     assert task.subtasks == []
     results = [
         e["data"]
@@ -377,7 +383,10 @@ def test_subtask_never_strands_a_confirmation(tmp_path, event_bus):
     tm = make_manager(settings, mock, event_bus=event_bus)
     res = tm._subagent.run_subtask(_spec("qa:sub:gate", "gate", "试着执行代码"))
 
-    assert res.status == "completed"
+    # #46 重裁（原断 completed）：子任务全程零成功调用却自称完成，reflect 判它
+    # UNVERIFIED；``run_subtask`` 那层把「非 COMPLETED」一律折成 failed 是既有映射，
+    # 本票不动它——父任务从此读不到一句没验过的「completed」，方向是对的。
+    assert res.status == "failed"
     sub_events = event_bus.replay("qa:sub:gate")
     types = {e["type"] for e in sub_events}
     assert "human_confirm_required" not in types
@@ -418,7 +427,12 @@ def test_subtask_planner_failure_folds_back_as_failed(tmp_path):
 
 # ── the switch ───────────────────────────────────────────────────────────────
 def test_subagent_disabled_removes_the_entry_point(tmp_path, event_bus):
-    """``subagent_enabled=False``：入口本身从面上消失，父任务零回归。"""
+    """``subagent_enabled=False``：入口本身从面上消失。
+
+    #46 重裁（原断 COMPLETED，写「父任务零回归」）：面上没回归，终态确实变了——
+    这条父任务唯一的调用被拒成 unknown tool，零成功却声称完成，正是 S2 拦的那件事，
+    从前盖 degraded 章算完成，现在如实 UNVERIFIED。
+    """
     settings = make_settings(tmp_path, subagent_enabled=False)
     mock = _QaResearchMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -428,7 +442,7 @@ def test_subagent_disabled_removes_the_entry_point(tmp_path, event_bus):
     task_id = tm.create_task(title="qa-off", user_input="调研 RAG 最新进展并写报告")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "UNVERIFIED"
     assert task.subtasks == []
     types = {e["type"] for e in event_bus.replay(task_id)}
     assert types.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})

@@ -1304,7 +1304,12 @@ def test_a_queued_subtask_that_never_starts_leaves_no_stop_flag(tmp_path):
 def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
     tmp_path, event_bus, monkeypatch
 ):
-    """崩掉的子任务只折回成一次失败的工具调用，父任务必须自己收场。"""
+    """崩掉的子任务只折回成一次失败的工具调用，父任务必须自己收场。
+
+    #46 重裁（原断 COMPLETED）：父任务这一轮的唯一下游是一次失败的 spawn 调用，
+    零成功却声称完成 = S2 命中。从前降级 COMPLETED+degraded，现在落 UNVERIFIED；
+    「不跟着子任务一起崩」这条钉子没动（终态不是 FAILED、也没有异常）。
+    """
     settings = make_settings(tmp_path)
     mock = _EscalatingSubtaskMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -1318,7 +1323,7 @@ def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
     _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "UNVERIFIED"
     assert task.subtasks == []  # 入口 B 的折叠摘要字段已无生产者
     results = [
         e["data"]

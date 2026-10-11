@@ -51,6 +51,13 @@ CONFIRM_AUTO_APPROVED = "auto_approved"
 # this set is what「已执行」means on the loop entry: no second ledger needed.
 TERMINAL_TOOL_CALL_STATUSES = frozenset({"success", "failed", "skipped"})
 
+# ── dangling tool calls (issue #46) ──────────────────────────────────────────
+# The single reason written on both faces of a call that was never executed: the
+# record (``error``, and so the persisted StepRecord) and the conversation (the
+# ``role: tool`` reply the protocol demands). One text, one source — same shape as
+# ``_feed_tool_failure`` (#95).
+DANGLING_SWEEP_TEXT = "interrupted before execution; swept at loop entry (#46)"
+
 
 class AgentRuntime:
     """Per-task runtime that backs the LangGraph nodes."""
@@ -385,10 +392,48 @@ class AgentRuntime:
                     plan[idx] = {"index": idx + 1, "description": str(step), "status": "skipped"}
         state["plan"] = plan
 
+    def _sweep_dangling_tool_calls(self, state: AgentState) -> None:
+        """Answer every tool call that never got an answer (#46 spec §5).
+
+        Two real gaps leave one hole: a stop while parked on the confirm gate, and
+        an interrupt mid-round. Both leave an assistant ``tool_calls`` turn with no
+        ``role: tool`` reply and a record stuck on ``pending`` — so the next request
+        violates the OpenAI tool-calling protocol, and the persisted task shows a
+        call that will never resolve.
+
+        Done at the loop entry rather than in ``finish``, because the invariant is
+        about what reaches the model: by the time any round calls the LLM, the
+        message face is clean. Only ``pending`` records are reclassified — a call
+        that already carries a terminal status keeps its own verdict.
+        """
+        messages = state.get("messages") or []
+        answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+        orphans: List[str] = []
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            for tc in msg.get("tool_calls") or []:
+                cid = tc.get("id")
+                if cid and cid not in answered:
+                    orphans.append(cid)
+                    answered.add(cid)
+        if not orphans:
+            return
+
+        by_id = {r.get("id"): r for r in self._call_records(state)}
+        for cid in orphans:
+            rec = by_id.get(cid)
+            if rec is not None and rec.get("status") == "pending":
+                rec["status"] = "skipped"
+                rec["error"] = DANGLING_SWEEP_TEXT
+            self._feed_tool_failure(state, {"id": cid, "error": DANGLING_SWEEP_TEXT})
+        logger.info("task %s swept %d dangling tool call(s) at loop entry", self.task_id, len(orphans))
+
     def executor(self, state: AgentState) -> AgentState:
         if self._stopped(state):
             state["_last_action"] = "stop"
             return state
+        self._sweep_dangling_tool_calls(state)
 
         step = state["steps"][-1] if state.get("steps") else None
         try:
@@ -766,8 +811,10 @@ class AgentRuntime:
         On failure, inject the evidence and loop back to the planner by flipping
         ``_last_action`` to ``verify_failed`` (the existing ``_after_reflect``
         router already sends any non-``final_answer`` to ``planner``); after
-        ``verify_max_retries`` degrade to COMPLETED with a ``degraded`` marker
-        rather than failing a possibly-genuinely-done task.
+        ``verify_max_retries`` the run ends UNVERIFIED (#46) — a completion we
+        could not verify is no longer written as COMPLETED with a soft ``degraded``
+        stamp, and it is still never a FAILED, so a false negative cannot kill a
+        genuinely-done task either (P0-B Q4, ADR 0005).
 
         Reject semantics, the ``_needs_confirm`` recompute block, and the graph
         topology are untouched. Error paths are skipped (``finish`` maps them to
@@ -792,24 +839,27 @@ class AgentRuntime:
 
         if not failures:
             state["_verification"] = {
-                "passed": True, "failures": [], "attempts": attempts, "degraded": False,
+                "passed": True, "failures": [], "attempts": attempts, "reason": "",
             }
             self._publish("verification", dict(state["_verification"], task_id=self.task_id))
             return state  # _last_action stays final_answer -> _after_reflect -> finish
 
         if attempts >= max_retries:
-            # Q4: degrade, never FAIL — a false negative must not kill a real task.
+            # Q4: never FAIL on a verification miss — but the terminal state is now
+            # UNVERIFIED, not COMPLETED (a claim we could not check is not a delivery).
             state["_verification"] = {
-                "passed": False, "failures": failures, "attempts": attempts, "degraded": True,
+                "passed": False, "failures": failures, "attempts": attempts,
+                "reason": "retry_exhausted",
             }
             self._publish("verification", dict(state["_verification"], task_id=self.task_id))
-            return state  # keep final_answer -> finish -> COMPLETED (degraded)
+            return state  # keep final_answer -> finish -> UNVERIFIED
 
         # Loop back with evidence: flip _last_action so the existing router sends
         # the flow to planner; the injected message tells the model what to fix.
         state["_verify_attempts"] = attempts + 1
         state["_verification"] = {
-            "passed": False, "failures": failures, "attempts": attempts + 1, "degraded": False,
+            "passed": False, "failures": failures, "attempts": attempts + 1,
+            "reason": "pending",  # open verdict — finish/max_steps close it
         }
         feedback = (
             "完成验证未通过：" + "；".join(failures) +
@@ -822,9 +872,64 @@ class AgentRuntime:
         state["_last_action"] = "verify_failed"
         return state
 
+    def _call_records(self, state: AgentState) -> List[Dict[str, Any]]:
+        """Every tool-call record of this run, across all rounds."""
+        return [
+            tc
+            for st in (state.get("steps") or [])
+            for tc in (st.get("tool_calls") or [])
+        ]
+
+    def _expectation_failures(self, state: AgentState) -> List[str]:
+        """Judge the caller-declared expectations (#46 spec §3).
+
+        Two kinds, both objective facts about the run: ``artifact`` — the declared
+        path, relative to the sandbox root, exists and is non-empty; ``tool_success``
+        — that tool (``*`` == any tool) succeeded at least once. A declared kind we
+        cannot judge counts as unmet: an unverifiable pass line must not read as a
+        delivery. With nothing declared this returns nothing, which is exactly
+        today's放行 behaviour for an informational task (Q9 no-op PASS untouched).
+        """
+        expectations = state.get("expectations") or []
+        if not expectations:
+            return []
+
+        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        root = Path(str(settings.artifacts_path)).resolve()
+        ok_names = {
+            str(tc.get("tool_name", ""))
+            for tc in self._call_records(state)
+            if tc.get("status") == "success"
+        }
+        failures: List[str] = []
+        for exp in expectations:
+            kind = str(exp.get("type", ""))
+            target = str(exp.get("target", ""))
+            if kind == "artifact":
+                p = (root / target).resolve()
+                if root not in p.parents and p != root:
+                    failures.append(f"声明的产物路径越出沙箱根：{target}")
+                elif not p.exists():
+                    failures.append(f"声明的产物缺失：{p.name}")
+                elif p.stat().st_size == 0:
+                    failures.append(f"声明的产物为空：{p.name}")
+            elif kind == "tool_success":
+                if target in ("", "*"):
+                    if not ok_names:
+                        failures.append("声明「至少一次成功工具调用」，但全程零成功调用")
+                elif target not in ok_names:
+                    failures.append(f"声明的工具未成功调用过：{target}")
+            else:
+                failures.append(f"无法判定的 expectation 类型：{kind or '(空)'}")
+        return failures
+
     def _verify_completion(self, state: AgentState) -> List[str]:
         """Deterministic completion checks; returns failure reasons ([] == verified).
 
+        E — the caller's declared expectations (#46): the completion line was drawn
+        by whoever submitted the task, so "the deliverable that was required but
+        never produced" is now askable. Runs first: it is the narrowest, most
+        specific statement of what this task owed.
         S1 — every artifact registered this run must still exist and be non-empty.
         S2 (triple-narrowed) — zero successful product AND zero successful tool
         call AND >=1 failed tool call: "everything failed yet claims done". The
@@ -832,10 +937,10 @@ class AgentRuntime:
         flagged. Artifacts are read from the manager's authoritative side (P3
         copy semantics) with a getattr guard for SimpleNamespace test fakes.
 
-        Deliberately NOT checked here (P1): completeness — a deliverable that was
-        required but never produced (needs declared expectations, spec §八).
+        Still NOT checked here: semantic grading of what a deliverable says (that is
+        #46's second step — an independent grader over a declared rubric).
         """
-        failures: List[str] = []
+        failures: List[str] = self._expectation_failures(state)
         tm_states = getattr(self.tm, "_active_states", None) or {}
         run_state = tm_states.get(self.task_id, {}) or {}
         artifacts = run_state.get("artifacts", []) or []
@@ -851,11 +956,7 @@ class AgentRuntime:
                 failures.append(f"产物为空：{p.name}")
             else:
                 ok_artifacts += 1
-        statuses = [
-            tc.get("status")
-            for st in (state.get("steps") or [])
-            for tc in (st.get("tool_calls") or [])
-        ]
+        statuses = [tc.get("status") for tc in self._call_records(state)]
         n_success = sum(1 for s in statuses if s == "success")
         n_failed = sum(1 for s in statuses if s == "failed")
         if ok_artifacts == 0 and n_success == 0 and n_failed >= 1:
@@ -865,12 +966,23 @@ class AgentRuntime:
         return failures
 
     def finish(self, state: AgentState) -> AgentState:
+        """Map the run onto one of five terminal statuses (#46 spec §1).
+
+        Order is load-bearing: a stop is a stop and an error is an error before
+        anything is judged. ``_verification`` absent means either the gate is off
+        (``verify_enabled=false``, zero regression) or the state came from a
+        pre-#46 checkpoint — both keep COMPLETED. A verdict that did not pass is
+        UNVERIFIED, never FAILED: P0-B Q4 still holds (ADR 0005).
+        """
         if state.get("stop_requested"):
             state["status"] = "INTERRUPTED"
         elif state.get("error"):
             state["status"] = "FAILED"
         elif state.get("final_answer"):
-            state["status"] = "COMPLETED"
+            verdict = state.get("_verification")
+            state["status"] = (
+                "COMPLETED" if verdict is None or verdict.get("passed") else "UNVERIFIED"
+            )
         else:
             state["status"] = "FAILED"
         if state.get("steps"):

@@ -7,6 +7,8 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
   COMPLETED: "bg-green-600",
   FAILED: "bg-red-600",
   INTERRUPTED: "bg-amber-500",
+  // #46: orange, not amber — 被停止与未通过验收得一眼分开
+  UNVERIFIED: "bg-orange-600",
 };
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -15,6 +17,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   COMPLETED: "已完成",
   FAILED: "失败",
   INTERRUPTED: "已停止",
+  UNVERIFIED: "未验过",
 };
 
 export function HistoryPanel() {
