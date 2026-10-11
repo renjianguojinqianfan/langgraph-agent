@@ -231,7 +231,7 @@ classDiagram
     %% ── 持久化模型 ──
     class TaskStatus {
         <<enum>>
-        PENDING RUNNING COMPLETED FAILED INTERRUPTED
+        PENDING RUNNING COMPLETED FAILED INTERRUPTED UNVERIFIED
     }
     class ToolCallRecord {
         +str id
@@ -313,7 +313,7 @@ classDiagram
 
 | 模型 | 关键字段 |
 |------|----------|
-| `TaskStatus` | `PENDING / RUNNING / COMPLETED / FAILED / INTERRUPTED` |
+| `TaskStatus` | `PENDING / RUNNING / COMPLETED / FAILED / INTERRUPTED / UNVERIFIED`（#46：验证未过 = `UNVERIFIED`，不是 `FAILED`，见 [ADR 0005](adr/0005-terminal-status-unverified.md)）|
 | `Task` | `id, title, user_input, status, steps[], plan[], artifacts[], final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
 | `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, need_confirm, confirmed` |
