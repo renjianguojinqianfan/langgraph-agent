@@ -19,7 +19,7 @@
 
 图节点：`planner` / `executor` / `tool` / `reflect` / `risk_scan` / `human_confirm` / `finish`。
 运行时概念：`checkpoint` / `resume` / 确认闸门（confirm gate）/ 熔断 / 沙箱根。
-任务与产物：`artifact`（产物，ADR-0004：本任务**写出**的文件，仅 `registers_artifact` 工具为源）/ `degraded`（完成验证重试耗尽的降级完工标记）/ `thread_id`（= task_id，resume 寻址恒等）。
+任务与产物：`artifact`（产物，ADR-0004：本任务**写出**的文件，仅 `registers_artifact` 工具为源）/ `expectation`（调用方声明的完成条件，ADR-0006）/ `UNVERIFIED`（跑完但验收未过的独立终态，ADR-0005）/ `thread_id`（= task_id，resume 寻址恒等）。
 闸门终态五档：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（常量与分档判据以 `nodes.py` 的 `CONFIRM_*` 为准）。
 图形态：`subtask`（子任务图：无 risk/confirm 节点，工具面走声明档位——`graph.py` `mode="subtask"`）。
 注入：`两层注入`（home 层 `AGENTS.md` → 工作区根 `AGENTS.md`；实现 `inject.py`）。
