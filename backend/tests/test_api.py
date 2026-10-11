@@ -89,6 +89,28 @@ def test_create_task_rejects_empty_input(client):
     assert r.status_code == 400
 
 
+def test_create_task_accepts_declared_expectations(client):
+    """#46 输入面的 REST 一侧：声明要落进任务记录并原样读得回来。"""
+    tid = client.post(
+        "/api/tasks",
+        json={
+            "input": "把结论写成 report.md",
+            "expectations": [{"type": "artifact", "target": "report.md"}],
+        },
+    ).json()["data"]["task_id"]
+    task = client.get(f"/api/tasks/{tid}").json()["data"]
+    assert task["expectations"] == [{"type": "artifact", "target": "report.md"}]
+
+
+def test_create_task_rejects_undecidable_expectation(client):
+    """判不动的声明在门口就拒（422），不留到运行中变成一个说不清的验收失败。"""
+    for body in (
+        {"input": "x", "expectations": [{"type": "sha256", "target": "a.txt"}]},
+        {"input": "x", "expectations": [{"type": "artifact", "target": ""}]},
+    ):
+        assert client.post("/api/tasks", json=body).status_code == 422
+
+
 def test_get_task_returns_full_task(client):
     tid = client.post("/api/tasks", json={"input": "write a file via api"}).json()["data"]["task_id"]
     r = client.get(f"/api/tasks/{tid}")

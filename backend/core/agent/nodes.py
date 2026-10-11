@@ -914,7 +914,7 @@ class AgentRuntime:
                 elif p.stat().st_size == 0:
                     failures.append(f"声明的产物为空：{p.name}")
             elif kind == "tool_success":
-                if target in ("", "*"):
+                if target == "*":
                     if not ok_names:
                         failures.append("声明「至少一次成功工具调用」，但全程零成功调用")
                 elif target not in ok_names:

@@ -14,7 +14,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from backend.api.schemas import Task, TaskStatus
+import pytest
+
+from backend.api.schemas import Expectation, Task, TaskStatus
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import MockLLMClient
 from backend.services.event_bus import EventBus
@@ -304,6 +306,15 @@ def test_expectation_unjudgable_kind_fails_closed(tmp_path: Path) -> None:
     out = rt.reflect(_state(expectations=[_exp("sha256", "report.md")]))
     assert out["_verification"]["passed"] is False
     assert any("sha256" in f for f in out["_verification"]["failures"])
+
+
+def test_expectation_target_is_mandatory_and_nonempty() -> None:
+    """target 是声明的正文。放过空 target，tool_success 就悄悄变成「任一工具」——
+    正是这份契约要消除的那种松弛；REST 侧因此收 422 而不是收下一条没人能验的条件。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Expectation(type="tool_success", target="")
 
 
 def test_no_expectation_leaves_informational_task_alone(tmp_path: Path) -> None:

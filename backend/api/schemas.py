@@ -32,7 +32,10 @@ class Expectation(BaseModel):
     type: Literal["artifact", "tool_success"]
     # ``artifact``: path relative to the sandbox root. ``tool_success``: tool
     # name, or ``*`` for "at least one successful call of any tool".
-    target: str = ""
+    # Required and non-empty: a declaration without a target is a condition
+    # nothing can be judged against, and letting it through would quietly mean
+    # "any tool" — the one shape of slack this contract exists to remove.
+    target: str = Field(min_length=1)
 
 
 class PlanStep(BaseModel):
