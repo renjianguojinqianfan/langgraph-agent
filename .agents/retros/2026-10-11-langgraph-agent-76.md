@@ -8,16 +8,22 @@
 
 ## 候选（按严重度）
 
-### C1. PR 面无「票号 + Closes」机械门 · Automated checks · 复现 1/2
+### C1. PR 面无「票号 + Closes」机械门 · Automated checks · 复现 2/2
 
 - **事实**：`docs/agents/workflow.md` 步 4 把「标题带票号（Closes #N）」写成硬惯例；
   全仓唯一机械校验 `scripts/validate_commit_msg.py` 只管 commit 消息且只经本地钩子
   （CI 从不跑 git 钩子，#115 body 自述）。PR 标题/body 零校验。本会话实测：
   PR #120 标题只有 `#76`、body 无 `Closes`，合并前人工补回；漏补后果 = 票不自动关、
   `blocked_by` 依赖边不释放（本会话开局正卡在该边上）。
+- **复现 2（#121 会话，2026-10-11）**：PR #121 标题带 `#46`、正文用 `Refs` 不用
+  `Closes`——且这是**正确**的（#46 票面「两步、各自一张 PR」，第二步 grader 未做，
+  关票会灭掉第二步 AC）。修法方向据此修正：机械门不能只认 `Closes|Fixes|Resolves`
+  三件套，必须放行「显式 `Refs #N` + 一句理由」的形态，否则门禁会逼出误关。
+  证据：PR #121 范围段 + 评审结论评论（issuecomment-6110071986）。
 - **修法方向**（建检查，不写规则）：`validate_commit_msg.py` 的 `evaluate()` 提为可
-  复用函数 + `pull_request` CI job——非 docs 类 PR 必须含 `#\d+` 且含
-  `Closes|Fixes|Resolves`；paths 全落 `docs/` 只提醒（对齐 commit-msg 的 docs 豁免）。
+  复用函数 + `pull_request` CI job——非 docs 类 PR 必须含 `#\d+`，且收口关键字三选
+  一：`Closes|Fixes|Resolves`，或显式 `Refs #N` + 理由（两步 scope 票的正当形态，
+  见复现 2）；paths 全落 `docs/` 只提醒（对齐 commit-msg 的 docs 豁免）。
   形态仿 protected-files guard job。
 
 ### C2. 决策票终裁不回写票面 · Navigation · 复现 1/2
