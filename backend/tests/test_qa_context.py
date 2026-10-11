@@ -87,10 +87,31 @@ def test_compress_keeps_recent_assistant_tool_pair_intact():
 
 
 def test_compress_no_trigger_when_keep_recent_ge_n():
+    """Re-adjudicated by #85: ``keep_recent >= n`` means *never truncate*, not *never squeeze*.
+
+    票面最终裁定（issue #85 评论 5916632479，2026-09-30）：**「保护带不截断消息」是真意图；
+    「带内超预算也不挤」是按条数设计的副产品，不是特性**。旧断言（``budget=1`` 也恒等返回、
+    永不压缩）钉的正是那个副产品；超预算该不该挤，改由
+    ``test_context.py::test_ticket_85_window1_keep_recent_covering_everything_still_squeezes``
+    钉住。留在这里的是真意图的两半：带子够得着预算时保持身份，带子无可再挤时也绝不截断。
+    """
+    # ① The band fits the budget: even a count trigger must not truncate a history
+    # that ``keep_recent`` fully covers (identity convention).
     msgs = _many(5)
-    out, meta = compress_messages(msgs, budget=1, keep_recent=100)
+    out, meta = compress_messages(msgs, budget=10_000, keep_recent=100, max_messages=3)
+    assert meta["trigger"] == "count"
     assert out is msgs  # identity
     assert meta["compressed"] is False
+    assert meta["dropped"] == 0
+
+    # ② Over budget but nothing left to give (every message is shorter than a note):
+    # still no truncation, and the miss is reported instead of papered over.
+    short = [_msg("user" if i % 2 == 0 else "assistant", f"m{i}" + "x" * 9) for i in range(5)]
+    out2, meta2 = compress_messages(short, budget=1, keep_recent=100)
+    assert out2 is short
+    assert meta2["compressed"] is False
+    assert meta2["dropped"] == 0 and meta2["band_evicted"] == 0
+    assert meta2["converged"] is False
 
 
 def test_compress_count_trigger_boundary():

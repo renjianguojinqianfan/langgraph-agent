@@ -1,4 +1,5 @@
 import { useTaskStore } from "../store/taskStore";
+import { compressFaceParts } from "../types";
 import { Task, TraceMarker } from "../types";
 
 /** Render one live circuit-open / compression marker as a flow hint. */
@@ -17,6 +18,7 @@ function MarkerRow({ marker }: { marker: TraceMarker }) {
   const d = marker.data as {
     step_index?: number;
     dropped?: number;
+    band_evicted?: number;
     context_tokens?: number;
     strategy?: string;
   };
@@ -25,7 +27,7 @@ function MarkerRow({ marker }: { marker: TraceMarker }) {
     <div className="flex justify-start">
       <div className="max-w-[80%] text-sm bg-violet-950/40 border border-violet-500/30 text-violet-300 rounded-lg px-3 py-2">
         <span className="mr-1">🗜</span>
-        上下文已压缩：丢弃 {d.dropped ?? "?"} 条早期消息，策略{" "}
+        上下文已压缩：{compressFaceParts(d)}，策略{" "}
         {d.strategy ?? "?"}
         {stepPart}
         {d.context_tokens != null && `（剩余 ${d.context_tokens} tokens）`}

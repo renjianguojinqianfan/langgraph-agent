@@ -316,6 +316,118 @@ def test_tool_only_band_reaches_the_budget_at_marker_only():
         assert f"留痕: {TRACE_REF}#" in note, note
 
 
+def test_ticket_85_window1_keep_recent_covering_everything_still_squeezes():
+    """残窗一（#85）：``n <= keep_recent`` 不再是「压不动」的后门——带内超预算照样挤。
+
+    票面复现：12 条 4000 字符、budget 1000、keep_recent 20。旧实现把 keep 夹成 n 之后
+    「keep >= n」直接早退，截断与挤压都不触发，#82 立项要杀的症状（每轮压不动、压缩比恒
+    为 1）在这个边界原样存活，只是不发事件。#85 裁定：「保护带不截断消息」是真意图，
+    「带内超预算也不挤」是按条数设计的副产品——所以这一轮仍然一条不截，但带子照挤。
+    """
+    msgs = [_msg("user" if i % 2 == 0 else "assistant", "x" * 4000) for i in range(12)]
+    assert estimate_tokens(msgs) == 12012  # 起点：超预算 12 倍
+
+    out, meta = compress_messages(msgs, budget=1000, keep_recent=20, trace_ref=TRACE_REF)
+
+    # 真意图不动：一条都不截——没有 placeholder，条数与顺序原样。
+    assert meta["dropped"] == 0, meta
+    assert len(out) == 12, out
+    assert [m["role"] for m in out] == ["user", "assistant"] * 6
+    # 副产品不再成立：整条历史就是保护带，从最旧开始挤，最新一条逐字（A′ 不变）。
+    assert meta["compressed"] is True, meta
+    assert meta["band_evicted"] == 11, meta
+    assert meta["context_tokens"] < 12012, meta
+    assert out[-1] is msgs[-1]
+    # 这组全是 user/assistant，预览不许归零 → 够不到预算，如实报 False 而不是假装压完。
+    assert meta["converged"] is False, meta
+
+    # 停手不空转：同一份带再来一轮，无可再挤 → 原样返回、不再自称压缩。
+    again, meta2 = compress_messages(out, budget=1000, keep_recent=20, trace_ref=TRACE_REF)
+    assert meta2["compressed"] is False, meta2
+    assert meta2["band_evicted"] == 0, meta2
+    assert again is out
+
+
+def test_ticket_85_window1_short_non_tool_message_keeps_its_copy():
+    """#85 评审 F1：window-1 这一档不许把短 user/assistant 降成无预览的裸 marker。
+
+    评审侧实测的复现形态：两条 300 字符的 user/assistant + 10 条 4000 字符，budget 1000、
+    ``keep_recent=20``（n=12 ≤ keep_recent，正是本票新开的档）。``_squeeze_content`` 的
+    「预览装不下就 marker-only」回退过去**只受 pass 2 的角色门保护**，pass 1 绕过它——
+    那条 300 字符的 user 原文（唯一一份、trace 不落）被换成 54 字符裸 marker，marker 自己
+    还写着「留痕: 无」。那是丢，不是缩，与 A′ 约束直接冲突。既有 4000 字符级测试全绿不能
+    替代这条：短消息才走得到「装不下」那一支。
+    """
+    short = ["u" * 300, "a" * 300]
+    msgs = [_msg("user", short[0]), _msg("assistant", short[1])] + [
+        _msg("user", "x" * 4000) for _ in range(10)
+    ]
+    tokens_in = estimate_tokens(msgs)
+
+    out, meta = compress_messages(msgs, budget=1000, keep_recent=20, trace_ref=TRACE_REF)
+
+    # 本票的语义不动：长消息照挤、一条不截、够不到预算如实报 False。
+    assert meta["compressed"] is True, meta
+    assert meta["dropped"] == 0, meta
+    assert meta["band_evicted"] > 0, meta
+    assert meta["converged"] is False, meta
+    assert estimate_tokens(out) < tokens_in, "挤了却没变小 = 空转"
+
+    # A′：非 tool 短消息宁可原样不动，也不许降成裸 marker。
+    assert out[0]["content"] == short[0], "user 的唯一一份原文被丢了"
+    assert out[1]["content"] == short[1], "assistant 的唯一一份原文被丢了"
+    assert out[-1]["content"] == "x" * 4000, "最新一条逐字（A′ 不变）"
+
+    # 凡是被挤过的，都必须还带着预览。
+    notes = [m for m in out if m["content"].startswith(NOTE_PREFIXES)]
+    assert len(notes) == meta["band_evicted"], (len(notes), meta)
+    assert notes, "一条都没挤，本条测试就没测到东西"
+    for m in notes:
+        assert "\n" in m["content"], "便签只剩 header = 预览归零"
+
+
+def test_ticket_85_window2_summarize_shares_the_band_squeeze():
+    """残窗二（#85）：挤压从 truncate 路径上提到 ``compress_messages``，summarize 也吃到。
+
+    票面复现方向：同一 oversized fixture + ``strategy="summarize"`` + stub LLM。旧实现里
+    summarize 带内超预算时 ``band_evicted`` 恒 0——``converged`` 只如实报 False，带子该挤
+    不挤。tool 结果全文在 trace 里，可以降到带预览的便签，所以数值 AC 落在这一条上。
+    """
+    msgs: List[Dict[str, Any]] = []
+    for i in range(6):
+        msgs.append(_assistant_call(f"c{i}", "read"))
+        msgs.append(_tool("x" * 4000, f"c{i}"))
+    llm = _FakeLLM("早期历史摘要")
+
+    out, meta = compress_messages(
+        msgs, budget=1000, keep_recent=4, strategy="summarize", llm=llm, trace_ref=TRACE_REF
+    )
+
+    assert meta["strategy"] == "summarize"
+    assert meta["compressed"] is True, meta
+    assert meta["dropped"] == 8  # 摘要块顶掉早期 8 条：这一步本来就归 summarize 自己做
+    assert meta["band_evicted"] == 2, meta  # 带内两条 tool 结果也被挤——残窗二的关键
+    assert meta["context_tokens"] <= 1000, meta
+    assert meta["converged"] is True, meta
+    assert len(out) == 5, out
+    # 摘要块是「头」，和保护带里的消息不是一回事：不被挤、也不计数。
+    assert out[0] == {"role": "system", "content": "早期历史摘要"}
+    assert _notes_by_role(out)["tool"].startswith(EVICT_PLACEHOLDER_PREFIX)
+    assert llm.calls == 1
+
+    # summarize 的早退语义不动：一条都不截时不白烧摘要调用，但带子照挤（两窗合流）。
+    whole = msgs[:2]
+    out2, meta2 = compress_messages(
+        whole, budget=1, keep_recent=20, strategy="summarize", llm=llm, trace_ref=TRACE_REF
+    )
+    assert llm.calls == 1, "带内挤压不该再打一次摘要调用"
+    assert meta2["dropped"] == 0, meta2
+    assert meta2["band_evicted"] == 1, meta2
+    assert len(out2) == 2, out2
+    assert out2[0] is whole[0]  # 空 content 的 assistant 调用无可再挤：原对象返回
+    assert out2[1]["content"].startswith(EVICT_PLACEHOLDER_PREFIX)  # 挤的是带内那条 tool
+
+
 def test_last_notch_demotes_tool_only_and_reports_not_converged():
     """A′ 的角色闸门：最后 notch 只准削 tool 结果，user 的预览是它最后一份信息。
 
@@ -590,8 +702,12 @@ def test_no_context_compressed_event_once_the_squeeze_stalls(tmp_path: Path):
     assert len(events) == 1  # 只有真正变小那一轮发了一条，此后停手
 
 
-def test_summarize_strategy_reports_band_evicted_zero():
-    """``band_evicted`` 是 meta 的固定字段：summarize 不挤带，报 0。"""
+def test_summarize_reports_band_evicted_zero_when_the_band_fits():
+    """``band_evicted`` 是 meta 的固定字段：带子够得着预算时报 0。
+
+    #85 之后 summarize 也挤带（``test_ticket_85_window2_summarize_shares_the_band_squeeze``
+    钉住该挤的那半），所以这里的 0 说的是「带内不超预算」，不再是「策略不挤带」。
+    """
     msgs = _many_messages(30)
     out, meta = compress_messages(
         msgs, budget=100, keep_recent=5, strategy="summarize", llm=_FakeLLM("摘要")
