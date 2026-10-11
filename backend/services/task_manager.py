@@ -1066,6 +1066,19 @@ class TaskManager:
         return True
 
     # ── artifacts ──
+    def has_active_state(self, task_id: str) -> bool:
+        """Whether the task's live run state (and with it, its artifact ledger)
+        still exists.
+
+        ``run()``'s finally pops ``_active_states[task_id]``, so once a task has
+        finished there is no ledger left to register into. A subtask hand-back
+        that arrives that late (parent stopped, or the subtask overran the
+        timeout window) has to be refused loudly instead of minting a record
+        that lands nowhere (issue #76); this predicate is how the hand-back asks
+        without reaching into the private dict.
+        """
+        return task_id in self._active_states
+
     def add_artifact(self, task_id: str, path: Path) -> Artifact:
         """Register a file the task produced; one record per task and file.
 
@@ -1076,12 +1089,17 @@ class TaskManager:
         knowledge base is already idempotent per resolved path, so what a
         duplicate used to cost is a spurious product row, not a double index.
 
-        Two settled semantics callers rely on: the key is per **task**, so a
-        subtask handing its file back to the parent registers once under each
-        owner; and a hit returns the record as first registered, i.e. its
-        ``size`` / ``created_at`` are the ones from the initial write (completion
-        verification re-stats the disk, so S1 is unaffected). A task with no
-        active state has no registry to dedupe against and registers as before.
+        Two settled semantics callers rely on: the key is per **task** — two
+        tasks touching the same file each own a record — and a hit returns the
+        record as first registered, i.e. its ``size`` / ``created_at`` are the
+        ones from the initial write (completion verification re-stats the disk,
+        so S1 is unaffected). A subtask write's single registration is the
+        hand-back under the parent id (#76 — the tool node no longer registers
+        under the subtask's own id). A task with no active state has no
+        registry to dedupe against and registers as before (mint + event, no
+        ledger); the subtask hand-back refuses that case loudly instead of
+        calling in (see :meth:`has_active_state`), and landing the record on a
+        finished task is ticket #106's call.
 
         The lookup and the append are one atomic step under ``self._lock`` (the
         same manager lock the resume claim uses), because subtasks run on a pool:

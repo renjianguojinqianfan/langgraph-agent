@@ -568,11 +568,19 @@ class AgentRuntime:
             # result advertising a directory would otherwise land in
             # verification as a 0-byte「产物为空」and loop a healthy task back
             # (#17).
+            #
+            # A subtask's write is registered by the hand-back in
+            # ``subagent._exec_one`` under the PARENT id only (#76). Registering
+            # here as well would mint a record no ledger can hold — a subtask
+            # never has an ``_active_states`` entry — so its whole cost used to
+            # be a phantom ``artifact_created`` on the subtask channel plus a
+            # redundant KB ingest.
             if (
                 tool.registers_artifact
                 and result.success
                 and isinstance(result.data, dict)
                 and result.data.get("path")
+                and not state.get("_is_subtask")
             ):
                 p = Path(result.data["path"])
                 if p.is_file():

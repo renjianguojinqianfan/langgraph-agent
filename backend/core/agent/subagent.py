@@ -406,16 +406,35 @@ class SubAgentExecutor:
 
             # Register subtask-produced files as artifacts of the parent task so
             # they remain downloadable from the main task view.
-            if spec.parent_task_id:
-                for p in unique:
-                    try:
-                        from pathlib import Path
+            #
+            # The hand-back is the ONLY registration a subtask write gets (#76 A:
+            # the tool node no longer registers under the subtask's own id, which
+            # had no ledger to land in). If the parent's run is already over the
+            # ledger is gone, and the refusal has to be loud: ``add_artifact``
+            # would mint a record nothing holds and fire an ``artifact_created``
+            # promising a product the task does not own. Landing the record on a
+            # finished task is ticket #106's (裁 B) job — here the drop merely
+            # becomes attributable.
+            if spec.parent_task_id and unique:
+                if not self.tm.has_active_state(spec.parent_task_id):
+                    logger.warning(
+                        "late hand-back refused: parent task %s has no active run; "
+                        "%d artifact(s) from subtask %s not registered: %s",
+                        spec.parent_task_id,
+                        len(unique),
+                        spec.subtask_id,
+                        unique,
+                    )
+                else:
+                    for p in unique:
+                        try:
+                            from pathlib import Path
 
-                        path_obj = Path(p)
-                        if path_obj.exists():
-                            self.tm.add_artifact(spec.parent_task_id, path_obj)
-                    except Exception as exc:  # pragma: no cover - defensive
-                        logger.warning("failed to register subtask artifact %s: %s", p, exc)
+                            path_obj = Path(p)
+                            if path_obj.exists():
+                                self.tm.add_artifact(spec.parent_task_id, path_obj)
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.warning("failed to register subtask artifact %s: %s", p, exc)
 
             # Propagate the subtask graph's terminal status: a subtask whose
             # graph ends FAILED (e.g. a planner LLM error after Issue #12) must
