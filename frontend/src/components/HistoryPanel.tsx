@@ -7,7 +7,7 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
   COMPLETED: "bg-green-600",
   FAILED: "bg-red-600",
   INTERRUPTED: "bg-amber-500",
-  // #46: orange, not amber — 被停止与未通过验收得一眼分开
+  // #46: 与 INTERRUPTED 分开色系，理由见 TaskHeader 同注释
   UNVERIFIED: "bg-orange-600",
 };
 

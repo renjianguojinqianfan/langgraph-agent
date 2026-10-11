@@ -5,8 +5,8 @@
 中断」，危害是 resume / 续跑后把一条没有回答的 ``tool_calls`` 发给 OpenAI 协议
 端点（#95 留下的两个缺口）。
 
-不变量：**任何一次进入 executor 之前**，消息面不存在孤儿 tool_calls、记录面不
-存在残留 pending。所以这里测的是 executor 这个节点入口，而不是某个私有函数。
+不变量：**任何一次进入模型之前**（planner 与 executor 两个 LLM 入口），消息面不存在
+孤儿 tool_calls、记录面不存在残留 pending。所以这里测的是节点入口与真图，不是私有函数。
 """
 
 from __future__ import annotations
@@ -22,8 +22,10 @@ from backend.services.event_bus import EventBus
 from backend.tests.conftest import make_settings
 
 
-def _rt(tmp_path: Path) -> Tuple[AgentRuntime, List[Dict[str, Any]]]:
-    settings = make_settings(tmp_path)
+def _rt(
+    tmp_path: Path, *, llm: Any = None, **settings_kw: Any
+) -> Tuple[AgentRuntime, List[Dict[str, Any]]]:
+    settings = make_settings(tmp_path, **settings_kw)
     bus = EventBus()
     events: List[Dict[str, Any]] = []
     bus.subscribe("t1", lambda e: events.append(e))
@@ -35,19 +37,25 @@ def _rt(tmp_path: Path) -> Tuple[AgentRuntime, List[Dict[str, Any]]]:
         _active_states={"t1": {"artifacts": []}},
     )
     rt = AgentRuntime(
-        "t1", tm, llm=MockLLMClient(final_answer="收尾答案"), tools=[], tool_schemas=[]
+        "t1",
+        tm,
+        llm=llm if llm is not None else MockLLMClient(final_answer="收尾答案"),
+        tools=[],
+        tool_schemas=[],
     )
     return rt, events
 
 
-def _rec(call_id: str, status: str, tool_name: str = "write") -> Dict[str, Any]:
+def _rec(
+    call_id: str, status: str, tool_name: str = "write", error: str = ""
+) -> Dict[str, Any]:
     return {
         "id": call_id,
         "tool_name": tool_name,
         "input": {},
         "output": None,
         "status": status,
-        "error": "",
+        "error": error,
         "need_confirm": False,
         "confirmed": False,
     }
@@ -145,16 +153,72 @@ def test_executor_entry_leaves_answered_call_alone(tmp_path: Path) -> None:
 
 
 def test_executor_entry_answers_orphan_whose_record_already_settled(tmp_path: Path) -> None:
-    """记录终态但消息面缺答（#95 之前的中途失败路径）：补消息，不改写记录终态。"""
+    """记录终态但消息面缺答（#95 之前的中途失败路径）：补消息，且用它自己的理由说话。
+
+    记录已经判过的事（``failed: disk full``）不许被清扫文案改口成「没执行就被打断」——
+    模型和人都得读到同一句真话（#95 的一面一源）。
+    """
     rt, _ = _rt(tmp_path)
     state = _state(
         messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
-        records=[_rec("c1", "failed", )],
+        records=[_rec("c1", "failed", error="disk full")],
     )
     out = rt.executor(state)
 
     assert _orphans(out["messages"]) == []
-    assert out["steps"][0]["tool_calls"][0]["status"] == "failed"
+    rec = out["steps"][0]["tool_calls"][0]
+    assert rec["status"] == "failed"
+    assert rec["error"] == "disk full"
+    answer = _answers(out["messages"], "c1")[0]["content"]
+    assert "disk full" in answer and "swept at loop entry" not in answer
+
+
+def test_planner_entry_sweeps_before_the_first_llm_call(tmp_path: Path) -> None:
+    """resume 后出门的第一个请求是 planner 的：孤儿必须在它之前就没了。
+
+    只在 executor 入口扫，等于让 planner 先把一条没人回答的 tool_calls 发出去——
+    规格要的是「任何一次进入模型之前都干净」，两个 LLM 入口都算入口。
+    """
+    rt, _ = _rt(tmp_path, llm=MockLLMClient(plan=["写文件"], final_answer="done"))
+    state = _state(
+        messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
+        records=[_rec("c1", "pending")],
+    )
+    out = rt.planner(state)
+
+    assert _orphans(out["messages"]) == []
+    assert out["steps"][0]["tool_calls"][0]["status"] == "skipped"
+
+
+def test_graph_run_leaves_no_orphan_on_the_message_face(tmp_path: Path) -> None:
+    """集成层看消息面（规格的测试决策把这一条放在集成层观察）：真图跑完不留孤儿。
+
+    起图时故意带一条悬空 ``tool_calls``；两轮 LLM 入口（planner / executor）都由图自己
+    走到，所以任一入口漏掉清扫都会在这里变红——它不是恒真的观察性断言。
+    """
+    from backend.core.agent.graph import build_graph
+
+    rt, _ = _rt(
+        tmp_path,
+        llm=MockLLMClient(
+            plan=["写文件"],
+            tool_calls=[{"id": "g1", "name": "write", "arguments": {"path": "a.txt", "content": "x"}}],
+            final_answer="写好了",
+        ),
+        risk_scan_enabled=False,
+        subagent_enabled=False,
+        checkpoint_enabled=False,
+    )
+    state = _state(
+        messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
+        records=[_rec("c1", "pending")],
+    )
+    final = build_graph(rt, mode="main").invoke(state)
+
+    assert _orphans(final["messages"]) == []
+    assert [
+        r["status"] for s in final["steps"] for r in s["tool_calls"] if r["id"] == "c1"
+    ] == ["skipped"]
 
 
 def test_executor_entry_sweeps_across_rounds(tmp_path: Path) -> None:

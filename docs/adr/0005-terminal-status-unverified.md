@@ -13,7 +13,7 @@ status: accepted
 2. `COMPLETED` 收紧为「跑完 **且** 验证通过（或验证关闭）」；`FAILED` 保持 crash/异常语义；
    `INTERRUPTED` 不变。
 3. 原因用 `Task.verification.reason` 区分：`retry_exhausted` / `max_steps` / `grader_error`
-   （回环中是 `pending`，由 `finish` / `_finalize_terminal` 收口成前者三值之一）。
+   （回环中是 `pending`；收口只发生在 `_finalize_terminal`——`finish` 不改写 reason）。
 4. headless 退出码**扩展**：0/1/2/3 语义不变，新增 `4 = UNVERIFIED`。
 5. 「绝不因验证误判判 FAILED」（Q4 核心）保留——`UNVERIFIED` 不是 `FAILED`。
 

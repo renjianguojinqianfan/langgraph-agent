@@ -107,7 +107,7 @@ def reflect(self, state):
 8. **Q7 子任务图**：`mode="subtask"` 同样验证。
 9. **Q12 暴露**：Task.verification 回填；verification 事件发出。
 10. **error 路径守卫**（review 漏洞1）：executor LLM 异常 → `state["error"]` 置 + final_answer → reflect **跳过验证**、不注入反馈、不回环，finish 判 FAILED（错误语义不变、不扰动存量异常测试）。
-11. **headless verification 键**（review 漏洞2）：`_collect` 结果含 `verification`、`_RESULT_KEYS` 同步；degraded 场景可读。
+11. **headless verification 键**（review 漏洞2）：`_collect` 结果含 `verification`、`_RESULT_KEYS` 同步；未通过验收的场景读得出 `reason`（#46 起字段是 `reason`，`degraded` 已退役）。
 - 守 conftest 隔离；不碰 checkpoint/resume；受保护块零改动。
 
 ## 六、纪律与约束

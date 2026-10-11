@@ -302,6 +302,17 @@ def test_expect_flag_wired_into_parser() -> None:
     assert build_parser().parse_args(["-p", "x"]).expect == []
 
 
+def test_cli_expectation_kinds_match_the_schema() -> None:
+    """两种形态只该有一份权威：CLI 的 kinds 漂移开 schemas 的 Literal 就是漏网。"""
+    from typing import get_args
+
+    from backend.api.schemas import Expectation
+    from backend.headless import _EXPECTATION_KINDS
+
+    declared = get_args(Expectation.model_fields["type"].annotation)
+    assert set(_EXPECTATION_KINDS) == set(declared)
+
+
 def test_malformed_expect_flag_is_usage_error() -> None:
     assert main(["-p", "x", "--expect", "oops"]) == EXIT_USAGE
 

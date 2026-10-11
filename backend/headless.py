@@ -169,7 +169,7 @@ _EXPECTATION_KINDS = ("artifact", "tool_success")
 
 
 def _parse_expectations(values: Sequence[str]) -> List[Dict[str, str]]:
-    """Parse repeated ``--expect kind:target`` into expectation dicts (#46 §6).
+    """Parse repeated ``--expect kind:target`` into expectation dicts (issue #46).
 
     Fail fast rather than drop: a declaration silently thrown away hands the
     harness back exactly the false completion exit code 4 exists to catch.

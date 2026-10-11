@@ -56,7 +56,7 @@ TERMINAL_TOOL_CALL_STATUSES = frozenset({"success", "failed", "skipped"})
 # record (``error``, and so the persisted StepRecord) and the conversation (the
 # ``role: tool`` reply the protocol demands). One text, one source — same shape as
 # ``_feed_tool_failure`` (#95).
-DANGLING_SWEEP_TEXT = "interrupted before execution; swept at loop entry (#46)"
+DANGLING_SWEEP_TEXT = "interrupted before execution; swept at loop entry"
 
 
 class AgentRuntime:
@@ -257,6 +257,9 @@ class AgentRuntime:
         if self._stopped(state):
             state["_last_action"] = "stop"
             return state
+        # The loop's first LLM entry — post-resume it is the very first request out
+        # the door, so the orphan sweep runs here as well as in ``executor``.
+        self._sweep_dangling_tool_calls(state)
 
         state["step_index"] = state.get("step_index", 0) + 1
         idx = state["step_index"]
@@ -393,7 +396,7 @@ class AgentRuntime:
         state["plan"] = plan
 
     def _sweep_dangling_tool_calls(self, state: AgentState) -> None:
-        """Answer every tool call that never got an answer (#46 spec §5).
+        """Answer every tool call that never got an answer (issue #46).
 
         Two real gaps leave one hole: a stop while parked on the confirm gate, and
         an interrupt mid-round. Both leave an assistant ``tool_calls`` turn with no
@@ -401,10 +404,13 @@ class AgentRuntime:
         violates the OpenAI tool-calling protocol, and the persisted task shows a
         call that will never resolve.
 
-        Done at the loop entry rather than in ``finish``, because the invariant is
-        about what reaches the model: by the time any round calls the LLM, the
-        message face is clean. Only ``pending`` records are reclassified — a call
-        that already carries a terminal status keeps its own verdict.
+        Run at **both** LLM entries (``planner`` and ``executor``), not only before
+        the tool round: the first request after a resume is the planner's, so an
+        entry that only guards the executor would still send the orphan. Only
+        ``pending`` records get reclassified, and a record that already carries a
+        verdict keeps its own words onto the message face too — one text, one
+        source (#95), otherwise the model is told「interrupted before execution」
+        about a call that ran and failed.
         """
         messages = state.get("messages") or []
         answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
@@ -426,7 +432,8 @@ class AgentRuntime:
             if rec is not None and rec.get("status") == "pending":
                 rec["status"] = "skipped"
                 rec["error"] = DANGLING_SWEEP_TEXT
-            self._feed_tool_failure(state, {"id": cid, "error": DANGLING_SWEEP_TEXT})
+            own = str((rec or {}).get("error") or "")
+            self._feed_tool_failure(state, {"id": cid, "error": own or DANGLING_SWEEP_TEXT})
         logger.info("task %s swept %d dangling tool call(s) at loop entry", self.task_id, len(orphans))
 
     def executor(self, state: AgentState) -> AgentState:
@@ -859,7 +866,7 @@ class AgentRuntime:
         state["_verify_attempts"] = attempts + 1
         state["_verification"] = {
             "passed": False, "failures": failures, "attempts": attempts + 1,
-            "reason": "pending",  # open verdict — finish/max_steps close it
+            "reason": "pending",  # 判决未收口；落库时仍挂着就记成 max_steps（见 _finalize_terminal）
         }
         feedback = (
             "完成验证未通过：" + "；".join(failures) +
@@ -881,7 +888,7 @@ class AgentRuntime:
         ]
 
     def _expectation_failures(self, state: AgentState) -> List[str]:
-        """Judge the caller-declared expectations (#46 spec §3).
+        """Judge the caller-declared expectations (issue #46, ADR 0006).
 
         Two kinds, both objective facts about the run: ``artifact`` — the declared
         path, relative to the sandbox root, exists and is non-empty; ``tool_success``
@@ -911,6 +918,10 @@ class AgentRuntime:
                     failures.append(f"声明的产物路径越出沙箱根：{target}")
                 elif not p.exists():
                     failures.append(f"声明的产物缺失：{p.name}")
+                elif not p.is_file():
+                    # 目录不是交付物（ADR 0004 给产物定的同一条判据，这里对声明复用）：
+                    # 一个非空目录的 st_size 在 Windows 上是 4096，只查「存在且非空」会放行。
+                    failures.append(f"声明的产物不是文件（目录不算交付）：{target}")
                 elif p.stat().st_size == 0:
                     failures.append(f"声明的产物为空：{p.name}")
             elif kind == "tool_success":
@@ -966,7 +977,7 @@ class AgentRuntime:
         return failures
 
     def finish(self, state: AgentState) -> AgentState:
-        """Map the run onto one of five terminal statuses (#46 spec §1).
+        """Map the run onto a terminal status (issue #46, ADR 0005).
 
         Order is load-bearing: a stop is a stop and an error is an error before
         anything is judged. ``_verification`` absent means either the gate is off

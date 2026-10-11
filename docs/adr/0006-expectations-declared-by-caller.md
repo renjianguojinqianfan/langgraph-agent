@@ -38,8 +38,7 @@ status: accepted
 
 - 判据顺序：确定性 expectation 先行，全过才轮到 grader（#46 第二步，`aux_llm` 独立裁判）；
   机械条件未过不调用裁判，不花那份钱。
-- expectation 落进**持久化的 Task 记录**，因此 resume 后仍按提交时那条线判——不给
-  续跑加新契约，只是不让「重新提交一次才算数」。
+- expectation 同时落进**持久化的 `Task` 记录**（读面：API / trace / 前端看得出这次声明了什么）；resume 后仍按同一条线判，靠的是 `expectations` 随 checkpoint 的状态通道恢复——`Task` 字段本身不承担续跑契约，只是让「欠了什么」在事后仍然可读。
 - 交付型任务可以因为「声明的产物没写出来」落 `UNVERIFIED`（见 0005），这是 #46 要抓的
   原始现象：一次工具都没成功调用也能 `COMPLETED` 且 `exit 0`（外部活标本 eval-harness T056）。
 

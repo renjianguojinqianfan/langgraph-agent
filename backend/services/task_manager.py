@@ -820,9 +820,12 @@ class TaskManager:
         verification = final.get("_verification")
         if isinstance(verification, dict):
             # P0-B §4.3 edge, told straight (#46): a verify loop that ``max_steps``
-            # cut short still carries its open verdict (``reason: "pending"``). Say
-            # which budget ran out instead of leaving an unexplained UNVERIFIED.
-            if status == "UNVERIFIED" and verification.get("reason") in ("", "pending"):
+            # cut short still carries its open verdict (``reason: "pending"``), and a
+            # ``_verification`` restored from a pre-#46 checkpoint has no reason key
+            # at all. Either way, name the budget that ran out instead of persisting
+            # an UNVERIFIED whose cause cannot be read.
+            reason = verification.get("reason")
+            if status == "UNVERIFIED" and reason in ("", "pending", None):
                 verification = dict(verification, reason="max_steps")
             task.verification = verification
         task.updated_at = _now()

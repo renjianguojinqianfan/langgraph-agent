@@ -300,6 +300,18 @@ def test_expectation_tool_success_any_tool(tmp_path: Path) -> None:
     assert bad["_verification"]["passed"] is False
 
 
+def test_expectation_artifact_directory_fails(tmp_path: Path) -> None:
+    """目录不算交付物（ADR 0004 给产物定的判据，这里对声明复用）。
+
+    只查「存在且非空」会放过它：Windows 上一个非空目录的 ``st_size`` 是 4096。
+    """
+    (tmp_path / "artifacts" / "docs").mkdir(parents=True)
+    rt, _ = _rt(tmp_path, artifacts=[])
+    out = rt.reflect(_state(expectations=[_exp("artifact", "docs")]))
+    assert out["_verification"]["passed"] is False
+    assert any("不是文件" in f for f in out["_verification"]["failures"])
+
+
 def test_expectation_unjudgable_kind_fails_closed(tmp_path: Path) -> None:
     """判不动的声明算未通过：一条没人能验的合格线，不该被读成「过了」。"""
     rt, _ = _rt(tmp_path, artifacts=[])
