@@ -42,14 +42,16 @@ opencode 对文件系统打快照取 diff、pi 只在写类工具上渲染 diff�
   交回同一父任务时，无锁的 check-then-act 会双双未命中、双双登记（PR #77 评审 F1）。事件发布与 KB 入库
   留在锁外，订阅方与文件索引回调不会在持锁状态下运行。
 - **无活跃态即无账本**：去重比对的是 `TaskManager._active_states[task_id]["artifacts"]`；续跑时该表由
-  checkpoint 带回，不在表里的 id（子任务自己的 id 就是）没有可比对象，按原样登记。
+  checkpoint 带回，不在表里的 id 没有可比对象，按原样登记。#76 之后 subtask id 不再走到
+  `add_artifact`（登记收敛到 hand-back 单点，迟到 hand-back 由 `has_active_state` 拒绝并留痕）；
+  让迟到记录落到 `Task.artifacts` 是 [#106](https://github.com/renjianguojinqianfan/langgraph-agent/issues/106)（裁 B）的活。
 
 ## 本票没顺手修的（#76 已跟进并落地）
 
-子任务跑的是同一个 `tool_node`，而它的 `runtime.task_id` 是 `subtask_id`，所以一次子任务 `write` 仍会调
+子任务跑的是同一个 `tool_node`，而它的 `runtime.task_id` 是 `subtask_id`，#72 落地时一次子任务 `write` 会调
 两次 `add_artifact`：一次记在子任务自己的 id 下（父任务产物表看不见它，只在子任务频道留一条
 `artifact_created`），一次由 `subagent.py` 回记到父任务。KB 自身按 resolved path 幂等，所以代价是一条
-多余事件 + 一次多余登记，而不是重复索引。#72 裁定不扩面，另票跟。
+多余事件 + 一次多余登记，而不是重复索引。#72 裁定不扩面，另票跟——即下述 #76，已落地。
 
 后续票 = [#76](https://github.com/renjianguojinqianfan/langgraph-agent/issues/76)：`tool_node` 在
 `_is_subtask` 为真时跳过登记，由 hand-back 单点回记父任务（一次 write 只登记一次、只发一条

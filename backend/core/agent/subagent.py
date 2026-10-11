@@ -414,7 +414,11 @@ class SubAgentExecutor:
             # would mint a record nothing holds and fire an ``artifact_created``
             # promising a product the task does not own. Landing the record on a
             # finished task is ticket #106's (裁 B) job — here the drop merely
-            # becomes attributable.
+            # becomes attributable. One narrow race survives on purpose: the
+            # liveness check and the registration are two steps, so a parent
+            # finishing exactly in between still mints the phantom record;
+            # closing that means moving the decision inside ``add_artifact``'s
+            # lock, which is #106's change anyway.
             if spec.parent_task_id and unique:
                 if not self.tm.has_active_state(spec.parent_task_id):
                     logger.warning(
