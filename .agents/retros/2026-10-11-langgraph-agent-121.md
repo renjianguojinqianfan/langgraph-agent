@@ -72,3 +72,18 @@
 
 - 沿用 `2026-10-11-langgraph-agent-76.md` 的规则：同候选再命中往该文件对应条目加
   复现计数；到 2/2 提请用户决断；新候选继续 C9 起编号，严重度重排全表。
+
+### C9. Dependabot group PR 的 body 摘要不可信 · 落文档（判断题）· 复现 1/2
+
+- **事实**（#116 评估，同日 PR 评审会话，2026-10-11）：PR body 写「Bumps the
+  npm_and_yarn group with 2 updates（移除 postcss-selector-parser + source-map-js
+  1.2.1→1.2.2）」，`package.json` 实际改的是 **tailwindcss ^3.4.0 → ^4.3.3 大版本**；
+  v4 的 PostCSS 插件独立成 `@tailwindcss/postcss`，本仓 postcss 配置还是 v3 形态，
+  `vite build` 红（CI 兜底，根因错误信息直白）。AGENTS.md 依赖面已有「依赖类 PR 先
+  人工评估（含 Dependabot 自动抬版）」规则，但**评估动作没有指明核 `package.json`
+  diff**——信 body 摘要就会漏。大版本混装是 group 配置允许 major 的结构性产物，不是
+  偶然。附带正向证据：人工评估环节按设计把它拦下了，流程工作正常，缺的只是评估动作
+  的明文。
+- **修法方向**（判断题，最简档）：AGENTS.md 依赖面行加一句「dependabot group PR
+  的评估核 `package.json` diff，不信 body 摘要」。机械检查（CI 检 semver-major）是
+  给一条一行能防的事造机器，不做。
