@@ -9,6 +9,13 @@
   so a re-write of the same file lands as one record, one ``artifact_created``
   event and one knowledge-base ingest call.
 
+Issue #76 adds the subtask half of the same contract: a subtask runs the same
+``tool_node``, but it never has an ``_active_states`` entry, so the registration
+the tool node used to make under the subtask's own id landed in no ledger at all
+— its whole cost was a phantom event on the subtask channel plus a redundant KB
+ingest. One subtask write must now mean one record (parent ledger), one event
+(parent channel) and one ingest, with the subtask channel registering nothing.
+
 The KB ingest count is asserted because the issue's acceptance list requires the
 event and ingest counts to track the registration count — that is the contract,
 not an implementation detail.
@@ -16,16 +23,22 @@ not an implementation detail.
 
 from __future__ import annotations
 
+import json
+import logging
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from backend.core.llm.client import MockLLMClient
+import pytest
+
+from backend.core.agent.subagent import SubTaskSpec
+from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.core.tools.mcp_tool import McpTool
 from backend.core.tools.openapi_tool import OpenAPITool
 from backend.core.tools.registry import build_tools
 from backend.services.event_bus import EventBus
 from backend.tests.conftest import make_manager, make_settings
+from backend.tests.test_checkpointer import _LogCollector
 from backend.tests.test_graph import _run_until_done
 
 
@@ -231,3 +244,162 @@ def test_registration_is_per_task(tmp_path, event_bus, monkeypatch):
     assert [a.filename for a in second.artifacts] == ["shared.txt"]
     assert first.artifacts[0].id != second.artifacts[0].id
     assert first.artifacts[0].path == second.artifacts[0].path
+
+
+def test_subtask_write_registers_once_on_the_parent_channel(
+    tmp_path, event_bus, monkeypatch
+):
+    """#76 A: a subtask's write is registered by the hand-back under the PARENT
+    id only — the tool node no longer registers it under the subtask's own id.
+
+    A subtask has no ``_active_states`` entry, so the registration the tool node
+    used to make there landed in no ledger at all: its whole cost was one
+    phantom ``artifact_created`` on the subtask channel plus one redundant KB
+    ingest (the record itself was minted and dropped). One write must now mean
+    one record on the parent ledger, one event on the parent channel, one KB
+    ingest — and nothing at all on the subtask channel.
+
+    Driven through ``run_subtask`` because that is exactly the entry
+    ``spawn_subagent`` uses (``SpawnSubagentTool.run`` hands it the spec), and
+    the parent ledger is hand-seated the same way
+    ``test_add_artifact_dedupes_by_resolved_path`` seats one: the subject is the
+    registration route, not a parent run.
+    """
+    tm, settings, ingest, _ = _manager(
+        tmp_path,
+        [_tool_call("s1", "write", {"path": "notes.txt", "content": "sub notes"})],
+        event_bus,
+        monkeypatch,
+    )
+    parent_id = "t-parent-live"
+    tm._active_states[parent_id] = {"artifacts": []}
+
+    res = tm._subagent.run_subtask(
+        SubTaskSpec(
+            subtask_id="sub:writes",
+            name="writer",
+            instruction="把笔记写进 notes.txt",
+            parent_task_id=parent_id,
+        )
+    )
+
+    # Guard: the write really ran inside the subtask — a run that never wrote
+    # must not be able to satisfy any of the counts below.
+    written = settings.artifacts_path / "notes.txt"
+    assert res.status == "completed"
+    assert [Path(p).resolve() for p in res.artifacts] == [written.resolve()]
+    assert written.read_text(encoding="utf-8") == "sub notes"
+
+    # The contract: one record on the parent ledger, one event on the parent
+    # channel, one KB ingest — and the subtask channel registers nothing.
+    ledger = tm._active_states[parent_id]["artifacts"]
+    assert [a["filename"] for a in ledger] == ["notes.txt"]
+    parent_events = [e for e in event_bus.replay(parent_id) if e["type"] == "artifact_created"]
+    assert len(parent_events) == 1
+    sub_events = [e for e in event_bus.replay("sub:writes") if e["type"] == "artifact_created"]
+    assert sub_events == []
+    assert ingest == [str(written.resolve())]
+
+
+#: Only a subtask ever sees this; the parent's own input must not contain it.
+SUBTASK_MARKER = "笔记"
+
+
+class _ParentThenSubtaskMock(MockLLMClient):
+    """The parent final-answers on sight; the subtask writes one file first.
+
+    The two sides are told apart by the user text each graph carries — the
+    parent's ``user_input`` versus the subtask instruction — so a test observes
+    that the write really came from the subtask instead of assuming it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(plan=["produce"], final_answer="done")
+        self.subtask_turns = 0
+
+    def complete(self, messages, tools=None, **kwargs):
+        user = " ".join(
+            str(m.get("content") or "") for m in messages if m.get("role") == "user"
+        )
+        if not tools:
+            return LLMResponse(content=json.dumps(self.plan))
+        if SUBTASK_MARKER in user:
+            self.subtask_turns += 1
+            if self.subtask_turns == 1:
+                return LLMResponse(
+                    content="",
+                    tool_calls=[
+                        _tool_call("s1", "write", {"path": "notes.txt", "content": "sub notes"})
+                    ],
+                )
+            return LLMResponse(content=self.final_answer)
+        return LLMResponse(content=self.final_answer)
+
+
+@pytest.fixture
+def subagent_logs():
+    """Collect ``agent.subagent`` records for the duration of one test.
+
+    ``get_logger()`` sets ``propagate = False``, so pytest's caplog never sees
+    them; the handler is attached to the target logger directly (same shape as
+    ``test_checkpointer.tm_logs``).
+    """
+    collector = _LogCollector()
+    logging.getLogger("agent.agent.subagent").addHandler(collector)
+    try:
+        yield collector
+    finally:
+        logging.getLogger("agent.agent.subagent").removeHandler(collector)
+
+
+def test_late_hand_back_is_refused_loudly_not_dropped_silently(
+    tmp_path, event_bus, subagent_logs
+):
+    """#76 C: a hand-back that arrives after the parent's run is over is refused
+    and traced, not silently dropped.
+
+    ``add_artifact`` keeps its ledger in ``_active_states``; ``run()``'s finally
+    pops it, so a subtask finishing after its parent (parent stopped, subtask
+    overran the timeout window — #71's window) used to mint a record that
+    landed nowhere and fire one ``artifact_created`` that promised a product the
+    task did not own. The refusal must be loud instead: no event, no record, and
+    a warning naming the parent, the subtask and the path.
+
+    Landing the record is the follow-up ticket's (#106, 裁 B) job; this ticket
+    only turns the silent drop into an attributable one.
+
+    The parent runs to completion for real (``_run_until_done``) so the ledger
+    teardown under test is the production one, not a hand-emptied dict.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, _ParentThenSubtaskMock(), event_bus=event_bus)
+    parent_id = tm.create_task(title="parent", user_input="父任务直接收尾")
+    _run_until_done(tm, parent_id)
+
+    res = tm._subagent.run_subtask(
+        SubTaskSpec(
+            subtask_id="sub:late",
+            name="writer",
+            instruction="把" + SUBTASK_MARKER + "写进 notes.txt",
+            parent_task_id=parent_id,
+        )
+    )
+
+    # Guard: the write really ran — the refusal below is about what happens to
+    # the file, not about a subtask that did nothing.
+    written = settings.artifacts_path / "notes.txt"
+    assert res.status == "completed"
+    assert [Path(p).resolve() for p in res.artifacts] == [written.resolve()]
+    assert written.read_text(encoding="utf-8") == "sub notes"
+
+    # The refusal: no record on the (reloaded) task, no event promising one.
+    reloaded = tm.persistence.load_task(parent_id)
+    assert reloaded is not None and reloaded.artifacts == []
+    parent_events = [e for e in event_bus.replay(parent_id) if e["type"] == "artifact_created"]
+    assert parent_events == []
+
+    # The trace: a warning naming the parent task, the subtask and the path.
+    traces = subagent_logs.messages(min_level=logging.WARNING)
+    assert any(
+        parent_id in m and "notes.txt" in m and "sub:late" in m for m in traces
+    ), traces

@@ -32,21 +32,31 @@ opencode 对文件系统打快照取 diff、pi 只在写类工具上渲染 diff�
   子任务只读时向父任务交回的 `artifacts` 为空是**期望行为**，不等于「子任务没干活」。
 - **同文件重写只一条**，且该记录的 `size` / `created_at` 停在**首次**登记值。S1 完成验证会重新 stat 磁盘，
   不受影响；前端产物行显示的是首次登记的元数据。
-- **去重作用域按任务**：子任务把文件交回父任务，同一物理路径在父、子名下各记一条——与 ADR 0003
-  「按运行各记一本账」同构，不是重复登记。
+- **去重作用域按任务**：dedupe 键是「任务内 resolved path」——两个任务碰同一个文件，各记各的
+  （`test_registration_is_per_task` 钉住）。**子任务写入只记父任务一条**（[#76](https://github.com/renjianguojinqianfan/langgraph-agent/issues/76) 修订本节）：
+  登记点收敛到 `subagent._exec_one` 的 hand-back 单点回记父任务，`tool_node` 不再以 subtask id
+  登记——子任务没有 `_active_states` 条目，那条登记本来落不了任何账本，只发一条幻影
+  `artifact_created` 并多一次 KB ingest。原「同一物理路径在父、子名下各记一条」的表述随 #76 作废。
 - **并发登记原子**：「查已登记 → 铸记录 → 追加入账」在 manager 锁（`TaskManager._lock`，与 resume
   claim 同一把）内一步完成——子任务跑在线程池上（`subagent_max_concurrency`），两个子任务同时把同一路径
   交回同一父任务时，无锁的 check-then-act 会双双未命中、双双登记（PR #77 评审 F1）。事件发布与 KB 入库
   留在锁外，订阅方与文件索引回调不会在持锁状态下运行。
 - **无活跃态即无账本**：去重比对的是 `TaskManager._active_states[task_id]["artifacts"]`；续跑时该表由
-  checkpoint 带回，不在表里的 id（子任务自己的 id 就是）没有可比对象，按原样登记。
+  checkpoint 带回，不在表里的 id 没有可比对象，按原样登记。#76 之后 subtask id 不再走到
+  `add_artifact`（登记收敛到 hand-back 单点，迟到 hand-back 由 `has_active_state` 拒绝并留痕）；
+  让迟到记录落到 `Task.artifacts` 是 [#106](https://github.com/renjianguojinqianfan/langgraph-agent/issues/106)（裁 B）的活。
 
-## 本票没顺手修的
+## 本票没顺手修的（#76 已跟进并落地）
 
-子任务跑的是同一个 `tool_node`，而它的 `runtime.task_id` 是 `subtask_id`，所以一次子任务 `write` 仍会调
+子任务跑的是同一个 `tool_node`，而它的 `runtime.task_id` 是 `subtask_id`，#72 落地时一次子任务 `write` 会调
 两次 `add_artifact`：一次记在子任务自己的 id 下（父任务产物表看不见它，只在子任务频道留一条
 `artifact_created`），一次由 `subagent.py` 回记到父任务。KB 自身按 resolved path 幂等，所以代价是一条
-多余事件 + 一次多余登记，而不是重复索引。#72 裁定不扩面，另票跟。
+多余事件 + 一次多余登记，而不是重复索引。#72 裁定不扩面，另票跟——即下述 #76，已落地。
+
+后续票 = [#76](https://github.com/renjianguojinqianfan/langgraph-agent/issues/76)：`tool_node` 在
+`_is_subtask` 为真时跳过登记，由 hand-back 单点回记父任务（一次 write 只登记一次、只发一条
+`artifact_created`，父频道）；父任务已终结时的迟到 hand-back 明确拒绝并留痕（日志）。「无活跃态即无账本」
+的下一句改动——让迟到记录落到 `Task.artifacts`——是 [#106](https://github.com/renjianguojinqianfan/langgraph-agent/issues/106)（裁 B）的活，与本节各改各的。
 
 ## 重开条件
 
