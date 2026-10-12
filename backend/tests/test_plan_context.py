@@ -170,6 +170,14 @@ def test_renderer_empty_plan_is_empty_string() -> None:
     assert render_plan_section([]) == ""
 
 
+def test_renderer_tolerates_bare_string_steps() -> None:
+    """非 dict 条目（``_mark_high_steps_skipped`` / ``risk.scan_keywords`` 同样容忍的
+    旧形态）降级成一条描述，而不是把 executor 的整次调用炸掉。"""
+    assert render_plan_section(["Research X", {"index": 9, "description": "Act"}]) == (
+        f"\n\n{PLAN_SECTION}\n1. [pending] Research X\n9. [pending] Act"
+    )
+
+
 # ── AC1: the executor sees the current plan ─────────────────────────────────
 def test_executor_sees_plan_first_round(tmp_path: Path) -> None:
     """AC1（首轮）：planner 产出计划后，executor 那次调用的 system 含其渲染。"""

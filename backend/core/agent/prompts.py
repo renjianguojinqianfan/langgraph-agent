@@ -55,14 +55,13 @@ def render_plan_section(plan: Sequence[Any]) -> str:
     if not plan:
         return ""
     lines: List[str] = [PLAN_SECTION]
-    for position, step in enumerate(plan, 1):
-        # ``_parse_plan`` always emits PlanStep dicts; the non-dict branch is the
-        # same legacy shape ``_mark_high_steps_skipped`` already tolerates.
-        if isinstance(step, dict):
-            index = step.get("index", position)
-            description = str(step.get("description", ""))
-            status = str(step.get("status") or "pending")
-        else:
-            index, description, status = position, str(step), "pending"
+    for position, raw in enumerate(plan, 1):
+        # ``_parse_plan`` always emits PlanStep dicts; a bare string is the same
+        # legacy shape ``_mark_high_steps_skipped`` and ``risk.scan_keywords``
+        # tolerate, so it degrades to a description instead of raising.
+        step = raw if isinstance(raw, dict) else {"description": str(raw)}
+        index = step.get("index", position)
+        description = str(step.get("description", ""))
+        status = str(step.get("status") or "pending")
         lines.append(f"{index}. [{status}] {description}")
     return "\n\n" + "\n".join(lines)
