@@ -351,9 +351,10 @@ classDiagram
 > ⚠️ **现役清单以下表为准，本文不写计数**（计数每次增删都要重推一遍，23→24 连续两代
 > 都错在这里；同 `AGENTS.md`「文档不写现役测试计数（数字必腐，以实跑为准）」一个道理）。
 > v0.1 只有 12 种，此后新增的都在下表行内标了来源。
-> **已退役、后端无发布点**（#56 起）：`subtask_start` / `subtask_result` /
-> `subtask_failed` —— 子任务失败改由一条失败的 tool call 带回、父任务不死；旧文档里
-> 还列着它们，别照抄计数。
+> `subtask_start` / `subtask_result` / `subtask_failed`：#56 删入口 B 时曾退役（后端零发布点），
+> **#70 裁定 A 已把生产者补回 `spawn_subagent` 路径**——三条汇总事件重发在**父频道**上，见下表末三行。
+> 「子任务失败改由一条失败的 tool call 带回、父任务不死」那半契约没变，两条并存。
+> 面板（`SubtaskList`）数据源是 REST 的 `Task.subtasks`，不吃这三条事件；事件只进 Trace 时间线。
 > 前端两处注册表：`frontend/src/hooks/useSSE.ts` 的 `EVENT_TYPES`（EventSource **只派发注册过的
 > 类型**——漏注册不是「显示不全」，是静默收不到）与 `frontend/src/types/index.ts` 的
 > `SSEventType` 联合。本表、两处注册表与后端发布点由 `npm run check:sse` 逐条对齐，已接进 CI 的
@@ -386,6 +387,9 @@ classDiagram
 | `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |
 | `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|
 | `task_rollback` | `{task_id, ok, files, already_original}` | 工作区回滚完成（P1-B，`files` = 实际变动的沙箱内路径） |
+| `subtask_start` | `{subtask_id, name, status, parent_task_id}` | 子任务已派生（#70 裁定 A 恢复；**只发在父频道**，子任务自己的频道不带） |
+| `subtask_result` | `{subtask_id, name, status, summary, artifacts}` | 子任务 `completed` 的折叠回传（#70 裁定 A；父频道） |
+| `subtask_failed` | `{subtask_id, name, error}` | 子任务超时 / worker 崩溃 / 折回 `failed`（#70 裁定 A；父频道，与一条失败的 `tool_result` 并存、父任务不死） |
 | `heartbeat` | `{}` | 保活（每 15s） |
 
 ---
