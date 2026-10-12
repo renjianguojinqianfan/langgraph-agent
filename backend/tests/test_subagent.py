@@ -1324,7 +1324,11 @@ def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "UNVERIFIED"
-    assert task.subtasks == []  # 入口 B 的折叠摘要字段已无生产者
+    # #70 裁定 A 重裁（原断 == []，钉 #56「无生产者」）：崩掉的子任务也如实登一条
+    # failed——派出去过又折回来的，面板与 REST 都得说得出。
+    assert len(task.subtasks) == 1
+    assert task.subtasks[0].status == "failed"
+    assert "crashed" in (task.subtasks[0].error or "")
     results = [
         e["data"]
         for e in event_bus.replay(task_id)
@@ -1332,8 +1336,14 @@ def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
     ]
     assert results and results[0]["status"] == "failed"
     assert "crashed" in results[0]["error"]
-    # 入口 B 的事件词汇表随节点一起消失，父频道上只剩这次失败。
-    assert not [e for e in event_bus.replay(task_id) if "subtask" in e["type"]]
+    # #70 裁定 A 重裁（原断「父频道没有任何 subtask 事件」，钉 #56 的退役词汇表）：
+    # 崩溃的派生同样在父频道留下汇总事件——一条 start、一条 failed，没有 result；
+    # 「父频道上只剩这次失败」的那条失败 tool_result 原样还在（上面已断）。
+    parent_events = event_bus.replay(task_id)
+    types = [e["type"] for e in parent_events]
+    assert types.count("subtask_start") == 1
+    assert types.count("subtask_failed") == 1
+    assert "subtask_result" not in types
     assert not (settings.artifacts_path / _EscalatingSubtaskMock.REPORT).exists()
 
 

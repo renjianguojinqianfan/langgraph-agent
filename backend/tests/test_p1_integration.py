@@ -89,11 +89,13 @@ def test_p1_events_in_main_channel(tmp_path, event_bus):
     # Risk scan ran (default enabled) and published its report.
     assert "risk_report" in types
     # The delegation is an ordinary, approved tool call on the parent channel —
-    # and the keyword-triggered summary events are gone with entry B (#56).
+    # and since #70 ruling A the summary events are back on it as well (they were
+    # retired with entry B in #56; the re-adjudication lives in the ticket).
     spawn = _spawn_result(event_bus.replay(task_id))
     assert spawn and spawn[0]["status"] == "success"
     assert spawn[0]["output"]["status"] == "completed"
-    assert types.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
+    assert {"subtask_start", "subtask_result"} <= types
+    assert "subtask_failed" not in types
     # Parent artifacts include the subtask file via KB auto-index + artifact.
     assert any("p1_notes.txt" in a.filename for a in task.artifacts)
 
@@ -123,8 +125,11 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
     # One approved delegation actually ran the research leg.
     assert mock.subtask_turns >= 2
     assert _spawn_result(event_bus.replay(task_id))[0]["status"] == "success"
-    # ``state["subtasks"]`` belonged to entry B; nothing produces it now (#56).
-    assert task.subtasks == []
+    # #70 裁定 A 重裁（原断 == []，钉 #56「生产者已断」）：spawn 路径把子任务回传
+    # 回登进 ``Task.subtasks``——一次真实派生 = 一条 completed 记录。
+    assert len(task.subtasks) == 1
+    assert task.subtasks[0].status == "completed"
+    assert task.subtasks[0].subtask_id.startswith("spawn:sub:")
     # KB auto-indexed the artifact produced by the research subtask.
     hits = tm._kb.retrieve("P1 integration notes", top_k=3)
     assert len(hits) >= 1

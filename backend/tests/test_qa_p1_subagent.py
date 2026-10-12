@@ -7,9 +7,10 @@ Issue #56 collapsed the feature to one entry point, so the QA angle is now:
 * the parent's context carries only the folded digest (as a *tool* turn, never
   replayed as an assistant one — #51), never the subtask's internal messages;
 * subtask internal events live on the subtask's own channel, not the parent's;
-* nothing publishes the removed ``subtask_start`` / ``subtask_result`` /
-  ``subtask_failed`` events any more — a failing subtask rides back as a failed
-  tool call and the parent stays alive;
+* #70 ruling A restored the ``subtask_start`` / ``subtask_result`` /
+  ``subtask_failed`` summary events on the **parent** channel only (spawn path) —
+  a failing subtask additionally rides back as a failed tool call, and the parent
+  stays alive;
 * a subtask can never strand a confirmation (no gate in its graph, and no
   gated tool on its face);
 * ``subagent_enabled=False`` removes the entry point from the tool face.
@@ -219,8 +220,7 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
 
     Rewrite of the old «父消息只含折叠摘要» case: entry B wrote a ``system``
     digest into the parent state and filled ``state["subtasks"]``; the surviving
-    path hands the digest back as the *tool result* of the spawn call, and
-    ``subtasks`` has no producer left.
+    path hands the digest back as the *tool result* of the spawn call.
     """
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _SpawnOnceMock())
@@ -239,7 +239,10 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
     final = graph.invoke(_main_state("派个子任务给一句话结论"))
 
     assert final["status"] == "COMPLETED"
-    assert final["subtasks"] == []
+    # #70 裁定 A 重裁（原断 == []，钉 #56 的「生产者已断」）：spawn 路径把折叠回传
+    # 回登进图状态，本用例正好是它的图级落点；上下文隔离的本体（消息面只有 tool 轮）
+    # 一条没少，见下。
+    assert final["subtasks"] and final["subtasks"][0]["status"] == "completed"
 
     messages = final["messages"]
     roles = [m.get("role") for m in messages]
@@ -299,8 +302,13 @@ def test_subtask_internal_events_stay_on_subtask_channel(tmp_path, event_bus):
     assert any(e["type"] == "artifact_created" for e in parent_events)
 
 
-def test_no_channel_ever_publishes_the_removed_subtask_events(tmp_path, event_bus):
-    """入口 B 的三个事件名随节点一起作废：成功与失败路径都不该再出现。"""
+def test_summary_events_land_on_parent_channel_not_subtask_channel(tmp_path, event_bus):
+    """#70 裁定 A 重裁（原断「两个频道都不该再出现」，钉的是 #56 的退役契约）。
+
+    父频道补回了这三条汇总事件（载荷与顺序见
+    ``test_summary_events_publish_on_the_parent_channel``）；本用例钉没变的那半——
+    子任务内部频道依旧只带它自己的轮次，汇总事件不回灌进去。
+    """
     settings = make_settings(tmp_path)
     mock = _QaResearchMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -313,10 +321,11 @@ def test_no_channel_ever_publishes_the_removed_subtask_events(tmp_path, event_bu
         for e in event_bus.replay(task_id)
         if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
     )
-    seen = {e["type"] for e in event_bus.replay(task_id)} | {
-        e["type"] for e in event_bus.replay(subtask_id)
-    }
-    assert seen.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
+    parent_seen = {e["type"] for e in event_bus.replay(task_id)}
+    assert {"subtask_start", "subtask_result"} <= parent_seen
+    assert "subtask_failed" not in parent_seen  # 这条研究腿成功了
+    sub_seen = {e["type"] for e in event_bus.replay(subtask_id)}
+    assert sub_seen.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
 
 
 def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
@@ -343,7 +352,12 @@ def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "UNVERIFIED"
-    assert task.subtasks == []
+    # #70 裁定 A 重裁（原断 == []，钉 #56 的「无生产者」）：崩掉的子任务也如实登一条
+    # failed ——面板上「派出去又折回来的失败」必须看得见，不是「暂无子任务」。
+    # 「不跟着子任务一起崩」「失败经工具面回传」两条原钉子一条没少。
+    assert len(task.subtasks) == 1
+    assert task.subtasks[0].status == "failed"
+    assert "crashed" in (task.subtasks[0].error or "")
     results = [
         e["data"]
         for e in event_bus.replay(task_id)
@@ -464,3 +478,75 @@ def test_subagent_enabled_still_shares_one_executor_with_the_tool(tmp_path):
     tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
     tool = next(t for t in tm._tools if t.name == "spawn_subagent")
     assert tool.executor is tm._subagent
+
+
+# ── #70 裁定 A：spawn 路径补回观测生产者 ─────────────────────────────────────
+def test_spawned_subtask_lands_on_task_subtasks(tmp_path, event_bus):
+    """#70 第一步：一次真实派生 = 父任务记录上一条 ``Task.subtasks``。
+
+    #56 删入口 B 时顺手断了 ``state["subtasks"]`` 的唯一生产者，REST 字段与前端
+    ``SubtaskList`` 从此恒空（票面称之为「骗人面」）。裁定 A 把生产者补回 spawn
+    路径：``tool_node`` 处理 ``spawn_subagent`` 结果时把折叠回传登进图状态，
+    ``_finalize_terminal`` 原样拷进 ``Task.subtasks``。
+    """
+    settings = make_settings(tmp_path)
+    mock = _SpawnOnceMock()
+    tm = make_manager(settings, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="qa-obs", user_input="派个子任务给一句话结论")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
+    task = _run_until_done(tm, task_id)
+
+    assert task.status.value == "COMPLETED"
+    assert mock.subtask_turns >= 1
+    spawn = [
+        e["data"]
+        for e in event_bus.replay(task_id)
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
+    ]
+    assert spawn and spawn[0]["status"] == "success"
+
+    assert len(task.subtasks) == 1
+    st = task.subtasks[0]
+    assert st.subtask_id == spawn[0]["output"]["subtask_id"]
+    assert st.subtask_id.startswith("spawn:sub:")
+    assert st.name == "probe"
+    assert st.status == "completed"
+    assert st.summary == SUBTASK_ANSWER
+
+
+def test_summary_events_publish_on_the_parent_channel(tmp_path, event_bus):
+    """#70 第二步：一次真实派生在父频道 = 一条 ``subtask_start`` + 一条 ``subtask_result``。
+
+    事件面随裁定 A 恢复词汇表：``SubAgentExecutor.run_subtask`` 在父线程上发布——
+    提交池之前发 start（status=running），回折之后按结果发终态。时间线顺序是
+    「派出 → 回传 → spawn 的 tool_result」，载荷沿用入口 B 当年的键名。
+    """
+    settings = make_settings(tmp_path)
+    mock = _SpawnOnceMock()
+    tm = make_manager(settings, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="qa-obs-ev", user_input="派个子任务给一句话结论")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
+    _run_until_done(tm, task_id)
+
+    events = event_bus.replay(task_id)
+    types = [e["type"] for e in events]
+    assert types.count("subtask_start") == 1
+    assert types.count("subtask_result") == 1
+    assert "subtask_failed" not in types
+    start = next(e for e in events if e["type"] == "subtask_start")
+    result = next(e for e in events if e["type"] == "subtask_result")
+    spawn_result = next(
+        e
+        for e in events
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
+    )
+    assert events.index(start) < events.index(result) < events.index(spawn_result)
+
+    assert start["data"]["subtask_id"].startswith("spawn:sub:")
+    assert start["data"]["name"] == "probe"
+    assert start["data"]["status"] == "running"
+    assert start["data"]["parent_task_id"] == task_id
+    assert result["data"]["subtask_id"] == start["data"]["subtask_id"]
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["summary"] == SUBTASK_ANSWER
+    assert result["data"]["artifacts"] == []
