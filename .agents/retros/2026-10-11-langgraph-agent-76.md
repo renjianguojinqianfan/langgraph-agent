@@ -8,7 +8,7 @@
 
 ## 候选（按严重度）
 
-### C1. PR 面无「票号 + Closes」机械门 · Automated checks · 复现 2/2
+### C1. PR 面无「票号 + Closes」机械门 · Automated checks · 复现 2/2 · **已决：不建（用户 2026-10-12 拍板）**
 
 - **事实**：`docs/agents/workflow.md` 步 4 把「标题带票号（Closes #N）」写成硬惯例；
   全仓唯一机械校验 `scripts/validate_commit_msg.py` 只管 commit 消息且只经本地钩子
@@ -20,6 +20,10 @@
   关票会灭掉第二步 AC）。修法方向据此修正：机械门不能只认 `Closes|Fixes|Resolves`
   三件套，必须放行「显式 `Refs #N` + 一句理由」的形态，否则门禁会逼出误关。
   证据：PR #121 范围段 + 评审结论评论（issuecomment-6110071986）。
+- **决断记录**：用户 2026-10-12 拍板**不建**该机械门。在账理由（拍板后补的旁证，
+  非拍板依据）：C1 两起复现之后的本波四张 PR（#121/#123/#112/#107）标题票号与收口
+  关键字全部正确（含 #121 正当使用 `Refs`、#112/#107 用 `Closes`），现有约定+评审
+  人肉核未再漏——门禁的边际价值不成立，维持现状。
 - **修法方向**（建检查，不写规则）：`validate_commit_msg.py` 的 `evaluate()` 提为可
   复用函数 + `pull_request` CI job——非 docs 类 PR 必须含 `#\d+`，且收口关键字三选
   一：`Closes|Fixes|Resolves`，或显式 `Refs #N` + 理由（两步 scope 票的正当形态，
