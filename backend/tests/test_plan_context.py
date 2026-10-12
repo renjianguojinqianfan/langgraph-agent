@@ -320,6 +320,37 @@ def test_plan_section_sits_after_inject_block(tmp_path: Path, tmp_home: Path) ->
     assert system.index(ENV_SECTION) < system.index(PLAN_SECTION)
 
 
+def test_plan_section_survives_disabled_injection(
+    tmp_path: Path, tmp_home: Path
+) -> None:
+    """README 那句改写措辞的回归锚：计划块**不受** ``context_inject_enabled`` 管辖。
+
+    「关掉 AGENTS.md 注入」和「关掉计划的供给」不是一件事，本票把它写成了文档里的新真相，
+    所以钉成机械断言而不是留在散文里。**显式**关注入、**显式**给非空 plan——不依赖 conftest
+    那条进程级 ``CONTEXT_INJECT_ENABLED=false``，那个默认值哪天翻转这条断言也不失守。
+    """
+    settings = _settings(tmp_path, context_inject_enabled=False)
+    sandbox = Path(settings.artifacts_path)
+    sandbox.mkdir(parents=True, exist_ok=True)
+    (sandbox / "AGENTS.md").write_text("SANDBOX-RULES", encoding="utf-8")
+    home_agents = tmp_home / ".agents"
+    home_agents.mkdir(parents=True, exist_ok=True)
+    (home_agents / "AGENTS.md").write_text("HOME-RULES", encoding="utf-8")
+    llm = _FakeLLM()
+    rt = _runtime(settings, llm)
+
+    rt.executor(_state(plan=_plan("Alpha")))
+
+    system = llm.executor_systems[-1]
+    # 注入块确实被这个开关关掉了——两层文件此刻都在盘上有内容，所以「不在」不是空断言。
+    assert "SANDBOX-RULES" not in system and "HOME-RULES" not in system
+    assert ENV_SECTION not in system
+    # 计划块照在场：开关只管上面三段，管不到它。
+    assert PLAN_SECTION in system
+    assert "1. [pending] Alpha" in system
+    assert system == EXECUTOR_SYSTEM + render_plan_section(_plan("Alpha"))
+
+
 def test_executor_with_empty_plan_is_unchanged(tmp_path: Path) -> None:
     """零回归面：plan 为空时 executor 的 system 与 #119 之前逐字相同。"""
     settings = _settings(tmp_path, context_token_budget=1, context_keep_recent=2)
