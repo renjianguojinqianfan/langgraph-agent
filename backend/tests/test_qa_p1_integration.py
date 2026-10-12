@@ -159,7 +159,9 @@ def test_journey_subagent_spawn_summary_artifact_kb(tmp_path, event_bus):
     assert spawn[0]["output"]["summary"]
     # The deleted split entry leaves no event vocabulary behind (#56).
     assert types.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
-    assert task.subtasks == []
+    # #70 裁定 A 重裁（原断 == []）：一次批准的真实派生回登一条 completed 子任务。
+    assert len(task.subtasks) == 1
+    assert task.subtasks[0].status == "completed"
     # Subtask-produced file handed back to the parent artifacts (item 2)...
     assert any("qa_report_notes.md" in a.filename for a in task.artifacts)
     # ...while its own tool call stayed on the subtask channel.

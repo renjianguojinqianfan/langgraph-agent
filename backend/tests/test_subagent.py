@@ -1324,7 +1324,11 @@ def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "UNVERIFIED"
-    assert task.subtasks == []  # 入口 B 的折叠摘要字段已无生产者
+    # #70 裁定 A 重裁（原断 == []，钉 #56「无生产者」）：崩掉的子任务也如实登一条
+    # failed——派出去过又折回来的，面板与 REST 都得说得出。
+    assert len(task.subtasks) == 1
+    assert task.subtasks[0].status == "failed"
+    assert "crashed" in (task.subtasks[0].error or "")
     results = [
         e["data"]
         for e in event_bus.replay(task_id)

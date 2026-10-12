@@ -219,8 +219,7 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
 
     Rewrite of the old «父消息只含折叠摘要» case: entry B wrote a ``system``
     digest into the parent state and filled ``state["subtasks"]``; the surviving
-    path hands the digest back as the *tool result* of the spawn call, and
-    ``subtasks`` has no producer left.
+    path hands the digest back as the *tool result* of the spawn call.
     """
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _SpawnOnceMock())
@@ -239,7 +238,10 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
     final = graph.invoke(_main_state("派个子任务给一句话结论"))
 
     assert final["status"] == "COMPLETED"
-    assert final["subtasks"] == []
+    # #70 裁定 A 重裁（原断 == []，钉 #56 的「生产者已断」）：spawn 路径把折叠回传
+    # 回登进图状态，本用例正好是它的图级落点；上下文隔离的本体（消息面只有 tool 轮）
+    # 一条没少，见下。
+    assert final["subtasks"] and final["subtasks"][0]["status"] == "completed"
 
     messages = final["messages"]
     roles = [m.get("role") for m in messages]
@@ -343,7 +345,12 @@ def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "UNVERIFIED"
-    assert task.subtasks == []
+    # #70 裁定 A 重裁（原断 == []，钉 #56 的「无生产者」）：崩掉的子任务也如实登一条
+    # failed ——面板上「派出去又折回来的失败」必须看得见，不是「暂无子任务」。
+    # 「不跟着子任务一起崩」「失败经工具面回传」两条原钉子一条没少。
+    assert len(task.subtasks) == 1
+    assert task.subtasks[0].status == "failed"
+    assert "crashed" in (task.subtasks[0].error or "")
     results = [
         e["data"]
         for e in event_bus.replay(task_id)
@@ -464,3 +471,37 @@ def test_subagent_enabled_still_shares_one_executor_with_the_tool(tmp_path):
     tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
     tool = next(t for t in tm._tools if t.name == "spawn_subagent")
     assert tool.executor is tm._subagent
+
+
+# ── #70 裁定 A：spawn 路径补回观测生产者 ─────────────────────────────────────
+def test_spawned_subtask_lands_on_task_subtasks(tmp_path, event_bus):
+    """#70 第一步：一次真实派生 = 父任务记录上一条 ``Task.subtasks``。
+
+    #56 删入口 B 时顺手断了 ``state["subtasks"]`` 的唯一生产者，REST 字段与前端
+    ``SubtaskList`` 从此恒空（票面称之为「骗人面」）。裁定 A 把生产者补回 spawn
+    路径：``tool_node`` 处理 ``spawn_subagent`` 结果时把折叠回传登进图状态，
+    ``_finalize_terminal`` 原样拷进 ``Task.subtasks``。
+    """
+    settings = make_settings(tmp_path)
+    mock = _SpawnOnceMock()
+    tm = make_manager(settings, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="qa-obs", user_input="派个子任务给一句话结论")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
+    task = _run_until_done(tm, task_id)
+
+    assert task.status.value == "COMPLETED"
+    assert mock.subtask_turns >= 1
+    spawn = [
+        e["data"]
+        for e in event_bus.replay(task_id)
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
+    ]
+    assert spawn and spawn[0]["status"] == "success"
+
+    assert len(task.subtasks) == 1
+    st = task.subtasks[0]
+    assert st.subtask_id == spawn[0]["output"]["subtask_id"]
+    assert st.subtask_id.startswith("spawn:sub:")
+    assert st.name == "probe"
+    assert st.status == "completed"
+    assert st.summary == SUBTASK_ANSWER

@@ -123,8 +123,11 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
     # One approved delegation actually ran the research leg.
     assert mock.subtask_turns >= 2
     assert _spawn_result(event_bus.replay(task_id))[0]["status"] == "success"
-    # ``state["subtasks"]`` belonged to entry B; nothing produces it now (#56).
-    assert task.subtasks == []
+    # #70 裁定 A 重裁（原断 == []，钉 #56「生产者已断」）：spawn 路径把子任务回传
+    # 回登进 ``Task.subtasks``——一次真实派生 = 一条 completed 记录。
+    assert len(task.subtasks) == 1
+    assert task.subtasks[0].status == "completed"
+    assert task.subtasks[0].subtask_id.startswith("spawn:sub:")
     # KB auto-indexed the artifact produced by the research subtask.
     hits = tm._kb.retrieve("P1 integration notes", top_k=3)
     assert len(hits) >= 1
