@@ -131,6 +131,64 @@ def test_factory_uses_explicit_base_url_when_provided():
     assert client.base_url == "https://my.gw/v1"
 
 
+# ── Issue #108: injectable offline mock script ──
+def _write_script(tmp_path, payload: Dict[str, Any]) -> str:
+    p = tmp_path / "mock_script.json"
+    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return str(p)
+
+
+def test_factory_reads_mock_llm_script_path(tmp_path):
+    """A preset script carrying a confirm-requiring call is what the factory hands out.
+
+    This is the seam #108 exists for: offline (no key) the server-side client must be
+    able to drive ``code_exec`` so the human_confirm gate actually opens in the browser.
+    """
+    path = _write_script(
+        tmp_path,
+        {
+            "plan": ["Run a probe command"],
+            "tool_calls": [
+                {
+                    "id": "call_exec",
+                    "name": "code_exec",
+                    "arguments": {"language": "python", "code": "print('probe')"},
+                }
+            ],
+            "final_answer": "mock confirm demo finished.",
+        },
+    )
+    client = create_llm_client(Settings(use_mock_llm=True, mock_llm_script_path=path))
+
+    assert isinstance(client, MockLLMClient)
+    assert client.plan == ["Run a probe command"]
+    assert client.final_answer == "mock confirm demo finished."
+    assert [tc["name"] for tc in client.tool_calls] == ["code_exec"]
+    assert client.tool_calls[0]["arguments"] == {"language": "python", "code": "print('probe')"}
+
+
+def test_factory_falls_back_to_default_script_when_injected_script_unreadable(tmp_path):
+    """「读不到保持现状」: a missing / invalid / empty path hands out the built-in script.
+
+    The default path is the zero-regression promise — an unusable injection must not
+    change what ``use_mock_llm`` produces, it must only not override it.
+    """
+    expected = [tc["name"] for tc in make_default_mock_client().tool_calls]
+
+    missing = create_llm_client(
+        Settings(use_mock_llm=True, mock_llm_script_path=str(tmp_path / "absent.json"))
+    )
+    assert [tc["name"] for tc in missing.tool_calls] == expected
+
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    invalid = create_llm_client(Settings(use_mock_llm=True, mock_llm_script_path=str(broken)))
+    assert [tc["name"] for tc in invalid.tool_calls] == expected
+
+    unset = create_llm_client(Settings(use_mock_llm=True, mock_llm_script_path=""))
+    assert [tc["name"] for tc in unset.tool_calls] == expected
+
+
 def test_llm_client_passes_bounded_request_timeout(monkeypatch):
     """Issue #13: one hung provider request must not eat the whole run budget —
     the SDK's own default is 600s."""
