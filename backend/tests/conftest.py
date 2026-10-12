@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 # ── Offline isolation (MUST run before any `backend.config` import) ──
 os.environ.setdefault("USE_MOCK_LLM", "true")
+os.environ.setdefault("MOCK_LLM_SCRIPT_PATH", "")  # #108: a local .env script must not steer the suite
 os.environ.setdefault("LLM_BASE_URL", "")  # neutralise .env live endpoint
 os.environ.setdefault("LLM_API_KEY", "")
 os.environ.setdefault("AUX_LLM_ENABLED", "false")
