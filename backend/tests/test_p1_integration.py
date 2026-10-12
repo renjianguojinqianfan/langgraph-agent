@@ -89,11 +89,13 @@ def test_p1_events_in_main_channel(tmp_path, event_bus):
     # Risk scan ran (default enabled) and published its report.
     assert "risk_report" in types
     # The delegation is an ordinary, approved tool call on the parent channel —
-    # and the keyword-triggered summary events are gone with entry B (#56).
+    # and since #70 ruling A the summary events are back on it as well (they were
+    # retired with entry B in #56; the re-adjudication lives in the ticket).
     spawn = _spawn_result(event_bus.replay(task_id))
     assert spawn and spawn[0]["status"] == "success"
     assert spawn[0]["output"]["status"] == "completed"
-    assert types.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
+    assert {"subtask_start", "subtask_result"} <= types
+    assert "subtask_failed" not in types
     # Parent artifacts include the subtask file via KB auto-index + artifact.
     assert any("p1_notes.txt" in a.filename for a in task.artifacts)
 

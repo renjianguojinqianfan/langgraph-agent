@@ -119,7 +119,8 @@ export interface RiskReportData {
 
 // --- P1 item 2: sub-agent ---
 
-/** 子任务快照：只来自 REST 的 `Task.subtasks`；#56 起子任务没有独立事件流。 */
+/** 子任务快照：面板只吃 REST 的 `Task.subtasks`（生产者由 #70-A 在 spawn 路径补回）；
+ * 三条 `subtask_*` 汇总事件走父频道、只进 Trace 时间线，不喂本快照。 */
 export interface SubTask {
   subtask_id: string;
   name: string;
@@ -197,8 +198,8 @@ export interface ApiResponse<T = any> {
  * 由 `scripts/check-sse-event-registry.mjs` 机械断言。
  * `trace_end` 是唯一多出来的成员：`TraceRecorder.close()` 把它直写进 trace JSONL、
  * 从不进 EventBus，所以 trace 回放面要认它，而 SSE 订阅表里没有它。
- * #56 起退役、后端零发布点的 `subtask_start` / `subtask_result` / `subtask_failed`
- * 已从本联合与订阅表删除（子任务的失败改由一条失败的 tool call 带回）。
+ * `subtask_start` / `subtask_result` / `subtask_failed` 随 #70 裁定 A 回到词汇表
+ * （#56 删入口 B 时退役，spawn 路径补回生产者后重发在父频道上）。
  */
 export type SSEventType =
   | "task_created"
@@ -222,6 +223,9 @@ export type SSEventType =
   | "tool_result_evicted" // T1.4: {tool_call_id, tool_name, original_chars, step_index}
   | "risk_report" // P1: {items, policy, semantic_enabled}
   | "risk_found" // P1: RiskItem
+  | "subtask_start" // #70-A: {subtask_id, name, status, parent_task_id}（父频道）
+  | "subtask_result" // #70-A: {subtask_id, name, status, summary, artifacts}（父频道）
+  | "subtask_failed" // #70-A: {subtask_id, name, error}（父频道）
   | "trace_end" // 仅 trace 回放面（见上方说明）
   | "heartbeat";
 

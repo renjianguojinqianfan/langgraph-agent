@@ -223,19 +223,63 @@ class SubAgentExecutor:
         finishes, and a tool batch runs only if ``tool_node`` had already passed
         its entry check (it polls once, not per call). As narrow as cooperative
         cancellation gets — see :meth:`_request_worker_stop`.
+
+        Summary events (#70 ruling A, restoring what #56 retired with entry B):
+        with a known parent channel, ``subtask_start`` is published here before
+        the submit and exactly one terminal event (``subtask_result`` /
+        ``subtask_failed``) after the fold — all on the parent's own thread,
+        which is also where the timeout fold happens, so a worker that finishes
+        late can never double-publish. A parent-less direct call (no
+        ``parent_task_id`` and no seated contextvar) publishes nothing.
         """
+        parent = spec.parent_task_id or get_current_task_id() or ""
+        if parent:
+            self.tm.event_bus.publish(
+                parent,
+                "subtask_start",
+                {
+                    "subtask_id": spec.subtask_id,
+                    "name": spec.name,
+                    "status": "running",
+                    "parent_task_id": parent,
+                },
+            )
         future = self._pool.submit(self._exec_one, spec)
         try:
-            return future.result(timeout=self.settings.subagent_timeout_sec)
+            result = future.result(timeout=self.settings.subagent_timeout_sec)
         except Exception as exc:  # timeout / worker crash
             self._request_worker_stop(future, spec)
             logger.warning("subtask %s aborted: %s", spec.subtask_id, exc)
-            return SubTaskResult(
+            result = SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="failed",
                 error=f"subtask timeout or worker error: {exc}",
             )
+        if parent:
+            if result.status == "completed":
+                self.tm.event_bus.publish(
+                    parent,
+                    "subtask_result",
+                    {
+                        "subtask_id": result.subtask_id,
+                        "name": result.name,
+                        "status": result.status,
+                        "summary": result.summary,
+                        "artifacts": list(result.artifacts),
+                    },
+                )
+            else:
+                self.tm.event_bus.publish(
+                    parent,
+                    "subtask_failed",
+                    {
+                        "subtask_id": result.subtask_id,
+                        "name": result.name,
+                        "error": result.error or "unknown error",
+                    },
+                )
+        return result
 
     def check_face(self, spec: SubTaskSpec) -> List[str]:
         """The tool names ``spec`` would get, without running anything.

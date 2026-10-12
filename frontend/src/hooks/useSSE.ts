@@ -32,6 +32,9 @@ const EVENT_TYPES: SSEventType[] = [
   "tool_result_evicted", // T1.4 旧的大段 tool 结果换成占位
   "risk_report", // P1: {items, policy, semantic_enabled}
   "risk_found", // P1: RiskItem
+  "subtask_start", // #70-A: 子任务派生（父频道）
+  "subtask_result", // #70-A: 子任务回传（父频道）
+  "subtask_failed", // #70-A: 子任务失败（父频道）
   "heartbeat",
 ];
 

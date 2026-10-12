@@ -7,9 +7,10 @@ Issue #56 collapsed the feature to one entry point, so the QA angle is now:
 * the parent's context carries only the folded digest (as a *tool* turn, never
   replayed as an assistant one — #51), never the subtask's internal messages;
 * subtask internal events live on the subtask's own channel, not the parent's;
-* nothing publishes the removed ``subtask_start`` / ``subtask_result`` /
-  ``subtask_failed`` events any more — a failing subtask rides back as a failed
-  tool call and the parent stays alive;
+* #70 ruling A restored the ``subtask_start`` / ``subtask_result`` /
+  ``subtask_failed`` summary events on the **parent** channel only (spawn path) —
+  a failing subtask additionally rides back as a failed tool call, and the parent
+  stays alive;
 * a subtask can never strand a confirmation (no gate in its graph, and no
   gated tool on its face);
 * ``subagent_enabled=False`` removes the entry point from the tool face.
@@ -301,8 +302,13 @@ def test_subtask_internal_events_stay_on_subtask_channel(tmp_path, event_bus):
     assert any(e["type"] == "artifact_created" for e in parent_events)
 
 
-def test_no_channel_ever_publishes_the_removed_subtask_events(tmp_path, event_bus):
-    """入口 B 的三个事件名随节点一起作废：成功与失败路径都不该再出现。"""
+def test_summary_events_land_on_parent_channel_not_subtask_channel(tmp_path, event_bus):
+    """#70 裁定 A 重裁（原断「两个频道都不该再出现」，钉的是 #56 的退役契约）。
+
+    父频道补回了这三条汇总事件（载荷与顺序见
+    ``test_summary_events_publish_on_the_parent_channel``）；本用例钉没变的那半——
+    子任务内部频道依旧只带它自己的轮次，汇总事件不回灌进去。
+    """
     settings = make_settings(tmp_path)
     mock = _QaResearchMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -315,10 +321,11 @@ def test_no_channel_ever_publishes_the_removed_subtask_events(tmp_path, event_bu
         for e in event_bus.replay(task_id)
         if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
     )
-    seen = {e["type"] for e in event_bus.replay(task_id)} | {
-        e["type"] for e in event_bus.replay(subtask_id)
-    }
-    assert seen.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
+    parent_seen = {e["type"] for e in event_bus.replay(task_id)}
+    assert {"subtask_start", "subtask_result"} <= parent_seen
+    assert "subtask_failed" not in parent_seen  # 这条研究腿成功了
+    sub_seen = {e["type"] for e in event_bus.replay(subtask_id)}
+    assert sub_seen.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
 
 
 def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
@@ -505,3 +512,41 @@ def test_spawned_subtask_lands_on_task_subtasks(tmp_path, event_bus):
     assert st.name == "probe"
     assert st.status == "completed"
     assert st.summary == SUBTASK_ANSWER
+
+
+def test_summary_events_publish_on_the_parent_channel(tmp_path, event_bus):
+    """#70 第二步：一次真实派生在父频道 = 一条 ``subtask_start`` + 一条 ``subtask_result``。
+
+    事件面随裁定 A 恢复词汇表：``SubAgentExecutor.run_subtask`` 在父线程上发布——
+    提交池之前发 start（status=running），回折之后按结果发终态。时间线顺序是
+    「派出 → 回传 → spawn 的 tool_result」，载荷沿用入口 B 当年的键名。
+    """
+    settings = make_settings(tmp_path)
+    mock = _SpawnOnceMock()
+    tm = make_manager(settings, mock, event_bus=event_bus)
+    task_id = tm.create_task(title="qa-obs-ev", user_input="派个子任务给一句话结论")
+    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
+    _run_until_done(tm, task_id)
+
+    events = event_bus.replay(task_id)
+    types = [e["type"] for e in events]
+    assert types.count("subtask_start") == 1
+    assert types.count("subtask_result") == 1
+    assert "subtask_failed" not in types
+    start = next(e for e in events if e["type"] == "subtask_start")
+    result = next(e for e in events if e["type"] == "subtask_result")
+    spawn_result = next(
+        e
+        for e in events
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
+    )
+    assert events.index(start) < events.index(result) < events.index(spawn_result)
+
+    assert start["data"]["subtask_id"].startswith("spawn:sub:")
+    assert start["data"]["name"] == "probe"
+    assert start["data"]["status"] == "running"
+    assert start["data"]["parent_task_id"] == task_id
+    assert result["data"]["subtask_id"] == start["data"]["subtask_id"]
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["summary"] == SUBTASK_ANSWER
+    assert result["data"]["artifacts"] == []
