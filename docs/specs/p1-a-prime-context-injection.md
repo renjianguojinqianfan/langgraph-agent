@@ -67,7 +67,7 @@
 
 - 段间以单个空行分隔；三个段标题文案为实现常量，测试中作为锚点字符串断言。
 - 某一层 AGENTS.md 缺失 → 该层小标题与内容整体不出现（不是空标题）；某段整体无内容 → 段标题不出现。
-- **三段全空时注入块为空串，system 与改造前逐字节相同**——这是零回归锚（§四-5.1 断言）。
+- **三段全空时注入块为空串，system 与改造前逐字节相同**——这是零回归锚（§四-5.1 断言）。#119 起此句要加限定：**注入层自身**这个结论一字未变，但 executor 的真实调用点在此之上还会拼一段 `# Current Plan`（plan 非空时），所以「整个 system 逐字节相同」只在**默认形态（`include_plan=False`）+ 空计划**前提下成立，见 §5.2 的现状修正注。
 
 ### 3.2 AGENTS.md 合并块
 
@@ -141,7 +141,7 @@
 
 | 用例 | 构造 | 断言 |
 |---|---|---|
-| test_disabled_byte_identical | `context_inject_enabled=False` + 两层全放内容 | `_build_messages` 返回的 system 与改造前逐字节相同（零回归锚） |
+| test_disabled_byte_identical | `context_inject_enabled=False` + 两层全放内容 | `_build_messages` 返回的 system 与改造前逐字节相同（零回归锚）。**#119 起限定：默认形态（`include_plan=False`）+ 空计划前提**——计划块不受本开关管辖，那半由 `test_plan_context.py::test_plan_section_survives_disabled_injection` 单独钉 |
 | test_settings_defaults | `monkeypatch.delenv("CONTEXT_INJECT_ENABLED")` + `delenv("CONTEXT_INJECT_SKILLS_BUDGET")` 后构造 `Settings()` | `context_inject_enabled is True`、`context_inject_skills_budget == 4000`（conftest 隔离行已设进程级环境变量，默认值断言必须先清掉再构造） |
 | 基线验证（非单测） | conftest 隔离行就位后全量重跑 | 444 存量用例全绿（验收锚点 ①） |
 
@@ -205,6 +205,14 @@ self._inject_block = (
 ```
 
 2. `_build_messages` 返回处把 `system` 拼上注入块：`system + self._inject_block`（`self._inject_block` 非空时其自身以 `\n\n` 开头，由 `build_inject_block` 保证）。
+
+> **现状修正（#119，2026-10-13）——以本段为准，上面那行是当时的形态**：executor 侧现在拼的是
+> `system + self._inject_block + plan_block`。`plan_block` 是 `state["plan"]` 的渲染（`render_plan_section`），
+> 跟在注入块之后、与注入块**同权**（system 侧、不进压缩预算、永不淘汰），由
+> `_build_messages(..., include_plan=True)` **只在 executor 调用点**打开；planner 侧一字不变，故本 spec 的
+> 零回归锚（逐字节相同那条）与「planner/executor 共享同一注入块」的断言都仍然成立。注入层本身没变，
+> 变的是它后面多了一段——两块组合契约的现役权威面是 `prompts.render_plan_section` 的 docstring 与
+> `backend/tests/test_plan_context.py`。
 
 - **不碰** `_needs_confirm` 重算块、`_stopped` helper、`tool_node` 等一切既有逻辑；`getattr(..., True)` 兜底 SimpleNamespace 假 settings（与 `verify_enabled` 同款先例）。
 

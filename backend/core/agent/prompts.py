@@ -3,9 +3,15 @@
 These are intentionally provider-agnostic natural-language instructions. The
 planner is asked to return a JSON array of step descriptions; the executor is
 asked to either call one of the supplied tools or return a final answer.
+
+:func:`render_plan_section` belongs here too: it turns ``state["plan"]`` into
+the block appended to the executor's system message (issue #119 — the plan had
+no consumer on the execution face at all).
 """
 
 from __future__ import annotations
+
+from typing import Any, List, Sequence
 
 PLANNER_SYSTEM = """You are the planner for an autonomous task agent.
 Given the user's request, produce a concise, ordered plan as a JSON array of
@@ -25,3 +31,37 @@ Based on the conversation and the available tools, decide the next action:
 - If the task is fully complete, return a final answer as plain text that
   summarises what was accomplished (do NOT call a tool).
 Think step by step but respond with either a tool call or a final answer."""
+
+#: Section anchor of the plan block (issue #119) — asserted verbatim by the
+#: tests, same public-contract rule as the injection block's anchors in
+#: :mod:`backend.core.agent.inject`.
+PLAN_SECTION = "# Current Plan"
+
+
+def render_plan_section(plan: Sequence[Any]) -> str:
+    """Render ``state["plan"]`` as the executor's ``# Current Plan`` block (#119).
+
+    ``""`` for an empty plan (before the first planner round, or after a planner
+    failure left it empty), so the system message stays byte-identical to the
+    pre-#119 shape. Otherwise the block starts with a blank line so callers can
+    append it verbatim — the same composition contract as
+    :func:`~backend.core.agent.inject.build_inject_block`, which it follows.
+
+    The block is *derived* from the live state on every call and never
+    accumulated, which is what makes「替换、不堆叠」structural rather than a rule
+    the caller has to remember (AC2): one plan, one rendering, at the tail of
+    system.
+    """
+    if not plan:
+        return ""
+    lines: List[str] = [PLAN_SECTION]
+    for position, raw in enumerate(plan, 1):
+        # ``_parse_plan`` always emits PlanStep dicts; a bare string is the same
+        # legacy shape ``_mark_high_steps_skipped`` and ``risk.scan_keywords``
+        # tolerate, so it degrades to a description instead of raising.
+        step = raw if isinstance(raw, dict) else {"description": str(raw)}
+        index = step.get("index", position)
+        description = str(step.get("description", ""))
+        status = str(step.get("status") or "pending")
+        lines.append(f"{index}. [{status}] {description}")
+    return "\n\n" + "\n".join(lines)

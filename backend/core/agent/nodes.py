@@ -19,7 +19,7 @@ from ..tools.base import BaseTool, ToolResult
 from ..tools.http_api import WRITE_METHODS
 from . import inject
 from .context import compress_messages, evict_tool_results
-from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
+from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, render_plan_section
 from .state import AgentState
 
 logger = get_logger("agent.runtime")
@@ -162,13 +162,22 @@ class AgentRuntime:
                 self._aux = None
         return self._aux
 
-    def _build_messages(self, state: AgentState, system: str) -> List[Dict[str, Any]]:
+    def _build_messages(
+        self, state: AgentState, system: str, *, include_plan: bool = False
+    ) -> List[Dict[str, Any]]:
         """Build the message list sent to the LLM, compressing history first.
 
         Compression happens exactly here (shared by planner and executor) so
         every LLM call sees an up-to-date, bounded context. Under the budget
         the messages are returned untouched. The P1-A′ injection block rides on
         the *system* message and is deliberately outside the compression budget.
+
+        ``include_plan`` (the executor's call, issue #119) appends the rendering
+        of ``state["plan"]`` after that block, with the same rights: system-side,
+        outside the budget, never evicted or compressed. It is re-derived from
+        the live state each call, so a re-plan replaces the section instead of
+        adding a second copy — and the planner leaves the flag off, which is why
+        the injection tests' byte-exact planner assertion still holds.
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
         messages = state.get("messages", []) or []
@@ -232,7 +241,8 @@ class AgentRuntime:
                 )
             except Exception:  # pragma: no cover - event is optional
                 logger.warning("failed to publish context_compressed event", exc_info=True)
-        return [{"role": "system", "content": system + self._inject_block}, *compressed]
+        plan_block = render_plan_section(state.get("plan") or []) if include_plan else ""
+        return [{"role": "system", "content": system + self._inject_block + plan_block}, *compressed]
 
     def _parse_plan(self, content: str) -> List[Dict[str, Any]]:
         content = (content or "").strip()
@@ -445,7 +455,10 @@ class AgentRuntime:
         step = state["steps"][-1] if state.get("steps") else None
         try:
             resp = self.llm.complete(
-                self._build_messages(state, EXECUTOR_SYSTEM), tools=self.tool_schemas
+                # include_plan: the plan is the executor's brief (#119) — before
+                # this call it had no consumer on the execution face at all.
+                self._build_messages(state, EXECUTOR_SYSTEM, include_plan=True),
+                tools=self.tool_schemas,
             )
         except Exception as exc:
             logger.exception("executor LLM error")
