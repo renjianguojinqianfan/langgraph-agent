@@ -87,3 +87,9 @@
 - **修法方向**（判断题，最简档）：AGENTS.md 依赖面行加一句「dependabot group PR
   的评估核 `package.json` diff，不信 body 摘要」。机械检查（CI 检 semver-major）是
   给一条一行能防的事造机器，不做。
+- **复现加成（同日 #124，2026-10-12）**：#116 关闭后 dependabot **换了一张标题皮
+  再提案**——「postcss-selector-parser 6.1.4 → removed」，`package.json` 里躺着的
+  还是 tailwindcss ^3.4.0→^4.3.3，frontend job 同样红。即：**只要 group 配置允许
+  major，在 #122 落地前这是机械性复发，不是人偶然漏读**。修法方向补一个止扰档
+  （归用户/合并侧定，本票不实施）：dependabot 配置对该 group 排除 major，或忍到
+  #122 落地。计数维持 1/2（同一会话内的机械复发，非独立会话），但「会发生」已证明。
