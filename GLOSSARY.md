@@ -29,9 +29,10 @@
 
 **`plan` 有两个意思，禁用裸词「计划」**：
 
-- `state["plan"]`（运行时对象）：planner 节点产出的 PlanStep 列表。现役唯一消费者是
-  `risk_scan` 与 `plan_update` 事件，**不进 executor 上下文**（2026-10-07 源码实证，
-  见 `docs/research-pi-1.0.md` §2 的对标）。指它时必须写全 `state["plan"]`。
+- `state["plan"]`（运行时对象）：planner 节点产出的 PlanStep 列表。消费者是 `risk_scan`、`plan_update`
+  事件，以及 **#119 起** executor 的 system 尾部渲染块（`# Current Plan`，替换语义、不参与压缩淘汰）——
+  它曾是「planner 花 ~10s 产出、执行面一个字都不读」的断供面（2026-10-07 源码实证，对标见
+  `docs/research-pi-1.0.md` §2；那条实证到 #119 落地为止，别照抄）。指它时必须写全 `state["plan"]`。
 - 票面计划（工作级）：issue/spec 层的拆解与 AC。指它时写「票面 / spec」。
 
 ## 外来术语对照（对标 pi 等外部 agent 时用；不是本仓词）

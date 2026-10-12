@@ -206,6 +206,14 @@ self._inject_block = (
 
 2. `_build_messages` 返回处把 `system` 拼上注入块：`system + self._inject_block`（`self._inject_block` 非空时其自身以 `\n\n` 开头，由 `build_inject_block` 保证）。
 
+> **现状修正（#119，2026-10-13）——以本段为准，上面那行是当时的形态**：executor 侧现在拼的是
+> `system + self._inject_block + plan_block`。`plan_block` 是 `state["plan"]` 的渲染（`render_plan_section`），
+> 跟在注入块之后、与注入块**同权**（system 侧、不进压缩预算、永不淘汰），由
+> `_build_messages(..., include_plan=True)` **只在 executor 调用点**打开；planner 侧一字不变，故本 spec 的
+> 零回归锚（逐字节相同那条）与「planner/executor 共享同一注入块」的断言都仍然成立。注入层本身没变，
+> 变的是它后面多了一段——两块组合契约的现役权威面是 `prompts.render_plan_section` 的 docstring 与
+> `backend/tests/test_plan_context.py`。
+
 - **不碰** `_needs_confirm` 重算块、`_stopped` helper、`tool_node` 等一切既有逻辑；`getattr(..., True)` 兜底 SimpleNamespace 假 settings（与 `verify_enabled` 同款先例）。
 
 ### 5.3 改 `backend/config.py`（2 个新字段，归 `context_inject_*` 子家族，紧跟 Context compression 组之后）
