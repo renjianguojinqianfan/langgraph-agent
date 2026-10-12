@@ -1,0 +1,17 @@
+{
+  "plan": [
+    "Run one sandboxed probe command (it requires human confirmation)",
+    "Return a final answer"
+  ],
+  "tool_calls": [
+    {
+      "id": "call_confirm_probe",
+      "name": "code_exec",
+      "arguments": {
+        "language": "python",
+        "code": "print('mock probe: this call goes through the confirm gate')"
+      }
+    }
+  ],
+  "final_answer": "Offline mock script finished: the code_exec call passed the confirmation gate."
+}
