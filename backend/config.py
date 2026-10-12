@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_request_timeout_sec: int = 90  # per-request wall clock (SDK default 600s ate live budgets, #13)
     use_mock_llm: bool = False  # when True, an offline MockLLMClient is used
+    mock_llm_script_path: str = ""  # #108: JSON script for the offline mock (empty / unreadable -> built-in demo script)
 
     # ── Agent / orchestration ──
     max_steps: int = 15  # default max planner/executor iterations (P0-1)

@@ -3,7 +3,9 @@
 The orchestration kernel depends only on :class:`LLMClient`. New providers are
 added by subclassing :class:`LLMClient` (see ``openai_compat.py``). A scripted
 :class:`MockLLMClient` is provided so the whole stack can run offline without
-any API key — this is what the smoke test and the ``use_mock_llm`` flag use.
+any API key — this is what the smoke test and the ``use_mock_llm`` flag use, and
+``mock_llm_script_path`` lets a JSON file script that mock instead (#108), which
+is how a confirmation-requiring call reaches the gate with no key configured.
 """
 
 from __future__ import annotations
@@ -11,8 +13,10 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
+from ...config import PROJECT_ROOT
 from ...utils.logging import get_logger
 
 logger = get_logger("llm")
@@ -135,6 +139,66 @@ def make_default_mock_client() -> MockLLMClient:
         ],
         final_answer="I researched the topic and wrote the findings to report.txt.",
     )
+
+
+def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
+    """Build a :class:`MockLLMClient` from a JSON script file (issue #108).
+
+    The point of the file is to put a **confirmation-requiring** call (``code_exec``,
+    a git write tool, ``spawn_subagent``) on the offline script, so the human_confirm
+    gate can be driven — in the browser — without any LLM key. Shape (every key
+    optional; an absent one keeps :class:`MockLLMClient`'s own default)::
+
+        {
+          "plan": ["..."],
+          "tool_calls": [{"id": "call_1", "name": "code_exec", "arguments": {...}}],
+          "final_answer": "..."
+        }
+
+    A relative ``script_path`` resolves against :data:`PROJECT_ROOT` (same convention
+    as the data / artifact dirs), so pointing at a repo-relative file works no matter
+    where the server was started.
+
+    Raises :class:`Exception` (``OSError`` / ``ValueError``) on an unreadable or
+    malformed file; the caller owns the fallback — :func:`create_llm_client` keeps the
+    built-in demo script, so a bad path can never change the offline default behaviour.
+    """
+    path = Path(script_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"mock LLM script {path} must be a JSON object")
+
+    tool_calls: List[Dict[str, Any]] = []
+    entries = raw.get("tool_calls") or []
+    if not isinstance(entries, list):
+        raise ValueError("`tool_calls` must be a JSON array")
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not str(entry.get("name") or ""):
+            raise ValueError(f"tool_calls[{index}] needs a non-empty `name`")
+        arguments = entry.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            raise ValueError(f"tool_calls[{index}] `arguments` must be a JSON object")
+        tool_calls.append(
+            {
+                "id": str(entry.get("id") or f"call_script_{index}"),
+                "name": str(entry["name"]),
+                "arguments": arguments,
+            }
+        )
+
+    script: Dict[str, Any] = {"tool_calls": tool_calls}
+    plan = raw.get("plan")
+    if plan is not None:
+        if not isinstance(plan, list):
+            raise ValueError("`plan` must be a JSON array of step strings")
+        script["plan"] = [str(step) for step in plan]
+    final_answer = raw.get("final_answer")
+    if final_answer is not None:
+        script["final_answer"] = str(final_answer)
+    logger.info("MockLLM script loaded: %s (%d tool call(s))", path, len(tool_calls))
+    return MockLLMClient(**script)
 
 
 # Auxiliary-model role markers. The aux client is scripted *per role* so the

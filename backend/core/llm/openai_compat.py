@@ -17,6 +17,7 @@ from .client import (
     LLMResponse,
     MockAuxLLMClient,
     make_default_mock_client,
+    make_mock_client_from_script,
 )
 
 logger = get_logger("llm.openai")
@@ -120,8 +121,22 @@ def create_llm_client(settings: Settings) -> LLMClient:
     """Build the configured :class:`LLMClient`.
 
     Returns :class:`MockLLMClient` when ``use_mock_llm`` is set (offline mode).
+    With ``mock_llm_script_path`` set, that mock is driven by the JSON script file
+    instead of the built-in demo (#108 — a script can carry a confirm-requiring
+    call, which is what lets the browser drive the gate without an API key). An
+    unreadable path falls back to the built-in script, so the default offline
+    behaviour is unchanged either way.
     """
     if settings.use_mock_llm:
+        if settings.mock_llm_script_path:
+            try:
+                return make_mock_client_from_script(settings.mock_llm_script_path)
+            except Exception as exc:
+                logger.warning(
+                    "mock_llm_script_path %r unusable (%s); using the built-in demo script",
+                    settings.mock_llm_script_path,
+                    exc,
+                )
         logger.info("Using MockLLMClient (use_mock_llm=True)")
         return make_default_mock_client()
 

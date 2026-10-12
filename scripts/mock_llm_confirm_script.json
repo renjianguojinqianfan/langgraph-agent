@@ -1,0 +1,26 @@
+{
+  "plan": [
+    "Run the first sandboxed probe (needs human confirmation)",
+    "Run the second sandboxed probe (needs human confirmation)",
+    "Return a final answer"
+  ],
+  "tool_calls": [
+    {
+      "id": "call_confirm_probe_1",
+      "name": "code_exec",
+      "arguments": {
+        "language": "python",
+        "code": "print('mock probe 1: this call goes through the confirm gate')"
+      }
+    },
+    {
+      "id": "call_confirm_probe_2",
+      "name": "code_exec",
+      "arguments": {
+        "language": "python",
+        "code": "print('mock probe 2: a second gated call, for the cross-task confirm-box case')"
+      }
+    }
+  ],
+  "final_answer": "Offline mock script finished: both code_exec calls passed the confirmation gate."
+}

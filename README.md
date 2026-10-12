@@ -23,6 +23,15 @@ cd frontend && npm install && npm run dev                 # http://localhost:517
 
 一键：`python start.py --mock`（离线 Mock，无需 Key）· `python start.py`（真实 Key）· `docker compose up --build`
 
+> **离线驱动确认闸门（#108）**：`use_mock_llm=true` 时再设 `MOCK_LLM_SCRIPT_PATH=scripts/mock_llm_confirm_script.json`，
+> 内置演示脚本就换成这份含两次 `code_exec` 的脚本——**无 Key 也能在浏览器里真实弹出确认框**（内置脚本只走
+> `web_search`/`write`，永远碰不到闸门，凡需人点一次的验收项此前都只能记「跳过」）。脚本读不到或非法 JSON 会
+> WARN 并回落内置脚本，默认离线行为一字不变。两条边界得先知道：**① 脚本内容直入 `MockLLMClient.tool_calls`，
+> 没有工具名白名单**——总闸是 `use_mock_llm`（它为假时本键根本不参与判定），且风险扫描照跑、危险工具照需人批，
+> 所以它是**离线开发态**的面，不是新的授权面；**② 一份脚本按执行轮次依次发放、client 与进程同寿，因此是被
+> 「消耗」而不是「重播」**——任务 A 停在闸门处才会把下一条调用留给任务 B（#91 那两个框并存的场景正是如此），
+> A 若自己跑完就把两条都用掉、B 只拿到 `final_answer`、第三个任务零闸门；要重播得重启进程。
+
 > 虚拟环境请叫 `.venv311`：`start.py` 会拦住仓库根目录的 `.venv`（本地那个是 3.13 且未装依赖，
 > 误用只会得到一堆与真因无关的 ImportError）。
 
@@ -43,7 +52,11 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 `human_confirm_required`），只把「等一个判决」换成 `auto_approved` 一档，人明确拒过的调用不被翻案
 （[#57](https://github.com/renjianguojinqianfan/langgraph-agent/issues/57) AC6）；
 运行流水在评测态**默认开**（`runs/<task_id>.jsonl`：件清单 + 每轮原话，结果 JSON 带回 `manifest_path`），
-便于 harness 对两次运行做控制变量 diff。离线冒烟 `python -m backend.headless --check`。它是自建 agent 评测台驱动本 agent 的统一入口，路线见
+便于 harness 对两次运行做控制变量 diff。离线冒烟 `python -m backend.headless --check`。headless 与服务端同经
+`create_llm_client`，所以 `USE_MOCK_LLM=true` + `MOCK_LLM_SCRIPT_PATH=scripts/mock_llm_confirm_script.json`
+也能在**无 Key** 下驱出带确认闸门的评测场景（[#108](https://github.com/renjianguojinqianfan/langgraph-agent/issues/108)）——
+注意 `--auto-approve` 下没人被问，看的是判定照算、闸门照进与那条 `human_confirm_resolved(outcome=auto_approved)`，
+不是浏览器里的框。它是自建 agent 评测台驱动本 agent 的统一入口，路线见
 [`docs/roadmap-pawbench.md`](docs/roadmap-pawbench.md)。
 
 ---
