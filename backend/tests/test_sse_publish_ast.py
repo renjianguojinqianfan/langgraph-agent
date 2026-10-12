@@ -34,11 +34,12 @@ BACKEND_DIR = REPO_ROOT / "backend"
 ARCH_DOC = REPO_ROOT / "docs" / "architecture.md"
 TRACE_MODULE = BACKEND_DIR / "services" / "trace.py"
 
-# 三种现役发布形状 → 类型实参在 AST 里的位置。
+# 三种现役发布形状 → 类型实参在 AST 里的落点。
 # `_publish` / `publish`：位置实参的下标（EventBus.publish 的首参是 task_id，
 # 类型永远在第二位——锚在形参位置上，才不会把「第一个字符串」当成类型）。
-# `sse_format`：首参是 dict 字面量，类型在 `"type"` 键上（哨兵 -1 走另一条分支）。
-_TYPE_ARG_POSITION = {"_publish": 0, "publish": 1, "sse_format": -1}
+_PUBLISH_ARG_POSITION = {"_publish": 0, "publish": 1}
+# `sse_format`：首参是 dict 字面量，类型不在位置上、在 `"type"` 键上，走单独那条分支。
+_DICT_TYPE_CALLEE = "sse_format"
 
 _TABLE_ROW = re.compile(r"^\| `([a-z_]+)` \|", re.MULTILINE)
 
@@ -70,25 +71,28 @@ def _str_literal(node: ast.expr | None) -> str | None:
     return None
 
 
+def _type_from_dict(node: ast.Dict) -> str | None:
+    """dict 字面量里 ``"type"`` 键的字符串字面量值（SSE 帧与 trace 记录共用这个形状）。"""
+    for key, value in zip(node.keys, node.values):
+        if _str_literal(key) == "type":
+            return _str_literal(value)
+    return None
+
+
 def _event_type_of(call: ast.Call) -> str | None:
     """一个 publish 形状调用里的字符串字面量类型实参；取不到就返回 None（不计入）。"""
     name = _callee_name(call)
     if name is None:
         return None
-    position = _TYPE_ARG_POSITION.get(name)
-    if position is None:
+    if name == _DICT_TYPE_CALLEE:  # sse_format({"type": "x", ...})
+        for arg in call.args:
+            if isinstance(arg, ast.Dict):
+                return _type_from_dict(arg)
         return None
-    if position >= 0:
-        if len(call.args) > position:
-            return _str_literal(call.args[position])
+    position = _PUBLISH_ARG_POSITION.get(name)
+    if position is None or len(call.args) <= position:
         return None
-    # sse_format({"type": "x", ...})：认 dict 字面量的 "type" 键。
-    for arg in call.args:
-        if isinstance(arg, ast.Dict):
-            for key, value in zip(arg.keys, arg.values):
-                if _str_literal(key) == "type":
-                    return _str_literal(value)
-    return None
+    return _str_literal(call.args[position])
 
 
 def _publish_points() -> dict[str, list[str]]:
@@ -125,13 +129,10 @@ def _trace_file_only_types() -> list[str]:
     tree = ast.parse(TRACE_MODULE.read_text(encoding="utf-8"), filename="backend/services/trace.py")
     types: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Dict):
-            continue
-        for key, value in zip(node.keys, node.values):
-            if _str_literal(key) == "type":
-                literal = _str_literal(value)
-                if literal is not None:
-                    types.append(literal)
+        if isinstance(node, ast.Dict):
+            literal = _type_from_dict(node)
+            if literal is not None:
+                types.append(literal)
     return types
 
 
