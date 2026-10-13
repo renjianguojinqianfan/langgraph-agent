@@ -37,7 +37,8 @@ Result contract: with ``--output json`` the parsed result object is the ONLY
 thing on stdout (agent logs are repointed at stderr); diagnostics/logs live on
 stderr. Exit codes: 0 COMPLETED, 1 FAILED, 2 INTERRUPTED/timeout, 3 usage/config,
 4 UNVERIFIED (#46 — ran and claimed completion, verification did not pass; the
-deliverable it owed is declared with ``--expect kind:target``).
+deliverable it owed is declared with ``--expect kind:target`` and, for the parts
+no mechanical condition can express, with ``--rubric`` #46 step 2).
 """
 
 from __future__ import annotations
@@ -284,6 +285,7 @@ def _run_once(
     llm_client: Optional[LLMClient] = None,
     tools: Optional[List[BaseTool]] = None,
     expectations: Optional[List[Dict[str, str]]] = None,
+    rubric: str = "",
 ) -> Dict[str, Any]:
     """Drive one task to a terminal state and return the result object.
 
@@ -291,7 +293,9 @@ def _run_once(
     a scripted mock offline; production passes neither and both are built from
     ``settings``. ``expectations`` is this run's completion contract (#46): the
     harness declares what the task owes, and exit code 4 is what comes back when
-    the run claims otherwise. ``__main__`` repoints agent logs to stderr before
+    the run claims otherwise. ``rubric`` (#46 second step) is the same contract's
+    free-text half — an independent grader judges it, and it can only ever widen
+    exit 4, never 1. ``__main__`` repoints agent logs to stderr before
     this runs, so stdout stays clean for the result.
     """
     settings.artifacts_path.mkdir(parents=True, exist_ok=True)
@@ -310,7 +314,10 @@ def _run_once(
     timed_out = False
     try:
         task_id = tm.create_task(
-            title=prompt[:40], user_input=prompt, expectations=expectations or []
+            title=prompt[:40],
+            user_input=prompt,
+            expectations=expectations or [],
+            rubric=rubric,
         )
         task = _wait_terminal(tm, task_id, timeout)
         if task is None or task.status.value not in _TERMINAL:
@@ -391,6 +398,7 @@ def run_task(args: argparse.Namespace) -> int:
         auto_approve=bool(args.auto_approve),
         timeout=float(args.timeout),
         expectations=expectations,
+        rubric=str(args.rubric or ""),
     )
     _emit(result, args.output)
     return int(result["exit_code"])
@@ -582,6 +590,14 @@ def build_parser() -> argparse.ArgumentParser:
         "artifact:<path under --dir> | tool_success:<tool> | tool_success:* (any). "
         "Declared but unmet -> exit 4 (UNVERIFIED) instead of 0; undeclared tasks "
         "stay informational and are judged as before",
+    )
+    parser.add_argument(
+        "--rubric",
+        default="",
+        metavar="TEXT",
+        help="free-text completion line judged by an independent grader (#46 step 2); "
+        "mechanical --expect conditions are checked first and a grader verdict can only "
+        "ever widen exit 4 (UNVERIFIED), never exit 1 (FAILED)",
     )
     parser.add_argument("--model", help="override LLM model (else env/.env)")
     parser.add_argument("--base-url", help="override LLM base_url (else env/.env)")

@@ -546,12 +546,19 @@ class TaskManager:
         title: Optional[str],
         user_input: str,
         expectations: Optional[List[Dict[str, Any]]] = None,
+        rubric: str = "",
     ) -> str:
         """Start one task. ``expectations`` is the caller's completion contract (#46).
 
         Validated here, at the boundary: a declaration that is not one of the two
         decidable kinds would otherwise surface as a mid-run failure the submitter
         cannot tell apart from a task that genuinely missed its deliverable.
+
+        ``rubric`` (#46 second step) is the free-text half of the same contract,
+        judged by the independent grader rather than mechanically. Normalised here —
+        the one boundary both input faces pass through — so a blank declaration is
+        stored as "nothing declared" instead of a whitespace ghost that a later
+        branch reads as a rubric and summons a judge for.
         """
         task_id = uuid.uuid4().hex
         now = _now()
@@ -563,6 +570,7 @@ class TaskManager:
             created_at=now,
             updated_at=now,
             expectations=[Expectation(**e) for e in expectations or []],
+            rubric=(rubric or "").strip(),
         )
         # P0 item 4: attach the trace recorder before any event is published so
         # the JSONL captures task_created onwards.
@@ -633,6 +641,9 @@ class TaskManager:
             # state so reflect judges against it, and restored with the checkpoint
             # on resume (a resumed task is still held to the same line).
             "expectations": [e.model_dump() for e in task.expectations],
+            # #46 second step: the rubric half of the same contract, judged by the
+            # grader. Same resume reasoning as expectations above.
+            "rubric": task.rubric,
         }
         self._active_states[task_id] = state
 

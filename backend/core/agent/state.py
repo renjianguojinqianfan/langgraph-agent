@@ -43,6 +43,10 @@ class AgentState(TypedDict, total=False):
     # ── #46: caller-declared completion contract ──
     # [{type: artifact|tool_success, target}] — set at submission, read by reflect.
     expectations: List[Dict[str, str]]
+    # #46 second step: the caller's free-text "what done looks like". Set at
+    # submission, read by reflect; absent == nothing to grade, so the grader is
+    # never summoned for a task that did not declare one.
+    rubric: str
 
     # ── P1 item 1: risk scan ──
     risk_report: List[Dict[str, Any]]       # latest round of RiskItem dicts

@@ -139,6 +139,10 @@ class Task(BaseModel):
     # #46: the completion contract this run is judged against (persisted, so a
     # resumed task is still held to what its caller declared).
     expectations: List[Expectation] = Field(default_factory=list)
+    # #46 second step: the caller's free-text "what done looks like", judged by an
+    # independent grader. Empty == nothing to grade (informational task, and the
+    # pre-#46 shape): a rubric nobody declared must never summon a judge.
+    rubric: str = ""
 
 
 # ── Request bodies ──
@@ -146,6 +150,7 @@ class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
     input: str
     expectations: List[Expectation] = Field(default_factory=list)  # #46
+    rubric: str = ""  # #46 第二步
 
 
 class ConfirmRequest(BaseModel):
