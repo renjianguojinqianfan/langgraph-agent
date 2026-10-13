@@ -324,10 +324,11 @@ classDiagram
 
 ### 3.3 REST + SSE 接口定义
 
-> ⚠️ **v0.1：9 个端点。现役 16 个**（权威：`backend/api/routes.py` + Swagger）。
+> ⚠️ **v0.1：9 个端点。现役 17 个**（权威：`backend/api/routes.py` + Swagger）。
 > 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、`GET /kb` +
 > `POST /kb/rebuild` + `DELETE /kb/{doc_id}`（P1）、`GET /mcp/servers`（P2）、
-> `POST /tasks/{id}/rollback`（P1-B）；
+> `POST /tasks/{id}/rollback`（P1-B）、`POST /tasks/{id}/review`（#46 切片 B：把
+> `UNVERIFIED` 人工接受为 `COMPLETED`，留痕落 `Task.review`，机器判决不被改写）；
 > `/health` 另在 `backend/main.py`。下表其余 9 条契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`
