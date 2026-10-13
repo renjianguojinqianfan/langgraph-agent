@@ -1133,9 +1133,16 @@ class TaskManager:
             review = TaskReview(
                 at=_now(), reviewer=reviewer, note=note, overruled_reason=reason
             )
-            # Reopen the audit trail for the review era (same pattern as rollback): the
-            # recorder detached when the run finished, so without this the acceptance
-            # reaches SSE subscribers but never the JSONL somebody replays later.
+            # Reopen the audit trail for the review era — the recorder detached when
+            # the run finished, so without this the acceptance reaches SSE subscribers
+            # but never the JSONL somebody replays later. That much is ``rollback``'s
+            # idea; the *placement`` is deliberately not: rollback attaches outside its
+            # lock, here attach -> publish -> save -> close all sit inside
+            # ``self._lock``. Two invariants only intersect there — one-acceptance-
+            # one-record needs validate+flip atomic, and event-before-record needs
+            # publish strictly before save. Cost, stated: a file open under the
+            # manager's global lock, so an accept can hold up other tasks' writes for
+            # its duration.
             if self._trace is not None:
                 self._trace.attach(self.event_bus, task_id)
             try:

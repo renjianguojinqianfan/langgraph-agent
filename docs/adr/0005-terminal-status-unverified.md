@@ -13,7 +13,10 @@ status: accepted
 2. `COMPLETED` 收紧为「跑完 **且** 验证通过（或验证关闭）」；`FAILED` 保持 crash/异常语义；
    `INTERRUPTED` 不变。
 3. 原因用 `Task.verification.reason` 区分：`retry_exhausted` / `max_steps` / `grader_error`
-   （回环中是 `pending`；收口只发生在 `_finalize_terminal`——`finish` 不改写 reason）。
+   （回环中是 `pending`；`finish` 不改写 reason）。`pending` 的收口**有两处**，不是一处：
+   主任务落库在 `_finalize_terminal`，子任务折叠在 `SubAgentExecutor.run_subtask`（子任务不
+   经 `_finalize_terminal`，漏那一处就等于把「还在验」递给父模型，而实际是没轮次了）。
+   原写「收口只发生在 `_finalize_terminal`」，被 #46 切片 B 的子任务侧补口作废。
 4. headless 退出码**扩展**：0/1/2/3 语义不变，新增 `4 = UNVERIFIED`。
 5. 「绝不因验证误判判 FAILED」（Q4 核心）保留——`UNVERIFIED` 不是 `FAILED`。
 
