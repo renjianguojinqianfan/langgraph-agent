@@ -24,6 +24,8 @@
 完成这条链上的四个不同概念，别互相代称：`claimed complete`（模型给了 `final_answer`，只是宣称）→ `verified`（机械证据复核通过）→ `UNVERIFIED`（跑完了但没通过）；`informational task`（交付物就是回答）对 `deliverable task`（交付物是外部世界的改动）。
 工具调用状态：`pending | success | failed | skipped`——只有后三是终态（`nodes.py` 的 `TERMINAL_TOOL_CALL_STATUSES`，#100）；`pending` 未收口即 `dangling tool call`（消息面也没有配对的 `role: tool` 回答）。
 闸门终态五档：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（常量与分档判据以 `nodes.py` 的 `CONFIRM_*` 为准）。
+人工复核：`Task.review`（#46 第二步切片 B）——把 `UNVERIFIED` 接受为 `COMPLETED` 的那次人工作证，带 who/when/why/`overruled_reason`；它是 `verification` 的**兄弟字段**，机器原判不被改写（改了就成 ADR 0005 要防的橡皮图章）。`reviewer` 自报，因为平台无用户账号（token 只认证「能进门」，不认证「是谁」）。
+回环两本账（#46 切片 B，ADR-0007 决策 3）：机械缺口走 `_verify_attempts`/`verify_max_retries`，语义 `needs_revision` 走 `_rubric_attempts`/`verify_rubric_max_retries`，各记各的、互不扣减。`verification.reason` 的 `pending` **只在回环中**，收口有**两处**而不是一处——主任务在 `_finalize_terminal`、子任务在 `subagent.py` 的折叠里，漏一处父模型就读到「还在验」而实际是「没轮次了」。
 图形态：`subtask`（子任务图：无 risk/confirm 节点，工具面走声明档位——`graph.py` `mode="subtask"`）。
 注入：`两层注入`（home 层 `AGENTS.md` → 工作区根 `AGENTS.md`；实现 `inject.py`）。
 记录：`trace`（系统侧事件/轨迹 JSONL，可回放；**不进** LLM 上下文——压缩留痕里只放指针）——与下面的 `transcript` 是两回事，勿混。

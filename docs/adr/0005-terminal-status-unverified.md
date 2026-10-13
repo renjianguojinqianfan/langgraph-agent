@@ -12,8 +12,14 @@ status: accepted
 1. 「模型声称完成、但我方验证没通过」有独立终态 `UNVERIFIED`，不再伪装成 `COMPLETED`。
 2. `COMPLETED` 收紧为「跑完 **且** 验证通过（或验证关闭）」；`FAILED` 保持 crash/异常语义；
    `INTERRUPTED` 不变。
-3. 原因用 `Task.verification.reason` 区分：`retry_exhausted` / `max_steps` / `grader_error`
-   （回环中是 `pending`；收口只发生在 `_finalize_terminal`——`finish` 不改写 reason）。
+3. 原因用 `Task.verification.reason` 区分：`retry_exhausted` / `rubric_exhausted` /
+   `max_steps` / `grader_error`（回环中是 `pending`；`finish` 不改写 reason）。两本账
+   烧完**分名**（#132 返工 C）：机械账（`verify_max_retries`）落 `retry_exhausted`，
+   语义账（`verify_rubric_max_retries`）落 `rubric_exhausted`——分账之后运维从
+   `reason` 就要能看出是哪本账花光。`pending` 的收口**有两处**，不是一处：
+   主任务落库在 `_finalize_terminal`，子任务折叠在 `SubAgentExecutor.run_subtask`（子任务不
+   经 `_finalize_terminal`，漏那一处就等于把「还在验」递给父模型，而实际是没轮次了）。
+   原写「收口只发生在 `_finalize_terminal`」，被 #46 切片 B 的子任务侧补口作废。
 4. headless 退出码**扩展**：0/1/2/3 语义不变，新增 `4 = UNVERIFIED`。
 5. 「绝不因验证误判判 FAILED」（Q4 核心）保留——`UNVERIFIED` 不是 `FAILED`。
 
@@ -48,6 +54,22 @@ status: accepted
 ## 重开条件
 
 引入「人工复核把 UNVERIFIED 接受为 COMPLETED」时重开：该操作算不算「验证通过」需要新拍板
-（#46 规格把它列在 Out of Scope）。子任务侧另有一本账：`run_subtask` 目前把「非 COMPLETED」
-一律折成 `failed`，`UNVERIFIED` 在父任务眼里读成「子任务失败了」——那是 [#106] 那一类
-折叠语义的活，不在本 ADR 的终态定义里。
+（#46 规格把它列在 Out of Scope）。
+
+**2026-10-13 重开并拍板（#46 第二步切片 B 落地）：不算「验证通过」。** 复核改的是**终态**，
+不是**判决**——`verification.passed` 与 `reason` 原样保留，接受这件事另记在 `Task.review`
+（谁 / 何时 / 为何 / 推翻了哪一档 `reason`），入口只有 REST `POST /api/tasks/{id}/review`；
+headless 没有对应开关，因为评测态屋里没有人，`exit 4` 就是它的诚实结论。于是第 2 条的公式
+多出第三个来源：`COMPLETED` = 验证通过 ∨ 验证关闭 ∨ **人工复核接受（留痕）**——第 5 条的安全
+原则一字未动，人工接受同样不把它判成 `FAILED`。四档 `reason` 都可被接受（拦住任何一档只会
+让黄灯永远亮着），但被推翻的是哪一档记在 `review.overruled_reason` 上，#46 试测要的「上线后
+持续采样」由此可数。
+
+子任务侧另有一本账：`run_subtask` 目前把「非 COMPLETED」一律折成 `failed`，`UNVERIFIED` 在
+父任务眼里读成「子任务失败了」——那是 [#106] 那一类折叠语义的活，不在本 ADR 的终态定义里。
+切片 B 复核过它与 rubric 的关系，两件事实：折叠**今天碰不到语义判决**（#46 spec §8 定的是
+「验收只挂在声明的那一层」，子任务状态里没有 `expectations` / `rubric`，裁判在子任务里一次
+都不被叫，`test_subagent.py::test_subtask_never_inherits_the_parents_contract` 钉住这个前提），
+所以它承接的 `UNVERIFIED` 永远来自确定性层；人工复核出口**不作用于子任务**（子任务不是一条
+`Task`，没有可接受的记录）。切片 B 只把折叠文案补上 `reason` 与具体缺口，映射本身照旧。若
+将来把声明跨层传给子任务，先重开「needs_revision 的回环预算由谁付」，再谈折叠要不要多一档。

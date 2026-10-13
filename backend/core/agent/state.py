@@ -39,6 +39,10 @@ class AgentState(TypedDict, total=False):
     # ── P0-B: completion verification ──
     _verification: Dict[str, Any]           # {passed, failures, attempts, reason}
     _verify_attempts: int                   # bounded verify-fail loop-back counter
+    # #46 second step (slice B): the grader's needs_revision loop keeps its OWN book,
+    # bounded by verify_rubric_max_retries. Shared accounting would let a mechanically
+    # decidable miss spend the semantic review's rounds away (ADR 0007 决策 3).
+    _rubric_attempts: int                   # bounded needs_revision loop-back counter
 
     # ── #46: caller-declared completion contract ──
     # [{type: artifact|tool_success, target}] — set at submission, read by reflect.

@@ -488,17 +488,44 @@ class SubAgentExecutor:
             # graph ends FAILED (e.g. a planner LLM error after Issue #12) must
             # fold back as failed with the real cause, not as a silent
             # "completed" carrying an empty summary.
+            #
+            # The mapping itself stands (#46 slice B, 3rd item): anything but
+            # COMPLETED folds to failed, so a parent never reads an unverified
+            # "completed" off its child — widening it to a third value is #106's
+            # folding-semantics job, not this ticket's. What the rubric did change
+            # is what the fold has to *say*: since ADR 0005 splits 「崩了」 from
+            # 「没验过」, handing the parent a bare status word leaves it unable to
+            # tell a repairable miss from a crash. So the verdict's own reason and
+            # concrete gaps ride along on ``error``.
             graph_status = final.get("status") or "COMPLETED"
             completed = graph_status == "COMPLETED"
+            error = ""
+            if not completed:
+                error = str(final.get("error") or "")
+                if not error and graph_status == "UNVERIFIED":
+                    verdict = final.get("_verification") or {}
+                    reason = str(verdict.get("reason") or "")
+                    if reason in ("", "pending"):
+                        # Same closure as ``_finalize_terminal``: a verdict still
+                        # open when the graph stopped looping was cut short by the
+                        # step budget, not left mid-round — say the budget instead
+                        # of a word with no follow-up.
+                        reason = "max_steps"
+                    misses = "；".join(
+                        str(f) for f in (verdict.get("failures") or [])[:3]
+                    )
+                    error = f"subtask graph ended UNVERIFIED（reason={reason}）"
+                    if misses:
+                        error += f"：{misses}"
+                elif not error:
+                    error = f"subtask graph ended {graph_status}"
             return SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="completed" if completed else "failed",
                 summary=summary,
                 artifacts=unique,
-                error=""
-                if completed
-                else (final.get("error") or f"subtask graph ended {graph_status}"),
+                error=error,
                 tool_calls_executed=tool_count,
                 tool_face=sorted(face),
             )

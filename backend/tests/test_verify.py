@@ -25,6 +25,7 @@ from backend.tests.conftest import make_manager, make_settings
 
 
 def _rt(tmp_path: Path, *, verify_enabled: bool = True, verify_max_retries: int = 2,
+        verify_rubric_max_retries: int = 2,
         artifacts: Optional[List[Dict[str, Any]]] = None, aux_llm: Any = None,
         with_file_tools: bool = False):
     """Build an AgentRuntime over a fake tm whose _active_states holds artifacts.
@@ -36,7 +37,10 @@ def _rt(tmp_path: Path, *, verify_enabled: bool = True, verify_max_retries: int 
     ledger has genuine ``registers_artifact`` producers to read.
     """
     settings = make_settings(
-        tmp_path, verify_enabled=verify_enabled, verify_max_retries=verify_max_retries
+        tmp_path,
+        verify_enabled=verify_enabled,
+        verify_max_retries=verify_max_retries,
+        verify_rubric_max_retries=verify_rubric_max_retries,
     )
     bus = EventBus()
     events: List[Dict[str, Any]] = []
@@ -510,14 +514,20 @@ def test_grader_satisfied_completes_the_task(tmp_path: Path) -> None:
 
 
 def test_grader_needs_revision_loops_back_with_the_gap(tmp_path: Path) -> None:
-    """needs_revision 不是判决的终点：具体缺口要注回对话，模型才修得动。"""
+    """needs_revision 不是判决的终点：具体缺口要注回对话，模型才修得动。
+
+    #46 切片 B 重裁（原断 ``_verify_attempts == 1``）：那条钉的是切片 A「与第一步的
+    确定性回环共用一本账」这个过渡收口；现在 needs_revision 记在自己那本账上
+    （``_rubric_attempts``），确定性那本一个字都不动。
+    """
     aux = _aux(_NEEDS_REVISION)
     rt, _ = _rt(tmp_path, aux_llm=aux)
     out = rt.reflect(_state(rubric=_RUBRIC))
     assert out["_verification"]["passed"] is False
     assert out["_verification"]["reason"] == "pending"  # 回环中，收口留给 finish
     assert out["_last_action"] == "verify_failed"  # 走第一步已有的 router 回 planner
-    assert out["_verify_attempts"] == 1
+    assert out["_rubric_attempts"] == 1
+    assert out.get("_verify_attempts", 0) == 0
     assert any("报告没有结论小节" in f for f in out["_verification"]["failures"])
     assert any(
         m.get("role") == "system" and "报告没有结论小节" in m.get("content", "")
@@ -525,22 +535,100 @@ def test_grader_needs_revision_loops_back_with_the_gap(tmp_path: Path) -> None:
     )
 
 
-def test_grader_needs_revision_shares_the_verify_budget(tmp_path: Path) -> None:
-    """切片 A 的收口方式（票面 §4）：三值照判，needs_revision 走第一步已有的回环，
-    预算与 retry_exhausted 共用——不是另起一本账。"""
+def test_grader_needs_revision_has_its_own_budget(tmp_path: Path) -> None:
+    """票面 §1（切片 B）：needs_revision 的回环预算与 retry_exhausted **分账**。
+
+    共用一本账时，一次机械缺口就能把语义复核的机会提前烧光——「先确定性、后裁判」
+    的顺序反过来惩罚了 rubric：模型刚被 expectation 打回两次，裁判再说一句「缺结论」
+    就直接 UNVERIFIED。分账之后裁判那本还有余额就继续回环。
+    """
     aux = _aux(_NEEDS_REVISION)
-    rt, _ = _rt(tmp_path, verify_max_retries=2, aux_llm=aux)
-    out = rt.reflect(_state(rubric=_RUBRIC, _verify_attempts=2))
+    rt, _ = _rt(tmp_path, verify_max_retries=2, verify_rubric_max_retries=2, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC, _verify_attempts=2))  # 确定性那本已花光
     assert out["_verification"]["passed"] is False
-    assert out["_verification"]["reason"] == "retry_exhausted"
+    assert out["_verification"]["reason"] == "pending"  # 不是 retry_exhausted
+    assert out["_last_action"] == "verify_failed"  # 自己的账还有余额 —— 继续回环
+    assert out["_rubric_attempts"] == 1
+    assert out["_verify_attempts"] == 2  # 另一本账不推进
+
+
+def test_rubric_budget_exhaustion_ends_unverified(tmp_path: Path) -> None:
+    """裁判那本账花完 → rubric_exhausted 收口、终态 UNVERIFIED、绝不 FAILED（ADR 0005）。
+
+    #132 返工 C 重裁：两本账烧完各叫各的名字（机械账 ``retry_exhausted``、语义账
+    ``rubric_exhausted``），运维从 reason 要能看出是哪本账花光。本条原钉的
+    ``retry_exhausted`` 是分名之前的形状——那条决定正是被这次返工改掉的。
+    """
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(tmp_path, verify_max_retries=2, verify_rubric_max_retries=1, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC, _rubric_attempts=1))
+    verdict = out["_verification"]
+    assert verdict["passed"] is False
+    assert verdict["reason"] == "rubric_exhausted"
     assert out["_last_action"] == "final_answer"  # 收口交给 finish，不再回环
-    assert out["_verify_attempts"] == 2  # 预算耗尽这档不推进计数
+    assert out["_rubric_attempts"] == 1  # 预算耗尽这档不推进计数
     assert rt.finish(out)["status"] == "UNVERIFIED"
+
+
+def test_rubric_exhausted_after_max_retries(tmp_path: Path) -> None:
+    """语义账耗尽的镜像形状（对 ``test_unverified_after_max_retries`` 那条机械账用例）：
+    裁判持续 ``needs_revision``、默认闸花光 → ``rubric_exhausted`` 收口，终态
+    UNVERIFIED、绝不 FAILED（ADR 0005；#132 返工 C 补的分名一档）。
+    """
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(tmp_path, verify_max_retries=2, verify_rubric_max_retries=2, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC, _rubric_attempts=2))  # 语义账已花光
+    assert out["_verification"]["passed"] is False
+    assert out["_verification"]["reason"] == "rubric_exhausted"
+    assert "degraded" not in out["_verification"]
+    assert out["_last_action"] == "final_answer"  # router still routes to finish
+    assert rt.finish(out)["status"] == "UNVERIFIED"
+
+
+def test_deterministic_budget_ignores_an_exhausted_rubric_budget(tmp_path: Path) -> None:
+    """分账是双向的：裁判那本花光，不许把确定性回环也一起判死。"""
+    empty = tmp_path / "empty.txt"
+    empty.write_text("", encoding="utf-8")
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(
+        tmp_path,
+        verify_max_retries=2,
+        verify_rubric_max_retries=1,
+        artifacts=[_art(empty)],
+        aux_llm=aux,
+    )
+    out = rt.reflect(
+        _state(rubric=_RUBRIC, _rubric_attempts=1, _verify_attempts=0),
+    )
+    # 确定性层先命中（空产物），裁判根本不被调用（票面 §3 的判定顺序）
+    assert aux.call_count == 0
+    assert out["_verification"]["reason"] == "pending"
+    assert out["_last_action"] == "verify_failed"
+    assert out["_verify_attempts"] == 1
+    assert out["_rubric_attempts"] == 1  # 裁判那本原样不动
+
+
+def test_verification_attempts_counts_both_loop_books(tmp_path: Path) -> None:
+    """`verification.attempts` 对外仍是「这一轮被打回了几次」，两本账合起来数。
+
+    分账分的是**预算**，不是那个给评测台/trace 看的计数——把载荷拆成两个数字会让所有
+    既有消费者重新学一遍语义，而它们要的回答本来就只有「回环了几次」。
+    """
+    empty = tmp_path / "empty.txt"
+    empty.write_text("", encoding="utf-8")
+    rt, _ = _rt(tmp_path, artifacts=[_art(empty)])
+    out = rt.reflect(_state(_rubric_attempts=1))
+    assert out["_verification"]["attempts"] == 2  # 已花 1（裁判那本）+ 本回合这次
+    assert out["_verify_attempts"] == 1
+    assert out["_rubric_attempts"] == 1
 
 
 def test_grader_failed_verdict_is_grader_error_and_not_a_death_sentence(tmp_path: Path) -> None:
     """``failed`` 专指 rubric 本身无法评估：回环修不动调用方写的卷子，所以不回环、
-    不烧预算，直接 UNVERIFIED(grader_error)——裁判的故障不许毁掉一个可能真完成的任务。"""
+    不烧预算，直接 UNVERIFIED(grader_error)——裁判的故障不许毁掉一个可能真完成的任务。
+
+    切片 B 之后「不烧预算」意味着**两本账都不烧**（ADR 0007 第 4 条）。
+    """
     aux = _aux('{"result": "failed", "explanation": "两条判据互相矛盾", "criteria": []}')
     rt, _ = _rt(tmp_path, verify_max_retries=2, aux_llm=aux)
     out = rt.reflect(_state(rubric=_RUBRIC))
@@ -549,6 +637,7 @@ def test_grader_failed_verdict_is_grader_error_and_not_a_death_sentence(tmp_path
     assert verdict["reason"] == "grader_error"
     assert out["_last_action"] == "final_answer"
     assert out.get("_verify_attempts", 0) == 0
+    assert out.get("_rubric_attempts", 0) == 0
     assert rt.finish(out)["status"] == "UNVERIFIED"
     assert aux.call_count == 1  # 一次都不多花
 

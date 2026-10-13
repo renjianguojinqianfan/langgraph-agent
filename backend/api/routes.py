@@ -33,6 +33,7 @@ from .schemas import (
     ConfirmRequest,
     CreateTaskRequest,
     McpServerInfo,
+    ReviewRequest,
 )
 from .sse import sse_response
 
@@ -137,6 +138,42 @@ def rollback_task(
         raise HTTPException(status_code=404, detail="task not found")
     try:
         result = _tm(request).rollback(task_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
+@router.post("/tasks/{task_id}/review")
+def review_task(
+    task_id: str,
+    payload: ReviewRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Accept an ``UNVERIFIED`` task as ``COMPLETED``, with the act recorded (#46 B).
+
+    One human door on a terminal state, and one only: the machine's verdict is not
+    rewritten (``verification.passed`` stays false, ``reason`` keeps its cause) — the
+    review rides beside it in ``Task.review``, carrying who / when / why / which
+    reason it overruled (ADR 0005 的重开条件，由本票拍板).
+
+    Refusals mirror the other control endpoints: 404 unknown task, 409 when the run
+    has not settled or its terminal state is not ``UNVERIFIED`` (including one already
+    accepted — a second review cannot rewrite the first one's grounds), 422 when a
+    field is missing, empty, or overlong (``reviewer`` ≤ 64 / ``note`` ≤ 2000 — both
+    land verbatim in the unredacted persistence + trace + SSE path, so the boundary
+    is where their size is bounded) and 400 when it survives only as whitespace.
+    Headless gets no equivalent flag on purpose: the evaluation face has no human in
+    the room, so exit code 4 is its honest verdict.
+    """
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).accept_unverified(
+            task_id, reviewer=payload.reviewer, note=payload.note
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data=result)

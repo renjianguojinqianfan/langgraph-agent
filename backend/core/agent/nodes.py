@@ -848,9 +848,11 @@ class AgentRuntime:
         (:mod:`grader`), and it can only ever widen a non-pass — never condemn.
         On failure, inject the evidence and loop back to the planner by flipping
         ``_last_action`` to ``verify_failed`` (the existing ``_after_reflect``
-        router already sends any non-``final_answer`` to ``planner``); after
-        ``verify_max_retries`` the run ends UNVERIFIED (#46) — a completion we
-        could not verify is no longer written as COMPLETED with a soft ``degraded``
+        router already sends any non-``final_answer`` to ``planner``). Each layer
+        burns its own budget — ``verify_max_retries`` for a deterministic miss,
+        ``verify_rubric_max_retries`` for a ``needs_revision`` verdict (#46 slice
+        B) — and once the one in play is spent the run ends UNVERIFIED: a completion
+        we could not verify is no longer written as COMPLETED with a soft ``degraded``
         stamp, and it is still never a FAILED, so a false negative — from either
         layer — cannot kill a genuinely-done task (P0-B Q4, ADR 0005).
 
@@ -873,16 +875,33 @@ class AgentRuntime:
         if state.get("_last_action") != "final_answer":
             return state  # only verify a claimed completion
 
-        failures = self._verify_completion(state)
-        attempts = int(state.get("_verify_attempts", 0) or 0)
-        max_retries = int(getattr(settings, "verify_max_retries", 2))
+        deterministic = self._verify_completion(state)
 
         # The deterministic layer runs first and alone if it already found a miss:
         # a mechanically decidable gap costs no judge tokens, and the model gets
         # the concrete failure instead of a second opinion on it (#46 spec §3).
+        grader_failures: List[str] = []
         grader_error = False
-        if not failures:
-            failures, grader_error = self._grade_against_rubric(state)
+        if not deterministic:
+            grader_failures, grader_error = self._grade_against_rubric(state)
+        failures = deterministic or grader_failures
+
+        # Two books, not one (#46 slice B): the deterministic loop is bounded by
+        # ``verify_max_retries``, the grader's needs_revision loop by
+        # ``verify_rubric_max_retries``. Sharing them would let a mechanically
+        # decidable miss spend the semantic review's rounds away — the loop that
+        # never reached a judge would still have eaten the budget the judge needs.
+        verify_attempts = int(state.get("_verify_attempts", 0) or 0)
+        rubric_attempts = int(state.get("_rubric_attempts", 0) or 0)
+        attempts = verify_attempts + rubric_attempts
+        budget = int(
+            getattr(
+                settings,
+                "verify_rubric_max_retries" if not deterministic else "verify_max_retries",
+                2,
+            )
+        )
+        spent = rubric_attempts if not deterministic else verify_attempts
 
         if not failures:
             state["_verification"] = {
@@ -896,6 +915,7 @@ class AgentRuntime:
             # or found the rubric itself unevaluable. Neither is the task's fault, so
             # this does not loop and does not burn retry budget — it terminates as
             # UNVERIFIED(reason=grader_error), which is still not a FAILED (ADR 0005).
+            # "retry budget" means **both books** now (ADR 0007 决策 4).
             state["_verification"] = {
                 "passed": False, "failures": failures, "attempts": attempts,
                 "reason": "grader_error",
@@ -903,19 +923,24 @@ class AgentRuntime:
             self._publish("verification", dict(state["_verification"], task_id=self.task_id))
             return state  # keep final_answer -> finish -> UNVERIFIED
 
-        if attempts >= max_retries:
+        if spent >= budget:
             # Q4: never FAIL on a verification miss — but the terminal state is now
             # UNVERIFIED, not COMPLETED (a claim we could not check is not a delivery).
+            # 两本账烧完要分名：机械账 retry_exhausted、语义账 rubric_exhausted——
+            # 分账之后运维从 reason 就要能看出是哪本账花光，同名等于没分（#132 返工 C）。
             state["_verification"] = {
                 "passed": False, "failures": failures, "attempts": attempts,
-                "reason": "retry_exhausted",
+                "reason": "rubric_exhausted" if not deterministic else "retry_exhausted",
             }
             self._publish("verification", dict(state["_verification"], task_id=self.task_id))
             return state  # keep final_answer -> finish -> UNVERIFIED
 
         # Loop back with evidence: flip _last_action so the existing router sends
         # the flow to planner; the injected message tells the model what to fix.
-        state["_verify_attempts"] = attempts + 1
+        if deterministic:
+            state["_verify_attempts"] = verify_attempts + 1
+        else:
+            state["_rubric_attempts"] = rubric_attempts + 1
         state["_verification"] = {
             "passed": False, "failures": failures, "attempts": attempts + 1,
             "reason": "pending",  # 判决未收口；落库时仍挂着就记成 max_steps（见 _finalize_terminal）

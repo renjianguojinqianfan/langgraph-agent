@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
+from backend.api.schemas import Expectation, Task, TaskStatus
 from backend.core.agent import subagent as subagent_mod
 from backend.core.agent.graph import build_graph
 from backend.core.agent.nodes import AgentRuntime
@@ -1367,3 +1368,99 @@ def test_subtask_failure_reports_the_cause_not_a_silent_success(tmp_path):
         [t.name for t in tm._tools], EXPLORE_TIER
     )
     assert "write" not in res.tool_face
+
+
+# ── #46 第二步（切片 B）第 3 项：子任务侧的折叠 × rubric / 验收 ─────────────────
+def test_subtask_unverified_folds_back_naming_the_missed_check(tmp_path):
+    """折叠映射原样保留（非 COMPLETED → `failed`），但**没过验收的理由必须到得了父任务**。
+
+    ADR 0005 把「崩了」与「没验过」分成两件事，子任务这一层却把它们折成同一个 `failed`：
+    映射本身是 #106 那一类折叠语义的活、本票不动它（父任务读不到一句没验过的
+    「completed」，方向是对的）。不动映射 ≠ 什么都不用做——从前它只交出一句
+    `subtask graph ended UNVERIFIED`，父模型既看不出没过的是哪一条，也无从决定是
+    重试还是收手。现在理由与具体缺口随 `error` 上去。
+    """
+    settings = make_settings(tmp_path, verify_max_retries=0)
+    mock = _CountingMock(
+        plan=["p"],
+        tool_calls=[{"id": "f1", "name": "read", "arguments": {"path": "nope.txt"}}],
+        final_answer="我看完了",
+    )
+    tm = make_manager(settings, mock)
+
+    res = tm._subagent.run_subtask(_spec(subtask_id="unv:sub:1"))
+
+    assert res.status == "failed"  # 既有映射，本票不改
+    assert "UNVERIFIED" in res.error
+    assert "retry_exhausted" in res.error  # 没验过的原因在场，不是「崩了」
+    assert "却声称完成" in res.error  # S2 那条具体缺口跟着上去
+    assert "crash" not in res.error.lower()  # 不许把没验过说成崩溃
+
+
+def test_subtask_cut_by_the_step_budget_reports_the_budget(tmp_path):
+    """``max_steps`` 抢占的回环：子任务里挂着未收口的 ``pending``，折叠不能说一个
+    没有后续的词。
+
+    上面那条是「预算花完」（``retry_exhausted``），本条是「预算还没花完、轮数先没了」——
+    ``verify_max_retries=1`` 留了一轮回环的额度，``max_steps=2`` 在它走回去之前把图掐了，
+    于是 ``_verification.reason`` 停在 ``pending``。主任务的 ``_finalize_terminal``
+    有这一处兜底，子任务侧过去没有：它会把 ``pending`` 原样递上去，父模型读到的
+    ``reason=pending`` 是「还在验」，而实际是「没轮次了」。同一个 fixture，只拧预算。
+    """
+    settings = make_settings(tmp_path, verify_max_retries=1, max_steps=2)
+    mock = _CountingMock(
+        plan=["p"],
+        tool_calls=[{"id": "f1", "name": "read", "arguments": {"path": "nope.txt"}}],
+        final_answer="我看完了",
+    )
+    tm = make_manager(settings, mock)
+
+    res = tm._subagent.run_subtask(_spec(subtask_id="budget:sub:1"))
+
+    assert res.status == "failed"
+    assert "UNVERIFIED" in res.error
+    assert "max_steps" in res.error  # 掐断它的是轮数预算，说得出名字
+    assert "pending" not in res.error  # 未收口的中间值不外传
+
+
+def test_subtask_never_inherits_the_parents_contract(tmp_path, monkeypatch):
+    """切片 B 第 3 项的前提钉子：**验收只挂在声明的那一层**（#46 spec §8）。
+
+    子任务的状态里既没有 `expectations` 也没有 `rubric`，所以裁判在子任务里一次都不会
+    被叫——上面那条折叠因此永远只可能承接确定性层的判决，不会承接语义判决。哪天有人把
+    声明跨层传下去，这条先红，那时才轮到拍「needs_revision 的回环预算由谁付」。
+    """
+    settings = make_settings(tmp_path, aux_llm_enabled=True, aux_llm_use_mock=True)
+    tm = make_manager(settings, _CountingMock(plan=["p"], final_answer="子任务做完了"))
+    # 父任务真的声明了 rubric——跨层继承最自然的写法就是从这条记录里取。
+    tm.persistence.save_task(
+        Task(
+            id="parent-with-rubric",
+            title="p",
+            user_input="u",
+            status=TaskStatus.RUNNING,
+            rubric="报告含结论小节",
+            expectations=[Expectation(type="artifact", target="report.md")],
+        )
+    )
+    seen: Dict[str, Any] = {}
+    real_reflect = AgentRuntime.reflect
+
+    def spy(self, state):  # noqa: ANN001 - 与既有夹具同风格
+        seen["rubric"] = state.get("rubric")
+        seen["expectations"] = state.get("expectations")
+        return real_reflect(self, state)
+
+    monkeypatch.setattr(AgentRuntime, "reflect", spy)
+    aux = tm._aux_llm
+    assert aux is not None, "夹具得给子任务一个真能叫到的裁判客户端，负断言才有意义"
+
+    res = tm._subagent.run_subtask(
+        _spec(subtask_id="inherit:sub:1", parent_task_id="parent-with-rubric")
+    )
+
+    assert res.status == "completed"  # reflect 真跑过（否则下面的负断言是空的）
+    assert seen, "spy 一次都没被调用——本条什么都没看住"
+    assert not seen["rubric"], "父任务的 rubric 跨层进了子任务状态"
+    assert not seen["expectations"], "父任务的 expectation 跨层进了子任务状态"
+    assert aux.call_count == 0, "裁判在子任务里被叫了——折叠面从此要区分语义判决"
