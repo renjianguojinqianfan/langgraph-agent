@@ -20,6 +20,12 @@ It then exercises the Issue #4 resume path: a second task is stopped mid-run,
 the TaskManager is rebuilt (simulating a process restart), and the task is
 resumed from its durable checkpoint to completion.
 
+A real model can reach for a dangerous (``requires_confirm``) tool on the way.
+The gate is not disabled here — the script plays the human instead, answering
+each request through the same ``TaskManager.confirm`` the UI calls (Issue #68),
+so the run tests resume rather than parking until ``confirm_timeout_sec`` (1800s)
+elapses. See ``attach_confirm_proxy``.
+
 Offline smoke mode (no key, no network — safe for CI):
     python scripts/live_e2e.py --check
 Forces USE_MOCK_LLM=true, redirects every writable path (data/artifacts/
@@ -58,6 +64,84 @@ def _wait_terminal(tm, task_id, timeout=90):
             return task
         time.sleep(0.1)
     return tm.get_task(task_id)
+
+
+def attach_confirm_proxy(tm: TaskManager, task_id: str) -> list[dict]:
+    """Play the human for the confirmation gate, so the run keeps moving (#68).
+
+    Scenario 2 claims to test stop -> rebuild -> resume, not the gate. A real
+    model can still pick a ``requires_confirm`` tool mid-run (observed: it loops
+    back after a failed verification and reaches for ``code_exec``), and
+    ``human_confirm_node`` then waits ``confirm_timeout_sec`` (default 1800s) for
+    a verdict nobody sends — while the script only waits 180s. The run always
+    times out, and the timeout reads like a kernel bug.
+
+    The answer goes through the client the gate already exposes to humans: the
+    same ``TaskManager.confirm`` the REST route ``POST /tasks/{id}/confirm``
+    calls. Deliberately NOT ``auto_approve`` — that is the evaluation-mode switch
+    of ``backend/headless.py``, which never asks. Here the gate computes its
+    verdict, parks, publishes ``human_confirm_required`` and only continues
+    because an approval landed, so the ask/reply pair and the ``approved``
+    terminal state stay on the record: the gate is still being tested, the
+    script just stopped being absent.
+
+    Returns the requests this proxy answered — diagnostics only; the evidence
+    check reads the events (see :func:`count_gate_verdicts`).
+    """
+    answered: list[dict] = []
+    logged: set[tuple[str, float]] = set()
+
+    def _on_event(event: dict) -> None:
+        if event.get("type") != "human_confirm_required":
+            return
+        data = event.get("data") or {}
+        call_id = str(data.get("tool_call_id") or "")
+        if not call_id:
+            return
+        # Answer first, log second: ``confirm`` is what knows whether a request
+        # is pending (False otherwise), and one call id can legitimately be
+        # asked twice in a run — a later round re-generating it, or the catch-up
+        # below re-delivering an event that was also delivered live.
+        ok = bool(tm.confirm(task_id, call_id, True))
+        key = (call_id, float(event.get("ts") or 0.0))
+        if key in logged:
+            return
+        logged.add(key)
+        answered.append(
+            {"tool_call_id": call_id, "tool_name": str(data.get("tool_name") or ""), "ok": ok}
+        )
+        print(
+            f"  [CONFIRM] approved {data.get('tool_name')} ({call_id})"
+            + ("" if ok else " — NO REQUEST PENDING, this run will park")
+        )
+
+    tm.event_bus.subscribe(task_id, _on_event)
+    # create_task() starts its worker inline, so a gate can already be waiting
+    # by the time we get here: replay the per-task buffer and answer whatever
+    # landed before the subscription (same catch-up the SSE endpoint relies on).
+    for event in tm.event_bus.replay(task_id):
+        _on_event(event)
+    return answered
+
+
+def count_gate_verdicts(events: list[dict]) -> tuple[int, int]:
+    """``(asks the gate published, asks closed by a human approval)`` in one stream.
+
+    Counting only ``approved`` — never ``auto_approved`` — is the point: it says
+    the run advanced because somebody answered, which is what tells this apart
+    from disabling the gate (#68 裁定 A). Pairing by count, not by call id,
+    because the kernel publishes exactly one ``human_confirm_resolved`` per ask,
+    while a call id can be reused across rounds. A run where the gate never
+    fires is a fine outcome (a read-only plan needs no verdict), so the pair is
+    compared, never required.
+    """
+    asks = sum(1 for e in events if e["type"] == "human_confirm_required")
+    approvals = sum(
+        1
+        for e in events
+        if e["type"] == "human_confirm_resolved" and (e.get("data") or {}).get("outcome") == "approved"
+    )
+    return asks, approvals
 
 
 def run_check() -> int:
@@ -152,6 +236,9 @@ def main() -> int:
         "then tell me what you did.",
     )
     print(f"task_id: {task_id}\n")
+    # The script is the human on this path (#68): a mid-run gate gets an answer
+    # instead of a timeout. Same client the UI/REST uses, so the gate stays armed.
+    attach_confirm_proxy(tm, task_id)
 
     # Budget expressed in LLM rounds, so raising llm_request_timeout_sec can never
     # silently shrink this window (#13).
@@ -169,6 +256,8 @@ def main() -> int:
     print("\n=== LIVE E2E REPORT ===")
     print("final status:", task.status.value if task else "MISSING")
     print("event types :", sorted(event_types))
+    asks1, approved1 = count_gate_verdicts(events)
+    print(f"confirm gates: {approved1}/{asks1} ask(s) closed by an approval")
 
     artifacts = [a.filename for a in (task.artifacts if task else [])]
     print("artifacts   :", artifacts)
@@ -222,6 +311,10 @@ def main() -> int:
         user_input="Create three text files r1.txt r2.txt r3.txt in artifacts, "
         "each containing its own name, then summarize what you created.",
     )
+    # Before the stop, too: a gate parked here would write ``pending_confirm``,
+    # and ``resume()`` refuses a snapshot parked on the gate — the scenario would
+    # then fail on "resume accepted" and say nothing about the resume path.
+    attach_confirm_proxy(tm_stop, rid)
 
     # Stop as soon as it is RUNNING so an INTERRUPTED record exists.
     stopped = False
@@ -251,6 +344,11 @@ def main() -> int:
                             llm_client=create_llm_client(settings), tools=build_tools(settings))
     tm_stop.shutdown()
 
+    # A rebuilt manager owns a new bus and a new pending-request registry, so the
+    # proxy has to re-attach there before resume(): the continued run answers the
+    # same way the pre-restart one did (#68).
+    attach_confirm_proxy(tm_resume, rid)
+
     resumed = False
     try:
         res = tm_resume.resume(rid)
@@ -267,6 +365,11 @@ def main() -> int:
     fresh = Persistence(settings).load_task(rid)
     if (task_final is None or task_final.status.value == "RUNNING") and fresh:
         task_final = fresh
+    # Gate evidence spans both phases: two buses, one story. An ask the proxy
+    # could not answer is what #68 actually was, so it fails here rather than
+    # showing up as an unexplained 180s timeout.
+    asks2, approved2 = count_gate_verdicts(eb2.replay(rid) + tm_resume.event_bus.replay(rid))
+    print(f"confirm gates: {approved2}/{asks2} ask(s) closed by an approval")
     final_checks = {
         "task was interrupted before stop": stopped and interrupted_observed,
         "resume accepted": resumed,
@@ -274,6 +377,9 @@ def main() -> int:
         "resumed run completed": bool(task_final) and task_final.status.value == "COMPLETED",
         "steps continued (not restarted)": bool(task_final) and len(task_final.steps) >= max(steps_before, 1),
         "final answer present": bool(task_final and task_final.final_answer),
+        # Vacuous when the model never reached for a gated tool (asks2 == 0); it
+        # is the gate *not being bypassed* that has to hold whenever it fires.
+        "every confirm gate got an approval": asks2 == approved2,
     }
     for name, passed in final_checks.items():
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
