@@ -1,6 +1,12 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* #122 v3→v4：原 tailwind.config.js 的 theme.extend.colors 迁到 CSS-first 的 @theme。
+   键名保留 panelMuted（v4 认这个名字，bg-panelMuted 与 bg-panelMuted/60 照常生成），
+   字面值不动——它们是设计值，不跟 v4 重绘后的默认 slate-* 调色板走。 */
+@theme {
+  --color-panel: #0f172a;
+  --color-panelMuted: #1e293b;
+}
 
 html,
 body,
