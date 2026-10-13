@@ -85,6 +85,11 @@ def attach_confirm_proxy(tm: TaskManager, task_id: str) -> list[dict]:
     terminal state stay on the record: the gate is still being tested, the
     script just stopped being absent.
 
+    Both publishers of that event get an answer, since both wait on the same
+    request registry: the per-call gate above, and ``risk_policy=pause``'s
+    plan-level confirmation — which has no timeout at all, so an absent human
+    parks that run forever rather than for 1800s.
+
     Returns the requests this proxy answered — diagnostics only; the evidence
     check reads the events (see :func:`count_gate_verdicts`).
     """
@@ -129,13 +134,23 @@ def count_gate_verdicts(events: list[dict]) -> tuple[int, int]:
 
     Counting only ``approved`` — never ``auto_approved`` — is the point: it says
     the run advanced because somebody answered, which is what tells this apart
-    from disabling the gate (#68 裁定 A). Pairing by count, not by call id,
-    because the kernel publishes exactly one ``human_confirm_resolved`` per ask,
-    while a call id can be reused across rounds. A run where the gate never
-    fires is a fine outcome (a read-only plan needs no verdict), so the pair is
-    compared, never required.
+    from disabling the gate (#68 裁定 A). A run where the gate never fires is a
+    fine outcome (a read-only plan needs no verdict), so the pair is compared,
+    never required.
+
+    Pairing is by count, not by call id: one ask gets exactly one
+    ``human_confirm_resolved``, while a call id can be reused across rounds. The
+    plan-level ask (``risk_policy=pause``, key ``risk_plan``) is left out of the
+    ask side on purpose — that confirmation has no tool-call record to annotate,
+    so it resolves as a bare bool and never emits ``human_confirm_resolved``
+    (nodes.py ``_plan_confirm``; README「分档与上界都只在 per-call 闸门这一层」).
+    Counting it would turn a legitimately answered plan-level pause into a FAIL.
     """
-    asks = sum(1 for e in events if e["type"] == "human_confirm_required")
+    asks = sum(
+        1
+        for e in events
+        if e["type"] == "human_confirm_required" and (e.get("data") or {}).get("tool_call_id") != "risk_plan"
+    )
     approvals = sum(
         1
         for e in events
@@ -344,9 +359,9 @@ def main() -> int:
                             llm_client=create_llm_client(settings), tools=build_tools(settings))
     tm_stop.shutdown()
 
-    # A rebuilt manager owns a new bus and a new pending-request registry, so the
-    # proxy has to re-attach there before resume(): the continued run answers the
-    # same way the pre-restart one did (#68).
+    # The rebuilt manager owns a new bus and a new pending-request registry, so
+    # the proxy has to re-attach there before resume(): the continued run answers
+    # the same way the pre-restart one did (#68).
     attach_confirm_proxy(tm_resume, rid)
 
     resumed = False
@@ -379,7 +394,7 @@ def main() -> int:
         "final answer present": bool(task_final and task_final.final_answer),
         # Vacuous when the model never reached for a gated tool (asks2 == 0); it
         # is the gate *not being bypassed* that has to hold whenever it fires.
-        "every confirm gate got an approval": asks2 == approved2,
+        "no per-call gate left unanswered": asks2 == approved2,
     }
     for name, passed in final_checks.items():
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
