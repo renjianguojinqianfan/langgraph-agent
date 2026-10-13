@@ -4,8 +4,9 @@
 > 本指南是**真实 LLM 验证的唯一权威**——步骤、额度核验、CI key gate 的实际语义都以本文为准
 > （规则与缘由见 `AGENTS.md`「跨任务安全边界」）。
 > 现役模型口径（`.env`）：DashScope `deepseek-v4.1-flash`（评测线统一大脑，见 `docs/roadmap-pawbench.md`）；
-> 全绿历史记录为 `qwen3.7-flash-2026-07-15`（2026-08-24）。已知：场景 2 在 `deepseek-v4.1-flash` 下
-> 会因模型中途请求确认而超时（[#68](https://github.com/renjianguojinqianfan/langgraph-agent/issues/68)，既有问题，与主干无关）。
+> 全绿记录：`qwen3.7-flash-2026-07-15`（2026-08-24）、`deepseek-v4.1-flash`（2026-10-13，双场景）。
+> 场景 2 曾因模型中途请求确认而稳定超时（[#68](https://github.com/renjianguojinqianfan/langgraph-agent/issues/68)）——
+> 现已由脚本代人应答闸门修掉（见 §2.3「代人应答」），不再是已知问题。
 
 ---
 
@@ -71,10 +72,21 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" .venv311/Scripts/python.exe scripts/live_e2e.py
 - **场景 2（断点续跑）**：第二个任务跑到中途 `stop` → 重建 `TaskManager`（模拟进程重启）→ `resume` →
   COMPLETED。轮询窗口 180s；真实模型偶发单次调用挂起（>窗口）会误伤单跑，**先 A/B 复跑再归因**，
   不要直接当成回归。
+  **代人应答（[#68](https://github.com/renjianguojinqianfan/langgraph-agent/issues/68)）**：模型中途挑了 `requires_confirm` 工具时，脚本用 `attach_confirm_proxy` 替人把判决
+  送进去——走的是 REST `POST /tasks/{id}/confirm` 同一条 `TaskManager.confirm`，**不是 `--auto-approve`
+  旁路**：判定照算、闸门照停、`human_confirm_required` 照发，只是有人答了「允许」。所以闸门本身仍在被测，
+  脚本只是不再缺席。场景 2 判据据此多一项「无 per-call 闸门悬空未答」，输出多一行 `confirm gates: n/n`。
+  `asks == 0`（模型这轮没挑危险工具）是合法结果，不作失败要求。
 
 **验证过的结果（2026-08-24）**：`=== RESULT: PASS ===`，9/9 通过，~18s 完成，
 事件流含 `plan_update → tool_call → tool_result → artifact_created → final_answer → task_completed`
 （含 `risk_report`，P1 风险扫描在真实链路同样生效）。场景 2 亦有多次 PASS 记录。
+
+**验证过的结果（2026-10-13，`deepseek-v4.1-flash`）**：双场景 `FINAL RESULT: PASS`（exit 0）——场景 1 九项、
+场景 2 七项（含新增的「无 per-call 闸门悬空未答」）全过。那一轮模型没挑危险工具（`confirm gates: 0/0`），
+只证明无回归；另跑一轮定向任务（明写必须用 `code_exec`）真实触发闸门，trace 四事件成链
+`tool_call → human_confirm_required → human_confirm_resolved(outcome=approved) → tool_result`，
+全程 <90s **未超时**——这是 [#68](https://github.com/renjianguojinqianfan/langgraph-agent/issues/68) 的回归证据。
 
 ### 2.4 CI 上的 live job（key gate 语义）
 
