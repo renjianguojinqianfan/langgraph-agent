@@ -470,8 +470,9 @@ def test_expectation_unverified_end_to_end(tmp_path: Path) -> None:
 
 
 # ── #46 第二步：grader 三值判定（节点 seam：reflect）───────────────────────────
-# 裁判的判决形状沿用 #46 试测的协议（data/grader-trial/run_grader.py 的
-# SYSTEM_PROMPT）：{"result": satisfied|needs_revision|failed, "explanation", "criteria"}。
+# 裁判的判决形状沿用 #46 试测的协议（SYSTEM_PROMPT 与 JSON 形状记在
+# docs/grader-fn-trial-2026-10-13.md「裁判协议形状」一节）：
+# {"result": satisfied|needs_revision|failed, "explanation", "criteria"}。
 # 试测量出假阴性 0/24、0/23 用的就是这一份，换形状等于换掉了那组数字的依据。
 _GRADER_ROLE = "grader"
 

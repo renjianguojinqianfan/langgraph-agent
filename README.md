@@ -7,7 +7,7 @@
 
 这个仓库想证明的不是"能跑通一个 agent demo"，而是 agent 运行时里那几件难做的事被工程化地解决了：
 任务被中途停止后能从检查点续跑、危险操作在执行前被闸门拦住、工具连续失败时熔断降级而不是把循环拖死、
-外部工具生态（MCP / OpenAPI）能动态接进来而不改内核、模型自称「做完了」时被确定性自检拦回来。
+外部工具生态（MCP / OpenAPI）能动态接进来而不改内核、模型自称「做完了」时被确定性自检与独立裁判拦回来。
 
 ---
 
@@ -47,7 +47,12 @@ python -m backend.headless -p "把能力总结写进 summary.txt" --dir ./out --
 `0` 完成 / `1` 失败 / `2` 中断或超时 / `3` 用法或配置错误 / `4` **未通过验收**（#46：跑完并声称完成，
 但 `--expect` 声明的合格线没过 → 终态 `UNVERIFIED`；`verification` 键带着原因与失败项）；LLM 配置全走 `LLM_*` 环境变量（env 优先于
 .env）。合格线用 `--expect kind:target` 声明，可重复：`artifact:<沙箱根相对路径>`（存在且非空）、
-`tool_success:<工具名>`（`*` = 任一工具至少成功一次）；不声明就是信息型任务，判据一条不加。`--auto-approve` 是**评测态**开关（TaskManager 实例级，服务端 API 路径永不触发）：它不是整块旁路
+`tool_success:<工具名>`（`*` = 任一工具至少成功一次）；不声明就是信息型任务，判据一条不加。
+语义合格线另用 `--rubric "<自由文本>"` 声明（#46 第二步）：它由**独立裁判** `aux_llm` 判，
+三值 `satisfied | needs_revision | failed`，判决形状与开工前置试测同一份（见 `docs/grader-fn-trial-2026-10-13.md`、
+ADR 0007）。**这条有前置**：`aux_llm_enabled=false`（默认）时声明 rubric 必然落 `UNVERIFIED(grader_error)`
+——裁判不可用不是工作的错，但也不该被读成过了；要真判就得配 `aux_llm_model`。确定性判据先行，
+它没发现缺口时才叫裁判，所以没声明 rubric 的任务零额外 token。`--auto-approve` 是**评测态**开关（TaskManager 实例级，服务端 API 路径永不触发）：它不是整块旁路
 闸门——判定照算、闸门照进、终态照播一条 `human_confirm_resolved`（不向不在场的人发问，所以没有
 `human_confirm_required`），只把「等一个判决」换成 `auto_approved` 一档，人明确拒过的调用不被翻案
 （[#57](https://github.com/renjianguojinqianfan/langgraph-agent/issues/57) AC6）；
