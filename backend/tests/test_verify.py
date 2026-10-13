@@ -621,3 +621,153 @@ def test_grader_prompt_carries_the_rubric_verbatim(tmp_path: Path) -> None:
     rt.reflect(_state(rubric=_RUBRIC))
     sent = " ".join(str(m.get("content") or "") for m in aux.requests[-1])
     assert _RUBRIC in sent
+
+
+# ── #46 第二步：裁判的证据面（试测定居的两个「偏松」洞，构造性堵住）────────────
+def _sent_prompt(aux: MockAuxLLMClient) -> str:
+    assert aux.requests, "裁判一次都没被调用，谈不上它收到了什么证据"
+    return " ".join(str(m.get("content") or "") for m in aux.requests[-1])
+
+
+def _ledger_block(prompt: str) -> str:
+    start, end = prompt.find("<write_ledger>"), prompt.find("</write_ledger>")
+    assert start >= 0 and end > start, "裁决提示里没有写调用账本"
+    return prompt[start:end]
+
+
+def _write_call(path: str, content: str, *, ok: bool = True) -> Dict[str, Any]:
+    return {
+        "tool_name": "write",
+        "status": "success" if ok else "failed",
+        "input": {"path": path, "content": content},
+        "output": {"path": path, "size": len(content)} if ok else None,
+        "error": "" if ok else "disk full",
+    }
+
+
+def test_ledger_hands_the_judge_only_successful_write_calls(tmp_path: Path) -> None:
+    """洞 (a)：试测里模型声称写了 r3、其实没写，裁判拿一次 ``ls`` 的间接证据就放行。
+    所以交给裁判的归属账本只收**成功的写调用**——失败的写、读过的文件、ls 列出来的
+    路径一概不在里面，「文件存在」从此顶替不了「本次运行写的」。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux, with_file_tools=True)
+    state = _state(
+        rubric=_RUBRIC,
+        steps=[
+            {
+                "index": 1,
+                "tool_calls": [
+                    _write_call("report.md", "结论：沙箱根下有四个文件"),
+                    _write_call("ghost.md", "写失败的那一份", ok=False),
+                    {"tool_name": "read", "status": "success", "input": {"path": "other.md"}},
+                    {"tool_name": "ls", "status": "success", "input": {"path": "."}},
+                ],
+            }
+        ],
+    )
+    rt.reflect(state)
+    ledger = _ledger_block(_sent_prompt(aux))
+    assert "report.md" in ledger
+    assert "结论：沙箱根下有四个文件" in ledger  # 正文在场，占位符才判得动
+    assert "ghost.md" not in ledger
+    assert "other.md" not in ledger
+
+
+def test_ledger_states_plainly_when_no_write_succeeded(tmp_path: Path) -> None:
+    """零成功写调用时账本要说「没有」，而不是留一个空块让裁判自己去猜空意味着什么。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux, with_file_tools=True)
+    state = _state(
+        rubric=_RUBRIC,
+        steps=[{"index": 1, "tool_calls": [{"tool_name": "ls", "status": "success", "input": {}}]}],
+    )
+    rt.reflect(state)
+    assert "没有任何成功的写调用" in _ledger_block(_sent_prompt(aux))
+
+
+def test_ledger_marks_an_edit_as_a_fragment_not_the_whole_file(tmp_path: Path) -> None:
+    """edit 只带替换片段。标清楚，否则裁判会把一小段当成整份交付物来评内容。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux, with_file_tools=True)
+    state = _state(
+        rubric=_RUBRIC,
+        steps=[
+            {
+                "index": 1,
+                "tool_calls": [
+                    {
+                        "tool_name": "edit",
+                        "status": "success",
+                        "input": {"path": "report.md", "old_string": "旧", "new_string": "新结论"},
+                        "output": {"path": "report.md"},
+                    }
+                ],
+            }
+        ],
+    )
+    rt.reflect(state)
+    ledger = _ledger_block(_sent_prompt(aux))
+    assert "report.md" in ledger
+    assert "非全文" in ledger
+
+
+def test_grader_rules_forbid_existence_as_authorship_evidence(tmp_path: Path) -> None:
+    """判据正文要在场：试测放过的 r123 案就是拿「三个文件都在」当证据的。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    rt.reflect(_state(rubric=_RUBRIC))
+    system = str(aux.requests[-1][0].get("content") or "")
+    assert "文件存在不是证据" in system
+    assert "ls" in system and "read" in system
+
+
+def test_grader_rules_forbid_a_placeholder_as_content(tmp_path: Path) -> None:
+    """试测放过的第二案：交付物是占位符也 satisfied。判据里必须点名占位符形态。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    rt.reflect(_state(rubric=_RUBRIC))
+    system = str(aux.requests[-1][0].get("content") or "")
+    assert "占位符" in system
+    assert "非空" in system  # 「非空」不等于「兑现」——空文件挡得住 S1，挡不住这条
+
+
+def test_transcript_carries_the_callers_task_and_the_final_claim(tmp_path: Path) -> None:
+    """裁判看的是记录，不是模型的自述：任务原文与 final answer 都要在场，
+    两边缺一边，「声称」与「被要求」就没得对照。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    rt.reflect(_state(rubric=_RUBRIC, messages=[{"role": "user", "content": "把调研写成 report.md"}]))
+    prompt = _sent_prompt(aux)
+    assert "<task>" in prompt and "把调研写成 report.md" in prompt
+    assert "<final_answer>" in prompt
+
+
+def test_blank_rubric_is_not_a_declaration(tmp_path: Path) -> None:
+    """空白声明归一成「没声明」，在 create_task 那道 boundary 做一次。
+
+    留着 ``"   "`` 当声明，就是一个没人写得出的 rubric 把任务拖去见裁判、再拖成
+    UNVERIFIED——所以这里既断记录是空串，也断裁判真的没被叫起。
+    """
+    settings = make_settings(
+        tmp_path,
+        risk_scan_enabled=False,
+        subagent_enabled=False,
+        aux_llm_enabled=True,
+        aux_llm_use_mock=True,
+    )
+    tm = make_manager(settings, MockLLMClient(final_answer="结论如上"), event_bus=EventBus())
+    aux = tm._aux_llm
+    assert isinstance(aux, MockAuxLLMClient)
+    aux.role_responses[_GRADER_ROLE] = _NEEDS_REVISION
+    tid = tm.create_task(title="t", user_input="随便聊聊", rubric="   ")
+    deadline = time.time() + 15
+    task = None
+    while time.time() < deadline:
+        task = tm.get_task(tid)
+        if task and task.status.value in ("COMPLETED", "FAILED", "INTERRUPTED", "UNVERIFIED"):
+            break
+        time.sleep(0.05)
+    assert task is not None
+    assert task.rubric == ""
+    assert task.status is TaskStatus.COMPLETED
+    assert aux.call_count == 0
