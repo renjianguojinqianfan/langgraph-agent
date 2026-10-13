@@ -18,14 +18,23 @@ import pytest
 
 from backend.api.schemas import Expectation, Task, TaskStatus
 from backend.core.agent.nodes import AgentRuntime
-from backend.core.llm.client import MockLLMClient
+from backend.core.llm.client import MockAuxLLMClient, MockLLMClient
+from backend.core.tools.registry import build_tools
 from backend.services.event_bus import EventBus
 from backend.tests.conftest import make_manager, make_settings
 
 
 def _rt(tmp_path: Path, *, verify_enabled: bool = True, verify_max_retries: int = 2,
-        artifacts: Optional[List[Dict[str, Any]]] = None):
-    """Build an AgentRuntime over a fake tm whose _active_states holds artifacts."""
+        artifacts: Optional[List[Dict[str, Any]]] = None, aux_llm: Any = None,
+        with_file_tools: bool = False):
+    """Build an AgentRuntime over a fake tm whose _active_states holds artifacts.
+
+    ``aux_llm`` is injected the way ``TaskManager`` injects it in production; left
+    ``None`` the lazy property consults settings (aux disabled -> ``None``), which
+    is exactly the degradation path the grader has to fail closed on.
+    ``with_file_tools`` mounts the real file tools so the grader's authorship
+    ledger has genuine ``registers_artifact`` producers to read.
+    """
     settings = make_settings(
         tmp_path, verify_enabled=verify_enabled, verify_max_retries=verify_max_retries
     )
@@ -38,7 +47,9 @@ def _rt(tmp_path: Path, *, verify_enabled: bool = True, verify_max_retries: int 
         add_artifact=lambda *a, **k: None,
         _active_states={"t1": {"artifacts": list(artifacts or [])}},
     )
-    rt = AgentRuntime("t1", tm, llm=SimpleNamespace(), tools=[], tool_schemas=[])
+    tools = build_tools(settings) if with_file_tools else []
+    rt = AgentRuntime("t1", tm, llm=SimpleNamespace(), tools=tools,
+                      tool_schemas=[t.to_openai_schema() for t in tools], aux_llm=aux_llm)
     return rt, events
 
 
@@ -456,3 +467,157 @@ def test_expectation_unverified_end_to_end(tmp_path: Path) -> None:
     assert task.verification["passed"] is False
     assert task.verification["reason"] == "retry_exhausted"
     assert any("report.md" in f for f in task.verification["failures"])
+
+
+# ── #46 第二步：grader 三值判定（节点 seam：reflect）───────────────────────────
+# 裁判的判决形状沿用 #46 试测的协议（data/grader-trial/run_grader.py 的
+# SYSTEM_PROMPT）：{"result": satisfied|needs_revision|failed, "explanation", "criteria"}。
+# 试测量出假阴性 0/24、0/23 用的就是这一份，换形状等于换掉了那组数字的依据。
+_GRADER_ROLE = "grader"
+
+_SATISFIED = '{"result": "satisfied", "explanation": "报告含结论小节", ' \
+             '"criteria": [{"name": "结论小节", "passed": true}]}'
+_NEEDS_REVISION = '{"result": "needs_revision", "explanation": "缺结论", ' \
+                  '"criteria": [{"name": "结论小节", "passed": false, "gap": "报告没有结论小节"}]}'
+_RUBRIC = "报告含结论小节，且引用至少两个来源"
+
+
+class _RaisingAux(MockAuxLLMClient):
+    """裁判自己出错（网络 / 鉴权 / 超时）——grader_error 那一档的注入点。"""
+
+    def complete(self, messages, tools=None, **kwargs):
+        raise RuntimeError("aux endpoint returned 500")
+
+
+def _aux(verdict: str) -> MockAuxLLMClient:
+    aux = MockAuxLLMClient()
+    aux.role_responses[_GRADER_ROLE] = verdict
+    return aux
+
+
+def test_grader_satisfied_completes_the_task(tmp_path: Path) -> None:
+    aux = _aux(_SATISFIED)
+    rt, events = _rt(tmp_path, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC))
+    assert out["_verification"]["passed"] is True
+    assert out["_verification"]["reason"] == ""
+    assert out["_last_action"] == "final_answer"  # -> finish -> COMPLETED
+    assert rt.finish(out)["status"] == "COMPLETED"
+    # 裁判真的被独立客户端跑过一次（票面用户故事 20：验证者独立于声明者）
+    assert _GRADER_ROLE in aux.roles_called
+    assert any(e["type"] == "verification" for e in events)
+
+
+def test_grader_needs_revision_loops_back_with_the_gap(tmp_path: Path) -> None:
+    """needs_revision 不是判决的终点：具体缺口要注回对话，模型才修得动。"""
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC))
+    assert out["_verification"]["passed"] is False
+    assert out["_verification"]["reason"] == "pending"  # 回环中，收口留给 finish
+    assert out["_last_action"] == "verify_failed"  # 走第一步已有的 router 回 planner
+    assert out["_verify_attempts"] == 1
+    assert any("报告没有结论小节" in f for f in out["_verification"]["failures"])
+    assert any(
+        m.get("role") == "system" and "报告没有结论小节" in m.get("content", "")
+        for m in out["messages"]
+    )
+
+
+def test_grader_needs_revision_shares_the_verify_budget(tmp_path: Path) -> None:
+    """切片 A 的收口方式（票面 §4）：三值照判，needs_revision 走第一步已有的回环，
+    预算与 retry_exhausted 共用——不是另起一本账。"""
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(tmp_path, verify_max_retries=2, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC, _verify_attempts=2))
+    assert out["_verification"]["passed"] is False
+    assert out["_verification"]["reason"] == "retry_exhausted"
+    assert out["_last_action"] == "final_answer"  # 收口交给 finish，不再回环
+    assert out["_verify_attempts"] == 2  # 预算耗尽这档不推进计数
+    assert rt.finish(out)["status"] == "UNVERIFIED"
+
+
+def test_grader_failed_verdict_is_grader_error_and_not_a_death_sentence(tmp_path: Path) -> None:
+    """``failed`` 专指 rubric 本身无法评估：回环修不动调用方写的卷子，所以不回环、
+    不烧预算，直接 UNVERIFIED(grader_error)——裁判的故障不许毁掉一个可能真完成的任务。"""
+    aux = _aux('{"result": "failed", "explanation": "两条判据互相矛盾", "criteria": []}')
+    rt, _ = _rt(tmp_path, verify_max_retries=2, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC))
+    verdict = out["_verification"]
+    assert verdict["passed"] is False
+    assert verdict["reason"] == "grader_error"
+    assert out["_last_action"] == "final_answer"
+    assert out.get("_verify_attempts", 0) == 0
+    assert rt.finish(out)["status"] == "UNVERIFIED"
+    assert aux.call_count == 1  # 一次都不多花
+
+
+def test_grader_unparseable_output_is_grader_error(tmp_path: Path) -> None:
+    aux = _aux("我认为这份交付挺好的，不需要改。")
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC))
+    assert out["_verification"]["reason"] == "grader_error"
+    assert rt.finish(out)["status"] == "UNVERIFIED"
+
+
+def test_grader_client_exception_is_grader_error(tmp_path: Path) -> None:
+    aux = _RaisingAux()
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC))
+    assert out["_verification"]["reason"] == "grader_error"
+    assert out["_last_action"] == "final_answer"
+    assert rt.finish(out)["status"] == "UNVERIFIED"
+
+
+def test_rubric_declared_without_a_judge_fails_closed(tmp_path: Path) -> None:
+    """声明了 rubric 却没有独立裁判（aux 未配置）：一条没人能验的合格线不该被读成
+    交付——与 ``_expectation_failures`` 的「判不动即未过」同调，落 grader_error 不判死。"""
+    rt, _ = _rt(tmp_path)  # aux_llm=None + settings aux disabled -> runtime.aux_llm is None
+    assert rt.aux_llm is None
+    out = rt.reflect(_state(rubric=_RUBRIC))
+    assert out["_verification"]["passed"] is False
+    assert out["_verification"]["reason"] == "grader_error"
+    assert rt.finish(out)["status"] == "UNVERIFIED"
+
+
+def test_mechanical_expectation_runs_before_the_grader(tmp_path: Path) -> None:
+    """判定顺序（票面 §3）：确定性条件没过就带失败项回环，一次裁判都不叫——
+    能确定性解决的问题不花裁判的钱。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    out = rt.reflect(
+        _state(rubric=_RUBRIC, expectations=[_exp("artifact", "report.md")])
+    )
+    assert out["_verification"]["passed"] is False
+    assert any("report.md" in f for f in out["_verification"]["failures"])
+    assert aux.call_count == 0
+
+
+def test_no_rubric_never_summons_the_judge(tmp_path: Path) -> None:
+    """向后兼容的根钉子：没声明 rubric 的任务，行为与第一步逐字相同、零额外调用。"""
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    out = rt.reflect(_state())
+    assert out["_verification"]["passed"] is True
+    assert aux.call_count == 0
+
+
+def test_verify_disabled_with_rubric_is_zero_regression(tmp_path: Path) -> None:
+    """``verify_enabled=false`` 的零回归锚必须对新字段同样成立：闸门关掉 = 今天，
+    不判定、不叫裁判、仍 COMPLETED（票面 §8「验证关闭：等价今天」）。"""
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(tmp_path, verify_enabled=False, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC))
+    assert "_verification" not in out
+    assert out["_last_action"] == "final_answer"
+    assert aux.call_count == 0
+    assert rt.finish(out)["status"] == "COMPLETED"
+
+
+def test_grader_prompt_carries_the_rubric_verbatim(tmp_path: Path) -> None:
+    """rubric 是判据正文：到裁判手里时必须原样在场，不是又被模型转述过一遍的东西。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux)
+    rt.reflect(_state(rubric=_RUBRIC))
+    sent = " ".join(str(m.get("content") or "") for m in aux.requests[-1])
+    assert _RUBRIC in sent
