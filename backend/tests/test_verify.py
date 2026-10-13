@@ -771,3 +771,15 @@ def test_blank_rubric_is_not_a_declaration(tmp_path: Path) -> None:
     assert task.rubric == ""
     assert task.status is TaskStatus.COMPLETED
     assert aux.call_count == 0
+
+
+def test_ledger_block_is_bounded_and_says_so(tmp_path: Path) -> None:
+    """账本也要有上界：一次写 40 个文件的运行不该把无上限的提示词交给裁判。
+    截断是**说出来**的，不是悄悄做的——「未列出」意味着「此处无证据」，
+    而裁判的规则是正面确认不了的判据不许通过。"""
+    aux = _aux(_SATISFIED)
+    rt, _ = _rt(tmp_path, aux_llm=aux, with_file_tools=True)
+    calls = [_write_call(f"f{i}.md", f"第 {i} 份正文") for i in range(40)]
+    rt.reflect(_state(rubric=_RUBRIC, steps=[{"index": 1, "tool_calls": calls}]))
+    ledger = _ledger_block(_sent_prompt(aux))
+    assert "另有 10 次成功写调用未在此列出" in ledger

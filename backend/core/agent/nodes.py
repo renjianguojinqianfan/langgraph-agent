@@ -836,23 +836,29 @@ class AgentRuntime:
         return state
 
     def reflect(self, state: AgentState) -> AgentState:
-        """P0-B completion verification (Issue #25).
+        """P0-B completion verification (Issue #25), two layers (#46).
 
         A model's "I'm done" claim (``_last_action == "final_answer"``) is not
-        trusted blindly: re-check the concrete deliverables with deterministic
-        code — the strongest independence, since ``Path.exists()`` cannot be
-        argued with the way an LLM self-critique can ("structural hallucination").
+        trusted blindly. Layer one is deterministic code — ``Path.exists()`` cannot
+        be argued with the way an LLM self-critique can ("structural hallucination")
+        — and it runs alone: the caller's ``expectations``, S1 artifact integrity,
+        the S2 all-failed gate. Layer two is the independent grader, and it exists
+        because determinism cannot read what a deliverable *says*: it is invoked
+        only once layer one has nothing to report, on a client of its own
+        (:mod:`grader`), and it can only ever widen a non-pass — never condemn.
         On failure, inject the evidence and loop back to the planner by flipping
         ``_last_action`` to ``verify_failed`` (the existing ``_after_reflect``
         router already sends any non-``final_answer`` to ``planner``); after
         ``verify_max_retries`` the run ends UNVERIFIED (#46) — a completion we
         could not verify is no longer written as COMPLETED with a soft ``degraded``
-        stamp, and it is still never a FAILED, so a false negative cannot kill a
-        genuinely-done task either (P0-B Q4, ADR 0005).
+        stamp, and it is still never a FAILED, so a false negative — from either
+        layer — cannot kill a genuinely-done task (P0-B Q4, ADR 0005).
 
         Reject semantics, the ``_needs_confirm`` recompute block, and the graph
         topology are untouched. Error paths are skipped (``finish`` maps them to
-        FAILED). With ``verify_enabled`` false this is the original no-op shell.
+        FAILED). With ``verify_enabled`` false this is the original no-op shell:
+        no layer runs, and a declared ``rubric`` summons no judge either (#46's
+        zero-regression anchor covers the new field, not just the old ones).
         """
         if self._stopped(state):
             return state

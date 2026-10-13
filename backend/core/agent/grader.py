@@ -132,7 +132,9 @@ def _write_ledger(state: AgentState, producing: Set[str]) -> List[Dict[str, str]
             kind = "edit 片段（替换进去的内容，非全文）"
         else:
             body = str(args.get("content") or "")
-            kind = "write 全文"
+            # Only ``write`` proves it hands over a whole file; any other producer
+            # (a plugin declaring ``registers_artifact``) is labelled for what it is.
+            kind = "write 全文" if name == "write" else f"{name} 正文（取自调用参数）"
         ledger.append(
             {
                 "tool": name,
@@ -153,17 +155,24 @@ def _format_ledger(ledger: List[Dict[str, str]]) -> str:
             "本次运行没有任何成功的写调用——即没有文件可以算作本任务写出的产物。\n"
             "</write_ledger>"
         )
+    # The transcript is bounded and so is this block, or a run that wrote a hundred
+    # files would hand the judge an unbounded prompt. Truncation is *said* rather
+    # than silently applied: a dropped entry means "not evidenced here", and the
+    # judge's rule is that an unconfirmed criterion must not pass.
+    shown = ledger[:MAX_ITEMS]
     lines = [
         "<write_ledger>",
         "以下条目是本次运行中成功的写调用（产物归属的唯一证据；正文是当时写入的内容）：",
     ]
-    for i, entry in enumerate(ledger, 1):
+    for i, entry in enumerate(shown, 1):
         size = f"，{entry['size']} 字节" if entry["size"] else ""
         lines.append(
             f"{i}. {entry['tool']} -> {entry['path']}（{entry['kind']}{size}）\n"
             f"   落盘路径：{entry['resolved']}\n"
             f'   content："""{entry["content"]}"""'
         )
+    if len(ledger) > len(shown):
+        lines.append(f"（另有 {len(ledger) - len(shown)} 次成功写调用未在此列出）")
     lines.append("</write_ledger>")
     return "\n".join(lines)
 
@@ -213,7 +222,9 @@ def build_transcript(state: AgentState) -> str:
     items.append(f"<final_answer>\n{_clip(str(state.get('final_answer') or ''))}\n</final_answer>")
 
     if len(items) > MAX_ITEMS:
-        items = items[:1] + items[-(MAX_ITEMS - 1):]
+        # Exactly the trial's keep-policy: the caller's task, then the last
+        # MAX_ITEMS items — the middle is what a bounded judge never sees.
+        items = items[:1] + items[1:][-MAX_ITEMS:]
     return "\n".join(_clip(item) for item in items)
 
 
