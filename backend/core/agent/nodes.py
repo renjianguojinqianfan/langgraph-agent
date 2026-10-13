@@ -11,13 +11,13 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Tuple, cast
 
 from ...config import get_settings
 from ...utils.logging import get_logger
 from ..tools.base import BaseTool, ToolResult
 from ..tools.http_api import WRITE_METHODS
-from . import inject
+from . import grader, inject
 from .context import compress_messages, evict_tool_results
 from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, render_plan_section
 from .state import AgentState
@@ -836,23 +836,29 @@ class AgentRuntime:
         return state
 
     def reflect(self, state: AgentState) -> AgentState:
-        """P0-B completion verification (Issue #25).
+        """P0-B completion verification (Issue #25), two layers (#46).
 
         A model's "I'm done" claim (``_last_action == "final_answer"``) is not
-        trusted blindly: re-check the concrete deliverables with deterministic
-        code — the strongest independence, since ``Path.exists()`` cannot be
-        argued with the way an LLM self-critique can ("structural hallucination").
+        trusted blindly. Layer one is deterministic code — ``Path.exists()`` cannot
+        be argued with the way an LLM self-critique can ("structural hallucination")
+        — and it runs alone: the caller's ``expectations``, S1 artifact integrity,
+        the S2 all-failed gate. Layer two is the independent grader, and it exists
+        because determinism cannot read what a deliverable *says*: it is invoked
+        only once layer one has nothing to report, on a client of its own
+        (:mod:`grader`), and it can only ever widen a non-pass — never condemn.
         On failure, inject the evidence and loop back to the planner by flipping
         ``_last_action`` to ``verify_failed`` (the existing ``_after_reflect``
         router already sends any non-``final_answer`` to ``planner``); after
         ``verify_max_retries`` the run ends UNVERIFIED (#46) — a completion we
         could not verify is no longer written as COMPLETED with a soft ``degraded``
-        stamp, and it is still never a FAILED, so a false negative cannot kill a
-        genuinely-done task either (P0-B Q4, ADR 0005).
+        stamp, and it is still never a FAILED, so a false negative — from either
+        layer — cannot kill a genuinely-done task (P0-B Q4, ADR 0005).
 
         Reject semantics, the ``_needs_confirm`` recompute block, and the graph
         topology are untouched. Error paths are skipped (``finish`` maps them to
-        FAILED). With ``verify_enabled`` false this is the original no-op shell.
+        FAILED). With ``verify_enabled`` false this is the original no-op shell:
+        no layer runs, and a declared ``rubric`` summons no judge either (#46's
+        zero-regression anchor covers the new field, not just the old ones).
         """
         if self._stopped(state):
             return state
@@ -871,12 +877,31 @@ class AgentRuntime:
         attempts = int(state.get("_verify_attempts", 0) or 0)
         max_retries = int(getattr(settings, "verify_max_retries", 2))
 
+        # The deterministic layer runs first and alone if it already found a miss:
+        # a mechanically decidable gap costs no judge tokens, and the model gets
+        # the concrete failure instead of a second opinion on it (#46 spec §3).
+        grader_error = False
+        if not failures:
+            failures, grader_error = self._grade_against_rubric(state)
+
         if not failures:
             state["_verification"] = {
                 "passed": True, "failures": [], "attempts": attempts, "reason": "",
             }
             self._publish("verification", dict(state["_verification"], task_id=self.task_id))
             return state  # _last_action stays final_answer -> _after_reflect -> finish
+
+        if grader_error:
+            # The judge could not produce a verdict (absent / raised / unparseable),
+            # or found the rubric itself unevaluable. Neither is the task's fault, so
+            # this does not loop and does not burn retry budget — it terminates as
+            # UNVERIFIED(reason=grader_error), which is still not a FAILED (ADR 0005).
+            state["_verification"] = {
+                "passed": False, "failures": failures, "attempts": attempts,
+                "reason": "grader_error",
+            }
+            self._publish("verification", dict(state["_verification"], task_id=self.task_id))
+            return state  # keep final_answer -> finish -> UNVERIFIED
 
         if attempts >= max_retries:
             # Q4: never FAIL on a verification miss — but the terminal state is now
@@ -975,8 +1000,9 @@ class AgentRuntime:
         flagged. Artifacts are read from the manager's authoritative side (P3
         copy semantics) with a getattr guard for SimpleNamespace test fakes.
 
-        Still NOT checked here: semantic grading of what a deliverable says (that is
-        #46's second step — an independent grader over a declared rubric).
+        Still NOT checked here: what a deliverable *says*. That is the rubric half
+        of the same contract (#46 second step), judged by the independent grader in
+        :mod:`grader` — see :meth:`_grade_against_rubric` for why it runs after this.
         """
         failures: List[str] = self._expectation_failures(state)
         tm_states = getattr(self.tm, "_active_states", None) or {}
@@ -1002,6 +1028,38 @@ class AgentRuntime:
                 f"全程 {n_failed} 个工具调用失败且无任何成功产物，却声称完成"
             )
         return failures
+
+    def _grade_against_rubric(self, state: AgentState) -> Tuple[List[str], bool]:
+        """Judge the caller's free-text ``rubric`` with the independent grader (#46).
+
+        Returns ``(failures, grader_error)``. No rubric declared -> ``([], False)``,
+        i.e. the task behaves exactly as it did before this field existed and no aux
+        call is made; a satisfied verdict -> ``([], False)`` lets the run complete.
+
+        ``grader_error`` True means the *judge* failed rather than the work: an
+        unevaluable rubric, an absent aux client, an exception, an unparseable
+        answer. ``reflect`` turns that into a terminal UNVERIFIED instead of a
+        loop-back, because asking the model to try again cannot repair a document its
+        caller wrote — and because a judge outage must not spend retry budget.
+
+        Authorship and content evidence are assembled in :mod:`grader`, where the
+        two leniency holes measured in the #46 trial are closed by construction.
+        """
+        rubric = str(state.get("rubric") or "").strip()
+        if not rubric:
+            return [], False
+        # Same ADR 0004 line as the product ledger: only a tool declaring
+        # ``registers_artifact`` can produce a deliverable, so ``read`` / ``ls``
+        # results never reach the judge as proof of authorship.
+        producing = {
+            t.name for t in self.tools.values() if getattr(t, "registers_artifact", False)
+        }
+        verdict = grader.grade_rubric(self.aux_llm, rubric, state, producing)
+        if verdict["verdict"] == grader.VERDICT_SATISFIED:
+            return [], False
+        if verdict["verdict"] == grader.VERDICT_NEEDS_REVISION:
+            return list(verdict["failures"]), False
+        return list(verdict["failures"]), True
 
     def finish(self, state: AgentState) -> AgentState:
         """Map the run onto a terminal status (issue #46, ADR 0005).

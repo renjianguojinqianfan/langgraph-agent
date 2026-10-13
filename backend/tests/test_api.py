@@ -111,6 +111,31 @@ def test_create_task_rejects_undecidable_expectation(client):
         assert client.post("/api/tasks", json=body).status_code == 422
 
 
+# ── #46 第二步：rubric 声明面（REST 一侧）────────────────────────────────────
+def test_create_task_accepts_declared_rubric(client):
+    """「做完长什么样」是一段调用方给的自然语言，也要落进任务记录、原样读得回来。
+    机械 expectation 说得出「哪个文件」，说不清「报告得有料」——后者就是 rubric。"""
+    tid = client.post(
+        "/api/tasks",
+        json={
+            "input": "调研并写成 report.md",
+            "expectations": [{"type": "artifact", "target": "report.md"}],
+            "rubric": "报告含结论小节，且引用了至少两个来源",
+        },
+    ).json()["data"]["task_id"]
+    task = client.get(f"/api/tasks/{tid}").json()["data"]
+    assert task["rubric"] == "报告含结论小节，且引用了至少两个来源"
+    # 两条声明互不覆盖：机械条件仍在同一条契约上
+    assert task["expectations"] == [{"type": "artifact", "target": "report.md"}]
+
+
+def test_create_task_without_rubric_keeps_today_shape(client):
+    """没声明 rubric = 今天的任务：字段是空串，裁判一次都不该被叫起。"""
+    tid = client.post("/api/tasks", json={"input": "首都是哪里"}).json()["data"]["task_id"]
+    task = client.get(f"/api/tasks/{tid}").json()["data"]
+    assert task["rubric"] == ""
+
+
 def test_get_task_returns_full_task(client):
     tid = client.post("/api/tasks", json={"input": "write a file via api"}).json()["data"]["task_id"]
     r = client.get(f"/api/tasks/{tid}")

@@ -81,6 +81,8 @@ export interface Task {
   subtasks?: SubTask[]; // P1: sub-agent results
   verification?: Verification | null; // P0-B: 完成验证结论（#46 起 reason 取代 degraded）
   expectations?: Expectation[]; // #46: 调用方声明的合格线；空 = 信息型任务
+  rubric?: string; // #46 第二步：语义合格线（后端 Task.rubric，"" = 未声明）。暂无消费者，
+                   // 但 GET /api/tasks/{id} 会返回它——镜像契约面保持同形，别让字段静默差一格
 }
 
 // --- #46: 声明式验收 ---

@@ -302,6 +302,77 @@ def test_expect_flag_wired_into_parser() -> None:
     assert build_parser().parse_args(["-p", "x"]).expect == []
 
 
+# ── #46 第二步：rubric 声明面（headless 一侧）────────────────────────────────
+def test_rubric_flag_wired_into_parser() -> None:
+    """评测台要能声明「做完长什么样」——rubric 是这一段自然语言的唯一入口。"""
+    args = build_parser().parse_args(["-p", "x", "--rubric", "报告含结论小节"])
+    assert args.rubric == "报告含结论小节"
+    assert build_parser().parse_args(["-p", "x"]).rubric == ""
+
+
+def test_rubric_without_usable_verdict_exits_unverified(tmp_path: Path) -> None:
+    """声明了 rubric、裁判给不出判决 → 评测台拿到 4（UNVERIFIED）而不是 1（FAILED）。
+
+    裁判故障不判死（#46 §4）：未脚本化的 :class:`MockAuxLLMClient` 返回空内容，
+    正是「裁判自己出错」这一档，所以这条 e2e 不需要往 headless 里塞判决。
+    """
+    work = tmp_path / "work"
+    settings = make_settings(
+        tmp_path,
+        artifacts_dir=str(work),
+        trace_dir=str(tmp_path / "traces"),
+        risk_scan_enabled=False,
+        checkpoint_enabled=False,
+        subagent_enabled=False,
+        aux_llm_enabled=True,
+        aux_llm_use_mock=True,
+    )
+    result = _run_once(
+        settings,
+        "把调研写成 report.md",
+        work,
+        auto_approve=True,
+        timeout=60.0,
+        llm_client=_write_mock(),
+        expectations=[{"type": "artifact", "target": "hello.txt"}],
+        rubric="报告要给出结论小节",
+    )
+    assert result["status"] == "UNVERIFIED"
+    assert result["exit_code"] == EXIT_UNVERIFIED
+    assert result["verification"] is not None
+    assert result["verification"]["reason"] == "grader_error"
+
+
+def test_rubric_absent_never_reaches_the_judge(tmp_path: Path) -> None:
+    """零回归钉子：没声明 rubric 的任务，裁判一次都不被叫起，退出码仍是 0。
+
+    aux 在这里是开着的（mock）——所以「没调用」是真的没调用，不是没有客户端。
+    """
+    work = tmp_path / "work"
+    settings = make_settings(
+        tmp_path,
+        artifacts_dir=str(work),
+        trace_dir=str(tmp_path / "traces"),
+        risk_scan_enabled=False,
+        checkpoint_enabled=False,
+        subagent_enabled=False,
+        aux_llm_enabled=True,
+        aux_llm_use_mock=True,
+    )
+    result = _run_once(
+        settings,
+        "write hello",
+        work,
+        auto_approve=True,
+        timeout=60.0,
+        llm_client=_write_mock(),
+    )
+    assert result["status"] == "COMPLETED"
+    assert result["exit_code"] == EXIT_COMPLETED
+    assert result["verification"] is not None
+    assert result["verification"]["reason"] == ""
+
+
 def test_cli_expectation_kinds_match_the_schema() -> None:
     """两种形态只该有一份权威：CLI 的 kinds 漂移开 schemas 的 Literal 就是漏网。"""
     from typing import get_args

@@ -65,6 +65,7 @@ def create_task(
         payload.title,
         payload.input.strip(),
         expectations=[e.model_dump() for e in payload.expectations],
+        rubric=payload.rubric,
     )
     return _envelope(data={"task_id": task_id})
 

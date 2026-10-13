@@ -2,7 +2,7 @@
 
 > 生成于 2026-09-15，经 `/grilling` 两轮收敛（Round 1 Q1–Q7 + Round 2 Q8–Q13，用户「全按推荐」）。
 > 上游依据：`docs/capability-first-principles.md`（P7 / §六 P0-B）、`docs/roadmap-pawbench.md`（§三 能力清单、M2 前置）。
-> 本文件是 P0-B 的权威设计源。**2026-09-15 经代码实证 review 修订**：补 error 路径守卫、headless 结果暴露、S2 三重收窄（详见 §三 / §4.2 / §4.5）。关联 Issue：#25（初版落地）→ **#46（2026-10-11 第一步修订）**：终态换 `UNVERIFIED`、`degraded` 布尔换 `verification.reason`、新增调用方声明的 `expectation`、循环入口清扫悬空 `tool_call`。**Q4 的安全原则（绝不因验证误判判 FAILED）不变，改的是终态命名与机器边界**——见 [ADR 0005](../adr/0005-terminal-status-unverified.md) / [ADR 0006](../adr/0006-expectations-declared-by-caller.md)，本文各节「#46 修订」标注以那两份为准。
+> 本文件是 P0-B 的权威设计源。**2026-09-15 经代码实证 review 修订**：补 error 路径守卫、headless 结果暴露、S2 三重收窄（详见 §三 / §4.2 / §4.5）。关联 Issue：#25（初版落地）→ **#46（2026-10-11 第一步修订）**：终态换 `UNVERIFIED`、`degraded` 布尔换 `verification.reason`、新增调用方声明的 `expectation`、循环入口清扫悬空 `tool_call`。**Q4 的安全原则（绝不因验证误判判 FAILED）不变，改的是终态命名与机器边界**——见 [ADR 0005](../adr/0005-terminal-status-unverified.md) / [ADR 0006](../adr/0006-expectations-declared-by-caller.md)，本文各节「#46 修订」标注以那两份为准。**#46（2026-10-13 第二步）**：Q1 里「留 P1」的 **B（`aux_llm` 独立裁判）已落地**，故 Q5 那句「零 LLM 成本」不再无条件成立（只有声明了 `rubric` 的任务才花 aux token，且确定性判据先行、有缺口一次都不叫裁判）；§三 与 §八 里「语义级内容打分仍是 #46 第二步」这类**现在时**表述自本日起作废。决策与残留风险见 [ADR 0007](../adr/0007-grader-error-not-fatal.md)，开工前置的假阴性率实测见 [grader 试测记录](../grader-fn-trial-2026-10-13.md)。
 
 ## 一、动机与目标
 
@@ -40,7 +40,7 @@ reflect 在 `_last_action == "final_answer"` 且 `verify_enabled` 且未 stop �
 - **no-op PASS**（Q9）：`无 artifact 且无 failed tool_call` → 直接通过（纯问答/推理任务不被骚扰）。
 - **判定**：`failures = E失败项 ∪ S1失败项 ∪ S2失败项`；`passed = (failures 为空)`；`passed=false` 且声称完成 → 终态 `UNVERIFIED`（不写 COMPLETED）。
 
-**明确不做（P0-B 边界）**：completeness（「该产出却没产出」）——#46 第一步已把它**接住**，但只接住**调用方声明过**的那部分（E），没有声明就仍无从得知任务本来欠什么。语义级内容打分（LLM 裁判）仍是 #46 第二步。
+**明确不做（P0-B 边界）**：completeness（「该产出却没产出」）——#46 第一步已把它**接住**，但只接住**调用方声明过**的那部分（E），没有声明就仍无从得知任务本来欠什么。语义级内容打分（LLM 裁判）已于 **#46 第二步**（2026-10-13）落地，见 [ADR 0007](../adr/0007-grader-error-not-fatal.md)。
 
 ## 四、实现方案
 
@@ -137,6 +137,9 @@ def reflect(self, state):
 
 ## 八、明确不做（划到 P1）→ **#46 部分收编**
 - completeness 验证（声明式预期产物 / 结构化验收标准 = Q1 D）：**第一步已落**，但只覆盖**调用方声明过**的完成条件（`expectation`，[ADR 0006](../adr/0006-expectations-declared-by-caller.md)）——没声明的任务仍然问不出「本来欠什么」，这是有意保留的边界不是漏洞。
-- LLM 裁判层（Q1 B，aux_llm **独立**判者——绝不让主模型自评）：#46 **第二步**，开工前置是先量假阴性率（见票面），不可接受就缩小判据、而不是把终态改回 COMPLETED。
+- LLM 裁判层（Q1 B，aux_llm **独立**判者——绝不让主模型自评）：#46 **第二步已于 2026-10-13 落地**。
+  当时写下的开工前置是先量假阴性率、不可接受就缩小判据而不是把终态改回 COMPLETED——前置结果
+  是假阴性 **0/24 与 0/23**（两口径都是 0），所以判据未缩；真风险在反方向（裁判偏松），
+  处理见 [试测记录](../grader-fn-trial-2026-10-13.md) 与 ADR 0007 第 5 条。
 - 人工复核出口（把 `UNVERIFIED` 接受为 `COMPLETED`）：仍未做，是 [ADR 0005](../adr/0005-terminal-status-unverified.md) 的重开条件。
 - 前端 UI 的 verification 展示：#46 起已补终态徽章与失败项（见 §4.5）。
