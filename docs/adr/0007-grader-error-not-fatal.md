@@ -64,8 +64,9 @@ status: accepted
 
 - `verification.reason` 的 `grader_error` 一档有了生产者（第一步只是留位、没人发它）。
 - 裁判故障与验收未过在**终态上同类**（都 `UNVERIFIED`）、在**原因上可分**（`reason` 不同），
-  所以下游要按两件事处理：`retry_exhausted` / `max_steps` 是「工作没达标」，
-  `grader_error` 是「我们没能判」。
+  所以下游要按两件事处理：`retry_exhausted` / `rubric_exhausted` / `max_steps` 是「工作没达标」，
+  `grader_error` 是「我们没能判」。（#132 返工 C：两本账烧完分名后，语义账耗尽是
+  `rubric_exhausted`，与机械账的 `retry_exhausted` 并列归在这一族。）
 - 声明 rubric 却不配 aux 的调用方会看到 `UNVERIFIED`，需要 `.env.example` / README 明确
   这条耦合（`aux_llm_enabled` + `aux_llm_model` 是 grader 的前置）。
 - 离线测试面复用既有的 `aux_llm_use_mock`，不新造 mock 客户端。

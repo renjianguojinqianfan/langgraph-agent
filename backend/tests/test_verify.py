@@ -553,15 +553,35 @@ def test_grader_needs_revision_has_its_own_budget(tmp_path: Path) -> None:
 
 
 def test_rubric_budget_exhaustion_ends_unverified(tmp_path: Path) -> None:
-    """裁判那本账花完 → retry_exhausted 收口、终态 UNVERIFIED、绝不 FAILED（ADR 0005）。"""
+    """裁判那本账花完 → rubric_exhausted 收口、终态 UNVERIFIED、绝不 FAILED（ADR 0005）。
+
+    #132 返工 C 重裁：两本账烧完各叫各的名字（机械账 ``retry_exhausted``、语义账
+    ``rubric_exhausted``），运维从 reason 要能看出是哪本账花光。本条原钉的
+    ``retry_exhausted`` 是分名之前的形状——那条决定正是被这次返工改掉的。
+    """
     aux = _aux(_NEEDS_REVISION)
     rt, _ = _rt(tmp_path, verify_max_retries=2, verify_rubric_max_retries=1, aux_llm=aux)
     out = rt.reflect(_state(rubric=_RUBRIC, _rubric_attempts=1))
     verdict = out["_verification"]
     assert verdict["passed"] is False
-    assert verdict["reason"] == "retry_exhausted"
+    assert verdict["reason"] == "rubric_exhausted"
     assert out["_last_action"] == "final_answer"  # 收口交给 finish，不再回环
     assert out["_rubric_attempts"] == 1  # 预算耗尽这档不推进计数
+    assert rt.finish(out)["status"] == "UNVERIFIED"
+
+
+def test_rubric_exhausted_after_max_retries(tmp_path: Path) -> None:
+    """语义账耗尽的镜像形状（对 ``test_unverified_after_max_retries`` 那条机械账用例）：
+    裁判持续 ``needs_revision``、默认闸花光 → ``rubric_exhausted`` 收口，终态
+    UNVERIFIED、绝不 FAILED（ADR 0005；#132 返工 C 补的分名一档）。
+    """
+    aux = _aux(_NEEDS_REVISION)
+    rt, _ = _rt(tmp_path, verify_max_retries=2, verify_rubric_max_retries=2, aux_llm=aux)
+    out = rt.reflect(_state(rubric=_RUBRIC, _rubric_attempts=2))  # 语义账已花光
+    assert out["_verification"]["passed"] is False
+    assert out["_verification"]["reason"] == "rubric_exhausted"
+    assert "degraded" not in out["_verification"]
+    assert out["_last_action"] == "final_answer"  # router still routes to finish
     assert rt.finish(out)["status"] == "UNVERIFIED"
 
 

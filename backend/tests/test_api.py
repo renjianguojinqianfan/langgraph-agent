@@ -309,6 +309,29 @@ def test_review_endpoint_requires_both_fields(client):
     )
 
 
+def test_review_endpoint_rejects_overlong_fields(client):
+    """上界也是形状门的一部分：`reviewer`/`note` 原样进 Task.review、trace JSONL 与 SSE
+    （全仓零脱敏），无界自由文本在这条链路上没有第二道尺寸关卡——所以在边界上拒（422），
+    而不是等落盘时悄悄截断。"""
+    tid = _seed_unverified(client, "rev4")
+    assert (
+        client.post(
+            f"/api/tasks/{tid}/review",
+            json={"reviewer": "x" * 65, "note": "人工比对过 report.md"},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            f"/api/tasks/{tid}/review",
+            json={"reviewer": "opencode", "note": "理由" * 1001},
+        ).status_code
+        == 422
+    )
+    # 被拒的记录一字未动：复核没有发生，终态仍是 UNVERIFIED
+    assert client.get(f"/api/tasks/{tid}").json()["data"]["status"] == "UNVERIFIED"
+
+
 def test_review_endpoint_conflict_when_not_unverified(client):
     tid = client.post("/api/tasks", json={"input": "write a file via api"}).json()["data"]["task_id"]
     assert _wait_done(client, tid) == "COMPLETED"

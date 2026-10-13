@@ -45,7 +45,7 @@ reflect 在 `_last_action == "final_answer"` 且 `verify_enabled` 且未 stop �
 ## 四、实现方案
 
 ### 4.1 状态字段（`state.py` AgentState 追加）
-- `_verification: Dict[str, Any]` — `{passed: bool, failures: List[str], attempts: int, reason: str}`（**#46**：`reason` ∈ `"" | pending | retry_exhausted | max_steps | grader_error`，取代旧的 `degraded` 布尔）
+- `_verification: Dict[str, Any]` — `{passed: bool, failures: List[str], attempts: int, reason: str}`（**#46**：`reason` ∈ `"" | pending | retry_exhausted | rubric_exhausted | max_steps | grader_error`，取代旧的 `degraded` 布尔；**#132 返工 C**：两本账烧完分名，语义那本落 `rubric_exhausted`）
 - `expectations: List[Dict[str, str]]` — **#46 新增**：`[{type: artifact|tool_success, target}]`，由调用方在提交时给；落进持久化 `Task` 所以 resume 后仍按同一条线判
 - `_verify_attempts: int` — 验证失败回环计数（独立于 `step_index`）
 - 更新 `_last_action` 注释取值集：追加 `verify_failed`（`_last_action` 是 `str` 非 Literal，仅改注释，无类型面变更）
@@ -107,7 +107,7 @@ def reflect(self, state):
 2. **S1 产物消失**：登记后删文件 → `exists()==False` → 失败回环。
 3. **S2 全程失败 + 收窄反例**：零成功产物 + 零成功工具 + ≥1 failed + final_answer → 判失败回环；**反例**：1 个成功工具（web_search）+ 1 个 failed + 零产物（纯问答）→ **PASS 不打回**。
 4. **Q9 no-op**：纯 final_answer、无 artifact 无 failed tool → 直接 PASS（attempts=0，不回环）。
-5. **Q3/Q4 预算耗尽（#46 重裁）**：持续失败 → attempts 达 `verify_max_retries` → 终态 **`UNVERIFIED` + `reason="retry_exhausted"`**，**不 FAILED**（原用例名 `test_degrade_after_max_retries` 已改 `test_unverified_after_max_retries`，并把旧版漏掉的那一半补上：reflect 的输出要喂 `finish` 断终态，而不只断 `_last_action`）。
+5. **Q3/Q4 预算耗尽（#46 重裁）**：持续失败 → attempts 达 `verify_max_retries` → 终态 **`UNVERIFIED` + `reason="retry_exhausted"`**，**不 FAILED**（原用例名 `test_degrade_after_max_retries` 已改 `test_unverified_after_max_retries`，并把旧版漏掉的那一半补上：reflect 的输出要喂 `finish` 断终态，而不只断 `_last_action`）。**#132 返工 C 补**：语义那本账（`verify_rubric_max_retries`）烧完 → **`UNVERIFIED` + `reason="rubric_exhausted"`**，与机械账分名（`test_rubric_exhausted_after_max_retries` 钉节点 seam，`test_rubric_exhausted_exits_unverified` 钉 headless 的 `exit 4` + JSON 结果）。
 6. **Q5 关闸零回归**：`verify_enabled=false` → reflect 等价原空壳（final_answer 直接 finish）。
 7. **Q2/Q10 反馈注入**：失败回环后 messages 含带具体失败项的反馈消息。
 8. **Q7 子任务图**：`mode="subtask"` 同样验证。

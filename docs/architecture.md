@@ -381,7 +381,7 @@ classDiagram
 | `human_confirm_required` | `{tool_call_id, tool_name, input}` | 需用户确认（P1） |
 | `human_confirm_resolved` | `{tool_call_id, tool_name, outcome}` | 闸门收口的那一档终态：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（#57 AC5-AC6）。被 stop 打断的运行走不到 tool 节点、没有 `tool_result` 可挂标签，故终态必须单独播报一次。刻意不带 `input`：trace 不脱敏，同 id 的 `tool_call` 事件里已有入参 |
 | `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
-| `verification` | `{task_id, passed, failures, attempts, reason, loop_back?}` | 完成验证结论（P0-B）：`reason` ∈ `""`（通过）/ `pending`（回环中）/ `retry_exhausted`（预算耗尽 → 终态 `UNVERIFIED`）/ `max_steps`（被步数抢占，落库时兜底改写）/ `grader_error`（裁判自身不可用：aux 缺席 / 抛异常 / 回复不可解析 / rubric 无从评——**不回环、不烧重试预算**，ADR 0007）——#46 起它取代旧的 `degraded` 布尔；带 `loop_back` = 未达标、已注入证据回环 planner |
+| `verification` | `{task_id, passed, failures, attempts, reason, loop_back?}` | 完成验证结论（P0-B）：`reason` ∈ `""`（通过）/ `pending`（回环中）/ `retry_exhausted`（机械账预算耗尽 → 终态 `UNVERIFIED`）/ `rubric_exhausted`（语义账 `needs_revision` 预算耗尽，与机械账分名，#132 返工 C）/ `max_steps`（被步数抢占，落库时兜底改写）/ `grader_error`（裁判自身不可用：aux 缺席 / 抛异常 / 回复不可解析 / rubric 无从评——**不回环、不烧重试预算**，ADR 0007）——#46 起它取代旧的 `degraded` 布尔；带 `loop_back` = 未达标、已注入证据回环 planner |
 | `final_answer` | `{answer:str}` | 最终答案 |
 | `task_completed` | `{task_id, status}` | 完成 |
 | `task_failed` | `{task_id, error}` | 失败 |

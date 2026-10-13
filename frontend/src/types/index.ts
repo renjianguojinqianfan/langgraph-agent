@@ -97,7 +97,8 @@ export interface Verification {
   passed: boolean;
   failures: string[];
   attempts: number;
-  // "" 通过 | pending 回环中 | retry_exhausted 预算耗尽 | max_steps 被步数抢占
+  // "" 通过 | pending 回环中 | retry_exhausted 机械账预算耗尽 | rubric_exhausted
+  // | 语义账预算耗尽（#132 返工 C：两本账烧完分名）| max_steps 被步数抢占
   // | grader_error 裁判自身出错（#46 第二步）
   reason: string;
   loop_back?: boolean;

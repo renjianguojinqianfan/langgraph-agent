@@ -926,9 +926,11 @@ class AgentRuntime:
         if spent >= budget:
             # Q4: never FAIL on a verification miss — but the terminal state is now
             # UNVERIFIED, not COMPLETED (a claim we could not check is not a delivery).
+            # 两本账烧完要分名：机械账 retry_exhausted、语义账 rubric_exhausted——
+            # 分账之后运维从 reason 就要能看出是哪本账花光，同名等于没分（#132 返工 C）。
             state["_verification"] = {
                 "passed": False, "failures": failures, "attempts": attempts,
-                "reason": "retry_exhausted",
+                "reason": "rubric_exhausted" if not deterministic else "retry_exhausted",
             }
             self._publish("verification", dict(state["_verification"], task_id=self.task_id))
             return state  # keep final_answer -> finish -> UNVERIFIED

@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from backend.config import Settings
 from backend.core.agent.nodes import CONFIRM_AUTO_APPROVED
-from backend.core.llm.client import LLMClient, LLMResponse, MockLLMClient
+from backend.core.llm.client import LLMClient, LLMResponse, MockAuxLLMClient, MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.headless import (
     _RESULT_KEYS,
@@ -41,6 +41,7 @@ from backend.headless import (
     main,
     run_check,
 )
+from backend.services import task_manager as task_manager_module
 from backend.tests.conftest import make_settings
 
 
@@ -341,6 +342,51 @@ def test_rubric_without_usable_verdict_exits_unverified(tmp_path: Path) -> None:
     assert result["exit_code"] == EXIT_UNVERIFIED
     assert result["verification"] is not None
     assert result["verification"]["reason"] == "grader_error"
+
+
+# 裁判脚本：持续 needs_revision，把语义那本账烧完（判决形状见 test_verify.py 的协议注释）。
+_NEEDS_REVISION = (
+    '{"result": "needs_revision", "explanation": "缺结论", '
+    '"criteria": [{"name": "结论小节", "passed": false, "gap": "报告没有结论小节"}]}'
+)
+
+
+def test_rubric_exhausted_exits_unverified(tmp_path: Path, monkeypatch: Any) -> None:
+    """语义账烧完 → 评测台拿到 4（UNVERIFIED + reason=rubric_exhausted），不是 1。
+
+    与机械账那一支（``test_expectation_unmet_exits_unverified``）对偶：两本账烧完在
+    reason 上分名（#132 返工 C），headless 的 JSON 结果要把这一档原样带出来给
+    PawBench 那侧数。裁判在这儿是脚本化的——``_run_once`` 自己造 TaskManager、aux
+    从 settings 建，所以把工厂换成持续 needs_revision 的 mock。
+    """
+    work = tmp_path / "work"
+    settings = make_settings(
+        tmp_path,
+        artifacts_dir=str(work),
+        trace_dir=str(tmp_path / "traces"),
+        risk_scan_enabled=False,
+        checkpoint_enabled=False,
+        subagent_enabled=False,
+        aux_llm_enabled=True,
+        aux_llm_use_mock=True,
+        verify_rubric_max_retries=1,
+    )
+    aux = MockAuxLLMClient(role_responses={"grader": _NEEDS_REVISION})
+    monkeypatch.setattr(task_manager_module, "create_aux_llm_client", lambda _s: aux)
+    result = _run_once(
+        settings,
+        "把调研写成 report.md",
+        work,
+        auto_approve=True,
+        timeout=60.0,
+        llm_client=_write_mock(),
+        expectations=[{"type": "artifact", "target": "hello.txt"}],
+        rubric="报告要给出结论小节",
+    )
+    assert result["status"] == "UNVERIFIED"
+    assert result["exit_code"] == EXIT_UNVERIFIED
+    assert result["verification"] is not None
+    assert result["verification"]["reason"] == "rubric_exhausted"
 
 
 def test_rubric_absent_never_reaches_the_judge(tmp_path: Path) -> None:

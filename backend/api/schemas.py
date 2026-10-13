@@ -193,10 +193,21 @@ class ReviewRequest(BaseModel):
     The second is as strong as this platform's identity model gets — token auth (P1
     item 5) authenticates that a caller may act, not which person it is, so the name
     is self-declared and is recorded as such.
+
+    Both are also bounded above, and that bound is this paragraph's whole point:
+    whatever arrives here is persisted verbatim on ``Task.review``, written to the
+    trace JSONL in the clear (``trace.py`` is a bare ``json.dumps``; the repo redacts
+    nothing anywhere), and broadcast over SSE — three sinks with no size limit of
+    their own. Validating the size at the request edge is the cheap half of bounding
+    it, and the request model is where this repo already refuses an empty
+    declaration (``Expectation.target`` is ``min_length=1``). The ceilings are
+    deliberately generous: a waiver is a name and a sentence or two, not a document,
+    and overlong input is a 422 — never a silent truncation at write time.
     """
 
-    reviewer: str = Field(min_length=1)
-    note: str = Field(min_length=1)
+    # 上界的理由见 docstring：无界自由文本原样进不脱敏的持久化 / trace / SSE 三处。
+    reviewer: str = Field(min_length=1, max_length=64)
+    note: str = Field(min_length=1, max_length=2000)
 
 
 class AuthTokenRequest(BaseModel):
