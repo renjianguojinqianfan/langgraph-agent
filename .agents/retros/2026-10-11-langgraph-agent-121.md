@@ -31,15 +31,20 @@
   贴 copy-paste 命令（`gh api repos/<owner>/<repo>/pulls/<n>/files --jq '.[].path'`
   对全部 open PR 求交），提 PR 前与评审时各跑一遍。
 
-### C6. UI 验收没有 agent 可用的信息通道 · Information access
+### C6. UI 验收没有 agent 可用的信息通道 · Information access · 复现 2/2
 
-- **事实**：本票前端改动（UNVERIFIED 徽章 orange-600、失败项文案 `failures.join`）
-  的验证四态里「浏览器人肉」只能记「**跳过**」——实施与评审两侧都没有看图能力，
-  机械三门（tsc / check:sse / build）之外的纯人眼风险（与 INTERRUPTED 的 amber 是否
-  一眼分得清、长失败文案截断）无人看过，只能记账到发版前。
+- **事实**（#121 会话）：本票前端改动（UNVERIFIED 徽章 orange-600、失败项文案
+  `failures.join`）的验证四态里「浏览器人肉」只能记「**跳过**」——实施与评审两侧都没有
+  看图能力，机械三门（tsc / check:sse / build）之外的纯人眼风险（与 INTERRUPTED 的 amber
+  是否一眼分得清、长失败文案截断）无人看过，只能记账到发版前。
+- **复现 2（#125-#128 波次评审会话，2026-10-13，独立会话）**：同一缺口在**一波里
+  命中两票**——#70 的 AC「浏览器里 SubtaskList 渲染出一次真实派生」只能记「产物验收
+  交不出来，需 live key 或 #108」；#91 F1 的浏览器两腿留证在 #127 解除离线驱动阻塞
+  后**仍然交不出**——剩下的 blocker 就是「没有 agent 能看 UI」。两票的 AC 收口都卡在
+  同一格，且都只能挂「等有人开浏览器」。
 - **修法方向**：frontend 加 Playwright（或 puppeteer）截图 smoke——起 dev server、
-  注入 fixture 态 task（UNVERIFIED + failures）、对 TaskHeader / HistoryPanel 截图
-  落盘；把「跳过」变成「产物验收（截图）」。成本中等，收益覆盖所有前端 PR 的人眼项。
+  注入 fixture 态 task、对关键面截图落盘；把「跳过」变成「产物验收（截图）」。成本
+  中等，收益覆盖所有前端 PR 的人眼项（本波已两票实证其必要）。
 
 ### C7. PR 开后补 commit 无点名机制 · Coding standards（判断题，落文档）
 
@@ -51,13 +56,23 @@
   评论点明「哪个 commit、补了什么、为什么现在补」。docs-only 返工收端口径已要求读
   diff，点名让 diff 可定位。纯流程规则，无机械门候选。
 
-### C8. pwsh 下 gh 输出落盘再读出现 mojibake · Tool economy
+### C8. pwsh 下 gh/git 内容取证被编码与管道吃事 · Tool economy · 复现 2/2
 
-- **事实**：`gh pr view 121 --json body | Out-File -Encoding utf8` 落盘后用 read
+- **事实**（#121 会话）：`gh pr view 121 --json body | Out-File -Encoding utf8` 落盘后用 read
   工具读出 GBK 式乱码（PowerShell 5.1 的 utf8 带 BOM + 读取端编码推断不符），整篇
   body 重读一遍才继续；同会话 gh 直出 terminal 的中文渲染正常。
-- **修法方向**：本机 pwsh 会话里，长 JSON / body 要么直出 terminal，要么用 write
-  工具写临时文件（UTF-8 无 BOM，read 正常），别用 `Out-File -Encoding utf8` 中转。
+- **复现 2（#125-#128 波次评审会话，2026-10-13，独立会话）**：同一族故障四次变体——
+  ① `gh … --json body | Select-Object -First 1` 把多行字符串按行拆开，两次只取回
+  第一行（body 静默截断）；② `git grep -n … | ForEach-Object { $_.Line.Trim() }` 对
+  字符串输出用 MatchInfo 属性 → null 报错（grep 本身可能命中了，被管道吞掉）；③ 中文
+  pattern 走 `Select-String` 打在 piped git 输出上静默不命中（README 退出码段一次
+  假阴性，靠 `git grep` 字节级复核才翻案）；④ jq 程序里写 `;` 直接解析失败（四次）。
+  单次成本不大，但全是**静默型**失败——不报错、只给错答案，最贵。
+- **修法方向**（贴模式，不写工具）：本机 pwsh 取证的固定套路——内容比对用 `git grep`
+  （字节级、计数是 ASCII，中文 pattern 也走它）；多行捕获先进变量再处理，**绝不把多行
+  字符串管道给 `Select-Object -First`**；`gh pr diff` 不吃 pathspec（用 `git diff
+  <rev> -- <path>`）；jq 程序避免 `;`（一条程序一个表达式）。可并入 C3 修法方向那份
+  「贴命令」清单，单独一节。
 
 ## 观察项（本会话记录，不建议动）
 
