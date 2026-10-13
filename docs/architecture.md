@@ -47,7 +47,7 @@
 | Web 检索 | `duckduckgo-search`（默认免费）/ 预留 SerpAPI | ddgs ^4.0 | 不强制付费 Key |
 | 数据校验 | `pydantic` | ^2.7 | 模型与 API schema |
 | 前端框架 | React + Vite + TypeScript | react ^18.3、vite ^8.2 | 快速、类型安全 |
-| 前端样式 | Tailwind CSS | ^3.4 | 三栏布局、响应式 |
+| 前端样式 | Tailwind CSS | ^4.3 | 三栏布局、响应式；v4 起配置走 CSS-first（`@theme`），不再有 `tailwind.config.js`（#122）|
 | 状态管理 | Zustand | ^4.5 | 轻量、适合 SSE 事件累积 |
 | 图表/时间线 | 原生 DOM + Tailwind（不引入重型库） | — | 步骤时间线用列表即可 |
 
@@ -113,13 +113,12 @@ langgraph-agent/
     ├── vite.config.ts
     ├── tsconfig.json
     ├── tsconfig.node.json
-    ├── tailwind.config.js
-    ├── postcss.config.js
+    ├── postcss.config.js          # v4：插件是 @tailwindcss/postcss（无 autoprefixer）
     ├── index.html
     └── src/
         ├── main.tsx                 # React 入口
         ├── App.tsx                  # 根组件 + 三栏布局
-        ├── index.css                # Tailwind 指令 + 全局样式
+        ├── index.css                # v4 CSS-first：@import "tailwindcss" + @theme + @layer base
         ├── api/
         │   └── client.ts            # REST 封装 + SSE 订阅
         ├── types/
@@ -523,14 +522,14 @@ httpx>=0.27.0          # 供 http_api 工具使用
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^6.1.0",
-    "typescript": "^5.5.0",
-    "vite": "^8.2.2",
-    "tailwindcss": "^3.4.0",
     "postcss": "^8.4.0",
-    "autoprefixer": "^10.4.0"
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.5.0",
+    "vite": "^8.2.2"
   }
 }
 ```
