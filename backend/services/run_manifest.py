@@ -155,7 +155,11 @@ def _capability_lines(
             "type": "capability",
             "name": "completion_verification",
             "enabled": settings.verify_enabled,
-            "params": {"max_retries": settings.verify_max_retries},
+            "params": {
+                "max_retries": settings.verify_max_retries,
+                # #46 slice B: the grader's needs_revision loop is a separate book.
+                "rubric_max_retries": settings.verify_rubric_max_retries,
+            },
         },
         {
             "type": "capability",

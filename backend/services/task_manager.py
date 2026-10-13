@@ -26,6 +26,7 @@ from ..api.schemas import (
     StepRecord,
     SubTask,
     Task,
+    TaskReview,
     TaskStatus,
 )
 from ..config import Settings
@@ -1076,6 +1077,100 @@ class TaskManager:
             if self._trace is not None:
                 self._trace.close(task_id)
         return result
+
+    def accept_unverified(
+        self, task_id: str, *, reviewer: str, note: str
+    ) -> Dict[str, Any]:
+        """Accept an ``UNVERIFIED`` task as ``COMPLETED``, recording the act (#46 B).
+
+        The one human door on the terminal state — and it does **not** rewrite the
+        verdict. ``verification`` keeps saying ``passed: False`` with the reason it
+        earned, and the acceptance lands beside it as :class:`TaskReview` (who / when /
+        why / over which reason). That is the ruling ADR 0005's「重开条件」asked for:
+        人工接受**不算**「验证通过」—— it is a third source for ``COMPLETED``, next to
+        "verified" and "gate off", and it is attributable. Flipping ``passed`` here
+        would put the always-on yellow light back under a different stamp: the record
+        would claim a check that never happened.
+
+        Refusals raise ``RuntimeError`` (the route maps it to 409), in the same
+        synchronous style as ``resume`` / ``rollback``:
+
+        * still running / still unwinding — a verdict nobody has seen cannot be
+          pre-authorised, and the worker's own ``_finalize_terminal`` would then
+          overwrite this write;
+        * any terminal state but ``UNVERIFIED`` — including one already accepted, so
+          a second accept cannot rewrite the first one's grounds: one acceptance,
+          one record.
+
+        A blank ``note`` or ``reviewer`` raises ``ValueError`` (the route maps it to
+        400): an unattributed, unexplained overruling is not an audit trail, it is the
+        rubber stamp this method exists to replace.
+        """
+        reviewer = (reviewer or "").strip()
+        note = (note or "").strip()
+        if not reviewer or not note:
+            raise ValueError(
+                "acceptance needs a reviewer and a reason — 无人、无理由的接受就是橡皮图章"
+            )
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            live = self._threads.get(task_id)
+            if task.status in (TaskStatus.RUNNING, TaskStatus.PENDING) or (
+                live is not None and live.is_alive()
+            ):
+                raise RuntimeError(
+                    f"task {task_id} is {task.status.value}; "
+                    "acceptance requires a settled run (stop it first)"
+                )
+            if task.status is not TaskStatus.UNVERIFIED:
+                raise RuntimeError(
+                    f"task {task_id} is {task.status.value}; only UNVERIFIED tasks can be "
+                    "accepted, and an accepted one keeps its single record"
+                )
+            reason = str((task.verification or {}).get("reason") or "")
+            review = TaskReview(
+                at=_now(), reviewer=reviewer, note=note, overruled_reason=reason
+            )
+            # Reopen the audit trail for the review era (same pattern as rollback): the
+            # recorder detached when the run finished, so without this the acceptance
+            # reaches SSE subscribers but never the JSONL somebody replays later.
+            if self._trace is not None:
+                self._trace.attach(self.event_bus, task_id)
+            try:
+                # Published BEFORE the record is written, as in _finalize_terminal: an
+                # observer polling get_task() must never see COMPLETED ahead of event.
+                self.event_bus.publish(
+                    task_id,
+                    "task_accepted",
+                    {
+                        "task_id": task_id,
+                        "status": TaskStatus.COMPLETED.value,
+                        "reason": reason,
+                        "reviewer": reviewer,
+                        "note": note,
+                    },
+                )
+                task.review = review
+                task.status = TaskStatus.COMPLETED
+                task.updated_at = review.at
+                self.persistence.save_task(task)
+            finally:
+                if self._trace is not None:
+                    self._trace.close(task_id)
+        logger.info(
+            "task %s accepted as COMPLETED by reviewer=%s over UNVERIFIED(reason=%s)",
+            task_id,
+            reviewer,
+            reason or "(none)",
+        )
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "status": TaskStatus.COMPLETED.value,
+            "review": review.model_dump(),
+        }
 
     # ── human confirmation (P1-2) ──
     def request_confirm(self, task_id: str, tool_call_id: str):

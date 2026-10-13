@@ -386,6 +386,7 @@ classDiagram
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 被停止 |
 | `task_unverified` | `{task_id, status, reason}` | 跑完并声称完成、但验收没通过（#46，与 `task_interrupted` 同构）。`task_completed` 从此只在验证通过或验证关闭时发 |
+| `task_accepted` | `{task_id, status, reason, reviewer, note}` | 人工复核把 `UNVERIFIED` 接受为 `COMPLETED`（#46 第二步切片 B，REST `POST /api/tasks/{id}/review`）。改的是**终态**，`verification` 一字不动——`reason` 是被推翻的那条判定原因，`reviewer` / `note` 是留痕。一条任务只接受一次，第二次连同 `note` 一起被拒（409）；这一行也进 trace JSONL（发布点重新挂上记录器，同 `task_rollback`） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑启动（P3） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |

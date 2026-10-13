@@ -14,7 +14,9 @@ status: accepted
    由**独立裁判** `aux_llm` 判定，三值 `satisfied | needs_revision | failed`。
 2. **确定性层先行**：`expectation` 有缺口时不调裁判——机械可判的失败不需要第二意见，
    也不该花那份 token。
-3. `needs_revision` 注回对话续循环（复用第一步的 verify 回环预算；独立预算是后续切片的事）。
+3. `needs_revision` 注回对话续循环，烧**自己那本**预算（`verify_rubric_max_retries`；切片 A
+   曾与第一步的 `verify_max_retries` 共用一本账，切片 B 分账——共用时一次机械缺口会把语义
+   复核的回合提前烧光，「先确定性、后裁判」的顺序反而惩罚了 rubric）。
 4. **裁判自身故障**——aux 客户端缺席 / 调用抛异常 / 回复不可解析 / rubric 本身无从评——
    记 `UNVERIFIED(reason=grader_error)`：**不回环、不消耗重试预算、不判 `FAILED`**。
 5. 裁判的证据面按 [0004](0004-artifact-is-what-the-task-wrote.md) 同一条线收口：只有声明
@@ -72,7 +74,14 @@ status: accepted
 
 - 人工复核出口落地时（把 `UNVERIFIED` 接受为 `COMPLETED`，0005 的重开条件）：
   `grader_error` 是否应当比 `retry_exhausted` 更容易被人工放行，要一起拍。
+  → **2026-10-13 切片 B 已拍：不设按档门槛**——任何一档都能被人工接受，但接受的是哪一档记在
+  `Task.review.overruled_reason` 上（拦档只会让黄灯永远亮着；可数才是试测要的持续采样）。裁定正文在
+  [0005](0005-terminal-status-unverified.md) 的重开条件段，本条只留指针。
 - 若将来给裁判配独立重试预算，第 4 条「不烧预算」的边界要重述——那时要区分
   「被judge 的一方重试」与「judge 自己重试」。
+  → **2026-10-13 切片 B 已配**（`verify_rubric_max_retries` / `_rubric_attempts`，与第一步分账）：
+  第 4 条的「不烧预算」从此指**两本账都不烧**——`grader_error` 既不推进 `_verify_attempts`
+  也不推进 `_rubric_attempts`。而「被 judge 的一方重试」走的是 `_rubric_attempts` 那本，
+  与 judge 自己无关：裁判调用本身仍不重试（`grader.grade_rubric` 一次调用定判决）。
 - 出现「rubric 部分可评」的需求（多条合格线里只有一部分评不动）时，二值
   `grader_error / not` 不够用，要换成逐条状态。

@@ -19,6 +19,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.api.schemas import Task, TaskStatus
 from backend.api.sse import sse_response
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
@@ -244,3 +245,99 @@ def test_health_endpoint_reports_status(client):
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+# ── #46 第二步（切片 B）：人工复核出口 POST /api/tasks/{id}/review ──────────────
+def _seed_unverified(client, task_id: str = "rev1") -> str:
+    """Put a settled UNVERIFIED record in the store without running a graph for it.
+
+    The route's subject is the HTTP face of the door (status mapping + the envelope),
+    so the record is seeded; the state machine behind it is covered end-to-end in
+    ``test_unverified_review.py``.
+    """
+    client.app.state.persistence.save_task(
+        Task(
+            id=task_id,
+            title="t",
+            user_input="把调研写成 report.md",
+            status=TaskStatus.UNVERIFIED,
+            verification={
+                "passed": False,
+                "failures": ["声明的产物缺失：report.md"],
+                "attempts": 0,
+                "reason": "retry_exhausted",
+            },
+        )
+    )
+    return task_id
+
+
+def test_review_endpoint_accepts_unverified_task(client):
+    tid = _seed_unverified(client)
+    r = client.post(
+        f"/api/tasks/{tid}/review",
+        json={"reviewer": "opencode", "note": "人工看过 report.md，结论齐了"},
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "COMPLETED"
+    assert data["review"]["overruled_reason"] == "retry_exhausted"
+
+    task = client.get(f"/api/tasks/{tid}").json()["data"]
+    assert task["status"] == "COMPLETED"
+    # 机器判决原样在场：接受改的是终态，不是判定
+    assert task["verification"]["passed"] is False
+    assert task["review"]["note"] == "人工看过 report.md，结论齐了"
+
+
+def test_review_endpoint_rejects_blank_reason(client):
+    tid = _seed_unverified(client, "rev2")
+    assert (
+        client.post(f"/api/tasks/{tid}/review", json={"reviewer": "me", "note": "  "}).status_code
+        == 400
+    )
+    assert client.get(f"/api/tasks/{tid}").json()["data"]["status"] == "UNVERIFIED"
+
+
+def test_review_endpoint_requires_both_fields(client):
+    tid = _seed_unverified(client, "rev3")
+    # 缺字段 / 空字段 = 422（pydantic 的形状门），不是 400
+    assert client.post(f"/api/tasks/{tid}/review", json={"note": "x"}).status_code == 422
+    assert (
+        client.post(f"/api/tasks/{tid}/review", json={"reviewer": "me", "note": ""}).status_code
+        == 422
+    )
+
+
+def test_review_endpoint_conflict_when_not_unverified(client):
+    tid = client.post("/api/tasks", json={"input": "write a file via api"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "COMPLETED"
+    r = client.post(f"/api/tasks/{tid}/review", json={"reviewer": "me", "note": "想给它盖个章"})
+    assert r.status_code == 409
+
+
+def test_review_endpoint_second_round_keeps_first_record(client):
+    tid = _seed_unverified(client, "rev5")
+    assert (
+        client.post(
+            f"/api/tasks/{tid}/review", json={"reviewer": "a", "note": "第一条理由"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/tasks/{tid}/review", json={"reviewer": "b", "note": "换个理由再来"}
+        ).status_code
+        == 409
+    )
+    assert client.get(f"/api/tasks/{tid}").json()["data"]["review"]["reviewer"] == "a"
+
+
+def test_review_endpoint_unknown_task_is_404(client):
+    r = client.post("/api/tasks/nope/review", json={"reviewer": "me", "note": "x"})
+    assert r.status_code == 404
+
+
+def test_review_route_is_registered(client):
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert "/api/tasks/{task_id}/review" in paths

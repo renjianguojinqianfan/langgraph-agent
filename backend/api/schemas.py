@@ -121,6 +121,27 @@ class McpServerInfo(BaseModel):
     error: Optional[str] = None
 
 
+class TaskReview(BaseModel):
+    """One human acceptance of an ``UNVERIFIED`` verdict (#46 slice B).
+
+    Deliberately a *sibling* of :attr:`Task.verification`, never an edit to it: the
+    machine's verdict stays exactly as it was issued (``passed: False``, its original
+    ``reason``), and this record says who changed the terminal state, when, over
+    which verdict, and on what grounds. Flipping ``verification.passed`` would be the
+    rubber stamp ADR 0005 exists to prevent, wearing a different hat.
+
+    ``reviewer`` is self-declared because the platform has no user accounts — token
+    auth (P1 item 5) authenticates *that* a caller is allowed in, not *which* person
+    it is. ``overruled_reason`` copies the ``verification.reason`` the acceptance
+    walked over, so「哪一档被人工放过了」remains countable (#46 试测要的持续采样).
+    """
+
+    at: str
+    reviewer: str
+    note: str
+    overruled_reason: str
+
+
 class Task(BaseModel):
     id: str
     title: str = ""
@@ -136,6 +157,9 @@ class Task(BaseModel):
     risk_report: List[RiskItem] = Field(default_factory=list)  # P1 item 1
     subtasks: List[SubTask] = Field(default_factory=list)  # P1 item 2
     verification: Optional[Dict[str, Any]] = None  # P0-B: {passed, failures, attempts, reason}
+    # #46 slice B: one human acceptance of an UNVERIFIED verdict. Absent == nobody
+    # has overruled anything; ``verification`` above still holds the machine's say.
+    review: Optional[TaskReview] = None
     # #46: the completion contract this run is judged against (persisted, so a
     # resumed task is still held to what its caller declared).
     expectations: List[Expectation] = Field(default_factory=list)
@@ -156,6 +180,23 @@ class CreateTaskRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     tool_call_id: str
     approved: bool
+
+
+class ReviewRequest(BaseModel):
+    """Body of ``POST /api/tasks/{id}/review`` — the human review door (#46 slice B).
+
+    Accepting is the only review decision this platform has today (ADR 0005's
+    重开条件, settled by #46 B), hence no ``decision`` field yet — one verb, one door.
+
+    Both fields are required, because both are the point of the door: ``note`` is the
+    reason an unmet acceptance line is being waived, ``reviewer`` is who waived it.
+    The second is as strong as this platform's identity model gets — token auth (P1
+    item 5) authenticates that a caller may act, not which person it is, so the name
+    is self-declared and is recorded as such.
+    """
+
+    reviewer: str = Field(min_length=1)
+    note: str = Field(min_length=1)
 
 
 class AuthTokenRequest(BaseModel):

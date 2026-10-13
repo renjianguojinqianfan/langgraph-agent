@@ -158,6 +158,10 @@ function applyToTask(task: Task, ev: SSEvent): Task {
       return { ...task, status: "INTERRUPTED" };
     case "task_unverified":
       return { ...task, status: "UNVERIFIED" };
+    case "task_accepted":
+      // #46 切片 B：人工复核翻的是**终态**，verification 原样不动——徽章跟着状态走，
+      // 判定块继续显示「没过验收 + 原因」。复核人/理由的展示位是前端后续票的事。
+      return { ...task, status: "COMPLETED" };
     default:
       return task;
   }
