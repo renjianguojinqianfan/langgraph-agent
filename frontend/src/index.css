@@ -22,6 +22,16 @@ body {
   color: #e2e8f0;
 }
 
+/* #122 v4 preflight 不再给 button 设 cursor:pointer（v3 是 `button,[role=button]{cursor:pointer}`，
+   v4 删掉这条、回到浏览器默认）。本仓三栏界面整屏都是可点的 button（历史任务项 / Tab /
+   筛选 chip / 确认框两个按钮 / 回滚 / 登出），指针手势是最基本的可供性，按升级指南原样恢复；
+   放 @layer base 是为了 cursor-* utility 将来仍能盖它。删掉这一段 = 接受「按钮不再有手型」。 */
+@layer base {
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 /* Thin scrollbars for the panels. */
 *::-webkit-scrollbar {
   width: 8px;
