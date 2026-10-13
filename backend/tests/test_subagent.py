@@ -1397,6 +1397,32 @@ def test_subtask_unverified_folds_back_naming_the_missed_check(tmp_path):
     assert "crash" not in res.error.lower()  # 不许把没验过说成崩溃
 
 
+def test_subtask_cut_by_the_step_budget_reports_the_budget(tmp_path):
+    """``max_steps`` 抢占的回环：子任务里挂着未收口的 ``pending``，折叠不能说一个
+    没有后续的词。
+
+    上面那条是「预算花完」（``retry_exhausted``），本条是「预算还没花完、轮数先没了」——
+    ``verify_max_retries=1`` 留了一轮回环的额度，``max_steps=2`` 在它走回去之前把图掐了，
+    于是 ``_verification.reason`` 停在 ``pending``。主任务的 ``_finalize_terminal``
+    有这一处兜底，子任务侧过去没有：它会把 ``pending`` 原样递上去，父模型读到的
+    ``reason=pending`` 是「还在验」，而实际是「没轮次了」。同一个 fixture，只拧预算。
+    """
+    settings = make_settings(tmp_path, verify_max_retries=1, max_steps=2)
+    mock = _CountingMock(
+        plan=["p"],
+        tool_calls=[{"id": "f1", "name": "read", "arguments": {"path": "nope.txt"}}],
+        final_answer="我看完了",
+    )
+    tm = make_manager(settings, mock)
+
+    res = tm._subagent.run_subtask(_spec(subtask_id="budget:sub:1"))
+
+    assert res.status == "failed"
+    assert "UNVERIFIED" in res.error
+    assert "max_steps" in res.error  # 掐断它的是轮数预算，说得出名字
+    assert "pending" not in res.error  # 未收口的中间值不外传
+
+
 def test_subtask_never_inherits_the_parents_contract(tmp_path, monkeypatch):
     """切片 B 第 3 项的前提钉子：**验收只挂在声明的那一层**（#46 spec §8）。
 

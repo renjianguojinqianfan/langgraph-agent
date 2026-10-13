@@ -2,7 +2,7 @@
 
 > 生成于 2026-09-15，经 `/grilling` 两轮收敛（Round 1 Q1–Q7 + Round 2 Q8–Q13，用户「全按推荐」）。
 > 上游依据：`docs/capability-first-principles.md`（P7 / §六 P0-B）、`docs/roadmap-pawbench.md`（§三 能力清单、M2 前置）。
-> 本文件是 P0-B 的权威设计源。**2026-09-15 经代码实证 review 修订**：补 error 路径守卫、headless 结果暴露、S2 三重收窄（详见 §三 / §4.2 / §4.5）。关联 Issue：#25（初版落地）→ **#46（2026-10-11 第一步修订）**：终态换 `UNVERIFIED`、`degraded` 布尔换 `verification.reason`、新增调用方声明的 `expectation`、循环入口清扫悬空 `tool_call`。**Q4 的安全原则（绝不因验证误判判 FAILED）不变，改的是终态命名与机器边界**——见 [ADR 0005](../adr/0005-terminal-status-unverified.md) / [ADR 0006](../adr/0006-expectations-declared-by-caller.md)，本文各节「#46 修订」标注以那两份为准。**#46（2026-10-13 第二步）**：Q1 里「留 P1」的 **B（`aux_llm` 独立裁判）已落地**，故 Q5 那句「零 LLM 成本」不再无条件成立（只有声明了 `rubric` 的任务才花 aux token，且确定性判据先行、有缺口一次都不叫裁判）；§三 与 §八 里「语义级内容打分仍是 #46 第二步」这类**现在时**表述自本日起作废。决策与残留风险见 [ADR 0007](../adr/0007-grader-error-not-fatal.md)，开工前置的假阴性率实测见 [grader 试测记录](../grader-fn-trial-2026-10-13.md)。
+> 本文件是 P0-B 的权威设计源。**2026-09-15 经代码实证 review 修订**：补 error 路径守卫、headless 结果暴露、S2 三重收窄（详见 §三 / §4.2 / §4.5）。关联 Issue：#25（初版落地）→ **#46（2026-10-11 第一步修订）**：终态换 `UNVERIFIED`、`degraded` 布尔换 `verification.reason`、新增调用方声明的 `expectation`、循环入口清扫悬空 `tool_call`。**Q4 的安全原则（绝不因验证误判判 FAILED）不变，改的是终态命名与机器边界**——见 [ADR 0005](../adr/0005-terminal-status-unverified.md) / [ADR 0006](../adr/0006-expectations-declared-by-caller.md)，本文各节「#46 修订」标注以那两份为准。**#46（2026-10-13 第二步）**：Q1 里「留 P1」的 **B（`aux_llm` 独立裁判）已落地**，故 Q5 那句「零 LLM 成本」不再无条件成立（只有声明了 `rubric` 的任务才花 aux token，且确定性判据先行、有缺口一次都不叫裁判）；§三 与 §八 里「语义级内容打分仍是 #46 第二步」这类**现在时**表述自本日起作废。决策与残留风险见 [ADR 0007](../adr/0007-grader-error-not-fatal.md)，开工前置的假阴性率实测见 [grader 试测记录](../grader-fn-trial-2026-10-13.md)。**第二步的切片 B（同日）**再补两处：**Q3 的一本账变两本**（`verify_rubric_max_retries`，代价是最坏回环 2→4 轮）与 §八 划给 P1 的**人工复核出口已收编**（`POST /tasks/{id}/review`，旁挂不改写机器判决）。本文各节标「#46 切片 B」的修订以这两处为准。
 
 ## 一、动机与目标
 
@@ -18,7 +18,7 @@
 |---|---|---|
 | Q1 | 验证机制 | **A 纯确定性**为内核；B（aux_llm 独立裁判）/ D（结构化验收标准）留 P1 |
 | Q2 | 失败回环 | 复用现有 `reflect→planner` 边 + 注入反馈消息（**不改拓扑**）|
-| Q3 | 回环预算 | 新增 `verify_max_retries`（默认 2）独立小闸 + `max_steps` 总预算兜底 |
+| Q3 | 回环预算 | 新增 `verify_max_retries`（默认 2）独立小闸 + `max_steps` 总预算兜底。**#46 切片 B 修订：两本账**——确定性层的缺口烧 `verify_max_retries`，裁判层的 `needs_revision` 烧 `verify_rubric_max_retries`（默认也是 2），互不扣减；共享一本账会让「一次都没请到裁判」的机械缺口把裁判的轮数吃光。代价是**最坏回环总次数由 ≤2 变 ≤4**（两层各自 2 轮），总兜底仍是 `max_steps` |
 | Q4 | 耗尽终态 | **#46 修订**：独立终态 **`UNVERIFIED`** + `verification.reason` 记原因（原来是「降级 COMPLETED + `degraded` 警告」）；**绝不判 FAILED 这条原则不变**（误判比现状更糟）|
 | Q5 | 开关默认 | `verify_enabled` 默认 **true**（纯确定性、零 LLM 成本、只回环不判死）|
 | Q6 | 可观测 | 发 `verification` 事件 + `_verification` 入 state + 落 trace |
@@ -78,13 +78,19 @@ def reflect(self, state):
 ```
 - 新增私有方法 `_verify_completion(state) -> List[str]`：做 E+S1+S2，返回失败项文案列表。expectation 的 `artifact` 路径经 `settings.artifacts_path`（沙箱根）解析、越出沙箱根即判失败（#46）；artifact 经 **tm 权威侧**读（`getattr(self.tm, "_active_states", {})` 兜底 SimpleNamespace 假 tm，守 P3 副本语义）；tool 状态经 `state["steps"][*]["tool_calls"][*]["status"]`（`"failed"`/`"success"` 字面量已在 nodes.py:481 落定）。
 - **error 路径守卫**（review 漏洞1）：`state.get("error")` 已置时 reflect 直接返回、不验证——executor LLM 异常分支同样写 `final_answer`+`_last_action="final_answer"`（nodes.py:368-370），不守卫会把出错任务拖进验证回环、改变错误语义并扰动 MockLLM 脚本化异常的存量测试。
+- **#46 切片 B（2026-10-13）修订上面这段伪代码的三处**（伪代码按原样留着，好看出改了哪）：
+  ① `failures` 不再是「E+S1+S2 一把算」——**确定性层先跑且独自成立**，它有缺口时一次都不叫裁判（机械可判的缺口不花 aux token，模型拿到的是具体缺口而不是第二意见）；只有它空手时才请 `aux_llm` 裁判评 `rubric`。
+  ② 预算是一本变两本：`_verify_attempts`（确定性）与 `_rubric_attempts`（裁判的 `needs_revision`）各自与自己的闸比。
+  ③ 多一条不进任何账的短路：`grader_error`（裁判缺席 / 抛错 / 输出不可解析 / rubric 本身没法评）直接落 `UNVERIFIED(reason="grader_error")`，不回环、不烧预算、更不判 `FAILED`——见 [ADR 0007](../adr/0007-grader-error-not-fatal.md)。
 
 ### 4.3 路由（`graph.py`）
 - **`_after_reflect` 零改**：reflect 把 `_last_action` 改成 `"verify_failed"`（非 `final_answer`）→ 现有逻辑落 `if step_index >= max_steps: finish` 否则 `return "planner"`；`max_steps` 兜底天然生效。
 - **边界（#46 修订）**：若 `max_steps` 先于 `verify_max_retries` 触发（罕见，2≪15），回环中的 `_verification.reason` 还是 `pending`——`_finalize_terminal` 兜底把它改写成 `reason="max_steps"`，终态 `UNVERIFIED`。原来的「补 `degraded=true`」说法作废。
+- **#46 切片 B 补**：这本兜底账现在有**两处**，不是一处。主任务侧在 `_finalize_terminal`，子任务侧在 `SubAgentExecutor.run_subtask` 的折叠里（`subagent.py`）——子任务不落 `Task` 记录、不经 `_finalize_terminal`，少写一处就把 `pending` 原样递给了父模型，而 `pending` 的字面意思是「还在验」，实际是「没轮次了」。两侧各有一条测试钉着（`test_finalize_unverified_publishes_event_and_max_steps_reason` / `test_subtask_cut_by_the_step_budget_reports_the_budget`）。
 
 ### 4.4 配置（`config.py` + `.env.example` + docs）
 - `verify_enabled: bool = True`、`verify_max_retries: int = 2`
+- **#46 切片 B 加**：`verify_rubric_max_retries: int = 2`（裁判层 `needs_revision` 的独立小闸，与 `verify_max_retries` 互不扣减；见 Q3 的「两本账」）。`.env.example` 同段跟随，README 配置段同步。
 - Settings 前缀注释组 15 → 16；`.env.example` 加「── Verification (P0-B) ──」段；README + AGENTS §3 配置段同步。
 
 ### 4.5 对外暴露（Q12）
@@ -141,5 +147,5 @@ def reflect(self, state):
   当时写下的开工前置是先量假阴性率、不可接受就缩小判据而不是把终态改回 COMPLETED——前置结果
   是假阴性 **0/24 与 0/23**（两口径都是 0），所以判据未缩；真风险在反方向（裁判偏松），
   处理见 [试测记录](../grader-fn-trial-2026-10-13.md) 与 ADR 0007 第 5 条。
-- 人工复核出口（把 `UNVERIFIED` 接受为 `COMPLETED`）：仍未做，是 [ADR 0005](../adr/0005-terminal-status-unverified.md) 的重开条件。
+- 人工复核出口（把 `UNVERIFIED` 接受为 `COMPLETED`）：**#46 切片 B 已于 2026-10-13 落地**——`POST /api/tasks/{id}/review {reviewer, note}`。ADR 0005 那条重开条件附的「人工接受**不算**验证通过」写得比「翻终态」更硬，所以实现走的是**旁挂**：`Task.review` 与 `verification` 平级，`passed` 与原判因一字不动，被推翻的那一档记进 `overruled_reason` 让它可计数；改写 `passed` 就是换顶帽子的橡皮图章。headless 刻意无等价 flag（评测态房间里没有人，`exit 4` 就是它的诚实判决）。
 - 前端 UI 的 verification 展示：#46 起已补终态徽章与失败项（见 §4.5）。

@@ -20,6 +20,7 @@ TraceRecorder with a scripted mock LLM: no network, no key.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -203,6 +204,35 @@ def test_accept_refused_while_the_run_is_still_open(tmp_path: Path) -> None:
     assert _events(bus, "running1", "task_accepted") == []
 
 
+def test_accept_refused_while_the_worker_thread_has_not_returned(tmp_path: Path) -> None:
+    """记录已落 ``UNVERIFIED``、worker 线程却还没从 ``run()`` 返回——拒绝走的是
+    ``is_alive()`` 那一半边，不是状态那一半边。
+
+    这不是编出来的场景：``_finalize_terminal`` 先写终态记录、线程随后才收尾，两者之间
+    就是有一段窗口。此刻接受等于赶在 worker 自己的收口之前改写它即将写下的东西，
+    而这条出口的正当性恰恰在于「人已经看过一份不再变化的结论」。
+    """
+    tm, bus, tid = _unverified_manager(tmp_path, reason="retry_exhausted")
+    assert tm.get_task(tid).status is TaskStatus.UNVERIFIED  # type: ignore[union-attr]
+
+    gate = threading.Event()
+    stalled = threading.Thread(target=gate.wait, args=(30,), daemon=True)
+    stalled.start()
+    tm._threads[tid] = stalled
+    try:
+        with pytest.raises(RuntimeError, match="settled run"):
+            tm.accept_unverified(tid, reviewer=_REVIEWER, note=_NOTE)
+        assert tm.get_task(tid).status is TaskStatus.UNVERIFIED  # type: ignore[union-attr]
+        assert _events(bus, tid, "task_accepted") == []
+    finally:
+        gate.set()
+        stalled.join(timeout=5)
+
+    # 线程真返回了，同一份请求就放行——拒绝的对象是「没 settled」，不是这个任务。
+    tm.accept_unverified(tid, reviewer=_REVIEWER, note=_NOTE)
+    assert tm.get_task(tid).status is TaskStatus.COMPLETED  # type: ignore[union-attr]
+
+
 def test_accept_refused_on_a_task_that_passed_verification(tmp_path: Path) -> None:
     """过了验收的任务没有「接受」这件事可做——放过去就等于给一条真·绿的任务
     也留一条「有人替它背书」的记录，把两种来源混成一种。"""
@@ -247,3 +277,30 @@ def test_accept_refused_without_a_reason(tmp_path: Path) -> None:
         tm.accept_unverified(tid, reviewer=_REVIEWER, note="   ")
 
     assert tm.get_task(tid).status is TaskStatus.UNVERIFIED  # type: ignore[union-attr]
+
+
+# ── 落盘：复核的价值在「事后有人能重放」───────────────────────────────────────
+def test_acceptance_survives_a_manager_restart(tmp_path: Path) -> None:
+    """重启后这条记录还在不在。
+
+    上面几条读的都是同一个进程里的对象；审计的意义恰恰在服务重启之后——所以断言跑在
+    一个新的 :class:`TaskManager`（新的 :class:`Persistence`，从 ``tasks.json`` 重新
+    装载）上。``review`` 是个嵌套模型，它能不能跟着 ``Task`` 一起序列化/反序列化，
+    只有跨过这次重建才看得出来；``verification.passed`` 仍是 ``False`` 也一样，
+    否则「机器判决不被改写」只在本进程成立。
+    """
+    tm, _, tid = _unverified_manager(tmp_path, reason="retry_exhausted")
+    tm.accept_unverified(tid, reviewer=_REVIEWER, note=_NOTE)
+
+    restarted = make_manager(
+        tm.settings, MockLLMClient(final_answer="unused"), event_bus=EventBus()
+    )
+    task = restarted.get_task(tid)
+    assert task is not None and task.status is TaskStatus.COMPLETED
+    assert task.review is not None
+    assert task.review.reviewer == _REVIEWER
+    assert task.review.note == _NOTE
+    assert task.review.overruled_reason == "retry_exhausted"
+    assert task.review.at
+    assert (task.verification or {}).get("passed") is False
+    assert (task.verification or {}).get("reason") == "retry_exhausted"
