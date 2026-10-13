@@ -37,8 +37,8 @@ Result contract: with ``--output json`` the parsed result object is the ONLY
 thing on stdout (agent logs are repointed at stderr); diagnostics/logs live on
 stderr. Exit codes: 0 COMPLETED, 1 FAILED, 2 INTERRUPTED/timeout, 3 usage/config,
 4 UNVERIFIED (#46 — ran and claimed completion, verification did not pass; the
-deliverable it owed is declared with ``--expect kind:target`` and, for the parts
-no mechanical condition can express, with ``--rubric`` #46 step 2).
+deliverable it owed is declared with ``--expect kind:target`` and, for the parts no
+mechanical condition can express, with ``--rubric`` — #46 second step).
 """
 
 from __future__ import annotations
