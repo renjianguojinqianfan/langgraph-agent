@@ -1,8 +1,11 @@
+/* #122 v3→v4：三条 @tailwind 指令并成一句 @import "tailwindcss"。
+   tailwind.config.js 的 content 数组同时退役——v4 自动探测源文件，实测扫描根是构建
+   cwd（CI 里 = frontend/，仓库根的杂项文件不被扫），产物里没有多出一个 src 之外的 utility。
+   自定义色由 config 的 theme.extend.colors 迁到 CSS-first 的 @theme：键名保留 panelMuted
+   （v4 认它，bg-panelMuted 与 bg-panelMuted/60 照常生成），字面值不动——它们是设计值，
+   不跟 v4 重绘后的默认调色板走。 */
 @import "tailwindcss";
 
-/* #122 v3→v4：原 tailwind.config.js 的 theme.extend.colors 迁到 CSS-first 的 @theme。
-   键名保留 panelMuted（v4 认这个名字，bg-panelMuted 与 bg-panelMuted/60 照常生成），
-   字面值不动——它们是设计值，不跟 v4 重绘后的默认 slate-* 调色板走。 */
 @theme {
   --color-panel: #0f172a;
   --color-panelMuted: #1e293b;
@@ -22,10 +25,11 @@ body {
   color: #e2e8f0;
 }
 
-/* #122 v4 preflight 不再给 button 设 cursor:pointer（v3 是 `button,[role=button]{cursor:pointer}`，
-   v4 删掉这条、回到浏览器默认）。本仓三栏界面整屏都是可点的 button（历史任务项 / Tab /
-   筛选 chip / 确认框两个按钮 / 回滚 / 登出），指针手势是最基本的可供性，按升级指南原样恢复；
-   放 @layer base 是为了 cursor-* utility 将来仍能盖它。删掉这一段 = 接受「按钮不再有手型」。 */
+/* #122 v4 preflight 删掉了 v3 的 `button,[role=button]{cursor:pointer}` 与
+   `:disabled{cursor:default}` 两条（实测整个 v4 产物 CSS 里 cursor 出现 0 次，落回浏览器默认）。
+   本仓三栏界面整屏都是可点的 button（历史任务项 / Tab / 筛选 chip / 确认框两个按钮 / 回滚 / 登出），
+   指针手势是最基本的可供性，按官方升级指南原样恢复。放 @layer base 而不是裸写：base 层优先级
+   低于 utilities 层，cursor-* utility 才盖得住它。删掉这一段 = 接受「按钮没有手型」。 */
 @layer base {
   button:not(:disabled) {
     cursor: pointer;
