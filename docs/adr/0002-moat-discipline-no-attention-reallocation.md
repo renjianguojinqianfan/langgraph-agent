@@ -1,6 +1,12 @@
 ---
-status: accepted
+status: partially superseded by ADR-0008
 ---
+
+> **2026-10-14 部分退役**：本 ADR 随 [ADR 0008](0008-single-loop-plan-build-modes.md)（单一 loop + 计划/执行两模式）
+> **部分**退役——「受保护文件零改动（`resilience.py` / `registry.py` 的 CI guard）」与「`nodes.py` 的
+> `_needs_confirm` 重算块不可动」两条随确认闸门一并解除（见 0008「三笔账」第 3 条）。
+> **「持久化恢复」与「循环控制韧性」两项能力仍在**，由 0008 第 1 / 3 / 4 条承接。
+> 「三不」里「不绕过确认闸门」的举例已无对象，其余注意力纪律作为原则保留。**正文一字不动。**
 
 # 护城河纪律：不为凑功能挪用深度能力的注意力
 

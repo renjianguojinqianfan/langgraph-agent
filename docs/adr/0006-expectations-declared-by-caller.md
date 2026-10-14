@@ -1,6 +1,9 @@
 ---
-status: accepted
+status: superseded by ADR-0008
 ---
+
+> **2026-10-14 退役**：本 ADR 随 [ADR 0008](0008-single-loop-plan-build-modes.md)（单一 loop + 计划/执行两模式）
+> 退役——`expectation` 声明面连同完成验证栈整体取消。**正文一字不动，保留为决策留痕。**
 
 # 完成条件由调用方声明（expectation），不由模型自报
 

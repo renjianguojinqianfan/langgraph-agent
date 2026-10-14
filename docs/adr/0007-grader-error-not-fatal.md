@@ -1,6 +1,9 @@
 ---
-status: accepted
+status: superseded by ADR-0008
 ---
+
+> **2026-10-14 退役**：本 ADR 随 [ADR 0008](0008-single-loop-plan-build-modes.md)（单一 loop + 计划/执行两模式）
+> 退役——独立裁判（grader）整层删除，故「裁判出错不致命」这条不再有适用对象。**正文一字不动，保留为决策留痕。**
 
 # 裁判故障记 `grader_error`：不回环、不烧预算、不判死
 

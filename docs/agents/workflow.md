@@ -12,7 +12,7 @@
 | 3 | **qoder** | 调用 `code-review` skill **自评审**（双轴：规范轴 + 需求轴），返工发现后才进下一步 |
 | 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」 |
 | 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号（`Closes #N`）；body 调 `pr` skill 写（Summary 最小可视化 / Before-After Evidence / Merge Danger）；验证状态四态如实写（通过/跳过/未运行/产物验收） |
-| 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest/`--check`）+ 冻结区检查 + live 视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
+| 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest/`--check`）+ 危险动作钩子检查〔2026-10-14 起取代「冻结区检查」，冻结区随 ADR 0008 解除〕 + live 视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
 | 6 | 评审侧/用户 | 合并：调 `verification-loop` skill 走收尾门（机械验证 + 端到端验收）→ CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
 
 ## 边界
@@ -20,7 +20,9 @@
 - **实施者不合并自己的 PR**——合并动作在评审侧或用户手里。
 - **opencode 评审不改代码**——返工回 qoder 分支（保持评审上下文干净，等价于「新人视角复审」）。
 - 挂起票 / 决策票（无代码）不走此流程；docs 小修走 AGENTS.md 的直推惯例。
-- 评审发现冻结区触碰 → 直接打回（无需商量）。
+- ~~评审发现冻结区触碰 → 直接打回（无需商量）。~~ **2026-10-14 起作废**：冻结区（`resilience.py` /
+  `registry.py` 的 CI 守卫）随 [ADR 0008](../adr/0008-single-loop-plan-build-modes.md) 解除，不再有「冻结区」这一说。
+  取而代之：涉及**危险动作钩子面**的改动按「评审动作清单」的安全评审口径走。
 - **评审形态**：opencode 与 qoder 共用同一个 GitHub 账号，GitHub 不允许在自己的 PR 上正式 request changes，所以步 5 的评审以**评论型**提交——评审 body 就是结论载体（含「返工要求：仅 Fx」这类明确裁定），PR 的「评审通过」不靠 GitHub review 状态，靠评审 body + CI + 会话分工追踪。
 
 ## 评审动作清单（步 5 细则）
@@ -28,9 +30,9 @@
 > 2026-09-26 由 PR #69 评审→返工→复核→合并的首个完整循环补入：以下路由此前只活在临时交接文档（handoff）里，现在落进本体——handoff 是会话态，规则必须有持久家。
 
 - **双轴评审**：调 `code-review` skill（规范轴 + 需求轴**并行子代理**）。规范源 = `AGENTS.md` + `pyproject.toml` 注释 + 全局 `~/.agents/AGENTS.md` §7；需求源 = 票面 AC 逐条对照。规范轴另必带 **Fowler 坏味道基线**（`code-review` 技能内置 13 条）：repo 文档规范优先于基线；ruff/mypy 已机械覆盖的跳过；基线命中**一律是判断题**——不当硬违规打回，也不当 scope creep 放过。
-- **安全评审**：涉及**闸门 / 工具面 / 子代理权限**的 PR 必用 `security-review` skill；纯观测面（#58 件清单这类）可跳过。
+- **安全评审**：涉及**危险动作钩子 / 工具面 / 子代理权限**的 PR 必用 `security-review` skill〔2026-10-14 起：原「闸门」一项随 ADR 0008 退役，改为钩子面〕；纯观测面（#58 件清单这类）可跳过。
 - **件清单裁判**：能力面 / 工具面 PR 要跑一个 mock 任务（headless 管线 + 自定义 MockLLM 脚本）后核对 run manifest 的 capability / `subtask_face` 行与票面意图一致——「这次子代理能干什么」必须可 diff、可回看。
-- **live 视票面**：口径唯一权威 `scripts/LIVE_E2E.md`（含「先 A/B 复跑再归因」）。
+- **live 视票面**：口径唯一权威 `scripts/LIVE_E2E.md`〔片 S1 起该脚本与文档一并删除，届时本项作废——真模型验证改为「启服务、网页端手动跑一遍」〕（含「先 A/B 复跑再归因」）。
 - **评审交付物**：评审 body（结论 + 四态 + 逐条裁定）+ 必要时开跟进票、补标签（按 `docs/agents/triage-labels.md` 三类分诊）。
 
 ## 返工回环（步 5 → 6 之间）
@@ -54,7 +56,7 @@
 - **禁改文档的子代理要另答一题「你的改动让哪句现有声明失效了」**：并行段把步 3.5 收归主会话，等于让子代理**只改代码**；而 push 前四断言拦得住「越界改文档」，拦不住「改了代码让文档过期」。实证（#119 / PR #128）：给 executor 的 system 尾部加计划块后，README 那句「`context_inject_enabled=false` 一键回到旧行为（零回归锚：system 与改造前逐字节相同）」当场失准，而子代理全绿交回、一字未提——因为既有零回归锚断的是 `_build_messages` 的**默认形态**而非真实调用点，**测试与文档可以同时「没坏」，漂移却在门禁照不到的地方发生**。做法：任务卡边界段之后加这条必答项（没有就答「无」），汇报里点名；主会话收到后判归属——改文档措辞 / 补一条钉真实调用点的测试 / 加开关，**别默认加开关**（本次按事实改写 README 并在 PR 里列为请裁项，因为「关掉 AGENTS.md 注入」与「关掉计划供给」不是一个概念）
 - **派活前按 AC 跨层数估工作量**：一条 AC 动一层，五条 AC 动五层（判定→协议→配置→事件→测试）≈ 顶到一轮子代理预算上限——#57 就这么中断的（AC1-4 完成、AC5-7 半路）。超三层先拆再派，或按语义边界直接拆两张 PR
 - **子代理中断的 WIP 靠 scratch 分支续，不靠 patch**：撞轮次上限时树里往往是几个文件的**未提交**改动。正确起手是 `git switch -c wip/<slug>`（脏改动跟着过去）→ `git add -A` → 单 commit，再切回特性分支做干净态评审；续做时**从新 master 切分支只 `git cherry-pick` 那个单 commit**。别只导 `.patch`——未跟踪文件容易漏、patch 不带身份也不能直接跑门禁；patch 至多当备份。⚠️ 若特性分支后来 rebase 过，scratch 分支的父提交是**旧链**，直接 checkout 续做会把已被替换的提交带回来，必须先 cherry-pick 重接
-- **边界靠机械断言，不靠任务卡**：试水实证卡守不住文件面（禁了文档，agent 第二轮还是写了）；有效闸门是 push 前四断言——`git status` 空 / worktree 只有主树+本票 / 冻结区 diff 空 / 远端无此分支
+- **边界靠机械断言，不靠任务卡**：试水实证卡守不住文件面（禁了文档，agent 第二轮还是写了）；有效闸门是 push 前四断言——`git status` 空 / worktree 只有主树+本票 / ~~冻结区 diff 空~~〔2026-10-14 起作废，冻结区随 ADR 0008 解除〕 / 远端无此分支
 - **分离评审不是仪式**：agent 自评全绿之后，步 5 独立评审仍抓到了人漏读的真 bug（无可再挤时仍自称压缩）——不因自评绿而免
 - **多票大工程可整 spec 路由 `implement-spec`**：整份 spec 单集成分支落地、ticket 当任务图、实施子代理各占 worktree/分支、frontier 并发、最后跑一次 `code-review`——本节手搓约定（claim 走 GitHub、ADR 发号统一、四断言、brief 纪律）继续有效，只是执行形态换成上游正式版
 

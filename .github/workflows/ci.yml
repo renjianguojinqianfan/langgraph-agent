@@ -5,7 +5,7 @@
 #       docs/ 与根级 *.md 的变更不触发——唯一例外是 docs/architecture.md：§3.4 事件表
 #       是 `npm run check:sse` 的权威源，改本表的 PR 会触发全套 CI（#103）。
 # 内容：
-#   guard-protected-files  受保护文件守卫（resilience.py/registry.py，[OVERRIDE] 逃生舱）
+#   （2026-10-14：原 guard-protected-files 守卫已随 ADR 0008 删除——冻结区随确认闸门一并解除）
 #   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
 #                   + pytest 离线全量回归（backend/tests/，计数以实跑为准、不写进注释）
 #                   + live_e2e.py --check 与 backend.headless --check 离线冒烟（无 Key/无网络）
@@ -49,40 +49,6 @@ permissions:
   contents: read
 
 jobs:
-  # ── 受保护文件守卫（AGENTS.md：熔断层零改动的 CI 机械化闸门）────────────
-  guard-protected-files:
-    name: Protected files guard (resilience/registry)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0        # 保证 PR base sha 可 diff
-      - name: Detect changes to protected files
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          set -e
-          protected="backend/core/tools/resilience.py backend/core/tools/registry.py"
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-            changed=$(git diff --name-only "$base"...HEAD -- $protected)
-          elif [ -n "${{ github.event.before }}" ] && git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
-            changed=$(git diff --name-only "${{ github.event.before }}" HEAD -- $protected)
-          else
-            changed=""   # workflow_dispatch / 首次 push：无可比基线，放行
-          fi
-          if [ -z "$changed" ]; then
-            echo "No protected-file changes."; exit 0
-          fi
-          echo "Changed protected files:"; echo "$changed"
-          title="${PR_TITLE:-$(git log -1 --pretty=%s)}"
-          case "$title" in *"[OVERRIDE]"*)
-            echo "::warning::Protected files changed with [OVERRIDE] declared — allowing."; exit 0 ;;
-          esac
-          echo "::error::受保护文件被修改（AGENTS.md：熔断层零改动）。PR/commit 标题需包含 [OVERRIDE] 才能通过。"
-          exit 1
-
   # ── 后端：离线全量回归 ────────────────────────────────────────────────────
   backend-test:
     name: Backend tests (Python 3.11)
