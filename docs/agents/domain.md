@@ -86,14 +86,16 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 > _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
 
 `docs/adr/0001` (in-place migration over rewrite + resume-project positioning, decisions
-D1–D9), `0002` (moat discipline), `0003` (circuit-breaker state stays per-runtime, never shared
-across parent/subtasks — so **#60's "每个子任务各记一本账" is by design, not a bug to re-file**)
-and `0004` (a product is a file the task *wrote*: only `registers_artifact` tools are product
+D1–D9), `0002` (moat discipline — **部分退役**：「受保护文件零改动」与「`_needs_confirm` 重算块」
+两条随 `0008` 解除，见 0008「三笔账」3), `0003` (circuit-breaker state stays per-runtime, never shared
+across parent/subtasks — so **#60's "每个子任务各记一本账" is by design, not a bug to re-file**),
+`0004` (a product is a file the task *wrote*: only `registers_artifact` tools are product
 sources, deduped per task by resolved path — so **#72's "read 回读不再登记 / 重写只一条" is by
-design, not a bug to re-file**) are the live ADRs today. Beyond them, the equivalent
-frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (protected files,
-`_needs_confirm` recompute block, conftest isolation, dependency matrix, quality-gate
-baseline). Treat a contradiction with those the same way — surface it, don't silently override.
+design, not a bug to re-file**) and `0008` (single loop + plan/build two modes — **0005–0007 已随之退役**)
+are the live ADRs today. Beyond them, the equivalent
+frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (artifact registration,
+conftest isolation, dependency matrix, quality-gate baseline). Treat a contradiction with those
+the same way — surface it, don't silently override.
 
 ## 文档归属（hard rule, 2026-09-15 起）
 

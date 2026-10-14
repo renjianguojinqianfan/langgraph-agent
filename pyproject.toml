@@ -33,6 +33,8 @@ select = ["E4", "E7", "E9", "F", "I"]
 #                             落到 resilience.py 与 registry.py：两者是 AGENTS.md
 #                             「熔断层零改动」对象，且被 CI guard-protected-files
 #                             机械化拦截。为 linter 破门不值当。
+#                             〔2026-10-14：冻结区随 ADR 0008 解除，本条的**地面已消失**——
+#                             是否启用 UP 需重新量一次（另开片），本片不动配置。〕
 #   BLE001 / S110 / S112   —— 64 处宽捕获。本项目大量「工具失败只降级、不中断循环」
 #                             的刻意 except Exception（熔断层与 MCP 会话尤其如此），
 #                             逐处收窄等于改行为语义。
@@ -61,8 +63,9 @@ show_error_codes = true
 #
 # 零 mypy override：registry.py 曾有 2 处 return-value 不精确（get_tool 声明
 # BaseTool | None 实返 Type[BaseTool] | None；make_openapi_tool 声明 List[BaseTool]
-# 实返 List[OpenAPITool]）。因 registry.py 是 CI guard-protected-files 冻结文件、
+# 实返 List[OpenAPITool]）。因 registry.py 当时是 CI guard-protected-files 冻结文件、
 # 修签名需 [OVERRIDE] 破门，Phase 2 曾用唯一一条 [[tool.mypy.overrides]] 接住它。
 # 现已走解冻窗口修正两处签名（见 backend/core/tools/registry.py）并撤除该 override：
 # mypy 现零 override、零 ignore。红线不变——不准新增任何 override，也不准用
 # # type: ignore / # noqa 消错。resilience.py 始终 0 错，从未列入。
+# 〔2026-10-14：该冻结区已随 ADR 0008 解除，以上「需破门」的语境成为历史；本段保留为决策留痕。〕

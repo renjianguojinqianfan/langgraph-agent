@@ -1,5 +1,9 @@
 # 第二梯队优化：CI 守卫 + 无 Key 冒烟检查
 
+> **2026-10-14 退役提示**：本文两项**均已退役**——A 的 `guard-protected-files` job 随
+> [ADR 0008](../adr/0008-single-loop-plan-build-modes.md) 删除（冻结区解除）；B 的两条 `--check`
+> 离线冒烟随片 S1 删除（无人值守/评测入口整体退役）。**正文一字不动，保留为决策留痕。**
+
 ## Summary
 
 两项改动，约 1 小时：

@@ -24,7 +24,8 @@ still decided by the user in the moment.
   `npm ci` ERESOLVE，手动配套 bump 才绿）。
 - **依赖类 PR**：Dependabot 自动抬版勿直接合；跨 major 升级警惕配套 peer 缺失；依赖矩阵
   与抬版纪律见 `AGENTS.md`「跨任务安全边界」。
-- **合并方式**：`[OVERRIDE]` PR 用 squash（免 guard 变红）；合并后删远程分支前先
+- **合并方式**：~~`[OVERRIDE]` PR 用 squash（免 guard 变红）~~〔2026-10-14 起作废：`guard-protected-files`
+  job 随 ADR 0008 删除，无 guard 可变红；合并一律不 squash〕；合并后删远程分支前先
   `git ls-remote --heads origin <branch>` 核对；docs-only PR 无 checks / admin bypass
   属已知现象，不等于强合——但 `docs/architecture.md` 除外，#103 之后它照理会跑全套 CI。
 
