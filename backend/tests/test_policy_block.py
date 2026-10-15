@@ -18,8 +18,11 @@ ADR 0008 第 6 条：危险动作在执行前被**设置里的规则表**当场�
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from typing import Any, Dict, Optional
+
+import pytest
 
 from backend.api.schemas import StepRecord, ToolCallRecord
 from backend.config import Settings
@@ -275,6 +278,33 @@ def test_a_rule_for_another_tool_does_not_match(tmp_path):
 
 
 # ── 规则表本身：解析与匹配 ──────────────────────────────────────────────────
+class _LogCollector(logging.Handler):
+    """``get_logger()`` 把 propagate 关掉了，pytest 的 caplog 收不到这些记录，
+    因此直接把 handler 挂在目标 logger 上（同 ``test_checkpointer._LogCollector``）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+    def messages(self, min_level: int = logging.WARNING) -> list[str]:
+        return [r.getMessage() for r in self.records if r.levelno >= min_level]
+
+
+@pytest.fixture
+def policy_logs():
+    """收集 ``agent.policy`` 的日志（模块名 agent.policy → logger ``agent.agent.policy``）。"""
+    logger = logging.getLogger("agent.agent.policy")
+    collector = _LogCollector()
+    logger.addHandler(collector)
+    try:
+        yield collector
+    finally:
+        logger.removeHandler(collector)
+
+
 def _policy(*rules: Dict[str, Any]) -> DangerPolicy:
     return DangerPolicy.from_settings(Settings(policy_rules=json.dumps(list(rules))))
 
@@ -327,6 +357,25 @@ def test_check_never_mutates_the_arguments():
     _policy({"tool": "probe", "pattern": "rm", "reason": "no"}).check("probe", args)
 
     assert args == {"cmd": "rm -rf /"}
+
+
+def test_a_whole_table_written_wrong_is_loud(policy_logs):
+    """整表写坏 → **出声**（#136 §4.1 定的软档），不是静默裸奔。
+
+    参照物里够证据的三家（dsh 加载即抛 / pi 无 UI 即 block / codex 解析失败即报错）都是
+    fail-closed；本仓选了软档：warning + 照跑（整表作废 = 不拦，行为不变，但看得见）。
+    """
+    for raw in ("nope", '{"tool": "probe"}', '["probe"]', '[{"reason": "no tool"}]'):
+        before = len(policy_logs.messages())
+        assert DangerPolicy.from_settings(Settings(policy_rules=raw)).rules == ()
+        assert len(policy_logs.messages()) > before, f"{raw!r} 整表失效却没有一声"
+
+
+def test_an_explicitly_empty_table_stays_silent(policy_logs):
+    """`""` / `[]` / `null` 是「我就是要空表」，不该被当成写坏（否则每台机器都刷 warning）。"""
+    for raw in ("", "[]", "[ ]", "null"):
+        DangerPolicy.from_settings(Settings(policy_rules=raw))
+    assert policy_logs.messages() == []
 
 
 def test_settings_expose_the_rule_table_as_a_list(tmp_path):

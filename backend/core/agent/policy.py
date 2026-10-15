@@ -83,6 +83,23 @@ def _compile(rule: Mapping[str, Any]) -> Optional[BlockRule]:
     return BlockRule(tool=tool, pattern=pattern, reason=reason)
 
 
+def _table_is_explicitly_empty(raw: str) -> bool:
+    """``""`` / ``[]`` / ``null``（含空白）—— 运维就是没写表，不算写坏。
+
+    整表写坏与「我就是要空表」在**结果**上一样（都是不拦），所以只有读一眼原文才分得开：
+    解析不了、或解析出来不是数组，都按写坏论（下面那条 warning 就是给这一格用的）——
+    参照物里够证据的三家（dsh / pi / codex）在这一格全是 fail-closed，本仓选的是软档：
+    **出声但照跑**，见 ``docs/research-danger-policy-across-agents.md`` §4.1。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return True
+    try:
+        return json.loads(text) in (None, [])
+    except Exception:
+        return False
+
+
 class DangerPolicy:
     """编译好的规则表；对每一次调用判定一次。"""
 
@@ -92,9 +109,19 @@ class DangerPolicy:
     @classmethod
     def from_settings(cls, settings: Settings) -> "DangerPolicy":
         """Build from ``Settings.policy_rules_list`` (the parsed rule table)."""
-        return cls(
-            [r for r in (_compile(item) for item in settings.policy_rules_list) if r is not None]
-        )
+        rules = [
+            r for r in (_compile(item) for item in settings.policy_rules_list) if r is not None
+        ]
+        if not rules and not _table_is_explicitly_empty(settings.policy_rules):
+            # #136 §4.1：整表写坏 = 一条规则都没编出来，而运维多半以为拦着。
+            # ``_parse_json_list`` 对坏 JSON 静默回退空表（MCP 两处同口径，本片不动它），
+            # 所以这里补一句「什么都没拦住」，别让坏表静悄悄变成裸奔。
+            logger.warning(
+                "policy_rules is set but yielded no rule (not a usable JSON array?); "
+                "NOTHING is blocked: %r",
+                settings.policy_rules,
+            )
+        return cls(rules)
 
     def check(self, tool_name: str, args: Mapping[str, Any]) -> Optional[str]:
         """Return the reason to block this call on, or ``None`` to let it through.
