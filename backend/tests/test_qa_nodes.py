@@ -209,8 +209,9 @@ def _run_tool_node(tmp_path, target: Path, tool: BaseTool | None = None) -> list
 
 
 def test_directory_result_registers_no_artifact(tmp_path):
-    """A directory under ``path`` used to become a task artifact; verification
-    then saw a 0-byte「产物」and looped the task back (PR #69 live, run 1)."""
+    """A directory under ``path`` must not become a task artifact — a product is a
+    file (ADR 0004). Before #72 it registered, and the 0-byte「产物」that reached
+    the then-live verification layer looped the task back (PR #69 live, run 1)."""
     target = tmp_path / "sandbox-dir"
     target.mkdir()
     assert _run_tool_node(tmp_path, target) == []

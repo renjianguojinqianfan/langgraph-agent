@@ -203,16 +203,15 @@ def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
 
 # Auxiliary-model role markers. The aux client is scripted *per role* so the
 # offline test suite can assert which auxiliary task (summary / risk / tool
-# choice / grading) actually consumed the aux model — and prove that when aux is
-# disabled no auxiliary call is ever made (``call_count == 0``).
+# choice) actually consumed the aux model — and prove that when aux is disabled
+# no auxiliary call is ever made (``call_count == 0``).
 #
-# Order is load-bearing: ``_detect_role`` returns the first hit, and the grader's
-# transcript embeds the model's own words — which may well contain「风险」or「摘要」.
-# So the grader marker goes first, and it is a phrase only the judge's own system
-# prompt carries (「grader」 alone would misroute a risk scan of a task about a
-# grader).
+# ``_detect_role`` scans the *whole* message text — including any history
+# transcript embedded in the prompt (the summary prompt carries the history it
+# is compressing) — and returns the first marker it hits, so two markers can
+# collide. The order below is an explicit tie-break for that case, not a
+# guarantee that a collision cannot happen.
 _ROLE_MARKERS: Dict[str, List[str]] = {
-    "grader": ["独立验收裁判"],
     "risk": ["风险", "risk"],
     "summary": ["摘要", "压缩", "summary"],
     "tool_choice": ["工具选择", "候选工具", "filter_tool"],
@@ -228,8 +227,7 @@ class MockAuxLLMClient(LLMClient):
     task role in the prompt (see :data:`_ROLE_MARKERS`), falling back to
     ``default``. :attr:`call_count` / :attr:`roles_called` let QA assert that
     the aux model was (or was not) actually consumed. :attr:`requests` keeps the
-    messages themselves so a test can read what the aux model was *told* — the
-    grader's evidence face is part of its contract.
+    messages themselves so a test can read what the aux model was *told*.
     """
 
     def __init__(

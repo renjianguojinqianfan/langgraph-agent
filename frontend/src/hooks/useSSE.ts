@@ -22,13 +22,10 @@ const EVENT_TYPES: SSEventType[] = [
   "human_confirm_required",
   "human_confirm_resolved",
   "artifact_created",
-  "verification", // P0-B 完成验证结论
   "final_answer",
   "task_completed",
   "task_failed",
   "task_interrupted",
-  "task_unverified", // #46 跑完并声称完成，但验收没通过
-  "task_accepted", // #46 切片 B 人工复核把那条 UNVERIFIED 接受为 COMPLETED
   "task_resumed", // P3 从检查点续跑启动
   "tool_result_evicted", // T1.4 旧的大段 tool 结果换成占位
   "risk_report", // P1: {items, policy, semantic_enabled}

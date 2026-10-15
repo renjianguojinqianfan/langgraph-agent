@@ -5,8 +5,7 @@ export type TaskStatus =
   | "RUNNING"
   | "COMPLETED"
   | "FAILED"
-  | "INTERRUPTED"
-  | "UNVERIFIED"; // #46: 跑完并声称完成，但验收没通过（不是崩了，所以不并入 FAILED）
+  | "INTERRUPTED";
 
 /**
  * 确认闸门的五档终态，与后端 `nodes.py` 的 `CONFIRM_*` 常量一一对应（#57 AC5/AC6）。
@@ -79,38 +78,6 @@ export interface Task {
   updated_at: string;
   risk_report?: RiskItem[]; // P1: risk scan report
   subtasks?: SubTask[]; // P1: sub-agent results
-  verification?: Verification | null; // P0-B: 完成验证结论（#46 起 reason 取代 degraded）
-  expectations?: Expectation[]; // #46: 调用方声明的合格线；空 = 信息型任务
-  rubric?: string; // #46 第二步：语义合格线（后端 Task.rubric，"" = 未声明）。暂无消费者，
-                   // 但 GET /api/tasks/{id} 会返回它——镜像契约面保持同形，别让字段静默差一格
-  review?: TaskReview | null; // #46 切片 B：人工复核接受了这条 UNVERIFIED；null/缺席 = 没人推翻过
-}
-
-// --- #46: 声明式验收 ---
-
-export interface Expectation {
-  type: "artifact" | "tool_success";
-  target: string; // artifact: 沙箱根相对路径；tool_success: 工具名或 "*"
-}
-
-export interface Verification {
-  passed: boolean;
-  failures: string[];
-  attempts: number;
-  // "" 通过 | pending 回环中 | retry_exhausted 机械账预算耗尽 | rubric_exhausted
-  // | 语义账预算耗尽（#132 返工 C：两本账烧完分名）| max_steps 被步数抢占
-  // | grader_error 裁判自身出错（#46 第二步）
-  reason: string;
-  loop_back?: boolean;
-}
-
-export interface TaskReview {
-  // 后端 Task.review（#46 切片 B）：一次「人工把 UNVERIFIED 接受为 COMPLETED」的留痕。
-  // 它是 verification 的**兄弟字段**而不是其成员——机器的判决一字不改（passed 仍是 false）。
-  at: string;
-  reviewer: string; // 自报的复核人名：本仓只有 token 鉴权，没有账号，身份强度到此为止
-  note: string;
-  overruled_reason: string; // 被推翻的那条 verification.reason
 }
 
 // --- P1 item 1: risk scan ---
@@ -226,13 +193,10 @@ export type SSEventType =
   | "human_confirm_required"
   | "human_confirm_resolved" // #57: {tool_call_id, tool_name, outcome}（outcome 见 ToolCallRecord.confirm_outcome；入参不带，同 id 的 tool_call 事件已有且 trace 不脱敏）
   | "artifact_created"
-  | "verification" // P0-B: {task_id, passed, failures, attempts, reason, loop_back?}（#46：reason 取代 degraded）
   | "final_answer"
   | "task_completed"
   | "task_failed"
   | "task_interrupted"
-  | "task_unverified" // #46: {task_id, status, reason} —— 跑完但验收没过，与 interrupted 同构
-  | "task_accepted" // #46 切片 B: {task_id, status, reason, reviewer, note} —— 人工复核接受了那条 UNVERIFIED
   | "task_resumed" // P3: {task_id, status}
   | "tool_result_evicted" // T1.4: {tool_call_id, tool_name, original_chars, step_index}
   | "risk_report" // P1: {items, policy, semantic_enabled}

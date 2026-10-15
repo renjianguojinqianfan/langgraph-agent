@@ -1,4 +1,4 @@
-"""Agent node implementations (Planner / Executor / Tool / Reflect / Confirm).
+"""Agent node implementations (Planner / Executor / Tool / Confirm).
 
 :class:`AgentRuntime` owns the per-task references the nodes need (the
 ``TaskManager`` for events & persistence, the ``LLMClient``, and the resolved
@@ -11,13 +11,13 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, cast
+from typing import Any, Dict, List, cast
 
 from ...config import get_settings
 from ...utils.logging import get_logger
 from ..tools.base import BaseTool, ToolResult
 from ..tools.http_api import WRITE_METHODS
-from . import grader, inject
+from . import inject
 from .context import compress_messages, evict_tool_results
 from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, render_plan_section
 from .state import AgentState
@@ -629,10 +629,9 @@ class AgentRuntime:
             # Register an artifact when a producing tool wrote a file on disk.
             # Two guards, one per axis: only a ``registers_artifact`` tool is a
             # source of products (#72 — a ``read`` of the same file used to
-            # register it again), and the path must be a real file, since a
-            # result advertising a directory would otherwise land in
-            # verification as a 0-byte「产物为空」and loop a healthy task back
-            # (#17).
+            # register it again), and the path must be a real file — a directory
+            # is not a deliverable (ADR 0004), and before #17 a result
+            # advertising one registered as a phantom 0-byte product.
             #
             # A subtask's write is registered by the hand-back in
             # ``subagent._exec_one`` under the PARENT id only (#76). Registering
@@ -823,137 +822,15 @@ class AgentRuntime:
 
         # Recompute whether any pending confirmation remains. Previously the
         # node only appended to _confirmed_ids/_rejected_ids but left
-        # state["_needs_confirm"] as True, so graph.py's _after_tool kept
-        # routing the flow back into human_confirm -> GraphRecursionError on
-        # single-tool flows. For such flows this must now become False so the
-        # flow proceeds to reflect and completes normally.
+        # state["_needs_confirm"] as True, so the tool router kept routing the
+        # flow back into human_confirm -> GraphRecursionError on single-tool
+        # flows. For such flows this must now become False so the flow moves on.
         confirmed_ids = state.get("_confirmed_ids", []) or []
         rejected_ids = state.get("_rejected_ids", []) or []
         state["_needs_confirm"] = any(
             r["need_confirm"] and r["id"] not in confirmed_ids and r["id"] not in rejected_ids
             for r in tcs
         )
-        return state
-
-    def reflect(self, state: AgentState) -> AgentState:
-        """P0-B completion verification (Issue #25), two layers (#46).
-
-        A model's "I'm done" claim (``_last_action == "final_answer"``) is not
-        trusted blindly. Layer one is deterministic code — ``Path.exists()`` cannot
-        be argued with the way an LLM self-critique can ("structural hallucination")
-        — and it runs alone: the caller's ``expectations``, S1 artifact integrity,
-        the S2 all-failed gate. Layer two is the independent grader, and it exists
-        because determinism cannot read what a deliverable *says*: it is invoked
-        only once layer one has nothing to report, on a client of its own
-        (:mod:`grader`), and it can only ever widen a non-pass — never condemn.
-        On failure, inject the evidence and loop back to the planner by flipping
-        ``_last_action`` to ``verify_failed`` (the existing ``_after_reflect``
-        router already sends any non-``final_answer`` to ``planner``). Each layer
-        burns its own budget — ``verify_max_retries`` for a deterministic miss,
-        ``verify_rubric_max_retries`` for a ``needs_revision`` verdict (#46 slice
-        B) — and once the one in play is spent the run ends UNVERIFIED: a completion
-        we could not verify is no longer written as COMPLETED with a soft ``degraded``
-        stamp, and it is still never a FAILED, so a false negative — from either
-        layer — cannot kill a genuinely-done task (P0-B Q4, ADR 0005).
-
-        Reject semantics, the ``_needs_confirm`` recompute block, and the graph
-        topology are untouched. Error paths are skipped (``finish`` maps them to
-        FAILED). With ``verify_enabled`` false this is the original no-op shell:
-        no layer runs, and a declared ``rubric`` summons no judge either (#46's
-        zero-regression anchor covers the new field, not just the old ones).
-        """
-        if self._stopped(state):
-            return state
-        if state.get("error"):
-            # Executor LLM errors also set final_answer; finish judges them FAILED.
-            # Verifying an erroring task would only churn the loop and change the
-            # error semantics (review 漏洞1).
-            return state
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        if not getattr(settings, "verify_enabled", True):
-            return state  # gate off == original empty-shell behaviour (zero regression)
-        if state.get("_last_action") != "final_answer":
-            return state  # only verify a claimed completion
-
-        deterministic = self._verify_completion(state)
-
-        # The deterministic layer runs first and alone if it already found a miss:
-        # a mechanically decidable gap costs no judge tokens, and the model gets
-        # the concrete failure instead of a second opinion on it (#46 spec §3).
-        grader_failures: List[str] = []
-        grader_error = False
-        if not deterministic:
-            grader_failures, grader_error = self._grade_against_rubric(state)
-        failures = deterministic or grader_failures
-
-        # Two books, not one (#46 slice B): the deterministic loop is bounded by
-        # ``verify_max_retries``, the grader's needs_revision loop by
-        # ``verify_rubric_max_retries``. Sharing them would let a mechanically
-        # decidable miss spend the semantic review's rounds away — the loop that
-        # never reached a judge would still have eaten the budget the judge needs.
-        verify_attempts = int(state.get("_verify_attempts", 0) or 0)
-        rubric_attempts = int(state.get("_rubric_attempts", 0) or 0)
-        attempts = verify_attempts + rubric_attempts
-        budget = int(
-            getattr(
-                settings,
-                "verify_rubric_max_retries" if not deterministic else "verify_max_retries",
-                2,
-            )
-        )
-        spent = rubric_attempts if not deterministic else verify_attempts
-
-        if not failures:
-            state["_verification"] = {
-                "passed": True, "failures": [], "attempts": attempts, "reason": "",
-            }
-            self._publish("verification", dict(state["_verification"], task_id=self.task_id))
-            return state  # _last_action stays final_answer -> _after_reflect -> finish
-
-        if grader_error:
-            # The judge could not produce a verdict (absent / raised / unparseable),
-            # or found the rubric itself unevaluable. Neither is the task's fault, so
-            # this does not loop and does not burn retry budget — it terminates as
-            # UNVERIFIED(reason=grader_error), which is still not a FAILED (ADR 0005).
-            # "retry budget" means **both books** now (ADR 0007 决策 4).
-            state["_verification"] = {
-                "passed": False, "failures": failures, "attempts": attempts,
-                "reason": "grader_error",
-            }
-            self._publish("verification", dict(state["_verification"], task_id=self.task_id))
-            return state  # keep final_answer -> finish -> UNVERIFIED
-
-        if spent >= budget:
-            # Q4: never FAIL on a verification miss — but the terminal state is now
-            # UNVERIFIED, not COMPLETED (a claim we could not check is not a delivery).
-            # 两本账烧完要分名：机械账 retry_exhausted、语义账 rubric_exhausted——
-            # 分账之后运维从 reason 就要能看出是哪本账花光，同名等于没分（#132 返工 C）。
-            state["_verification"] = {
-                "passed": False, "failures": failures, "attempts": attempts,
-                "reason": "rubric_exhausted" if not deterministic else "retry_exhausted",
-            }
-            self._publish("verification", dict(state["_verification"], task_id=self.task_id))
-            return state  # keep final_answer -> finish -> UNVERIFIED
-
-        # Loop back with evidence: flip _last_action so the existing router sends
-        # the flow to planner; the injected message tells the model what to fix.
-        if deterministic:
-            state["_verify_attempts"] = verify_attempts + 1
-        else:
-            state["_rubric_attempts"] = rubric_attempts + 1
-        state["_verification"] = {
-            "passed": False, "failures": failures, "attempts": attempts + 1,
-            "reason": "pending",  # 判决未收口；落库时仍挂着就记成 max_steps（见 _finalize_terminal）
-        }
-        feedback = (
-            "完成验证未通过：" + "；".join(failures) +
-            "。任务尚未可验证地完成，请据此修正后继续；在真正满足前不要重复声称完成。"
-        )
-        state.setdefault("messages", []).append({"role": "system", "content": feedback})
-        self._publish(
-            "verification", dict(state["_verification"], task_id=self.task_id, loop_back=True)
-        )
-        state["_last_action"] = "verify_failed"
         return state
 
     def _call_records(self, state: AgentState) -> List[Dict[str, Any]]:
@@ -964,146 +841,19 @@ class AgentRuntime:
             for tc in (st.get("tool_calls") or [])
         ]
 
-    def _expectation_failures(self, state: AgentState) -> List[str]:
-        """Judge the caller-declared expectations (issue #46, ADR 0006).
-
-        Two kinds, both objective facts about the run: ``artifact`` — the declared
-        path, relative to the sandbox root, exists and is non-empty; ``tool_success``
-        — that tool (``*`` == any tool) succeeded at least once. A declared kind we
-        cannot judge counts as unmet: an unverifiable pass line must not read as a
-        delivery. With nothing declared this returns nothing, which is exactly
-        today's放行 behaviour for an informational task (Q9 no-op PASS untouched).
-        """
-        expectations = state.get("expectations") or []
-        if not expectations:
-            return []
-
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        root = Path(str(settings.artifacts_path)).resolve()
-        ok_names = {
-            str(tc.get("tool_name", ""))
-            for tc in self._call_records(state)
-            if tc.get("status") == "success"
-        }
-        failures: List[str] = []
-        for exp in expectations:
-            kind = str(exp.get("type", ""))
-            target = str(exp.get("target", ""))
-            if kind == "artifact":
-                p = (root / target).resolve()
-                if root not in p.parents and p != root:
-                    failures.append(f"声明的产物路径越出沙箱根：{target}")
-                elif not p.exists():
-                    failures.append(f"声明的产物缺失：{p.name}")
-                elif not p.is_file():
-                    # 目录不是交付物（ADR 0004 给产物定的同一条判据，这里对声明复用）：
-                    # 一个非空目录的 st_size 在 Windows 上是 4096，只查「存在且非空」会放行。
-                    failures.append(f"声明的产物不是文件（目录不算交付）：{target}")
-                elif p.stat().st_size == 0:
-                    failures.append(f"声明的产物为空：{p.name}")
-            elif kind == "tool_success":
-                if target == "*":
-                    if not ok_names:
-                        failures.append("声明「至少一次成功工具调用」，但全程零成功调用")
-                elif target not in ok_names:
-                    failures.append(f"声明的工具未成功调用过：{target}")
-            else:
-                failures.append(f"无法判定的 expectation 类型：{kind or '(空)'}")
-        return failures
-
-    def _verify_completion(self, state: AgentState) -> List[str]:
-        """Deterministic completion checks; returns failure reasons ([] == verified).
-
-        E — the caller's declared expectations (#46): the completion line was drawn
-        by whoever submitted the task, so "the deliverable that was required but
-        never produced" is now askable. Runs first: it is the narrowest, most
-        specific statement of what this task owed.
-        S1 — every artifact registered this run must still exist and be non-empty.
-        S2 (triple-narrowed) — zero successful product AND zero successful tool
-        call AND >=1 failed tool call: "everything failed yet claims done". The
-        narrowing keeps a pure-Q&A task with one flaky search failure from being
-        flagged. Artifacts are read from the manager's authoritative side (P3
-        copy semantics) with a getattr guard for SimpleNamespace test fakes.
-
-        Still NOT checked here: what a deliverable *says*. That is the rubric half
-        of the same contract (#46 second step), judged by the independent grader in
-        :mod:`grader` — see :meth:`_grade_against_rubric` for why it runs after this.
-        """
-        failures: List[str] = self._expectation_failures(state)
-        tm_states = getattr(self.tm, "_active_states", None) or {}
-        run_state = tm_states.get(self.task_id, {}) or {}
-        artifacts = run_state.get("artifacts", []) or []
-        ok_artifacts = 0
-        for art in artifacts:
-            path = art.get("path") if isinstance(art, dict) else getattr(art, "path", None)
-            if not path:
-                continue
-            p = Path(path)
-            if not p.exists():
-                failures.append(f"产物缺失：{p.name}")
-            elif p.stat().st_size == 0:
-                failures.append(f"产物为空：{p.name}")
-            else:
-                ok_artifacts += 1
-        statuses = [tc.get("status") for tc in self._call_records(state)]
-        n_success = sum(1 for s in statuses if s == "success")
-        n_failed = sum(1 for s in statuses if s == "failed")
-        if ok_artifacts == 0 and n_success == 0 and n_failed >= 1:
-            failures.append(
-                f"全程 {n_failed} 个工具调用失败且无任何成功产物，却声称完成"
-            )
-        return failures
-
-    def _grade_against_rubric(self, state: AgentState) -> Tuple[List[str], bool]:
-        """Judge the caller's free-text ``rubric`` with the independent grader (#46).
-
-        Returns ``(failures, grader_error)``. No rubric declared -> ``([], False)``,
-        i.e. the task behaves exactly as it did before this field existed and no aux
-        call is made; a satisfied verdict -> ``([], False)`` lets the run complete.
-
-        ``grader_error`` True means the *judge* failed rather than the work: an
-        unevaluable rubric, an absent aux client, an exception, an unparseable
-        answer. ``reflect`` turns that into a terminal UNVERIFIED instead of a
-        loop-back, because asking the model to try again cannot repair a document its
-        caller wrote — and because a judge outage must not spend retry budget.
-
-        Authorship and content evidence are assembled in :mod:`grader`, where the
-        two leniency holes measured in the #46 trial are closed by construction.
-        """
-        rubric = str(state.get("rubric") or "").strip()
-        if not rubric:
-            return [], False
-        # Same ADR 0004 line as the product ledger: only a tool declaring
-        # ``registers_artifact`` can produce a deliverable, so ``read`` / ``ls``
-        # results never reach the judge as proof of authorship.
-        producing = {
-            t.name for t in self.tools.values() if getattr(t, "registers_artifact", False)
-        }
-        verdict = grader.grade_rubric(self.aux_llm, rubric, state, producing)
-        if verdict["verdict"] == grader.VERDICT_SATISFIED:
-            return [], False
-        if verdict["verdict"] == grader.VERDICT_NEEDS_REVISION:
-            return list(verdict["failures"]), False
-        return list(verdict["failures"]), True
-
     def finish(self, state: AgentState) -> AgentState:
-        """Map the run onto a terminal status (issue #46, ADR 0005).
+        """Map the run onto a terminal status.
 
         Order is load-bearing: a stop is a stop and an error is an error before
-        anything is judged. ``_verification`` absent means either the gate is off
-        (``verify_enabled=false``, zero regression) or the state came from a
-        pre-#46 checkpoint — both keep COMPLETED. A verdict that did not pass is
-        UNVERIFIED, never FAILED: P0-B Q4 still holds (ADR 0005).
+        the claim is read. A final answer is ``COMPLETED`` — since #137 nothing
+        judges it any more; a run that never claimed anything is ``FAILED``.
         """
         if state.get("stop_requested"):
             state["status"] = "INTERRUPTED"
         elif state.get("error"):
             state["status"] = "FAILED"
         elif state.get("final_answer"):
-            verdict = state.get("_verification")
-            state["status"] = (
-                "COMPLETED" if verdict is None or verdict.get("passed") else "UNVERIFIED"
-            )
+            state["status"] = "COMPLETED"
         else:
             state["status"] = "FAILED"
         if state.get("steps"):

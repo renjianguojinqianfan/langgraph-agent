@@ -20,13 +20,11 @@ from langgraph.types import Durability
 
 from ..api.schemas import (
     Artifact,
-    Expectation,
     PlanStep,
     RiskItem,
     StepRecord,
     SubTask,
     Task,
-    TaskReview,
     TaskStatus,
 )
 from ..config import Settings
@@ -509,21 +507,8 @@ class TaskManager:
         self,
         title: Optional[str],
         user_input: str,
-        expectations: Optional[List[Dict[str, Any]]] = None,
-        rubric: str = "",
     ) -> str:
-        """Start one task. ``expectations`` is the caller's completion contract (#46).
-
-        Validated here, at the boundary: a declaration that is not one of the two
-        decidable kinds would otherwise surface as a mid-run failure the submitter
-        cannot tell apart from a task that genuinely missed its deliverable.
-
-        ``rubric`` (#46 second step) is the free-text half of the same contract,
-        judged by the independent grader rather than mechanically. Normalised here —
-        the one boundary both input faces pass through — so a blank declaration is
-        stored as "nothing declared" instead of a whitespace ghost that a later
-        branch reads as a rubric and summons a judge for.
-        """
+        """Start one task."""
         task_id = uuid.uuid4().hex
         now = _now()
         task = Task(
@@ -533,8 +518,6 @@ class TaskManager:
             status=TaskStatus.PENDING,
             created_at=now,
             updated_at=now,
-            expectations=[Expectation(**e) for e in expectations or []],
-            rubric=(rubric or "").strip(),
         )
         # P0 item 4: attach the trace recorder before any event is published so
         # the JSONL captures task_created onwards.
@@ -598,13 +581,6 @@ class TaskManager:
             "_risk_blocked": False,
             "subtasks": [],
             "_is_subtask": False,
-            # #46: the contract the caller drew at submission — carried into the
-            # state so reflect judges against it, and restored with the checkpoint
-            # on resume (a resumed task is still held to the same line).
-            "expectations": [e.model_dump() for e in task.expectations],
-            # #46 second step: the rubric half of the same contract, judged by the
-            # grader. Same resume reasoning as expectations above.
-            "rubric": task.rubric,
         }
         self._active_states[task_id] = state
 
@@ -697,11 +673,12 @@ class TaskManager:
         """LangGraph runnable config under the thread_id == task_id convention.
 
         Also lifts the default recursion limit (25). The P1 main topology runs
-        6 nodes per agent cycle (planner→risk_scan→executor→
-        [human_confirm]→tool→reflect), so the earlier ×4 estimate undershot and
-        long tasks crashed with GraphRecursionError; ×8 covers the full cycle
-        plus finish with headroom (issue #56 dropped one node per cycle and left
-        the multiplier alone — the limit is a ceiling, not a budget).
+        5 nodes per agent cycle (planner→risk_scan→executor→
+        [human_confirm]→tool; #137 dropped the reflect node), so the earlier ×4
+        estimate undershot and long tasks crashed with GraphRecursionError; ×8
+        covers the full cycle plus finish with headroom (issue #56 dropped one
+        node per cycle and left the multiplier alone — the limit is a ceiling,
+        not a budget).
         """
         return {
             "configurable": {"thread_id": task_id},
@@ -786,33 +763,10 @@ class TaskManager:
         task.error = final.get("error")
         task.risk_report = [RiskItem(**it) for it in final.get("risk_report", [])]
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
-        verification = final.get("_verification")
-        if isinstance(verification, dict):
-            # P0-B §4.3 edge, told straight (#46): a verify loop that ``max_steps``
-            # cut short still carries its open verdict (``reason: "pending"``), and a
-            # ``_verification`` restored from a pre-#46 checkpoint has no reason key
-            # at all. Either way, name the budget that ran out instead of persisting
-            # an UNVERIFIED whose cause cannot be read.
-            reason = verification.get("reason")
-            if status == "UNVERIFIED" and reason in ("", "pending", None):
-                verification = dict(verification, reason="max_steps")
-            task.verification = verification
         task.updated_at = _now()
         if status == "COMPLETED":
             self.event_bus.publish(
                 task.id, "task_completed", {"task_id": task.id, "status": status}
-            )
-        elif status == "UNVERIFIED":
-            # #46: same shape as task_interrupted — a terminal state that is neither
-            # success nor crash has to be distinguishable on the event face alone.
-            self.event_bus.publish(
-                task.id,
-                "task_unverified",
-                {
-                    "task_id": task.id,
-                    "status": status,
-                    "reason": (task.verification or {}).get("reason", ""),
-                },
             )
         elif status == "FAILED":
             self.event_bus.publish(
@@ -1030,107 +984,6 @@ class TaskManager:
                 self._trace.close(task_id)
         return result
 
-    def accept_unverified(
-        self, task_id: str, *, reviewer: str, note: str
-    ) -> Dict[str, Any]:
-        """Accept an ``UNVERIFIED`` task as ``COMPLETED``, recording the act (#46 B).
-
-        The one human door on the terminal state — and it does **not** rewrite the
-        verdict. ``verification`` keeps saying ``passed: False`` with the reason it
-        earned, and the acceptance lands beside it as :class:`TaskReview` (who / when /
-        why / over which reason). That is the ruling ADR 0005's「重开条件」asked for:
-        人工接受**不算**「验证通过」—— it is a third source for ``COMPLETED``, next to
-        "verified" and "gate off", and it is attributable. Flipping ``passed`` here
-        would put the always-on yellow light back under a different stamp: the record
-        would claim a check that never happened.
-
-        Refusals raise ``RuntimeError`` (the route maps it to 409), in the same
-        synchronous style as ``resume`` / ``rollback``:
-
-        * still running / still unwinding — a verdict nobody has seen cannot be
-          pre-authorised, and the worker's own ``_finalize_terminal`` would then
-          overwrite this write;
-        * any terminal state but ``UNVERIFIED`` — including one already accepted, so
-          a second accept cannot rewrite the first one's grounds: one acceptance,
-          one record.
-
-        A blank ``note`` or ``reviewer`` raises ``ValueError`` (the route maps it to
-        400): an unattributed, unexplained overruling is not an audit trail, it is the
-        rubber stamp this method exists to replace.
-        """
-        reviewer = (reviewer or "").strip()
-        note = (note or "").strip()
-        if not reviewer or not note:
-            raise ValueError(
-                "acceptance needs a reviewer and a reason — 无人、无理由的接受就是橡皮图章"
-            )
-        with self._lock:
-            task = self.persistence.load_task(task_id)
-            if task is None:
-                raise RuntimeError(f"task {task_id} not found")
-            live = self._threads.get(task_id)
-            if task.status in (TaskStatus.RUNNING, TaskStatus.PENDING) or (
-                live is not None and live.is_alive()
-            ):
-                raise RuntimeError(
-                    f"task {task_id} is {task.status.value}; "
-                    "acceptance requires a settled run (stop it first)"
-                )
-            if task.status is not TaskStatus.UNVERIFIED:
-                raise RuntimeError(
-                    f"task {task_id} is {task.status.value}; only UNVERIFIED tasks can be "
-                    "accepted, and an accepted one keeps its single record"
-                )
-            reason = str((task.verification or {}).get("reason") or "")
-            review = TaskReview(
-                at=_now(), reviewer=reviewer, note=note, overruled_reason=reason
-            )
-            # Reopen the audit trail for the review era — the recorder detached when
-            # the run finished, so without this the acceptance reaches SSE subscribers
-            # but never the JSONL somebody replays later. That much is ``rollback``'s
-            # idea; the *placement`` is deliberately not: rollback attaches outside its
-            # lock, here attach -> publish -> save -> close all sit inside
-            # ``self._lock``. Two invariants only intersect there — one-acceptance-
-            # one-record needs validate+flip atomic, and event-before-record needs
-            # publish strictly before save. Cost, stated: a file open under the
-            # manager's global lock, so an accept can hold up other tasks' writes for
-            # its duration.
-            if self._trace is not None:
-                self._trace.attach(self.event_bus, task_id)
-            try:
-                # Published BEFORE the record is written, as in _finalize_terminal: an
-                # observer polling get_task() must never see COMPLETED ahead of event.
-                self.event_bus.publish(
-                    task_id,
-                    "task_accepted",
-                    {
-                        "task_id": task_id,
-                        "status": TaskStatus.COMPLETED.value,
-                        "reason": reason,
-                        "reviewer": reviewer,
-                        "note": note,
-                    },
-                )
-                task.review = review
-                task.status = TaskStatus.COMPLETED
-                task.updated_at = review.at
-                self.persistence.save_task(task)
-            finally:
-                if self._trace is not None:
-                    self._trace.close(task_id)
-        logger.info(
-            "task %s accepted as COMPLETED by reviewer=%s over UNVERIFIED(reason=%s)",
-            task_id,
-            reviewer,
-            reason or "(none)",
-        )
-        return {
-            "ok": True,
-            "task_id": task_id,
-            "status": TaskStatus.COMPLETED.value,
-            "review": review.model_dump(),
-        }
-
     # ── human confirmation (P1-2) ──
     def request_confirm(self, task_id: str, tool_call_id: str):
         import threading
@@ -1190,8 +1043,7 @@ class TaskManager:
         Two settled semantics callers rely on: the key is per **task** — two
         tasks touching the same file each own a record — and a hit returns the
         record as first registered, i.e. its ``size`` / ``created_at`` are the
-        ones from the initial write (completion verification re-stats the disk,
-        so S1 is unaffected). A subtask write's single registration is the
+        ones from the initial write. A subtask write's single registration is the
         hand-back under the parent id (#76 — the tool node no longer registers
         under the subtask's own id). A task with no active state has no
         registry to dedupe against and registers as before (mint + event, no

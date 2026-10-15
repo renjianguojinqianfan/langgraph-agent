@@ -22,7 +22,12 @@ import time
 
 import pytest
 
-from backend.core.agent.graph import _after_planner_subtask, build_graph
+from backend.core.agent.graph import (
+    _after_planner_subtask,
+    _tool_router,
+    _tool_router_subtask,
+    build_graph,
+)
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import MockLLMClient
 from backend.tests.conftest import make_manager, make_settings
@@ -100,8 +105,8 @@ def test_main_topology_is_statically_declared(settings):
         assert "subagent_split" not in (src, dst)
     assert ("executor", "human_confirm") in edges
     assert ("executor", "tool") in edges
-    assert ("tool", "reflect") in edges
-    assert ("reflect", "planner") in edges
+    assert ("tool", "planner") in edges
+    assert ("tool", "finish") in edges
     # 确认闸门之后是静态边（总是去 tool），不是条件边。
     assert ("human_confirm", "tool") in edges
     # planner 不可能直达 tool：这条边一旦出现，就说明 path_map 退化成了
@@ -115,10 +120,28 @@ def test_subtask_topology_declares_no_gate_and_no_risk(settings):
 
     assert ("planner", "executor") in edges
     assert ("executor", "tool") in edges
-    assert ("tool", "reflect") in edges
+    assert ("tool", "planner") in edges
     for src, dst in edges:
         assert src not in ("human_confirm", "risk_scan", "subagent_split")
         assert dst not in ("human_confirm", "risk_scan", "subagent_split")
+
+
+def test_main_tool_router_spends_the_step_budget_into_finish():
+    """步数预算路由（#137 把它从 reflect 路由挪进 tool 路由）：预算未尽回 planner，
+    用尽即 finish；stop / 待确认项优先于预算。"""
+    router = _tool_router(_runtime(max_steps=3))
+    assert router({"step_index": 2, "_last_action": "tool_done"}) == "planner"
+    assert router({"step_index": 3}) == "finish"
+    assert router({"step_index": 99, "stop_requested": True}) == "finish"
+    assert router({"step_index": 99, "_needs_confirm": True}) == "human_confirm"
+
+
+def test_subtask_tool_router_spends_the_step_budget_into_finish():
+    """子任务拓扑没有确认闸门，预算路由只有 planner | finish 两个落点。"""
+    router = _tool_router_subtask(_runtime(max_steps=2))
+    assert router({"step_index": 1}) == "planner"
+    assert router({"step_index": 2}) == "finish"
+    assert router({"step_index": 99, "stop_requested": True}) == "finish"
 
 
 def test_unknown_mode_is_rejected(settings):
