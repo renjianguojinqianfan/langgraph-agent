@@ -43,6 +43,7 @@ export interface ToolCallRecord {
   error?: string | null;
   need_confirm: boolean;
   confirmed: boolean;
+  blocked?: boolean; // S2 #136: 被设置里的规则表当场拒掉（未执行，理由在 error 上；backend schemas.py 同源）
   confirm_outcome?: ConfirmOutcome | ""; // #57: 五档终态；"" = 未进闸门（backend schemas.py 同源）
   circuit_open?: boolean; // P0: short-circuited by the circuit breaker
   retries?: number; // P0: retries performed by the tool executor

@@ -34,6 +34,9 @@ class ToolCallRecord(BaseModel):
     error: Optional[str] = None
     need_confirm: bool = False
     confirmed: bool = False
+    # S2 (#136): 被设置里的规则表当场拒掉（未执行，``reason`` 在 ``error`` 上）。
+    # 与 ``status="skipped"`` 同现；默认 False = 没被拦过。
+    blocked: bool = False
     # #57 AC5: 进过闸门的调用带终态分档（approved | denied | timed_out | aborted |
     # auto_approved）；空串是「没进过闸门」，不是某种失败。
     confirm_outcome: str = ""

@@ -19,6 +19,7 @@ from ..tools.base import BaseTool, ToolResult
 from ..tools.http_api import WRITE_METHODS
 from . import inject
 from .context import compress_messages, evict_tool_results
+from .policy import DangerPolicy
 from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, render_plan_section
 from .state import AgentState
 
@@ -101,6 +102,11 @@ class AgentRuntime:
         # Issue #57 AC5: 等一个判决要有上界，否则「超时未答」这一档不可达。和下面的
         # 注入块一样按任务快照一次——任务中途改 confirm_timeout_sec 不生效。
         self.confirm_timeout_sec: float = settings.confirm_timeout_sec
+        # S2 (#136): the danger rule table is compiled once per task, same snapshot
+        # discipline as the injection block below — mid-task edits take effect on
+        # the NEXT task. An empty table compiles to zero rules and `check` always
+        # returns None, so the executor's decision path is unchanged (#136 AC1).
+        self.danger_policy: DangerPolicy = DangerPolicy.from_settings(settings)
         self._inject_block: str = (
             inject.build_inject_block(settings)
             if getattr(settings, "context_inject_enabled", True)
@@ -441,9 +447,19 @@ class AgentRuntime:
             rec = by_id.get(cid)
             if rec is not None and rec.get("status") == "pending":
                 rec["status"] = "skipped"
-                rec["error"] = DANGLING_SWEEP_TEXT
+                # #136: a policy-blocked call already carries its own reason, and
+                # this record only ever reaches here if the run was interrupted
+                # between the executor's verdict and the tool node's delivery.
+                # Overwriting it with「interrupted before execution」would tell the
+                # model a second, different story about the same call — the same
+                # 「一个文本、一个来源」rule the line below already keeps for
+                # settled records.
+                rec["error"] = rec.get("error") or DANGLING_SWEEP_TEXT
             own = str((rec or {}).get("error") or "")
-            self._feed_tool_failure(state, {"id": cid, "error": own or DANGLING_SWEEP_TEXT})
+            if (rec or {}).get("blocked"):
+                self._feed_blocked(state, {"id": cid, "error": own})
+            else:
+                self._feed_tool_failure(state, {"id": cid, "error": own or DANGLING_SWEEP_TEXT})
         logger.info("task %s swept %d dangling tool call(s) at loop entry", self.task_id, len(orphans))
 
     def executor(self, state: AgentState) -> AgentState:
@@ -477,8 +493,15 @@ class AgentRuntime:
                 name = tc.get("name", "")
                 args = tc.get("arguments", {}) or {}
                 tool = self.tools.get(name)
+                # S2 (#136): the one hook. A rule hit DENIES this call outright —
+                # the tool never runs and the model gets {block, reason} back.
+                # Decided *before* (and independently of) the confirm judgement:
+                # asking a human about a call the table already refused would be
+                # the dialog ADR 0008 decision 6 rules out, and the args are
+                # passed by reference and never written (#136 AC3).
+                block_reason = self.danger_policy.check(name, args)
                 need_confirm = False
-                if self.confirm_enabled:
+                if block_reason is None and self.confirm_enabled:
                     need_confirm = bool(tool.requires_confirm) if tool else False
                     if tool and tool.name == "http_request" and str(args.get("method", "")).upper() in WRITE_METHODS:
                         need_confirm = True
@@ -514,6 +537,17 @@ class AgentRuntime:
                     "need_confirm": need_confirm,
                     "confirmed": False,
                 }
+                if block_reason is not None:
+                    # Only written on a hit: an empty rule table leaves the record
+                    # byte-identical to the pre-S2 shape (#136 AC1/AC4 — the repo's
+                    # zero-regression anchor is the event/state payload itself).
+                    # ``error`` carries the reason on the record face (the
+                    # ``tool_result`` event, the trace and the persisted
+                    # ``ToolCallRecord`` all read this one field — #95's
+                    # 「一个文本、一个来源」), while the model face gets the
+                    # ``{block, reason}`` shape the issue asks for.
+                    rec["blocked"] = True
+                    rec["error"] = block_reason
                 tcs.append(rec)
 
             state["_current_tool_calls"] = tcs
@@ -583,6 +617,17 @@ class AgentRuntime:
                 # here is per ``rec``, gated or not; retries are a different
                 # ledger, closed inside ``ToolExecutor.dispatch`` by ``with_retry``
                 # and never routed through a graph re-entry.
+                continue
+            if rec.get("blocked"):
+                # S2 (#136): the executor already refused this call — it never ran
+                # and never entered the gate. This node only delivers the verdict:
+                # mark it settled, publish it (so the timeline carries the refusal
+                # like any other result) and answer the model so the tool-call
+                # protocol stays intact (#46: a call with no `role: tool` reply is
+                # exactly the hole the loop entry sweep exists to patch).
+                rec["status"] = "skipped"
+                self._publish("tool_result", rec)
+                self._feed_blocked(state, rec)
                 continue
             if rec["need_confirm"] and rec["id"] in rejected:
                 rec["status"] = "skipped"
@@ -686,6 +731,28 @@ class AgentRuntime:
                 "tool_call_id": rec["id"],
                 "content": json.dumps(
                     {"ok": False, "error": rec["error"] or "tool failed"},
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            }
+        )
+
+    def _feed_blocked(self, state: AgentState, rec: Dict[str, Any]) -> None:
+        """Answer a policy-blocked call on the conversation face (#136).
+
+        A different shape from :meth:`_feed_tool_failure` on purpose: the model is
+        told *why* it is not allowed to run this one, in the ``{block, reason}``
+        form ADR 0008 decision 6 asks for, so it can re-plan instead of retrying
+        the same call (a plain ``{ok: false, error: ...}`` reads like a transient
+        failure). The reason text is the one already on ``rec["error"]`` — the same
+        string the ``tool_result`` event publishes (#95: one text, one source).
+        """
+        state.setdefault("messages", []).append(
+            {
+                "role": "tool",
+                "tool_call_id": rec["id"],
+                "content": json.dumps(
+                    {"block": True, "reason": rec["error"] or "blocked by policy"},
                     ensure_ascii=False,
                     default=str,
                 ),

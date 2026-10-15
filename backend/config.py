@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     confirm_timeout_sec: float = 1800.0  # wall clock bound on a human verdict -> timed_out (#57 AC5)
     risk_danger_keywords: str = ""  # optional JSON array override of the built-in table
 
+    # ── Danger policy (S2: settings rule table + one hook) ──
+    # JSON array of {"tool": name-or-glob, "pattern"?: regex, "reason"?: text}.
+    # Empty = nothing is blocked (byte-identical to the pre-S2 behaviour).
+    policy_rules: str = "[]"
+
     # ── Sub-agent (P1 item 2) ──
     subagent_enabled: bool = True  # master switch
     subagent_max_concurrency: int = 2  # thread-pool parallelism (1 = serial)
@@ -240,6 +245,17 @@ class Settings(BaseSettings):
         """``mcp_force_confirm`` as entries of ``mcp__{server}__{tool}`` / ``mcp__{server}__*``,
         each optionally ``!``-prefixed to mean "never confirm" (#57 AC3)."""
         return [str(x) for x in self._parse_json_list(self.mcp_force_confirm, [])]
+
+    @property
+    def policy_rules_list(self) -> List[dict]:
+        """``policy_rules`` as a parsed list of rule dicts (#136).
+
+        Non-dict entries are dropped: a rule that is not an object cannot name a
+        tool, so it is not a rule. Invalid JSON / a non-array falls back to ``[]``
+        via :meth:`_parse_json_list` — the same lenient contract as
+        ``mcp_servers``, so a typo in the table never crashes a run.
+        """
+        return [r for r in self._parse_json_list(self.policy_rules, []) if isinstance(r, dict)]
 
     @property
     def cors_origin_list(self) -> list[str]:
