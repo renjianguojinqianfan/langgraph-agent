@@ -247,15 +247,15 @@ class Settings(BaseSettings):
         return [str(x) for x in self._parse_json_list(self.mcp_force_confirm, [])]
 
     @property
-    def policy_rules_list(self) -> List[dict]:
-        """``policy_rules`` as a parsed list of rule dicts (#136).
+    def policy_rules_list(self) -> List[Any]:
+        """``policy_rules`` as the parsed JSON array (#136).
 
-        Non-dict entries are dropped: a rule that is not an object cannot name a
-        tool, so it is not a rule. Invalid JSON / a non-array falls back to ``[]``
-        via :meth:`_parse_json_list` — the same lenient contract as
-        ``mcp_servers``, so a typo in the table never crashes a run.
+        **只解析，不筛条目**：非对象条目的处置权归消费者
+        （``core/agent/policy.py`` 的 ``_compile``，它 warning 后作废那一条）——在配置层
+        悄悄滤掉，正好让写坏的条目在唯一能报出来的地方看不见（#136 独立评审 R1）。
+        坏 JSON / 非数组仍按 ``_parse_json_list`` 的老口径回退 ``[]``。
         """
-        return [r for r in self._parse_json_list(self.policy_rules, []) if isinstance(r, dict)]
+        return self._parse_json_list(self.policy_rules, [])
 
     @property
     def cors_origin_list(self) -> list[str]:

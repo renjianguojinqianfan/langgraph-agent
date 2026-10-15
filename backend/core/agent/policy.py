@@ -16,9 +16,12 @@
 
 判定单位是**一次调用**（工具名 + 入参），不是计划里的一句话：规划期那句「这一步看起来
 危险」是 :mod:`backend.core.agent.risk` 的活，两者不同源、也不互相替代。
+``pattern`` 打在**入参里的字符串值**上（不是 JSON 文本，见 :func:`_string_leaves`）。
 
 坏配置一律 warning + 忽略，绝不因为规则表写错把运行炸掉（与 ``risk_danger_keywords``
-同口径）；**空表 = 不拦**，与改造前逐字节一致。
+同口径）；整表都编不出规则时另发一条「什么都没拦住」——**软档**：出声但照跑
+（裁定见 ``docs/research-danger-policy-across-agents.md`` §4.1）。**空表 = 不拦**，
+与改造前逐字节一致。
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ import fnmatch
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Iterator, Mapping, Optional, Sequence, Tuple
 
 from ...config import Settings
 from ...utils.logging import get_logger
@@ -35,12 +38,22 @@ from ...utils.logging import get_logger
 logger = get_logger("agent.policy")
 
 
-def _args_text(args: Any) -> str:
-    """入参的判据文本：JSON 序列化（``default=str``），命令类参数会原样出现。"""
-    try:
-        return json.dumps(args, ensure_ascii=False, default=str)
-    except Exception:  # pragma: no cover - defensive
-        return str(args)
+def _string_leaves(value: Any) -> Iterator[str]:
+    """入参里的所有**字符串值**（dict 只走值、list/tuple 递归；键名不算）。
+
+    判据是「命令模式打在真实参数文本上」。以前搜 ``json.dumps(args)`` 的整段文本，JSON
+    转义会把真实字符变形——真 tab 变成 ``\\t``、引号变成 ``\\"``、Windows 路径变成双反斜杠
+    ——照着真实命令写的模式反而漏拦（#136 独立评审 R2 实测：``rm\\t-rf /`` 与
+    ``rm -rf "/"`` 都不命中）。顺带把「键名也被匹配」这一类假阳性一并去掉。
+    """
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _string_leaves(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _string_leaves(item)
 
 
 @dataclass(frozen=True)
@@ -48,24 +61,29 @@ class BlockRule:
     """一条「命中即拒」的规则。
 
     ``tool`` 是工具名，支持 ``fnmatch`` 通配（如 ``mcp__*__write``）；
-    ``pattern`` 可选，是对入参 JSON 文本的不区分大小写正则搜索——即「命令模式」，
-    省略则**该工具的任何一次调用**都拦。
+    ``pattern`` 可选，是对**入参里每个字符串值**的不区分大小写正则搜索——即「命令模式」，
+    省略则**该工具的任何一次调用**都拦。``reason`` 为空时由 :meth:`DangerPolicy.check`
+    用**实际工具名**补一句（规则里的通配名对模型没有意义）。
     """
 
     tool: str
     pattern: Optional["re.Pattern[str]"]
-    reason: str
+    reason: Optional[str]
 
     def matches(self, tool_name: str, args: Mapping[str, Any]) -> bool:
         if not fnmatch.fnmatchcase(tool_name, self.tool):
             return False
         if self.pattern is None:
             return True
-        return self.pattern.search(_args_text(args)) is not None
+        return any(self.pattern.search(leaf) for leaf in _string_leaves(args))
 
 
-def _compile(rule: Mapping[str, Any]) -> Optional[BlockRule]:
-    """一条规则 dict -> :class:`BlockRule`；写坏的那条 warning 后作废。"""
+def _compile(rule: Any) -> Optional[BlockRule]:
+    """一条规则 -> :class:`BlockRule`；写坏的那条 warning 后作废。"""
+    if not isinstance(rule, dict):
+        # 独立评审 R1：非对象条目以前在配置层就被静默滤掉，写坏的表因此无声无息。
+        logger.warning("policy_rules entry is not an object; ignored: %r", rule)
+        return None
     tool = str(rule.get("tool") or "").strip()
     if not tool:
         logger.warning("policy_rules entry without a 'tool'; ignored: %r", rule)
@@ -75,12 +93,12 @@ def _compile(rule: Mapping[str, Any]) -> Optional[BlockRule]:
     if raw_pattern:
         try:
             pattern = re.compile(str(raw_pattern), re.IGNORECASE)
-        except re.error:
+        except (re.error, OverflowError):
+            # OverflowError：``a{99999999999}`` 这类重复次数过大（独立评审 R3 实测）。
+            # 两样都按「这条规则写坏」处理，绝不让配置把运行炸掉。
             logger.warning("policy_rules pattern is not a valid regex; rule ignored: %r", rule)
             return None
-    # 没写 reason 也必须有话可回：模型看到的是一句拒绝，不是一个空对象。
-    reason = str(rule.get("reason") or "").strip() or f"{tool} is blocked by policy"
-    return BlockRule(tool=tool, pattern=pattern, reason=reason)
+    return BlockRule(tool=tool, pattern=pattern, reason=str(rule.get("reason") or "").strip() or None)
 
 
 def _table_is_explicitly_empty(raw: str) -> bool:
@@ -127,9 +145,10 @@ class DangerPolicy:
         """Return the reason to block this call on, or ``None`` to let it through.
 
         只读判定：不碰入参、不留状态、不弹框（pi 的钩子能原地改参数，这里不能）。
-        规则按表序判定，**第一条命中的说了算**。
+        规则按表序判定，**第一条命中的说了算**。规则没写 reason 时用**实际工具名**兜一句
+        ——「``mcp__*__write`` is blocked by policy」对模型没有可操作性（独立评审 R4）。
         """
         for rule in self.rules:
             if rule.matches(tool_name, args):
-                return rule.reason
+                return rule.reason or f"{tool_name} is blocked by policy"
         return None

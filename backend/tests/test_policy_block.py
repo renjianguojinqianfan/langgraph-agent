@@ -210,7 +210,7 @@ def test_block_holds_without_a_gate_on_this_runtime(tmp_path):
 
 
 def test_a_command_pattern_is_matched_against_the_arguments(tmp_path):
-    """「命令模式」= 对入参 JSON 文本做正则；同一个工具的另一次调用不受累。"""
+    """「命令模式」= 对入参里的字符串值做正则；同一个工具的另一次调用不受累。"""
     settings = _settings(
         tmp_path,
         policy_rules=_rules(
@@ -322,6 +322,20 @@ def test_a_rule_without_a_reason_still_says_something():
     assert "probe" in reason
 
 
+def test_the_default_reason_names_the_actual_tool_not_the_glob():
+    """R4：规则写的是通配 ``mcp__*__write``，回给模型的理由得是**真实工具名**。
+
+    规则里的通配名对模型没有可操作性——它刷新一条一模一样的调用时，需要知道自己被哪个
+    工具拒了（照纯读就好：拒绝理由是人读的话，不该拿规则文本喂模型）。
+    """
+    reason = _policy({"tool": "mcp__*__write"}).check("mcp__fs__write", {})
+
+    assert "mcp__fs__write" in reason
+    assert "mcp__*__write" not in reason
+    # 规则自己写了 reason 就照写，不被覆盖。
+    assert _policy({"tool": "mcp__*__write", "reason": "no writes"}).check("mcp__fs__write", {}) == "no writes"
+
+
 def test_exact_name_and_glob_and_pattern():
     policy = _policy(
         {"tool": "probe", "reason": "exact"},
@@ -346,6 +360,44 @@ def test_a_broken_pattern_is_dropped_not_crashed():
     assert policy.check("probe", {}) is None
 
 
+def test_an_over_large_repetition_is_dropped_not_crashed():
+    """R3：``a{99999999999}`` 抛的是 ``OverflowError``，不是 ``re.error``。
+
+    独立评审实测：只捕获 ``re.error`` 时这一条会穿过去把运行炸掉——而「配置写坏不炸运行」
+    是这张表自己的承诺。
+    """
+    policy = _policy({"tool": "probe", "pattern": "a{99999999999}", "reason": "no"})
+
+    assert policy.rules == ()
+    assert policy.check("probe", {"cmd": "aaaa"}) is None
+
+
+def test_a_pattern_is_matched_against_the_real_argument_text():
+    """R2：判据打在入参的**字符串值**上，不打在 JSON 文本上。
+
+    独立评审实测的三种漏拦（JSON 转义把真实字符变形）：真 tab 变 ``\\t``、引号变 ``\\"``、
+    Windows 路径反斜杠翻倍——照着真实命令写的模式在 JSON 文本上搜不到，于是「该拦的没拦」。
+    """
+    shell = _policy({"tool": "probe", "pattern": r"rm\s+-rf", "reason": "destructive"})
+    assert shell.check("probe", {"cmd": "rm\t-rf /"}) == "destructive"  # 真 tab
+    assert shell.check("probe", {"cmd": 'rm -rf "/"'}) == "destructive"  # 引号
+
+    winpath = _policy({"tool": "write", "pattern": r"C:\\tmp", "reason": "outside sandbox"})
+    assert winpath.check("write", {"path": r"C:\tmp\x"}) == "outside sandbox"
+
+    # 嵌套结构（list / dict）里的字符串也一样看得到。
+    nested = _policy({"tool": "probe", "pattern": "^rm -rf", "reason": "destructive"})
+    assert nested.check("probe", {"argv": ["sh", "-c", "rm -rf /"]}) == "destructive"
+
+
+def test_a_pattern_never_matches_a_key_name():
+    """R2 的顺带收益：键名不再参与匹配（以前搜整段 JSON 文本时，「key 里带 path」会误命中）。"""
+    policy = _policy({"tool": "probe", "pattern": "cmd", "reason": "no"})
+
+    assert policy.check("probe", {"cmd": "ls"}) is None
+    assert policy.check("probe", {"argv": "cmd"}) == "no"
+
+
 def test_the_first_matching_rule_wins():
     policy = _policy({"tool": "probe", "reason": "first"}, {"tool": "probe", "reason": "second"})
 
@@ -357,6 +409,18 @@ def test_check_never_mutates_the_arguments():
     _policy({"tool": "probe", "pattern": "rm", "reason": "no"}).check("probe", args)
 
     assert args == {"cmd": "rm -rf /"}
+
+
+def test_a_non_object_entry_is_loud(policy_logs):
+    """R1：非对象条目以前在配置层被静默滤掉——写坏的表因此无声无息。
+
+    处置权收在 ``policy.py``（``config.policy_rules_list`` 只解析、不筛），所以这里断言的
+    是「条目被丢掉」与「出声」同时成立，而不是只丢不响。
+    """
+    policy = _policy(1, {"tool": "probe", "reason": "no"})
+
+    assert [r.tool for r in policy.rules] == ["probe"], "好条目被坏条目带走了"
+    assert any("not an object" in m for m in policy_logs.messages())
 
 
 def test_a_whole_table_written_wrong_is_loud(policy_logs):
@@ -379,13 +443,17 @@ def test_an_explicitly_empty_table_stays_silent(policy_logs):
 
 
 def test_settings_expose_the_rule_table_as_a_list(tmp_path):
-    """配置层：JSON 字符串 -> 规则 dict 列表；坏 JSON / 非数组 -> 空表（不炸）。"""
+    """配置层只解析：JSON 字符串 -> 数组；坏 JSON / 非数组 -> 空表（不炸）。
+
+    条目校验归 `policy.py`（见 `test_a_non_object_entry_is_loud`）——这一层筛掉，正是
+    R1 那个「写坏无声」的来源。
+    """
     s = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": "no"}))
     assert s.policy_rules_list == [{"tool": "probe", "reason": "no"}]
-    for raw in ("", "nope", '{"tool": "probe"}', '["probe"]', "null"):
+    for raw in ("", "nope", '{"tool": "probe"}', "null"):
         assert Settings(policy_rules=raw).policy_rules_list == [], f"{raw!r} 不该产出规则"
-    # 非 dict 的条目丢掉，dict 的留下（判定单位是「一条规则」）
-    assert Settings(policy_rules='[1, {"tool": "a"}]').policy_rules_list == [{"tool": "a"}]
+    # 非 dict 的条目原样透出（由消费者出声处置）
+    assert Settings(policy_rules='[1, {"tool": "a"}]').policy_rules_list == [1, {"tool": "a"}]
 
 
 # ── 持久化面 ────────────────────────────────────────────────────────────────
