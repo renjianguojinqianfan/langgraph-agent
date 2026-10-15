@@ -762,65 +762,6 @@ def test_spawn_subagent_defaults_to_the_execute_tier(tmp_path):
     assert stub.specs[0].tools == ["read"]
 
 
-# ── isolation / artifact hand-back through the surviving entry ───────────────
-class _ResearchMock(MockLLMClient):
-    """Parent delegates the research leg (and gets approved); the subtask writes
-    its notes and reports back.
-
-    Entry B reached this shape from the wording alone; this drives the surviving
-    ``spawn_subagent`` path with the same script. The subtask
-    turn is recognised by the marker in its instruction because one client
-    instance serves both graphs.
-    """
-
-    INSTRUCTION = "检索素材并记下要点"
-
-    def __init__(self):
-        super().__init__(plan=["调研", "写作"], final_answer="父任务完成")
-        self.subtask_turns = 0
-
-    def complete(self, messages, tools=None, **kwargs):
-        user = " ".join(
-            str(m.get("content") or "") for m in messages if m.get("role") == "user"
-        )
-        if not tools:
-            return LLMResponse(content=json.dumps(self.plan))
-        if self.INSTRUCTION in user:
-            self.subtask_turns += 1
-            if self.subtask_turns == 1:
-                return LLMResponse(
-                    content="",
-                    tool_calls=[
-                        {
-                            "id": "sub1",
-                            "name": "write",
-                            "arguments": {
-                                "path": "research_notes.txt",
-                                "content": "RAG notes",
-                            },
-                        }
-                    ],
-                )
-            return LLMResponse(content="研究完成")
-        if self._executor_turn == 0:
-            self._executor_turn += 1
-            return LLMResponse(
-                content="",
-                tool_calls=[
-                    {
-                        "id": "spawn1",
-                        "name": "spawn_subagent",
-                        "arguments": {
-                            "name": "研究子任务",
-                            "instruction": self.INSTRUCTION,
-                            "tier": DEFAULT_TIER,
-                        },
-                    }
-                ],
-            )
-        return LLMResponse(content=self.final_answer)
-
-
 class _EscalatingSubtaskMock(MockLLMClient):
     """Parent delegates once; the subtask then asks for tools it was never given.
 

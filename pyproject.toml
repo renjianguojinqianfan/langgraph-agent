@@ -41,10 +41,11 @@ select = ["E4", "E7", "E9", "F", "I"]
 #   RUF012                 —— 31 处 BaseTool.args_schema：类级 JSON schema 常量，
 #                             加 ClassVar 只为让 linter 满意，噪音大于收益。
 #   E501                   —— 仓库既有长行（最长 172 字符，多在测试）不属本次范围。
-# RUF100（unused-noqa）不启用是因为它与 select 集合耦合：现有 29 处 noqa 全部是
-# E402/F401/S310，其中 E402 在本 select 下是**load-bearing** 的（conftest.py 与
-# scripts/ 刻意把 import 放在环境隔离/路径引导之后）。启用 RUF100 会在有人调整
-# select 时把这批 noqa 判成死注释并自动删掉，进而炸出 E402——是陷阱不是护栏。
+# RUF100（unused-noqa）不启用是因为它与 select 集合耦合：现有 18 处 noqa 是
+# E402/F401/S310/ANN001，其中 14 处 E402 在本 select 下是**load-bearing** 的
+# （conftest.py 与 test_smoke.py 刻意把 import 放在环境隔离 / 路径引导之后）。
+# 启用 RUF100 会在有人调整 select 时把这批 noqa 判成死注释并自动删掉，进而炸出
+# E402——是陷阱不是护栏。
 
 [tool.ruff.lint.isort]
 known-first-party = ["backend"]

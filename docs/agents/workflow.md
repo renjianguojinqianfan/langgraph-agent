@@ -31,7 +31,7 @@
 
 - **双轴评审**：调 `code-review` skill（规范轴 + 需求轴**并行子代理**）。规范源 = `AGENTS.md` + `pyproject.toml` 注释 + 全局 `~/.agents/AGENTS.md` §7；需求源 = 票面 AC 逐条对照。规范轴另必带 **Fowler 坏味道基线**（`code-review` 技能内置 13 条）：repo 文档规范优先于基线；ruff/mypy 已机械覆盖的跳过；基线命中**一律是判断题**——不当硬违规打回，也不当 scope creep 放过。
 - **安全评审**：涉及**危险动作钩子 / 工具面 / 子代理权限**的 PR 必用 `security-review` skill〔2026-10-14 起：原「闸门」一项随 ADR 0008 退役，改为钩子面〕；纯观测面（trace / SSE 事件词汇表这类）可跳过。
-- **能力面裁判**：能力面 / 工具面 PR 要能核对「这次子代理能干什么」——口径落在离线测试（`test_subagent.py` 的 `tier_face_names` / `resolve_tool_face` / `check_face` 断言 + `test_qa_p1_subagent.py` 的档位面断言）；原「跑 mock 任务后 diff run manifest 的 capability / `subtask_face` 行」这条随片 S1 删除（headless 管线与 run manifest 一并退役）。
+- **能力面裁判**：能力面 / 工具面 PR 要能核对「这次子代理能干什么」——口径落在离线测试（`test_subagent.py` 的 `tier_face_names` / `resolve_tool_face` / `check_face` 断言 + `test_qa_p1_subagent.py` 的档位面断言）。
 - **真模型视票面**：口径见 `AGENTS.md`「真实模型验证」——启服务、在网页端手动跑一遍；CI 不再跑真模型。
 - **评审交付物**：评审 body（结论 + 四态 + 逐条裁定）+ 必要时开跟进票、补标签（按 `docs/agents/triage-labels.md` 三类分诊）。
 
