@@ -206,10 +206,11 @@ def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
 # choice) actually consumed the aux model — and prove that when aux is disabled
 # no auxiliary call is ever made (``call_count == 0``).
 #
-# ``_detect_role`` returns the first hit, so the order is a tie-breaker for a
-# prompt that happens to carry two markers; today the three live auxiliary
-# prompts (risk semantic / summary / tool choice) are near-disjoint, and the
-# order is kept explicit so a collision resolves deterministically.
+# ``_detect_role`` scans the *whole* message text — including any history
+# transcript embedded in the prompt (the summary prompt carries the history it
+# is compressing) — and returns the first marker it hits, so two markers can
+# collide. The order below is an explicit tie-break for that case, not a
+# guarantee that a collision cannot happen.
 _ROLE_MARKERS: Dict[str, List[str]] = {
     "risk": ["风险", "risk"],
     "summary": ["摘要", "压缩", "summary"],
