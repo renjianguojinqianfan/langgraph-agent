@@ -1043,8 +1043,7 @@ class TaskManager:
         Two settled semantics callers rely on: the key is per **task** — two
         tasks touching the same file each own a record — and a hit returns the
         record as first registered, i.e. its ``size`` / ``created_at`` are the
-        ones from the initial write (completion verification re-stats the disk,
-        so S1 is unaffected). A subtask write's single registration is the
+        ones from the initial write. A subtask write's single registration is the
         hand-back under the parent id (#76 — the tool node no longer registers
         under the subtask's own id). A task with no active state has no
         registry to dedupe against and registers as before (mint + event, no

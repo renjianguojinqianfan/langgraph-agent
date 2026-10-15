@@ -629,10 +629,9 @@ class AgentRuntime:
             # Register an artifact when a producing tool wrote a file on disk.
             # Two guards, one per axis: only a ``registers_artifact`` tool is a
             # source of products (#72 — a ``read`` of the same file used to
-            # register it again), and the path must be a real file, since a
-            # result advertising a directory would otherwise land in
-            # verification as a 0-byte「产物为空」and loop a healthy task back
-            # (#17).
+            # register it again), and the path must be a real file — a directory
+            # is not a deliverable (ADR 0004), and before #17 a result
+            # advertising one registered as a phantom 0-byte product.
             #
             # A subtask's write is registered by the hand-back in
             # ``subagent._exec_one`` under the PARENT id only (#76). Registering
