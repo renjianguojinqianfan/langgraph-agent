@@ -146,10 +146,10 @@ def make_manager(
     releases its process-level resources (MCP children, checkpoint sqlite
     connection) even when a test forgets to call ``shutdown()``.
 
-    ``auto_approve`` mirrors the evaluation-mode gate switch and exists for tests
+    ``auto_approve`` mirrors the gate's auto-approve behaviour and exists for tests
     whose subject is *not* the confirm gate (spawn plumbing), so they need no
-    background confirmer thread. It is instance-scoped here, same as in
-    production: the service path never passes it.
+    background confirmer thread. It is instance-scoped here, same as on the
+    service path, which never passes it.
     """
     eb = event_bus or EventBus()
     persistence = persistence or Persistence(settings)
