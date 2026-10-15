@@ -260,7 +260,7 @@ def test_the_three_failure_states_are_pairwise_distinguishable(settings):
 
 
 def test_outcome_rides_the_tool_result_event(settings):
-    """事件面：SSE / trace / run manifest 镜像的都是这条记录体。"""
+    """事件面：SSE / trace 镜像的都是这条记录体。"""
     _rt, _state, tm = _run_gate(settings, verdict=None, confirm_timeout_sec=0.05)
     events = tm.event_bus.replay(TASK_ID)
     results = [e["data"] for e in events if e["type"] == "tool_result"]

@@ -4,8 +4,8 @@ All tests run fully offline: they build a :class:`MockLLMClient` (or otherwise
 mock the network) and use throwaway temporary directories for data / artifacts.
 
 Environment isolation: the suite must be deterministic regardless of a local
-``.env`` file (a developer may have configured a live DashScope/OpenAI endpoint
-for ``scripts/live_e2e.py``). Since pydantic-settings resolves *environment
+``.env`` file (a developer may have configured a live DashScope/OpenAI
+endpoint for manual runs). Since pydantic-settings resolves *environment
 variables* before ``.env``, we neutralise the live-provider keys here so the
 process-wide :func:`get_settings` singleton (used by the smoke test) never
 picks up a real endpoint. LangSmith is neutralised the same way and more
@@ -146,10 +146,10 @@ def make_manager(
     releases its process-level resources (MCP children, checkpoint sqlite
     connection) even when a test forgets to call ``shutdown()``.
 
-    ``auto_approve`` mirrors the headless evaluation switch and exists for tests
-    whose subject is *not* the confirm gate (``run_manifest`` / spawn plumbing),
-    so they need no background confirmer thread. It is instance-scoped here, same
-    as in production: the service path never passes it.
+    ``auto_approve`` mirrors the evaluation-mode gate switch and exists for tests
+    whose subject is *not* the confirm gate (spawn plumbing), so they need no
+    background confirmer thread. It is instance-scoped here, same as in
+    production: the service path never passes it.
     """
     eb = event_bus or EventBus()
     persistence = persistence or Persistence(settings)

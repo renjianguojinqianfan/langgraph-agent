@@ -38,7 +38,6 @@ from backend.core.agent.subagent import (
     SubTaskSpec,
     TierError,
     resolve_tool_face,
-    subtask_owner,
     tier_face_names,
     tier_names,
 )
@@ -299,10 +298,6 @@ def test_git_tools_appear_in_the_tiers_only_when_mounted(tmp_path):
     assert tier_face_names(git_face, EXECUTE_TIER) == sorted(
         set(tier_face_names(git_face, EXPLORE_TIER)) | {"write", "edit"}
     )
-
-
-def test_subtask_owner_label():
-    assert subtask_owner("abc:sub:1") == "subtask:abc:sub:1"
 
 
 def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
@@ -659,11 +654,10 @@ class _UnmountedAskMock(MockLLMClient):
 def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
     tmp_path, event_bus
 ):
-    """票面「观测」条：不新增 manifest 行，失败走 ``tool_result`` 事件——这里钉住事件。
+    """票面「观测」条：被拒的 spawn 不派出探子，失败走 ``tool_result`` 事件——这里钉住事件。
 
-    件清单裁判的两条断言常驻化：被拒的 spawn 在事件里带 error 文本；它没有派出
-    探子，所以父频道上连一条 subtask 事件都没有（拒绝点在 ``attach_subtask``
-    之前，manifest 的 ``subtask_face`` 行同样无从产生）。
+    被拒的 spawn 在事件里带 error 文本；它没有派出探子，所以父频道上连一条
+    subtask 事件都没有。
     """
     settings = make_settings(tmp_path)
     mock = _UnmountedAskMock()
@@ -774,8 +768,7 @@ class _ResearchMock(MockLLMClient):
     its notes and reports back.
 
     Entry B reached this shape from the wording alone; this drives the surviving
-    ``spawn_subagent`` path with the same script, which is why
-    ``test_run_manifest`` imports it for the parent-manifest cases. The subtask
+    ``spawn_subagent`` path with the same script. The subtask
     turn is recognised by the marker in its instruction because one client
     instance serves both graphs.
     """

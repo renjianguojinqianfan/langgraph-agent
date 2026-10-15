@@ -33,8 +33,8 @@ logger = get_logger("agent.runtime")
 # Abort) rather than a bool's shadow; these are the same three names.
 #
 # The bucket is written onto the tool-call record itself (``confirm_outcome``),
-# which is what the ``tool_result`` event, the trace, the run manifest and the
-# persisted ``ToolCallRecord`` all carry.
+# which is what the ``tool_result`` event, the trace and the persisted
+# ``ToolCallRecord`` all carry.
 CONFIRM_APPROVED = "approved"
 CONFIRM_DENIED = "denied"
 CONFIRM_TIMED_OUT = "timed_out"
@@ -771,8 +771,8 @@ class AgentRuntime:
         else:
             outcome = self._ask_human(state, target)
 
-        # Written on the record itself: the tool_result event, the trace, the run
-        # manifest and the persisted ToolCallRecord all carry this dict (#57 AC5).
+        # Written on the record itself: the tool_result event, the trace and the
+        # persisted ToolCallRecord all carry this dict (#57 AC5).
         target["confirm_outcome"] = outcome
         # The asked/replied pair (opencode names its two events the same way):
         # the outcome needs its own event because a 停止打断 run never reaches the
