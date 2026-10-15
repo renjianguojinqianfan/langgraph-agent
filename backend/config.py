@@ -46,13 +46,6 @@ class Settings(BaseSettings):
     # ── Agent / orchestration ──
     max_steps: int = 15  # default max planner/executor iterations (P0-1)
 
-    # ── Completion verification (P0-B) ──
-    verify_enabled: bool = True  # reflect re-checks deliverables before allowing finish
-    verify_max_retries: int = 2  # bounded verify-fail loop-backs before landing UNVERIFIED
-    # #46 第二步（切片 B）: the grader's ``needs_revision`` loop keeps its own book —
-    # a mechanically decidable miss must not spend the semantic review's rounds away.
-    verify_rubric_max_retries: int = 2  # bounded needs_revision loop-backs
-
     # ── Sandbox ──
     sandbox_timeout: int = 30  # seconds for code execution
 

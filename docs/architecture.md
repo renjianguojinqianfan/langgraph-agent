@@ -230,7 +230,7 @@ classDiagram
     %% ── 持久化模型 ──
     class TaskStatus {
         <<enum>>
-        PENDING RUNNING COMPLETED FAILED INTERRUPTED UNVERIFIED
+        PENDING RUNNING COMPLETED FAILED INTERRUPTED
     }
     class ToolCallRecord {
         +str id
@@ -312,7 +312,7 @@ classDiagram
 
 | 模型 | 关键字段 |
 |------|----------|
-| `TaskStatus` | `PENDING / RUNNING / COMPLETED / FAILED / INTERRUPTED / UNVERIFIED`（#46：验证未过 = `UNVERIFIED`，不是 `FAILED`，见 [ADR 0005](adr/0005-terminal-status-unverified.md)）|
+| `TaskStatus` | `PENDING / RUNNING / COMPLETED / FAILED / INTERRUPTED` |
 | `Task` | `id, title, user_input, status, steps[], plan[], artifacts[], final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
 | `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, need_confirm, confirmed` |
@@ -323,11 +323,10 @@ classDiagram
 
 ### 3.3 REST + SSE 接口定义
 
-> ⚠️ **v0.1：9 个端点。现役 17 个**（权威：`backend/api/routes.py` + Swagger）。
+> ⚠️ **v0.1：9 个端点。现役 16 个**（权威：`backend/api/routes.py` + Swagger）。
 > 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、`GET /kb` +
 > `POST /kb/rebuild` + `DELETE /kb/{doc_id}`（P1）、`GET /mcp/servers`（P2）、
-> `POST /tasks/{id}/rollback`（P1-B）、`POST /tasks/{id}/review`（#46 切片 B：把
-> `UNVERIFIED` 人工接受为 `COMPLETED`，留痕落 `Task.review`，机器判决不被改写）；
+> `POST /tasks/{id}/rollback`（P1-B）；
 > `/health` 另在 `backend/main.py`。下表其余 9 条契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`
@@ -380,13 +379,10 @@ classDiagram
 | `human_confirm_required` | `{tool_call_id, tool_name, input}` | 需用户确认（P1） |
 | `human_confirm_resolved` | `{tool_call_id, tool_name, outcome}` | 闸门收口的那一档终态：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（#57 AC5-AC6）。被 stop 打断的运行走不到 tool 节点、没有 `tool_result` 可挂标签，故终态必须单独播报一次。刻意不带 `input`：trace 不脱敏，同 id 的 `tool_call` 事件里已有入参 |
 | `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
-| `verification` | `{task_id, passed, failures, attempts, reason, loop_back?}` | 完成验证结论（P0-B）：`reason` ∈ `""`（通过）/ `pending`（回环中）/ `retry_exhausted`（机械账预算耗尽 → 终态 `UNVERIFIED`）/ `rubric_exhausted`（语义账 `needs_revision` 预算耗尽，与机械账分名，#132 返工 C）/ `max_steps`（被步数抢占，落库时兜底改写）/ `grader_error`（裁判自身不可用：aux 缺席 / 抛异常 / 回复不可解析 / rubric 无从评——**不回环、不烧重试预算**，ADR 0007）——#46 起它取代旧的 `degraded` 布尔；带 `loop_back` = 未达标、已注入证据回环 planner |
 | `final_answer` | `{answer:str}` | 最终答案 |
 | `task_completed` | `{task_id, status}` | 完成 |
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 被停止 |
-| `task_unverified` | `{task_id, status, reason}` | 跑完并声称完成、但验收没通过（#46，与 `task_interrupted` 同构）。`task_completed` 从此只在验证通过或验证关闭时发 |
-| `task_accepted` | `{task_id, status, reason, reviewer, note}` | 人工复核把 `UNVERIFIED` 接受为 `COMPLETED`（#46 第二步切片 B，REST `POST /api/tasks/{id}/review`）。改的是**终态**，`verification` 一字不动——`reason` 是被推翻的那条判定原因，`reviewer` / `note` 是留痕。一条任务只接受一次，第二次连同 `note` 一起被拒（409）；这一行也进 trace JSONL（发布点重新挂上记录器，同 `task_rollback`） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑启动（P3） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |

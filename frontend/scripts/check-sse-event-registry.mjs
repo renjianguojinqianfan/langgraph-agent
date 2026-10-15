@@ -149,7 +149,7 @@ function diff(name, left, right, leftLabel, rightLabel, hint) {
 
 // ── 采集 ────────────────────────────────────────────────────────────────────
 const publish = backendSsePublishPoints();
-const backend = new Set(publish.keys()); // 同一类型多个发布点是常态（如 verification），不报重复
+const backend = new Set(publish.keys()); // 同一类型多个发布点是常态（如 task_failed），不报重复
 const doc = unique("§3.4 表", docTableTypes());
 const listen = unique("EVENT_TYPES", subscribedTypes());
 const union = unique("SSEventType 联合", unionTypes());

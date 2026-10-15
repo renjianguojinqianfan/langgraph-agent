@@ -5,7 +5,7 @@
 
 ## 项目定位与适用范围
 
-基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式**〔片 S5，代码仍是旧的 planner→executor→tool→reflect〕 → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 熔断 / 工具生态 / 两层注入 / 回滚）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/pivot-plan-build.md`。能力见 `README.md`「能力」，交付长史见 `OVERVIEW.md`，设计与 spec 见 `docs/`。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式**〔片 S5，代码仍是旧的 planner/executor 两节点拓扑〕 → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 熔断 / 工具生态 / 两层注入 / 回滚）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/pivot-plan-build.md`。能力见 `README.md`「能力」，交付长史见 `OVERVIEW.md`，设计与 spec 见 `docs/`。
 
 - **本文件面向外部开发 agent**（改这个仓库时读）。
 - **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 工作区根 `AGENTS.md`（= 沙箱根）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py`。
@@ -41,7 +41,6 @@
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；三类 409 拒绝逐条仍成立〔片 S4 后「停在闸门」那一类随闸门消失，余两类不变〕 |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/pivot-plan-build.md`（切法与片号） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划；一轮没有工具调用即停下；状态三值、无「完成」终态。**片 S5 之前代码仍是旧拓扑**，别按新拓扑改旧节点 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
-| 完成验收语义〔片 S3 删〕 | `docs/adr/0008` + `docs/pivot-plan-build.md` §S3 | 整层已退役：`UNVERIFIED` 终态、`verification` 系列原因值、expectation / rubric、`aux_llm` 裁判、`POST /tasks/{id}/review`、`Task.verification` / `review` 等字段全部随 S3 删除。**状态机改为「跑着 / 停下 / 出错」三值，没有「完成」终态**——「完成」= 人不说了 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
 | 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆）；读料可交后台代理跑 `research` skill | 调研产物落 `docs/`（按 domain「文档归属」表，带文件级引用），票面只留结论 + 链接，再拍板 |
 

@@ -9,8 +9,6 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
   COMPLETED: "bg-green-600",
   FAILED: "bg-red-600",
   INTERRUPTED: "bg-amber-500",
-  // #46: orange, not amber — 被停止与未通过验收得一眼分开
-  UNVERIFIED: "bg-orange-600",
 };
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -19,19 +17,15 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   COMPLETED: "已完成",
   FAILED: "失败",
   INTERRUPTED: "已停止",
-  UNVERIFIED: "完成·未验过",
 };
 
 export function TaskHeader({ task }: { task: Task }) {
   const running = task.status === "RUNNING";
   // P1-B: rollback needs a settled task — the backend answers 409 otherwise.
-  // #46: UNVERIFIED is settled as well — the run is over, its verdict just isn't
-  // trustworthy, and「把沙箱恢复回去」正是这种收尾最需要的动作.
   const settled =
     task.status === "COMPLETED" ||
     task.status === "FAILED" ||
-    task.status === "INTERRUPTED" ||
-    task.status === "UNVERIFIED";
+    task.status === "INTERRUPTED";
   const authEnabled = useAuthStore((s) => s.authEnabled);
   const logout = useAuthStore((s) => s.logout);
   const [confirmRollback, setConfirmRollback] = useState(false);
@@ -76,14 +70,6 @@ export function TaskHeader({ task }: { task: Task }) {
       <div className="flex-1 min-w-0">
         <div className="font-semibold truncate">{task.title || "未命名任务"}</div>
         <div className="text-xs text-slate-500 truncate">{task.user_input}</div>
-        {task.status === "UNVERIFIED" && (task.verification?.failures.length ?? 0) > 0 && (
-          <div
-            className="text-xs text-orange-300 truncate"
-            title={task.verification?.failures.join("；")}
-          >
-            未通过验收：{task.verification?.failures.join("；")}
-          </div>
-        )}
       </div>
       {rollbackNote && (
         <span className="text-xs text-slate-400 truncate max-w-[16rem]">{rollbackNote}</span>

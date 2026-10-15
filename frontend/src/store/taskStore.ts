@@ -146,27 +146,12 @@ function applyToTask(task: Task, ev: SSEvent): Task {
     }
     case "final_answer":
       return { ...task, final_answer: ev.data.answer ?? task.final_answer };
-    case "verification":
-      // #46: 判定过程实时可见——失败项文本是「它卡在哪」的唯一来源（载荷含 task_id，
-      // 与后端 verification 事件同形，不在此裁剪）。
-      return { ...task, verification: ev.data };
     case "task_completed":
       return { ...task, status: "COMPLETED" };
     case "task_failed":
       return { ...task, status: "FAILED", error: ev.data.error ?? task.error };
     case "task_interrupted":
       return { ...task, status: "INTERRUPTED" };
-    case "task_unverified":
-      return { ...task, status: "UNVERIFIED" };
-    case "task_accepted":
-      // #46 切片 B：人工复核翻的是**终态**，verification 原样不动。
-      // ⚠️ 但 Web 面此刻读不出「这单被人工放过」：TaskHeader 的判定块条件挂在
-      // `status === "UNVERIFIED"` 上，状态一翻成 COMPLETED 就整块消失，而
-      // `Task.review`（复核人/理由/被推翻的那一档）在前端**零消费者**。
-      // 数据面诚实（`verification.passed` 仍是 false、`review` 与 trace 都在），
-      // 可见性这一侧是缺的——不是本文件的既有行为，是本切片引入的新状态。
-      // 承接票见 #132 评审发现 1（展示位与判定块条件都要改）。
-      return { ...task, status: "COMPLETED" };
     default:
       return task;
   }
