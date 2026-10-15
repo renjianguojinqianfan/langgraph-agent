@@ -33,13 +33,13 @@ logger = get_logger("agent.runtime")
 # Abort) rather than a bool's shadow; these are the same three names.
 #
 # The bucket is written onto the tool-call record itself (``confirm_outcome``),
-# which is what the ``tool_result`` event, the trace, the run manifest and the
-# persisted ``ToolCallRecord`` all carry.
+# which is what the ``tool_result`` event, the trace and the persisted
+# ``ToolCallRecord`` all carry.
 CONFIRM_APPROVED = "approved"
 CONFIRM_DENIED = "denied"
 CONFIRM_TIMED_OUT = "timed_out"
 CONFIRM_ABORTED = "aborted"
-#: Evaluation mode (#57 AC6): the gate still fires, an armed verdict is simply
+#: ``auto_approve`` (#57 AC6): the gate still fires, the verdict is simply
 #: pre-supplied by the harness. Distinct from ``approved`` — no human said so.
 CONFIRM_AUTO_APPROVED = "auto_approved"
 
@@ -87,9 +87,9 @@ class AgentRuntime:
         self.tool_schemas = tool_schemas
         self.max_steps = max_steps
         self.confirm_enabled = confirm_enabled  # False for subtask graphs (no human_confirm)
-        # Issue #57 AC6: 评测态只把「必问」换成放行（终态记成 auto_approved），
+        # Issue #57 AC6: ``auto_approve`` 只把「必问」换成放行（终态记成 auto_approved），
         # 判定面、事件面、显式拒绝一概照旧。与 confirm_enabled 是两件事：
-        # 后者是「这台 runtime 根本没有闸门」（子任务图），前者是「有人不在」。
+        # 后者是「这台 runtime 根本没有闸门」（子任务图），前者是「人不在场」。
         self.auto_approve = auto_approve
         self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
         self._aux = aux_llm  # injected aux client (may be None)
@@ -369,10 +369,10 @@ class AgentRuntime:
 
         #57 的终态分档只覆盖 per-call 闸门：这里的返回值只有 plan 一个消费者，
         没有可标注的 tool-call 记录，也就没有「事件与状态里可区分」的落点。
-        #57 AC6 的评测态在这里同样成立——不等人，但也不冒充人批过。
+        #57 AC6 的 ``auto_approve`` 在这里同样成立——不等人，但也不冒充人批过。
         """
         if self.auto_approve:
-            # 评测态：不向一个不在场的人发问（#57 AC6 的「必问 → 放行」）。
+            # ``auto_approve``：不向一个不在场的人发问（#57 AC6 的「必问 → 放行」）。
             return True
         if self.tm is None:
             return False
@@ -750,7 +750,7 @@ class AgentRuntime:
         #57 AC5: 拒绝 / 超时未答 / 停止打断 是三档，不是一个布尔的影子。分档写回
         记录体（``confirm_outcome``），事件、状态、持久化三面同源。
 
-        #57 AC6: 评测态（``auto_approve``）不再整块旁路判定 —— 判定照算、闸门照进、
+        #57 AC6: ``auto_approve`` 不再整块旁路判定 —— 判定照算、闸门照进、
         终态照播（只播 ``human_confirm_resolved``；向一个不在场的人发问是伪造事件），
         换掉的只有「等一个不出现的人」这一格，记成 ``auto_approved``。显式拒绝与
         ``_needs_confirm`` 重算块都不经过这条路。
@@ -771,8 +771,8 @@ class AgentRuntime:
         else:
             outcome = self._ask_human(state, target)
 
-        # Written on the record itself: the tool_result event, the trace, the run
-        # manifest and the persisted ToolCallRecord all carry this dict (#57 AC5).
+        # Written on the record itself: the tool_result event, the trace and the
+        # persisted ToolCallRecord all carry this dict (#57 AC5).
         target["confirm_outcome"] = outcome
         # The asked/replied pair (opencode names its two events the same way):
         # the outcome needs its own event because a 停止打断 run never reaches the

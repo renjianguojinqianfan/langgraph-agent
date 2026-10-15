@@ -97,11 +97,6 @@ class Settings(BaseSettings):
     trace_enabled: bool = True
     trace_dir: str = "data/traces"
 
-    # ── Run manifest (#58: bypass run pipeline, one self-describing file per task) ──
-    run_manifest_enabled: bool = False  # server default OFF (disk + sensitive content); headless eval turns it on
-    run_manifest_dir: str = "data/runs"
-    run_manifest_max_mb: int = 20  # per-task byte cap; exceeded -> one marker line, then no further writes
-
     # ── Risk scan (P1 item 1) ──
     risk_scan_enabled: bool = True  # master switch (false -> skip, zero regression)
     risk_semantic_enabled: bool = False  # LLM semantic analysis (needs aux/main model)
@@ -198,13 +193,6 @@ class Settings(BaseSettings):
         return p
 
     @property
-    def run_manifest_path(self) -> Path:
-        p = Path(self.run_manifest_dir)
-        if not p.is_absolute():
-            p = PROJECT_ROOT / p
-        return p
-
-    @property
     def kb_path(self) -> Path:
         p = Path(self.kb_dir)
         if not p.is_absolute():
@@ -231,8 +219,7 @@ class Settings(BaseSettings):
         """P1-B snapshot store root (defaults under ``data_path``).
 
         Outside the sandbox on purpose: snapshots must not be visible to
-        ``glob`` / ``grep`` / ``read`` nor auto-indexed into the KB, and the
-        headless run root takes them with it when the temp dir goes away.
+        ``glob`` / ``grep`` / ``read`` nor auto-indexed into the KB.
         """
         p = Path(self.snapshot_dir)
         if not self.snapshot_dir or not p.is_absolute():

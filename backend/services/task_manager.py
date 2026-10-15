@@ -44,7 +44,6 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from .event_bus import EventBus
 from .persistence import Persistence
-from .run_manifest import RunManifest
 from .snapshots import cleanup_expired, restore_task, set_current_task_id
 from .trace import TraceRecorder
 
@@ -170,14 +169,13 @@ class TaskManager:
         self.settings = settings
         self.event_bus = event_bus
         self.persistence = persistence
-        # P0-C headless: instance-scoped confirmation-gate behaviour. Only the
-        # headless entry (backend/headless.py) passes auto_approve=True; the
-        # FastAPI service path (main.py lifespan) never does, so there is no
-        # global "disable the gate" switch (roadmap v2 / AGENTS.md「跨任务安全边界」:
-        # 评测态 ≠ 生产态). Since #57 AC6 it no longer means「整块旁路」: the runtime
-        # keeps computing need_confirm, keeps publishing the ask, and records the
-        # terminal state as ``auto_approved`` instead of waiting for a human who
-        # is not there. An explicit deny (``_rejected_ids``) is never outvoted.
+        # Instance-scoped confirmation-gate behaviour. The FastAPI service path
+        # (main.py lifespan) never sets it, so there is no global "disable the
+        # gate" switch (AGENTS.md「跨任务安全边界」). Since #57 AC6 it does not
+        # mean「整块旁路」: the runtime keeps computing need_confirm, keeps
+        # publishing the ask, and records the terminal state as ``auto_approved``
+        # instead of waiting for a human who is not there. An explicit deny
+        # (``_rejected_ids``) is never outvoted.
         self._auto_approve = auto_approve
         # P0 item 3: auto-discover plugin tools before building the tool list.
         if settings.plugins_autoload:
@@ -210,22 +208,6 @@ class TaskManager:
         self._wire_injected_tools()
         # P0 item 4: resident trace recorder (EventBus subscriber).
         self._trace: Optional[TraceRecorder] = TraceRecorder(settings) if settings.trace_enabled else None
-        # #58: bypass run manifest (LLM rounds + tool events, owner-tagged).
-        # Built after the tool face is complete so the «件清单» header lists
-        # every actually-mounted tool (MCP / Git / OpenAPI included), plus the
-        # sub-agent tiers as they resolve against that face (#56).
-        self._manifest: Optional[RunManifest] = (
-            RunManifest(
-                settings,
-                [t.name for t in self._tools],
-                # #57 AC6: 评测态下闸门是**armed 且自动放行**，不是关掉——
-                # 件清单要说的是这个区别（auto_approve 单独一列，可 diff）。
-                confirm_enabled=True,
-                auto_approve=self._auto_approve,
-            )
-            if settings.run_manifest_enabled
-            else None
-        )
 
         self._lock = threading.Lock()
         self._active_states: Dict[str, AgentState] = {}
@@ -523,25 +505,6 @@ class TaskManager:
             self._checkpoint_conn = None
 
     # ── creation / query ──
-    def _wrap_llm_for_manifest(
-        self,
-        task_id: str,
-        client: Optional[LLMClient],
-        client_tag: str = "main",
-        owner: str = "parent",
-    ) -> Optional[LLMClient]:
-        """Wrap an LLM client for the run manifest (#58); no-op when off.
-
-        ``wrap_llm`` returns unwrapped clients for tasks without an open file,
-        so callers need no ``if`` — and double-wrapping is refused there too.
-        Used by the main run/resume paths (owner ``parent``) and by the
-        sub-agent executor (owner ``subtask:<id>``, rounds land in the
-        parent's file) — one wrap shape, two attributions.
-        """
-        if self._manifest is None or client is None:
-            return client
-        return self._manifest.wrap_llm(task_id, owner, client, client_tag)
-
     def create_task(
         self,
         title: Optional[str],
@@ -577,9 +540,6 @@ class TaskManager:
         # the JSONL captures task_created onwards.
         if self._trace is not None:
             self._trace.attach(self.event_bus, task_id)
-        # #58: open the run manifest (header = capability lines) alongside.
-        if self._manifest is not None:
-            self._manifest.attach(self.event_bus, task_id)
         self.persistence.save_task(task)
         self.event_bus.publish(
             task_id,
@@ -652,11 +612,11 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._wrap_llm_for_manifest(task_id, self._llm),
+                llm=self._llm,
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
+                aux_llm=self._aux_llm,
                 confirm_enabled=True,  # gate always armed (#57 AC6)
                 auto_approve=self._auto_approve,
             )
@@ -685,9 +645,6 @@ class TaskManager:
             # so the JSONL terminates with a trace_end line.
             if self._trace is not None:
                 self._trace.close(task_id)
-            # #58: same closure guarantee for the run manifest.
-            if self._manifest is not None:
-                self._manifest.close(task_id)
 
     # ── control ──
     def stop(self, task_id: str) -> Dict[str, Any]:
@@ -927,9 +884,6 @@ class TaskManager:
         # Reopen the audit trail for the continued era.
         if self._trace is not None:
             self._trace.attach(self.event_bus, task_id)
-        # #58: the manifest reopens too — a fresh header marks the resumed era.
-        if self._manifest is not None:
-            self._manifest.attach(self.event_bus, task_id)
 
         t = threading.Thread(target=self._resume_run, args=(task_id,), daemon=True)
         self._threads[task_id] = t
@@ -985,11 +939,11 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._wrap_llm_for_manifest(task_id, self._llm),
+                llm=self._llm,
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=self._wrap_llm_for_manifest(task_id, self._aux_llm, client_tag="aux"),
+                aux_llm=self._aux_llm,
                 confirm_enabled=True,  # gate always armed (#57 AC6)
                 auto_approve=self._auto_approve,
             )
@@ -1038,8 +992,6 @@ class TaskManager:
             self._stop_flags.pop(task_id, None)
             if self._trace is not None:
                 self._trace.close(task_id)
-            if self._manifest is not None:
-                self._manifest.close(task_id)
 
     # ── P1-B: workspace rollback (docs/specs/p1-b-rollback.md) ──
     def rollback(self, task_id: str) -> Dict[str, Any]:

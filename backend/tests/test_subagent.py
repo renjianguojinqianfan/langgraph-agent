@@ -38,7 +38,6 @@ from backend.core.agent.subagent import (
     SubTaskSpec,
     TierError,
     resolve_tool_face,
-    subtask_owner,
     tier_face_names,
     tier_names,
 )
@@ -299,10 +298,6 @@ def test_git_tools_appear_in_the_tiers_only_when_mounted(tmp_path):
     assert tier_face_names(git_face, EXECUTE_TIER) == sorted(
         set(tier_face_names(git_face, EXPLORE_TIER)) | {"write", "edit"}
     )
-
-
-def test_subtask_owner_label():
-    assert subtask_owner("abc:sub:1") == "subtask:abc:sub:1"
 
 
 def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
@@ -659,11 +654,10 @@ class _UnmountedAskMock(MockLLMClient):
 def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
     tmp_path, event_bus
 ):
-    """票面「观测」条：不新增 manifest 行，失败走 ``tool_result`` 事件——这里钉住事件。
+    """票面「观测」条：被拒的 spawn 不派出探子，失败走 ``tool_result`` 事件——这里钉住事件。
 
-    件清单裁判的两条断言常驻化：被拒的 spawn 在事件里带 error 文本；它没有派出
-    探子，所以父频道上连一条 subtask 事件都没有（拒绝点在 ``attach_subtask``
-    之前，manifest 的 ``subtask_face`` 行同样无从产生）。
+    被拒的 spawn 在事件里带 error 文本；它没有派出探子，所以父频道上连一条
+    subtask 事件都没有。
     """
     settings = make_settings(tmp_path)
     mock = _UnmountedAskMock()
@@ -766,66 +760,6 @@ def test_spawn_subagent_defaults_to_the_execute_tier(tmp_path):
     assert res.success is True
     assert stub.specs[0].tier == DEFAULT_TIER
     assert stub.specs[0].tools == ["read"]
-
-
-# ── isolation / artifact hand-back through the surviving entry ───────────────
-class _ResearchMock(MockLLMClient):
-    """Parent delegates the research leg (and gets approved); the subtask writes
-    its notes and reports back.
-
-    Entry B reached this shape from the wording alone; this drives the surviving
-    ``spawn_subagent`` path with the same script, which is why
-    ``test_run_manifest`` imports it for the parent-manifest cases. The subtask
-    turn is recognised by the marker in its instruction because one client
-    instance serves both graphs.
-    """
-
-    INSTRUCTION = "检索素材并记下要点"
-
-    def __init__(self):
-        super().__init__(plan=["调研", "写作"], final_answer="父任务完成")
-        self.subtask_turns = 0
-
-    def complete(self, messages, tools=None, **kwargs):
-        user = " ".join(
-            str(m.get("content") or "") for m in messages if m.get("role") == "user"
-        )
-        if not tools:
-            return LLMResponse(content=json.dumps(self.plan))
-        if self.INSTRUCTION in user:
-            self.subtask_turns += 1
-            if self.subtask_turns == 1:
-                return LLMResponse(
-                    content="",
-                    tool_calls=[
-                        {
-                            "id": "sub1",
-                            "name": "write",
-                            "arguments": {
-                                "path": "research_notes.txt",
-                                "content": "RAG notes",
-                            },
-                        }
-                    ],
-                )
-            return LLMResponse(content="研究完成")
-        if self._executor_turn == 0:
-            self._executor_turn += 1
-            return LLMResponse(
-                content="",
-                tool_calls=[
-                    {
-                        "id": "spawn1",
-                        "name": "spawn_subagent",
-                        "arguments": {
-                            "name": "研究子任务",
-                            "instruction": self.INSTRUCTION,
-                            "tier": DEFAULT_TIER,
-                        },
-                    }
-                ],
-            )
-        return LLMResponse(content=self.final_answer)
 
 
 class _EscalatingSubtaskMock(MockLLMClient):

@@ -99,9 +99,9 @@ def tier_names(tier: str) -> List[str]:
 def tier_face_names(tool_names: Any, tier: str) -> List[str]:
     """Tier members ∩ actually-loaded tool names, sorted.
 
-    Module-level on purpose: the run manifest's capability header lists the
-    same face (issue #58 — «这次子代理能干什么»), so execution and
-    observability share one implementation.
+    Module-level on purpose: the refusal messages in :func:`resolve_tool_face`
+    and the tests that pin the tiers both read this one list, so the two can
+    never disagree about what a subtask can narrow to.
     """
     loaded = set(tool_names)
     return sorted(name for name in tier_names(tier) if name in loaded)
@@ -150,15 +150,6 @@ def resolve_tool_face(
             )
         members &= set(subset)
     return [t for t in tools if t.name in members]
-
-
-def subtask_owner(subtask_id: str) -> str:
-    """The manifest owner label for one subtask's rounds/events.
-
-    Lives here (not in ``run_manifest``) so the format has one home and the
-    services layer imports it downstream — ``subagent`` cannot import back.
-    """
-    return f"subtask:{subtask_id}"
 
 
 @dataclass
@@ -367,63 +358,31 @@ class SubAgentExecutor:
             # is imported first (the uvicorn entry point).
             from .nodes import AgentRuntime
 
-            # #58: mirror this subtask's rounds and tool events into the
-            # parent's run manifest (owner-tagged), and record the face it
-            # actually got (#56). ``spec.parent_task_id`` is the spawn tool's
-            # link; the contextvar fallback covers a spec built without one
-            # (a direct ``run_subtask`` caller), and the subtask id is the last
-            # resort so a parent-less run still gets a self-describing file.
-            manifest = getattr(self.tm, "_manifest", None)
-            manifest_parent = spec.parent_task_id or get_current_task_id() or spec.subtask_id
-            if manifest is not None:
-                manifest.attach_subtask(
-                    self.tm.event_bus,
-                    manifest_parent,
-                    spec.subtask_id,
-                    tier=spec.tier,
-                    face=face,
-                )
+            runtime = AgentRuntime(
+                task_id=spec.subtask_id,
+                task_manager=self.tm,
+                llm=self.tm._llm,
+                tools=tools,
+                tool_schemas=schemas,
+                max_steps=self.settings.max_steps,
+                aux_llm=getattr(self.tm, "_aux_llm", None),
+                confirm_enabled=False,  # subtask internal: no human confirm
+                parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
+            )
+            from .graph import build_graph
 
-            try:
-                runtime = AgentRuntime(
-                    task_id=spec.subtask_id,
-                    task_manager=self.tm,
-                    # #58: rounds land in the parent's manifest file, attributed
-                    # to this subtask (shared wrap shape, subtask owner label).
-                    llm=self.tm._wrap_llm_for_manifest(
-                        manifest_parent, self.tm._llm, "main", subtask_owner(spec.subtask_id)
-                    ),
-                    tools=tools,
-                    tool_schemas=schemas,
-                    max_steps=self.settings.max_steps,
-                    aux_llm=self.tm._wrap_llm_for_manifest(
-                        manifest_parent,
-                        getattr(self.tm, "_aux_llm", None),
-                        "aux",
-                        subtask_owner(spec.subtask_id),
-                    ),
-                    confirm_enabled=False,  # subtask internal: no human confirm
-                    parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
-                )
-                from .graph import build_graph
-
-                graph = build_graph(runtime, mode="subtask")
-                # The subtask topology runs 4 nodes per cycle; lift the default
-                # recursion limit (25) so deep subtasks honor settings.max_steps.
-                #
-                # No checkpointer here, and deliberately no ``durability=`` either
-                # (langgraph 1.x): subtasks are never resumed — they fold into the
-                # parent's ``subtasks`` summary — and 1.x warns that durability has
-                # no effect when no checkpointer is present.
-                final = graph.invoke(
-                    state,
-                    {"recursion_limit": self.settings.max_steps * 4 + 10},
-                )
-            finally:
-                # #58: the subtask's channel detaches here; its rounds and
-                # tool events stay in the parent's file with their owner tags.
-                if manifest is not None:
-                    manifest.detach_subtask(spec.subtask_id)
+            graph = build_graph(runtime, mode="subtask")
+            # The subtask topology runs 4 nodes per cycle; lift the default
+            # recursion limit (25) so deep subtasks honor settings.max_steps.
+            #
+            # No checkpointer here, and deliberately no ``durability=`` either
+            # (langgraph 1.x): subtasks are never resumed — they fold into the
+            # parent's ``subtasks`` summary — and 1.x warns that durability has
+            # no effect when no checkpointer is present.
+            final = graph.invoke(
+                state,
+                {"recursion_limit": self.settings.max_steps * 4 + 10},
+            )
 
             summary = final.get("final_answer", "") or "(no final answer)"
             # Collect the products of the subtask: only the tools on its face

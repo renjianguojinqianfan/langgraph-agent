@@ -260,7 +260,7 @@ def test_the_three_failure_states_are_pairwise_distinguishable(settings):
 
 
 def test_outcome_rides_the_tool_result_event(settings):
-    """事件面：SSE / trace / run manifest 镜像的都是这条记录体。"""
+    """事件面：SSE / trace 镜像的都是这条记录体。"""
     _rt, _state, tm = _run_gate(settings, verdict=None, confirm_timeout_sec=0.05)
     events = tm.event_bus.replay(TASK_ID)
     results = [e["data"] for e in events if e["type"] == "tool_result"]
@@ -298,9 +298,9 @@ def test_default_bound_comes_from_settings(settings):
     assert settings.confirm_timeout_sec > 60, "上界短到会把在场的人判成超时"
 
 
-# ── AC6：评测态 --auto-approve 只把「必问」变放行 ──────────────────────────────
+# ── AC6：auto-approve 只把「必问」变放行 ──────────────────────────────────────
 class _NeverAsksTM(_GateTM):
-    """评测态的裁判：闸门一旦去向「人」发问，测试当场失败。"""
+    """auto-approve 的裁判：闸门一旦去向「人」发问，测试当场失败。"""
 
     def request_confirm(self, task_id: str, tool_call_id: str) -> threading.Event:
         raise AssertionError("auto-approve must not wait on a human")
@@ -342,12 +342,12 @@ def test_auto_approve_runs_the_gate_and_records_auto_approved(settings):
     assert state["_confirmed_ids"] == ["c1"]
     assert state["_rejected_ids"] == []
     assert state["_needs_confirm"] is False
-    # 「五档里只有 aborted 写 pending_confirm」这句话此前缺第五档的断言：评测态自动
-    # 放行同样不许在状态里留下「还停在闸口」的标记。
+    # 「五档里只有 aborted 写 pending_confirm」这句话此前缺第五档的断言：auto-approve
+    # 自动放行同样不许在状态里留下「还停在闸口」的标记。
     assert state["pending_confirm"] == {}
     types = [e["type"] for e in tm.event_bus.replay(TASK_ID)]
     assert types.count("human_confirm_resolved") == 1
-    # 真人不在，就不许发「已向人发问」这种事件（评测态不伪造 ask）。
+    # 真人不在，就不许发「已向人发问」这种事件（auto-approve 不伪造 ask）。
     assert "human_confirm_required" not in types
     assert _resolved(tm)[0]["outcome"] == CONFIRM_AUTO_APPROVED
     # 没向任何人发问：_NeverAsksTM 若被调用会直接抛。
@@ -355,11 +355,11 @@ def test_auto_approve_runs_the_gate_and_records_auto_approved(settings):
 
 
 def test_auto_approve_never_outvotes_an_explicit_deny(settings):
-    """显式 deny 不动：已被人拒掉的调用，评测态不许替它翻案成批准。"""
+    """显式 deny 不动：已被人拒掉的调用，auto-approve 不许替它翻案成批准。"""
     tm = _NeverAsksTM(settings, answered=False)
     rt, state = _auto_runtime(settings, tm)
     rt.executor(state)
-    # 人先说过不（跨 era 带回 _rejected_ids 的形状，评测态不得重开）。
+    # 人先说过不（跨 era 带回 _rejected_ids 的形状，auto-approve 不得重开）。
     state["_rejected_ids"] = ["c1"]
     rt.human_confirm_node(state)
     rt.tool_node(state)

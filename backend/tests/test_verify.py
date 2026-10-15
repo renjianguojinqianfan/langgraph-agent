@@ -3,8 +3,7 @@
 Unit level: drive :meth:`AgentRuntime.reflect` directly with crafted states and
 a fake ``tm`` exposing ``_active_states`` (the artifact registry) — fully
 deterministic, no graph, no LLM, no network. Plus one integration test through
-``make_manager`` for end-to-end ``Task.verification`` population, and the
-headless result-key contract (review 漏洞2).
+``make_manager`` for end-to-end ``Task.verification`` population.
 """
 
 from __future__ import annotations
@@ -203,13 +202,6 @@ def test_task_verification_populated_end_to_end(tmp_path: Path) -> None:
     # pure Q&A (no artifacts, no failed tools) -> verification no-op PASS
     assert task.verification is not None
     assert task.verification["passed"] is True
-
-
-# ── review 漏洞2: headless result carries verification ───────────────────────
-def test_headless_result_keys_include_verification() -> None:
-    from backend.headless import _RESULT_KEYS
-
-    assert "verification" in _RESULT_KEYS
 
 
 # ── #46 第二步前的载荷形状：reason 取代 degraded ─────────────────────────────
