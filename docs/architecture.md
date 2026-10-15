@@ -62,7 +62,7 @@
 ## 2. 文件列表及相对路径
 
 > ⚠️ **v0.1 计划态**，保留作原始设计意图记录。现役目录结构（含 `core/agent/` 的
-> context/risk/subagent/prompts、`core/kb/`、`core/mcp/`、`backend/headless.py`、
+> context/risk/subagent/prompts、`core/kb/`、`core/mcp/`、
 > 40 个测试文件、14 个前端组件、`docs/adr|specs|agents/`）见仓库实际结构（`backend/` / `frontend/` / `docs/`）。
 
 项目根：`E:\code\demo\langgraph-agent\`

@@ -27,7 +27,7 @@
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
 | 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部覆盖块（`setdefault` 语义）保持原样；SDK **自读**的 LangSmith / LangChain 开关与 Key 另由同文件的 pop 块摘除（#84）——「离线全绿」不靠开发者 shell 恰好没设变量 | `backend/tests/conftest.py` 顶部两块（代码即权威）+ 复现测试 `test_langsmith_offline_guard.py` |
 | 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn / starlette 区间不动 | `requirements.txt` 注释（三包理由 / mcp `--no-deps`） |
-| 真实模型验证 | 发布前 / 换供应商时，**启服务、在网页端手动跑一遍**（`live_e2e.py` / `live_skill_test.py` / CI 的 live job 随片 S1 删除）；README **不记**跑过的时间与模型 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
+| 真实模型验证 | 发布前 / 换供应商时，**启服务、在网页端手动跑一遍**（CI 不再跑真模型）；README **不记**跑过的时间与模型 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
 | 提交边界 | 副作用可逆或事先说明；提交只含本次意图内的源码与文档（`.env` / `data/` / `frontend/dist` 是本地态）；`push --force` 类默认拒绝 | `.gitignore` + 全局 `~/.agents/AGENTS.md` |
 | 发布与合并惯例 | 功能 / 依赖 / 代码走 PR + CI 全绿；docs 小修可直推；依赖类 PR 先人工评估 | `docs/agents/issue-tracker.md`「Release conventions」 |
 
@@ -41,7 +41,6 @@
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；三类 409 拒绝逐条仍成立〔片 S4 后「停在闸门」那一类随闸门消失，余两类不变〕 |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/pivot-plan-build.md`（切法与片号） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划；一轮没有工具调用即停下；状态三值、无「完成」终态。**片 S5 之前代码仍是旧拓扑**，别按新拓扑改旧节点 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
-| live / 换模型 / 评测台〔片 S1 删〕 | `docs/pivot-plan-build.md` §S1 | **别在退役面上开工**：`headless.py` / `live_e2e.py` / `live_skill_test.py` / `run_manifest.py` / CI 的 live job 随 S1 删除。真模型验证改为「启服务、网页端手动跑一遍」 |
 | 完成验收语义〔片 S3 删〕 | `docs/adr/0008` + `docs/pivot-plan-build.md` §S3 | 整层已退役：`UNVERIFIED` 终态、`verification` 系列原因值、expectation / rubric、`aux_llm` 裁判、`POST /tasks/{id}/review`、`Task.verification` / `review` 等字段全部随 S3 删除。**状态机改为「跑着 / 停下 / 出错」三值，没有「完成」终态**——「完成」= 人不说了 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
 | 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆）；读料可交后台代理跑 `research` skill | 调研产物落 `docs/`（按 domain「文档归属」表，带文件级引用），票面只留结论 + 链接，再拍板 |
@@ -56,13 +55,9 @@
 .\.venv311\Scripts\python.exe -m ruff check backend scripts
 .\.venv311\Scripts\python.exe -m mypy
 
-# 离线冒烟（无 Key / 无网络，CI 同款）
-.\.venv311\Scripts\python.exe scripts/live_e2e.py --check
-.\.venv311\Scripts\python.exe -m backend.headless --check
-
-# 真实模型（发布前 / 换模型；细则见 scripts/LIVE_E2E.md）
-LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_e2e.py
-LLM_API_KEY="$DASHSCOPE_API_KEY" .\.venv311\Scripts\python.exe scripts/live_skill_test.py
+# 真实模型验证（发布前 / 换模型）：启服务、在网页端手动跑一遍（CI 不再跑真模型）
+.\.venv311\Scripts\python.exe -m uvicorn backend.main:app --port 8000 --reload
+cd frontend; npm run dev
 
 # 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm run check:sse → npm run check:confirm → npm run build
 npx tsc --noEmit     # 本地快检，0 错误
