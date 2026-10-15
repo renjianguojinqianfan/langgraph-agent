@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
+from ...config import Settings
 from ...utils.logging import get_logger
 
 logger = get_logger("agent.policy")
@@ -89,7 +90,7 @@ class DangerPolicy:
         self.rules: Tuple[BlockRule, ...] = tuple(rules)
 
     @classmethod
-    def from_settings(cls, settings: Any) -> "DangerPolicy":
+    def from_settings(cls, settings: Settings) -> "DangerPolicy":
         """Build from ``Settings.policy_rules_list`` (the parsed rule table)."""
         return cls(
             [r for r in (_compile(item) for item in settings.policy_rules_list) if r is not None]

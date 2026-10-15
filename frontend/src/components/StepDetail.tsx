@@ -46,14 +46,6 @@ function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
               ↻重试×{tc.retries}
             </span>
           )}
-          {tc.blocked && (
-            <span
-              className="text-[10px] px-1 py-0.5 rounded bg-red-950 border border-red-500/40 text-red-400"
-              title={tc.error ?? ""}
-            >
-              ⛔规则拦截
-            </span>
-          )}
           <span className="text-slate-400">{tc.status}</span>
         </div>
       </div>

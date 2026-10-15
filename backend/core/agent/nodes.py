@@ -447,19 +447,9 @@ class AgentRuntime:
             rec = by_id.get(cid)
             if rec is not None and rec.get("status") == "pending":
                 rec["status"] = "skipped"
-                # #136: a policy-blocked call already carries its own reason, and
-                # this record only ever reaches here if the run was interrupted
-                # between the executor's verdict and the tool node's delivery.
-                # Overwriting it with「interrupted before execution」would tell the
-                # model a second, different story about the same call — the same
-                # 「一个文本、一个来源」rule the line below already keeps for
-                # settled records.
-                rec["error"] = rec.get("error") or DANGLING_SWEEP_TEXT
+                rec["error"] = DANGLING_SWEEP_TEXT
             own = str((rec or {}).get("error") or "")
-            if (rec or {}).get("blocked"):
-                self._feed_blocked(state, {"id": cid, "error": own})
-            else:
-                self._feed_tool_failure(state, {"id": cid, "error": own or DANGLING_SWEEP_TEXT})
+            self._feed_tool_failure(state, {"id": cid, "error": own or DANGLING_SWEEP_TEXT})
         logger.info("task %s swept %d dangling tool call(s) at loop entry", self.task_id, len(orphans))
 
     def executor(self, state: AgentState) -> AgentState:
@@ -532,22 +522,17 @@ class AgentRuntime:
                     "tool_name": name,
                     "input": args,
                     "output": None,
-                    "status": "pending",
-                    "error": "",
+                    # S2 (#136): a rule hit settles the call right here — the status
+                    # verb and the reason are the same two fields every other
+                    # non-executed call carries (``skipped`` + ``error``), so the
+                    # record / event / persisted faces need no new column. The
+                    # delivery itself happens with the ``tool_call`` publish below;
+                    # ``pending`` stays the only live status, exactly as before.
+                    "status": "skipped" if block_reason is not None else "pending",
+                    "error": block_reason or "",
                     "need_confirm": need_confirm,
                     "confirmed": False,
                 }
-                if block_reason is not None:
-                    # Only written on a hit: an empty rule table leaves the record
-                    # byte-identical to the pre-S2 shape (#136 AC1/AC4 — the repo's
-                    # zero-regression anchor is the event/state payload itself).
-                    # ``error`` carries the reason on the record face (the
-                    # ``tool_result`` event, the trace and the persisted
-                    # ``ToolCallRecord`` all read this one field — #95's
-                    # 「一个文本、一个来源」), while the model face gets the
-                    # ``{block, reason}`` shape the issue asks for.
-                    rec["blocked"] = True
-                    rec["error"] = block_reason
                 tcs.append(rec)
 
             state["_current_tool_calls"] = tcs
@@ -576,6 +561,19 @@ class AgentRuntime:
                 if step is not None:
                     step["tool_calls"].append(rec)
                 self._publish("tool_call", rec)
+                if rec["status"] == "skipped":
+                    # S2 (#136): a policy refusal is delivered here, at the point of
+                    # decision, and never handed to the tool node — there is nothing
+                    # to dispatch, and pi's hook produces its verdict the same way
+                    # (``block`` -> immediate error result, 调研 §5.3). The discriminator
+                    # is exact because these records were built two lines up: in this
+                    # round a call is either ``pending`` (dispatch it as always) or
+                    # ``skipped`` (a rule just refused it). The model is answered so the
+                    # assistant turn's ``tool_calls`` keep one reply each (#46), and the
+                    # tool node skips it on its own terminal-status guard — no second
+                    # branch there.
+                    self._publish("tool_result", rec)
+                    self._feed_blocked(state, rec)
 
             needs_confirm = any(r["need_confirm"] for r in tcs)
             state["_needs_confirm"] = needs_confirm
@@ -617,17 +615,6 @@ class AgentRuntime:
                 # here is per ``rec``, gated or not; retries are a different
                 # ledger, closed inside ``ToolExecutor.dispatch`` by ``with_retry``
                 # and never routed through a graph re-entry.
-                continue
-            if rec.get("blocked"):
-                # S2 (#136): the executor already refused this call — it never ran
-                # and never entered the gate. This node only delivers the verdict:
-                # mark it settled, publish it (so the timeline carries the refusal
-                # like any other result) and answer the model so the tool-call
-                # protocol stays intact (#46: a call with no `role: tool` reply is
-                # exactly the hole the loop entry sweep exists to patch).
-                rec["status"] = "skipped"
-                self._publish("tool_result", rec)
-                self._feed_blocked(state, rec)
                 continue
             if rec["need_confirm"] and rec["id"] in rejected:
                 rec["status"] = "skipped"
@@ -714,6 +701,21 @@ class AgentRuntime:
             step["status"] = "done"
         return state
 
+    def _feed_tool_reply(self, state: AgentState, rec: Dict[str, Any], payload: Dict[str, Any]) -> None:
+        """Append the ``role: tool`` reply for ``rec`` with ``payload`` as its body.
+
+        One envelope for every verdict — the protocol only demands that each
+        assistant ``tool_calls`` entry gets exactly one reply (#46); the *body*
+        is what differs (a failure's #95, a policy refusal's #136).
+        """
+        state.setdefault("messages", []).append(
+            {
+                "role": "tool",
+                "tool_call_id": rec["id"],
+                "content": json.dumps(payload, ensure_ascii=False, default=str),
+            }
+        )
+
     def _feed_tool_failure(self, state: AgentState, rec: Dict[str, Any]) -> None:
         """Answer one un-successful call on the conversation face (issue #95).
 
@@ -725,39 +727,19 @@ class AgentRuntime:
         as little as the old bare ``null`` did. The success path never comes
         through here.
         """
-        state.setdefault("messages", []).append(
-            {
-                "role": "tool",
-                "tool_call_id": rec["id"],
-                "content": json.dumps(
-                    {"ok": False, "error": rec["error"] or "tool failed"},
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            }
-        )
+        self._feed_tool_reply(state, rec, {"ok": False, "error": rec["error"] or "tool failed"})
 
     def _feed_blocked(self, state: AgentState, rec: Dict[str, Any]) -> None:
         """Answer a policy-blocked call on the conversation face (#136).
 
-        A different shape from :meth:`_feed_tool_failure` on purpose: the model is
-        told *why* it is not allowed to run this one, in the ``{block, reason}``
-        form ADR 0008 decision 6 asks for, so it can re-plan instead of retrying
-        the same call (a plain ``{ok: false, error: ...}`` reads like a transient
-        failure). The reason text is the one already on ``rec["error"]`` — the same
-        string the ``tool_result`` event publishes (#95: one text, one source).
+        A different *body* from :meth:`_feed_tool_failure` on purpose: the model
+        is told it is not allowed to run this one, in the ``{block, reason}``
+        shape ADR 0008 decision 6 asks for, so it re-plans instead of retrying (a
+        plain ``{ok: false, error: ...}`` reads like a transient failure). The
+        reason is the string already on ``rec["error"]`` — the same text the
+        ``tool_result`` event publishes, which the executor always sets on a hit.
         """
-        state.setdefault("messages", []).append(
-            {
-                "role": "tool",
-                "tool_call_id": rec["id"],
-                "content": json.dumps(
-                    {"block": True, "reason": rec["error"] or "blocked by policy"},
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            }
-        )
+        self._feed_tool_reply(state, rec, {"block": True, "reason": rec["error"]})
 
     def _confirm_skip_text(self, rec: Dict[str, Any]) -> str:
         """三档未批准各自的文案（#57 AC5）。
