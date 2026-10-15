@@ -4,7 +4,7 @@
  *
  * 为什么要有这个脚本：EventSource 只把带 `event:` 字段的消息派发给 `addEventListener`
  * 注册过的类型，没注册的类型浏览器直接丢。所以注册表漂了不报错、不告警，只是时间线
- * 静默少一类事件（`verification` / `task_resumed` / `task_rollback` / `tool_result_evicted`
+ * 静默少一类事件（`task_resumed` / `task_rollback` / `tool_result_evicted`
  * 就这么漂了数周）。此前唯一的对照手段是 docs/architecture.md §3.4 旁边那句
  * 「未知类型自然忽略」，靠人自觉，于是没人对照。这里把「对照」变成一条机械断言。
  *

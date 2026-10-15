@@ -56,9 +56,9 @@ from .state import AgentState
 # ── routers: main topology ───────────────────────────────────────────────────
 #
 # Unqualified names are the main topology (the default mode); ``_subtask``
-# suffixed ones are the simplified variant. The main-mode names are the ones the
-# 0.2 build used, so cross-references from elsewhere (e.g. the P0 note in
-# nodes.py pointing at ``_after_tool``) keep resolving.
+# suffixed ones are the simplified variant. The tool routers are factories (they
+# need ``runtime.max_steps``), and their inner functions keep the names the 0.2
+# build used (``_after_tool`` / ``_after_tool_subtask``).
 
 
 def _after_planner(s: AgentState) -> Literal["finish", "risk_scan"]:
