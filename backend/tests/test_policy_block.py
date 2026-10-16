@@ -404,10 +404,11 @@ def test_a_pattern_is_matched_against_the_real_argument_text():
 
 
 def test_numbers_and_bools_still_have_a_text_form_to_match():
-    """数字 / 布尔仍进匹配面（``str()``）：旧实现搜 JSON 文本时它们是能被命中的。
+    """数字 / 布尔仍进匹配面（``str()``）：不做「只看字符串」的静默收窄。
 
-    新实现若只看字符串，就是一次**静默收窄**——与本片要治的毛病同族。这条只钉「没收窄」，
-    不主张新旧有别（旧实现同样命中）。
+    数字：旧实现搜 JSON 文本，``22`` 同样命中 ``{"port": 22}``，所以这里钉的是「没收窄」。
+    布尔：新实现的文本形式是 ``str(True) == "True"``；旧实现搜的是 JSON 的 ``true``，
+    ``^True$`` 在旧实现上本来就不成立，所以布尔这一条只说明新实现的文本形式，不是「没收窄」的证据。
     """
     policy = _policy({"tool": "probe", "pattern": "22", "reason": "no"})
 
