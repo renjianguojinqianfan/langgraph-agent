@@ -3,7 +3,7 @@
 * the discrete sandbox file tools (``write`` / ``read`` / ``ls``) — sandbox
   whitelist: allow operations inside the root, reject escapes.
 * ``code_exec`` — restricted subprocess (runs code, honours timeout, requires_confirm).
-* ``http_api`` — confirm logic (GET free, write methods gated); network mocked.
+* ``http_api`` — request plumbing (network mocked); no confirm logic since #138.
 * ``web_search`` — mocked provider, validates returned structure.
 
 Everything is offline: network calls are replaced with mocks.
@@ -16,7 +16,7 @@ from unittest.mock import patch
 from backend.config import Settings
 from backend.core.tools.code_exec import CodeExecTool
 from backend.core.tools.file_io import LsTool, ReadTool, WriteTool
-from backend.core.tools.http_api import WRITE_METHODS, HttpTool
+from backend.core.tools.http_api import HttpTool
 from backend.core.tools.web_search import WebSearchTool
 
 
@@ -137,19 +137,6 @@ def test_code_exec_honours_timeout(settings):
 
 
 # ──────────────────────────── http_api ─────────────────────────────
-def test_http_tool_get_does_not_require_confirm():
-    tool = HttpTool(None)
-    assert tool._needs_confirm("GET") is False
-    assert tool._needs_confirm("HEAD") is False
-    assert tool._needs_confirm("OPTIONS") is False
-
-
-def test_http_tool_write_methods_require_confirm():
-    tool = HttpTool(None)
-    for method in WRITE_METHODS:
-        assert tool._needs_confirm(method) is True
-
-
 class _FakeResp:
     status_code = 200
     headers = {"content-type": "application/json"}

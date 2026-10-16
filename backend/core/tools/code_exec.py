@@ -1,8 +1,9 @@
 """Code execution tool (restricted subprocess sandbox).
 
 Runs Python / shell code via :mod:`backend.utils.sandbox`. Because arbitrary
-code execution is risky, ``requires_confirm`` is ``True`` so the kernel pauses
-for human confirmation before running it (P1-2).
+code execution is risky, ``requires_confirm`` is ``True`` — a danger marker.
+#138 retired the confirmation gate, so nothing pauses for a human any more; the
+S2 policy table (``policy_rules``) is what can block a call.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ class CodeExecTool(BaseTool):
     name = "code_exec"
     description = (
         "Execute Python or shell code in a restricted sandbox with a timeout. "
-        "Returns captured stdout/stderr and the exit code. Requires confirmation."
+        "Returns captured stdout/stderr and the exit code."
     )
     args_schema = {
         "type": "object",

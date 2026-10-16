@@ -8,8 +8,7 @@ The default :class:`TaskManager` is replaced with one driven by a
 * ``POST /api/tasks/{id}/stop`` interrupt;
 * ``GET /api/tasks/{id}/events`` SSE stream emitting events (tested via the
   ``sse_response`` generator the route uses, with a disconnected request so it
-  terminates immediately after replaying buffered events — no network, no hang);
-* ``POST /api/tasks/{id}/confirm`` envelope + 404 handling.
+  terminates immediately after replaying buffered events — no network, no hang).
 """
 
 from __future__ import annotations
@@ -179,18 +178,6 @@ def test_sse_response_emits_replayed_event_frames(client):
 def test_sse_route_is_registered(client):
     paths = {getattr(r, "path", "") for r in app.routes}
     assert "/api/tasks/{task_id}/events" in paths
-
-
-def test_confirm_endpoint_returns_envelope(client):
-    tid = client.post("/api/tasks", json={"input": "write a file via api"}).json()["data"]["task_id"]
-    r = client.post(
-        f"/api/tasks/{tid}/confirm",
-        json={"tool_call_id": "cc1", "approved": True},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["code"] == 0
-    assert "ok" in body["data"]
 
 
 def test_health_endpoint_reports_status(client):

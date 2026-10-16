@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HistoryPanel } from "../components/HistoryPanel";
 import { KbPanel } from "../components/KbPanel";
 import { StepDetail } from "../components/StepDetail";
@@ -61,7 +60,6 @@ export function TaskView() {
       />
       <StepDetail task={task} />
       {showKb && <KbPanel />}
-      <ConfirmDialog />
     </div>
   );
 }

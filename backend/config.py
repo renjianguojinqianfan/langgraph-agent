@@ -90,13 +90,6 @@ class Settings(BaseSettings):
     trace_enabled: bool = True
     trace_dir: str = "data/traces"
 
-    # ── Risk scan (P1 item 1) ──
-    risk_scan_enabled: bool = True  # master switch (false -> skip, zero regression)
-    risk_semantic_enabled: bool = False  # LLM semantic analysis (needs aux/main model)
-    risk_policy: str = "confirm"  # confirm | pause (default: per-call human confirm)
-    confirm_timeout_sec: float = 1800.0  # wall clock bound on a human verdict -> timed_out (#57 AC5)
-    risk_danger_keywords: str = ""  # optional JSON array override of the built-in table
-
     # ── Danger policy (S2: settings rule table + one hook) ──
     # JSON array of {"tool": name-or-glob, "pattern"?: regex, "reason"?: text}.
     # Empty = nothing is blocked (byte-identical to the pre-S2 behaviour).
@@ -140,7 +133,6 @@ class Settings(BaseSettings):
     mcp_servers: str = "[]"  # JSON array: [{name, command, args[], env{}, enabled, cwd?, transport?, url?}]
     mcp_timeout_sec: float = 30.0  # single call_tool timeout
     mcp_connect_timeout_sec: float = 15.0  # initialize + list_tools timeout per server
-    mcp_force_confirm: str = "[]"  # JSON array: exact names, `mcp__{server}__*`, or `!`-prefixed to mute
 
     # ── Git tools (P2 item 2) ──
     git_enabled: bool = True  # master switch (false -> zero Git tools)
@@ -239,12 +231,6 @@ class Settings(BaseSettings):
     def mcp_servers_list(self) -> List[dict]:
         """``mcp_servers`` as a parsed list of dicts (invalid JSON -> [])."""
         return self._parse_json_list(self.mcp_servers, [])
-
-    @property
-    def mcp_force_confirm_list(self) -> List[str]:
-        """``mcp_force_confirm`` as entries of ``mcp__{server}__{tool}`` / ``mcp__{server}__*``,
-        each optionally ``!``-prefixed to mean "never confirm" (#57 AC3)."""
-        return [str(x) for x in self._parse_json_list(self.mcp_force_confirm, [])]
 
     @property
     def policy_rules_list(self) -> List[Any]:

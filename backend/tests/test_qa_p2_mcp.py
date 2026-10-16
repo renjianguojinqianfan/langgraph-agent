@@ -3,17 +3,14 @@
 These tests complement ``test_p2_mcp.py`` (engineer's suite) with an
 independent perspective. Coverage gaps addressed here:
 
-* settings parsing: ``mcp_servers_list`` / ``mcp_force_confirm_list`` edge
-  cases (valid array / invalid JSON / non-list / non-dict entries / missing
-  required fields);
+* settings parsing: ``mcp_servers_list`` edge cases (valid array / invalid JSON
+  / non-list / non-dict entries / missing required fields);
 * ``McpTool`` normalisation: name sanitisation, description fallback,
   ``args_schema`` fallback for missing / non-object schemas, and the resilience
   knobs as they follow the server's self-reported danger hints (issue #57);
 * ``McpTool.run`` result mapping: ``isError=true`` -> ``success=False``;
   structured content extraction; empty content;
-* executor per-call confirmation end-to-end (destructive or un-reported tool ->
-  confirm -> reject -> skipped with NO execution; a self-reported read-only tool
-  executes directly; force confirm overrides a read-only report);
+* executor end-to-end (executor -> tool_node -> success) for an MCP tool;
 * REST ``GET /api/mcp/servers`` via TestClient (disabled -> empty list;
   connected -> connected + tools_count; failure -> error);
 * TaskManager integration: MCP tools actually land in ``_tools`` and
@@ -87,18 +84,6 @@ def test_mcp_servers_list_parsing(tmp_path):
     # Empty / whitespace -> empty list.
     assert Settings(mcp_servers="").mcp_servers_list == []
     assert Settings(mcp_servers="   ").mcp_servers_list == []
-
-
-def test_mcp_force_confirm_list_parsing(tmp_path):
-    s = Settings(
-        data_dir=str(tmp_path),
-        artifacts_dir=str(tmp_path / "artifacts"),
-        mcp_force_confirm=json.dumps(["mcp__a__write", "mcp__b__delete"]),
-    )
-    assert s.mcp_force_confirm_list == ["mcp__a__write", "mcp__b__delete"]
-    # Invalid -> empty; non-list -> empty.
-    assert Settings(mcp_force_confirm="nope").mcp_force_confirm_list == []
-    assert Settings(mcp_force_confirm='{"x": 1}').mcp_force_confirm_list == []
 
 
 def test_mcp_config_skips_non_dict_and_missing_fields(tmp_path):
@@ -289,78 +274,21 @@ def test_mcp_tool_manager_exception_maps_to_failure():
     assert "connection lost" in res.error
 
 
-# ─────────────────── executor per-call confirm (end-to-end) ───────────────────
-def test_executor_write_tool_confirm_rejected_not_executed(tmp_path):
-    """A tool the server did not report as read-only must go through
-    human_confirm; rejection skips."""
-    s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
-    mgr.connect_all()
-    tool = McpTool(
-        server_name="echo", tool_name="write_file", description="Write a file.",
-        input_schema={}, manager=mgr, settings=s,
-    )
-
-    from backend.core.agent.nodes import AgentRuntime
-
-    mock = MockLLMClient(
-        tool_calls=[{"id": "c1", "name": tool.name, "arguments": {"path": "x.txt"}}]
-    )
-    bus = EventBus()
-    tm = type("TM", (), {})()
-    tm.settings = s
-    tm.event_bus = bus
-
-    executed: list = []
-
-    class _FakeTM:
-        settings = s
-        event_bus = bus
-
-        def request_confirm(self, task_id, tool_call_id):
-            # The user REJECTS immediately.
-            ev = type("EV", (), {"is_set": lambda self: True})()
-            return ev
-
-        def consume_confirm(self, task_id, tool_call_id):
-            return False
-
-        def add_artifact(self, *a, **kw):
-            return None
-
-    rt = AgentRuntime(
-        "t_qa_mcp", _FakeTM(), llm=mock, tools=[tool],
-        tool_schemas=[tool.to_openai_schema()], confirm_enabled=True,
-    )
-    state = {
+# ─────────────────── executor pass (end-to-end) ───────────────────
+def _mcp_executor_state() -> dict:
+    return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
         "messages": [{"role": "user", "content": "hi"}],
         "plan": [], "artifacts": [], "status": "RUNNING", "stop_requested": False,
-        "pending_confirm": {}, "final_answer": "", "error": "",
-        "_last_action": "", "_current_tool_calls": [], "_confirmed_ids": [],
-        "_rejected_ids": [], "_needs_confirm": False, "risk_report": [],
-        "_risk_blocked": False, "subtasks": [], "_is_subtask": False,
+        "final_answer": "", "error": "",
+        "_last_action": "", "_current_tool_calls": [],
+        "subtasks": [], "_is_subtask": False,
     }
-    rt.executor(state)
-    assert state["_current_tool_calls"][0]["need_confirm"] is True
-
-    # human_confirm_node: reject -> recorded in _rejected_ids.
-    rt.human_confirm_node(state)
-    assert state["_rejected_ids"] == ["c1"]
-    assert state["_needs_confirm"] is False
-
-    # tool_node: the rejected call must be SKIPPED — the MCP server never runs.
-    rt.tool_node(state)
-    rec = state["_current_tool_calls"][0]
-    assert rec["status"] == "skipped"
-    assert rec["error"] == "rejected by user"
-    assert executed == []
-    mgr.cleanup()
 
 
 def test_executor_read_tool_executes_directly(tmp_path):
-    """A tool the server self-reports as read-only executes without confirmation."""
+    """A read tool runs over executor -> tool_node (no gate, #138)."""
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
     mgr.connect_all()
@@ -376,59 +304,25 @@ def test_executor_read_tool_executes_directly(tmp_path):
         tool_calls=[{"id": "c1", "name": tool.name, "arguments": {"text": "hi"}}]
     )
     bus = EventBus()
-    tm = type("TM", (), {})()
-    tm.settings = s
-    tm.event_bus = bus
 
     class _FakeTM:
         settings = s
         event_bus = bus
-
-        def request_confirm(self, *a):
-            raise AssertionError("read tool must not request confirmation")
-
-        def consume_confirm(self, *a):
-            return False
 
         def add_artifact(self, *a, **kw):
             return None
 
     rt = AgentRuntime(
         "t_qa_mcp_read", _FakeTM(), llm=mock, tools=[tool],
-        tool_schemas=[tool.to_openai_schema()], confirm_enabled=True,
+        tool_schemas=[tool.to_openai_schema()],
     )
-    state = {
-        "step_index": 1,
-        "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
-        "messages": [{"role": "user", "content": "hi"}],
-        "plan": [], "artifacts": [], "status": "RUNNING", "stop_requested": False,
-        "pending_confirm": {}, "final_answer": "", "error": "",
-        "_last_action": "", "_current_tool_calls": [], "_confirmed_ids": [],
-        "_rejected_ids": [], "_needs_confirm": False, "risk_report": [],
-        "_risk_blocked": False, "subtasks": [], "_is_subtask": False,
-    }
+    state = _mcp_executor_state()
     rt.executor(state)
-    assert state["_current_tool_calls"][0]["need_confirm"] is False
     # tool_node executes immediately -> success.
     rt.tool_node(state)
     rec = state["_current_tool_calls"][0]
     assert rec["status"] == "success"
     assert rec["output"]["text"] == "echo:hi"
-    mgr.cleanup()
-
-
-def test_executor_force_confirm_overrides_read_tool(tmp_path):
-    """mcp_force_confirm forces confirmation even for a self-reported read tool."""
-    s = _echo_settings(tmp_path, mcp_force_confirm=json.dumps(["mcp__echo__echo"]))
-    mgr = McpClientManager(s)
-    mgr.connect_all()
-    tool = McpTool(
-        server_name="echo", tool_name="echo", description="Echo text.",
-        input_schema={}, manager=mgr, settings=s,
-        annotations={"readOnlyHint": True},
-    )
-    assert tool._needs_confirm({}) is True  # force override
-    assert tool.danger_signal == "safe"     # but the report still says read-only
     mgr.cleanup()
 
 

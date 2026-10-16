@@ -30,7 +30,6 @@ from ..utils.logging import get_logger
 from .schemas import (
     ApiResponse,
     AuthTokenRequest,
-    ConfirmRequest,
     CreateTaskRequest,
     McpServerInfo,
 )
@@ -227,19 +226,6 @@ def preview_artifact(
         return Response(content=data, media_type=art.mime)
     # Images / binaries: return raw bytes for <img>/preview.
     return Response(content=data, media_type=art.mime)
-
-
-@router.post("/tasks/{task_id}/confirm")
-def confirm_task(
-    task_id: str,
-    payload: ConfirmRequest,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    if _tm(request).get_task(task_id) is None:
-        raise HTTPException(status_code=404, detail="task not found")
-    ok = _tm(request).confirm(task_id, payload.tool_call_id, payload.approved)
-    return _envelope(data={"ok": ok})
 
 
 # ── P1 item 5: auth (public) ──

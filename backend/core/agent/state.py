@@ -1,7 +1,7 @@
 """Agent state schema shared by the LangGraph nodes.
 
 This is the single in-memory representation threaded through the
-``Planner -> RiskScan -> Executor -> Tool`` loop. Field names mirror the
+``Planner -> Executor -> Tool`` loop. Field names mirror the
 persistence / API models (``Task``, ``StepRecord``, ``ToolCallRecord``,
 ``PlanStep``, ``Artifact``) so mapping at the end of a run is trivial.
 """
@@ -22,7 +22,6 @@ class AgentState(TypedDict, total=False):
     artifacts: List[Dict[str, Any]]         # Artifact dicts
     status: str
     stop_requested: bool
-    pending_confirm: Dict[str, Any]
 
     # ── Loop bookkeeping (internal) ──
     step_index: int
@@ -32,13 +31,6 @@ class AgentState(TypedDict, total=False):
     context_tokens: int  # P0: estimated token count of the (possibly compressed) messages
     _last_action: str                       # plan | tool_call | tool_done | final_answer | stop
     _current_tool_calls: List[Dict[str, Any]]
-    _confirmed_ids: List[str]
-    _rejected_ids: List[str]
-    _needs_confirm: bool
-
-    # ── P1 item 1: risk scan ──
-    risk_report: List[Dict[str, Any]]       # latest round of RiskItem dicts
-    _risk_blocked: bool                     # high-risk round -> executor must confirm
 
     # ── P1 item 2: sub-agent ──
     subtasks: List[Dict[str, Any]]          # SubTask dicts folded into the parent record

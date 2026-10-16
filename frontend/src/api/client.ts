@@ -2,7 +2,6 @@ import {
   ApiResponse,
   Artifact,
   AuthTokenResponse,
-  ConfirmRequest,
   CreateTaskRequest,
   KbDoc,
   RollbackResult,
@@ -71,12 +70,6 @@ export const getTask = (id: string) => req<Task>(`/tasks/${id}`);
 
 export const stopTask = (id: string) =>
   req<{ ok: boolean; status: string }>(`/tasks/${id}/stop`, { method: "POST" });
-
-export const confirmTask = (id: string, body: ConfirmRequest) =>
-  req<{ ok: boolean }>(`/tasks/${id}/confirm`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 
 // ── P1-B: workspace rollback ──
 export const rollbackTask = (id: string) =>

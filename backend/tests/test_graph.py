@@ -7,25 +7,18 @@ Exercises ``build_graph`` + :class:`AgentRuntime` end-to-end with a scripted
 * the compiled graph *declares* its topology (langgraph 1.x derives each
   branch's ``path_map`` from the router's ``Literal`` return annotation);
 * a full task produces a ``final_answer`` and a persisted artifact;
-* ``stop`` interrupts the loop within 2 seconds (P0-9);
-* the ``human_confirm`` node pauses *before* a dangerous (requires_confirm) tool
-  and only proceeds after approval (and skips after rejection) (P1-2).
+* ``stop`` interrupts the loop within 2 seconds (P0-9).
 
 Also wraps the engineer's offline smoke test so it runs under pytest.
 """
 
 from __future__ import annotations
 
-import json
-import threading
 import time
 
-import pytest
-
 from backend.core.agent.graph import (
-    _after_planner_subtask,
+    _after_planner,
     _tool_router,
-    _tool_router_subtask,
     build_graph,
 )
 from backend.core.agent.nodes import AgentRuntime
@@ -61,23 +54,6 @@ def _run_until_done(tm, task_id, timeout=15):
     return tm.get_task(task_id)
 
 
-def _auto_confirm_in_background(tm, event_bus, task_id, approved, timeout=10):
-    """Poll the event buffer and confirm/reject any pending confirmation."""
-
-    def _watcher():
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            for ev in event_bus.replay(task_id):
-                if ev["type"] == "human_confirm_required":
-                    tm.confirm(task_id, ev["data"]["tool_call_id"], approved)
-                    return
-            time.sleep(0.01)
-
-    t = threading.Thread(target=_watcher, daemon=True)
-    t.start()
-    return t
-
-
 # ── build / compile ──
 def test_build_graph_compiles(settings):
     graph = build_graph(_runtime())
@@ -94,60 +70,32 @@ def test_main_topology_is_statically_declared(settings):
     """
     compiled = build_graph(_runtime())
     edges = _declared_edges(compiled)
+    nodes = set(compiled.get_graph().nodes)
 
-    assert ("planner", "risk_scan") in edges
+    assert ("planner", "executor") in edges
     assert ("planner", "finish") in edges
-    # Issue #56: the keyword-triggered ``subagent_split`` node is gone, so the
-    # risk scan hands straight to the executor.
-    assert ("risk_scan", "executor") in edges
-    assert "subagent_split" not in set(compiled.get_graph().nodes)
-    for src, dst in edges:
-        assert "subagent_split" not in (src, dst)
-    assert ("executor", "human_confirm") in edges
     assert ("executor", "tool") in edges
+    assert ("executor", "finish") in edges
     assert ("tool", "planner") in edges
     assert ("tool", "finish") in edges
-    # 确认闸门之后是静态边（总是去 tool），不是条件边。
-    assert ("human_confirm", "tool") in edges
     # planner 不可能直达 tool：这条边一旦出现，就说明 path_map 退化成了
     # “可能指向任何节点”。
     assert ("planner", "tool") not in edges
+    # #56 dropped the keyword-triggered ``subagent_split``; #138 (S4) dropped the
+    # ``risk_scan`` node and the ``human_confirm`` gate. Main tasks and subtasks
+    # now share this one topology (``build_graph`` has no ``mode``).
+    for gone in ("subagent_split", "risk_scan", "human_confirm"):
+        assert gone not in nodes
+        assert all(gone not in (src, dst) for src, dst in edges)
 
 
-def test_subtask_topology_declares_no_gate_and_no_risk(settings):
-    """子任务图的存在意义就是“不可能递归拆分、不可能卡在确认闸”。"""
-    edges = _declared_edges(build_graph(_runtime(), mode="subtask"))
-
-    assert ("planner", "executor") in edges
-    assert ("executor", "tool") in edges
-    assert ("tool", "planner") in edges
-    for src, dst in edges:
-        assert src not in ("human_confirm", "risk_scan", "subagent_split")
-        assert dst not in ("human_confirm", "risk_scan", "subagent_split")
-
-
-def test_main_tool_router_spends_the_step_budget_into_finish():
+def test_tool_router_spends_the_step_budget_into_finish():
     """步数预算路由（#137 把它从 reflect 路由挪进 tool 路由）：预算未尽回 planner，
-    用尽即 finish；stop / 待确认项优先于预算。"""
+    用尽即 finish；stop 优先于预算。"""
     router = _tool_router(_runtime(max_steps=3))
     assert router({"step_index": 2, "_last_action": "tool_done"}) == "planner"
     assert router({"step_index": 3}) == "finish"
     assert router({"step_index": 99, "stop_requested": True}) == "finish"
-    assert router({"step_index": 99, "_needs_confirm": True}) == "human_confirm"
-
-
-def test_subtask_tool_router_spends_the_step_budget_into_finish():
-    """子任务拓扑没有确认闸门，预算路由只有 planner | finish 两个落点。"""
-    router = _tool_router_subtask(_runtime(max_steps=2))
-    assert router({"step_index": 1}) == "planner"
-    assert router({"step_index": 2}) == "finish"
-    assert router({"step_index": 99, "stop_requested": True}) == "finish"
-
-
-def test_unknown_mode_is_rejected(settings):
-    """静默退回 subtask 拓扑会丢掉风险扫描与确认闸门，必须响亮报错。"""
-    with pytest.raises(ValueError):
-        build_graph(_runtime(), mode="nonsense")
 
 
 def test_build_graph_runs_and_produces_final_answer(settings, event_bus):
@@ -227,103 +175,6 @@ def test_stop_interrupts_loop_within_two_seconds(settings, event_bus):
     assert "task_interrupted" in events
 
 
-# ── human confirmation (P1-2) ──
-def test_human_confirm_pauses_then_proceeds_on_approval(settings, event_bus):
-    mock = MockLLMClient(
-        plan=["p"],
-        tool_calls=[
-            {
-                "id": "cc1",
-                "name": "code_exec",
-                "arguments": {"language": "python", "code": "print(1 + 1)"},
-            }
-        ],
-        final_answer="Ran the code.",
-    )
-    tm = make_manager(settings, mock, event_bus=event_bus)
-    task_id = tm.create_task(title="code", user_input="run python")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
-
-    task = _run_until_done(tm, task_id)
-
-    assert task.status.value == "COMPLETED"
-    events = event_bus.replay(task_id)
-    assert "human_confirm_required" in {e["type"] for e in events}
-    # The code_exec tool actually executed (approval granted).
-    tool_results = [e["data"] for e in events if e["type"] == "tool_result"]
-    assert any(
-        r.get("tool_name") == "code_exec" and r.get("status") == "success"
-        for r in tool_results
-    )
-
-
-def test_human_confirm_skips_tool_on_rejection(settings, event_bus):
-    mock = MockLLMClient(
-        plan=["p"],
-        tool_calls=[
-            {
-                "id": "cc1",
-                "name": "code_exec",
-                "arguments": {"language": "python", "code": "print(1 + 1)"},
-            }
-        ],
-        final_answer="Skipped the code.",
-    )
-    tm = make_manager(settings, mock, event_bus=event_bus)
-    task_id = tm.create_task(title="code", user_input="run python")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=False)
-
-    task = _run_until_done(tm, task_id)
-
-    assert task.status.value == "COMPLETED"
-    events = event_bus.replay(task_id)
-    assert "human_confirm_required" in {e["type"] for e in events}
-    tool_results = [e["data"] for e in events if e["type"] == "tool_result"]
-    assert any(
-        r.get("tool_name") == "code_exec" and r.get("status") == "skipped"
-        for r in tool_results
-    )
-
-
-def test_openapi_write_operation_parks_at_the_gate(tmp_path, event_bus):
-    """A spec-generated POST must be gated end to end, not just by its flag (#59)."""
-    spec = {
-        "openapi": "3.0.0",
-        "info": {"title": "pets", "version": "1"},
-        "paths": {
-            "/pets": {
-                "post": {
-                    "operationId": "createPet",
-                    "responses": {"200": {"description": "ok"}},
-                },
-            },
-        },
-    }
-    spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(spec), encoding="utf-8")
-    st = make_settings(tmp_path / "store", openapi_enabled=True, openapi_spec_path=str(spec_path))
-
-    mock = MockLLMClient(
-        plan=["p"],
-        tool_calls=[{"id": "cc1", "name": "createPet", "arguments": {"name": "Rex"}}],
-        final_answer="Not sent.",
-    )
-    tm = make_manager(st, mock, event_bus=event_bus)
-    task_id = tm.create_task(title="post", user_input="create a pet")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=False)
-
-    task = _run_until_done(tm, task_id)
-
-    assert task.status.value == "COMPLETED"
-    events = event_bus.replay(task_id)
-    assert "human_confirm_required" in {e["type"] for e in events}
-    tool_results = [e["data"] for e in events if e["type"] == "tool_result"]
-    assert any(
-        r.get("tool_name") == "createPet" and r.get("status") == "skipped"
-        for r in tool_results
-    )
-
-
 # ── planner failure is surfaced, not degraded (Issue #12) ──
 class _FailingPlannerLLM(MockLLMClient):
     """Planner call raises; executor calls behave normally."""
@@ -353,12 +204,12 @@ def test_planner_failure_surfaces_error_and_fails_task(settings, event_bus):
     assert task.plan == []
 
 
-def test_subtask_planner_failure_short_circuits_to_finish():
-    """The subtask router must also skip the executor on a planner failure
-    (Issue #12: both topologies share the planner node)."""
-    assert _after_planner_subtask({"error": "planner boom"}) == "finish"
-    assert _after_planner_subtask({"stop_requested": True}) == "finish"
-    assert _after_planner_subtask({}) == "executor"
+def test_planner_failure_short_circuits_to_finish():
+    """The planner router skips the executor on a stop or a planner failure
+    (Issue #12)."""
+    assert _after_planner({"error": "planner boom"}) == "finish"
+    assert _after_planner({"stop_requested": True}) == "finish"
+    assert _after_planner({}) == "executor"
 
 
 # ── engineer smoke (offline) included in the unified run ──

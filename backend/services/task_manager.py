@@ -1,7 +1,7 @@
 """Task lifecycle orchestration.
 
 Owns task creation, runs the LangGraph graph on a background thread, and
-exposes stop / confirm / query APIs. The graph nodes publish events through the
+exposes stop / query APIs. The graph nodes publish events through the
 :class:`EventBus` and register artifacts through :class:`Persistence`. A
 ``stop_requested`` flag (checked at each node entry) guarantees the ≤2s
 interrupt requirement (P0-9).
@@ -21,7 +21,6 @@ from langgraph.types import Durability
 from ..api.schemas import (
     Artifact,
     PlanStep,
-    RiskItem,
     StepRecord,
     SubTask,
     Task,
@@ -162,19 +161,10 @@ class TaskManager:
         persistence: Persistence,
         llm_client: Optional[LLMClient] = None,
         tools: Optional[List[BaseTool]] = None,
-        auto_approve: bool = False,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
         self.persistence = persistence
-        # Instance-scoped confirmation-gate behaviour. The FastAPI service path
-        # (main.py lifespan) never sets it, so there is no global "disable the
-        # gate" switch (AGENTS.md「跨任务安全边界」). Since #57 AC6 it does not
-        # mean「整块旁路」: the runtime keeps computing need_confirm, keeps
-        # publishing the ask, and records the terminal state as ``auto_approved``
-        # instead of waiting for a human who is not there. An explicit deny
-        # (``_rejected_ids``) is never outvoted.
-        self._auto_approve = auto_approve
         # P0 item 3: auto-discover plugin tools before building the tool list.
         if settings.plugins_autoload:
             discover_plugins(settings.plugins_path)
@@ -209,7 +199,6 @@ class TaskManager:
 
         self._lock = threading.Lock()
         self._active_states: Dict[str, AgentState] = {}
-        self._confirm_state: Dict[str, Dict[str, Any]] = {}
         self._threads: Dict[str, threading.Thread] = {}
         # Issue #4: with a checkpointer mounted, langgraph hands nodes a
         # per-superstep COPY of the state, so mutating ``_active_states``
@@ -354,11 +343,8 @@ class TaskManager:
                 t.executor = self._subagent
             elif isinstance(t, (MemorySearchTool, KbQueryTool)):
                 t.kb = self._kb
-            # P2 item 1: McpTool already holds its McpClientManager reference at
-            # construction time; this hook stays as a defensive no-op so every
-            # injected-tool family funnels through one place.
-            elif getattr(t, "needs_per_call_confirm", False) and hasattr(t, "_manager"):
-                pass
+            # McpTool holds its McpClientManager reference at construction time,
+            # so it needs no wiring here.
 
     # ── P1 item 6: OpenAPI tool registration ──
     def _load_openapi_tools(self, settings: Settings) -> None:
@@ -568,17 +554,11 @@ class TaskManager:
             "artifacts": [],
             "status": "RUNNING",
             "stop_requested": False,
-            "pending_confirm": {},
             "step_index": 0,
             "final_answer": "",
             "error": "",
             "_last_action": "",
             "_current_tool_calls": [],
-            "_confirmed_ids": [],
-            "_rejected_ids": [],
-            "_needs_confirm": False,
-            "risk_report": [],
-            "_risk_blocked": False,
             "subtasks": [],
             "_is_subtask": False,
         }
@@ -593,10 +573,8 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._aux_llm,
-                confirm_enabled=True,  # gate always armed (#57 AC6)
-                auto_approve=self._auto_approve,
             )
-            graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
+            graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
                 state, self._thread_config(task_id), **self._invoke_kwargs()
             )
@@ -614,7 +592,6 @@ class TaskManager:
             )
         finally:
             self._active_states.pop(task_id, None)
-            self._confirm_state.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
             # P0 item 4: always close the trace (success / failure / interrupt)
@@ -630,10 +607,6 @@ class TaskManager:
         # Issue #4: authoritative signal for checkpointer-backed runs — nodes
         # poll this because their state dicts are per-superstep copies.
         self._stop_flags[task_id] = True
-        # Wake any pending confirmation wait so the loop can unwind promptly.
-        cs = self._confirm_state.get(task_id)
-        if cs is not None:
-            cs["event"].set()
 
         task = self.persistence.load_task(task_id)
         if task and task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
@@ -650,7 +623,7 @@ class TaskManager:
 
     def is_stop_flagged(self, task_id: str) -> bool:
         """Peek (not consume) the authoritative stop signal — nodes poll this
-        every cycle / confirmation wait. A task's own flag is popped in run
+        every cycle. A task's own flag is popped in run
         teardown; a sub-agent's is popped by the executor's done callback
         (Issue #71), since a subtask never enters ``_active_states``."""
         return self._stop_flags.get(task_id, False)
@@ -672,13 +645,10 @@ class TaskManager:
     def _thread_config(self, task_id: str) -> Dict[str, Any]:
         """LangGraph runnable config under the thread_id == task_id convention.
 
-        Also lifts the default recursion limit (25). The P1 main topology runs
-        5 nodes per agent cycle (planner→risk_scan→executor→
-        [human_confirm]→tool; #137 dropped the reflect node), so the earlier ×4
-        estimate undershot and long tasks crashed with GraphRecursionError; ×8
-        covers the full cycle plus finish with headroom (issue #56 dropped one
-        node per cycle and left the multiplier alone — the limit is a ceiling,
-        not a budget).
+        Also lifts the default recursion limit (25). The main topology runs
+        3 nodes per agent cycle (planner→executor→tool), so ×8 leaves ample
+        headroom (issue #56 dropped a node per cycle and #138 two more — the
+        limit is a ceiling, not a budget).
         """
         return {
             "configurable": {"thread_id": task_id},
@@ -705,48 +675,6 @@ class TaskManager:
                 time.sleep(0.3)
         return False
 
-    def _raise_if_parked_on_gate(self, task_id: str) -> None:
-        """Raise when the latest checkpoint is parked at the confirm gate.
-
-        A snapshot whose ``_current_tool_calls`` still contain a
-        ``need_confirm`` call with no recorded decision means the previous run
-        was interrupted while awaiting a human decision. Restoring would skip
-        the gate entirely, so resume is refused (caller maps to 409).
-        """
-        if self._checkpointer is None:
-            return
-        try:
-            snap = self._checkpointer.get_tuple(self._thread_config(task_id))
-            if snap is None:
-                return
-            vals = snap.checkpoint.get("channel_values", {}) or {}
-            # Channel 1: the confirm node recorded a stop-forced rejection —
-            # the most reliable "parked on gate" marker (Issue #4).
-            if vals.get("pending_confirm"):
-                raise RuntimeError(
-                    f"task {task_id} was stopped while awaiting human confirmation; "
-                    "this run cannot be resumed — create a new task instead"
-                )
-            # Channel 2: structural fallback for snapshots from older runs.
-            tcs = vals.get("_current_tool_calls") or []
-            confirmed = vals.get("_confirmed_ids") or []
-            rejected = vals.get("_rejected_ids") or []
-            parked = any(
-                tc.get("need_confirm")
-                and tc.get("id") not in confirmed
-                and tc.get("id") not in rejected
-                for tc in tcs
-            )
-            if parked:
-                raise RuntimeError(
-                    f"task {task_id} was stopped while awaiting human confirmation; "
-                    "this run cannot be resumed — create a new task instead"
-                )
-        except RuntimeError:
-            raise
-        except Exception:
-            logger.exception("confirm-gate inspection failed for %s", task_id)
-
     def _finalize_terminal(self, task: Task, final: Dict[str, Any]) -> None:
         """Map a finished graph state onto the persisted task record.
 
@@ -761,7 +689,6 @@ class TaskManager:
         task.artifacts = [Artifact(**a) for a in final.get("artifacts", [])]
         task.final_answer = final.get("final_answer", "")
         task.error = final.get("error")
-        task.risk_report = [RiskItem(**it) for it in final.get("risk_report", [])]
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()
         if status == "COMPLETED":
@@ -798,13 +725,6 @@ class TaskManager:
                 raise RuntimeError(f"task {task_id} is still shutting down")
 
         has_checkpoint = self._has_checkpoint(task_id)
-        # Safety default (spec D8 edge): a snapshot parked at the human-confirm
-        # gate (an unresolved requires_confirm call) cannot resume — the wait
-        # loop belonged to the dead thread and the gate must never be silently
-        # fast-tracked by a restore. Checked synchronously so callers get a
-        # clean 409 instead of a background task_failed.
-        if has_checkpoint:
-            self._raise_if_parked_on_gate(task_id)
         # ── claim: single check-and-set under the manager lock ──
         with self._lock:
             task = self.persistence.load_task(task_id)
@@ -864,8 +784,8 @@ class TaskManager:
         double-probe, so a legitimately-admitted resume never spuriously FAILEDs.
 
         This retries ONLY the read. Every reject semantic (non-INTERRUPTED, no
-        checkpoint, parked-on-gate) is enforced earlier in ``resume()`` and is
-        untouched here; a state still empty after the budget raises the original
+        checkpoint) is enforced earlier in ``resume()`` and is untouched here; a
+        state still empty after the budget raises the original
         ``empty checkpoint state`` error.
         """
         values: Dict[str, Any] = {}
@@ -898,10 +818,8 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._aux_llm,
-                confirm_enabled=True,  # gate always armed (#57 AC6)
-                auto_approve=self._auto_approve,
             )
-            graph = build_graph(runtime, mode="main", checkpointer=self._checkpointer)
+            graph = build_graph(runtime, checkpointer=self._checkpointer)
 
             # Bounded re-read (Issue #23): resume() already proved a durable
             # checkpoint exists, but under load the freshly mounted store can
@@ -912,11 +830,9 @@ class TaskManager:
             # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
             # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
             restored = cast(AgentState, values)
-            # Reset *control* flags only; plan / steps / confirmed-ids survive.
+            # Reset *control* flags only; plan / steps / artifacts survive.
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False
-            restored["pending_confirm"] = {}
-            restored["_needs_confirm"] = False
             restored["_current_tool_calls"] = []
             self._active_states[task_id] = restored
 
@@ -941,7 +857,6 @@ class TaskManager:
             )
         finally:
             self._active_states.pop(task_id, None)
-            self._confirm_state.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
             if self._trace is not None:
@@ -983,38 +898,6 @@ class TaskManager:
             if self._trace is not None:
                 self._trace.close(task_id)
         return result
-
-    # ── human confirmation (P1-2) ──
-    def request_confirm(self, task_id: str, tool_call_id: str):
-        import threading
-
-        ev = threading.Event()
-        self._confirm_state[task_id] = {
-            "tool_call_id": tool_call_id,
-            "event": ev,
-            "result": None,
-        }
-        return ev
-
-    def consume_confirm(self, task_id: str, tool_call_id: str) -> Optional[bool]:
-        """The human verdict: True/False = 答了，``None`` = **没答**（#57 AC5）。
-
-        从前这里把「没答」和「答了个不」都折成 False，闸门因此只有一种失败终态。
-        调用方（``human_confirm_node``）先按判决分档，再问是谁打断了等待；
-        ``_plan_confirm`` 那侧仍按 ``bool(...)`` 用（None 依旧是「没批」）。
-        """
-        cs = self._confirm_state.get(task_id)
-        if cs and cs["tool_call_id"] == tool_call_id:
-            return cs["result"]
-        return None
-
-    def confirm(self, task_id: str, tool_call_id: str, approved: bool) -> bool:
-        cs = self._confirm_state.get(task_id)
-        if not cs or cs["tool_call_id"] != tool_call_id:
-            return False
-        cs["result"] = approved
-        cs["event"].set()
-        return True
 
     # ── artifacts ──
     def has_active_state(self, task_id: str) -> bool:

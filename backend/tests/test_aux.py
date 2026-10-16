@@ -4,8 +4,8 @@ Proves:
 
 * with ``aux_llm_enabled=False`` (default) **zero** aux calls happen — the
   factory returns ``None`` and a full task run never touches an aux client;
-* with aux configured (mock), summary and risk-semantic work are delegated to
-  the aux model (``MockAuxLLMClient.call_count`` / ``roles_called`` assert it);
+* with aux configured (mock), summary work is delegated to the aux model
+  (``MockAuxLLMClient.call_count`` / ``roles_called`` assert it);
 * a live aux config missing model/api_key degrades to ``None``.
 """
 
@@ -107,28 +107,6 @@ def test_summary_uses_aux_when_configured(tmp_path):
     assert aux.call_count > 0
     assert "summary" in aux.roles_called
     assert state.get("compressed") is True
-
-
-def test_risk_semantic_uses_aux_when_configured(tmp_path, event_bus):
-    settings = _make_aux_settings(
-        tmp_path,
-        aux_llm_enabled=True,
-        aux_llm_use_mock=True,
-        risk_semantic_enabled=True,
-    )
-    # "清理服务器上所有数据" has no keyword hit -> semantic path decides.
-    mock = MockLLMClient(plan=["清理服务器上所有数据"], final_answer="done")
-    tm = make_manager(settings, mock, event_bus=event_bus)
-    aux = tm._aux_llm
-    assert isinstance(aux, MockAuxLLMClient)
-    aux.role_responses["risk"] = "high: 清理服务器数据属于高危操作"
-
-    task_id = tm.create_task(title="t", user_input="maintenance")
-    task = _run_until_done(tm, task_id)
-    assert task.status.value == "COMPLETED"
-    assert aux.call_count > 0
-    assert "risk" in aux.roles_called
-    assert any(it.level == "high" for it in task.risk_report)
 
 
 def test_live_aux_config_returns_real_client():

@@ -1,9 +1,9 @@
 """P1 integration tests — multiple P1 capabilities cooperating (offline).
 
 These exercise the *combination* of the new nodes/events through the real
-LangGraph loop with a scripted mock LLM: risk report events, the approved
-``spawn_subagent`` delegation and its artifact hand-back, knowledge-base
-auto-indexing, and the aux model degradation path.
+LangGraph loop with a scripted mock LLM: the ``spawn_subagent`` delegation and
+its artifact hand-back, knowledge-base auto-indexing, and the aux model
+degradation path.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import json
 
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.tests.conftest import make_manager, make_settings
-from backend.tests.test_graph import _auto_confirm_in_background, _run_until_done
+from backend.tests.test_graph import _run_until_done
 
 
 class _ResearchMock(MockLLMClient):
@@ -81,16 +81,14 @@ def test_p1_events_in_main_channel(tmp_path, event_bus):
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _ResearchMock(), event_bus=event_bus)
     task_id = tm.create_task(title="p1", user_input="调研 RAG 最新进展并写报告")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"
     types = {e["type"] for e in event_bus.replay(task_id)}
-    # Risk scan ran (default enabled) and published its report.
-    assert "risk_report" in types
-    # The delegation is an ordinary, approved tool call on the parent channel —
-    # and since #70 ruling A the summary events are back on it as well (they were
-    # retired with entry B in #56; the re-adjudication lives in the ticket).
+    # The delegation is an ordinary tool call on the parent channel — and since
+    # #70 ruling A the summary events are back on it as well (they were retired
+    # with entry B in #56; the re-adjudication lives in the ticket). Since #138
+    # the spawn is no longer gated, so no confirmation is needed.
     spawn = _spawn_result(event_bus.replay(task_id))
     assert spawn and spawn[0]["status"] == "success"
     assert spawn[0]["output"]["status"] == "completed"
@@ -105,8 +103,6 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
         tmp_path,
         aux_llm_enabled=True,
         aux_llm_use_mock=True,
-        risk_semantic_enabled=True,
-        risk_policy="confirm",
         subagent_max_concurrency=2,
         kb_auto_index_artifacts=True,
         context_compress_strategy="truncate",
@@ -115,14 +111,12 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
     tm = make_manager(settings, mock, event_bus=event_bus)
     aux = tm._aux_llm
     assert aux is not None
-    aux.role_responses["risk"] = "low: 常规调研任务"
 
     task_id = tm.create_task(title="all", user_input="调研 DeepAgent 架构并写报告")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"
-    # One approved delegation actually ran the research leg.
+    # One delegation actually ran the research leg.
     assert mock.subtask_turns >= 2
     assert _spawn_result(event_bus.replay(task_id))[0]["status"] == "success"
     # #70 裁定 A 重裁（原断 == []，钉 #56「生产者已断」）：spawn 路径把子任务回传

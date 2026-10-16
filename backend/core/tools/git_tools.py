@@ -21,9 +21,9 @@ parametrised subprocess):
 * **Wall-clock timeout** — ``subprocess.run(timeout=git_timeout_sec)`` kills a
   hung ``git`` child.
 
-``requires_confirm=True`` on ``git_commit`` / ``git_checkout`` / ``git_init``
-routes those calls through the existing P0 ``human_confirm`` flow. Blacklisted
-commands are *rejected outright* (never offered for confirmation).
+``requires_confirm=True`` marks ``git_commit`` / ``git_checkout`` / ``git_init``
+as dangerous — an inert flag since #138 retired the confirmation gate.
+Blacklisted commands are still *rejected outright* regardless of any policy rule.
 """
 
 from __future__ import annotations

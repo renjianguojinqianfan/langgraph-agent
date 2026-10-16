@@ -19,8 +19,6 @@ const EVENT_TYPES: SSEventType[] = [
   "tool_circuit_open",
   "context_compressed",
   "task_rollback", // P1-B 工作区回滚完成
-  "human_confirm_required",
-  "human_confirm_resolved",
   "artifact_created",
   "final_answer",
   "task_completed",
@@ -28,8 +26,6 @@ const EVENT_TYPES: SSEventType[] = [
   "task_interrupted",
   "task_resumed", // P3 从检查点续跑启动
   "tool_result_evicted", // T1.4 旧的大段 tool 结果换成占位
-  "risk_report", // P1: {items, policy, semantic_enabled}
-  "risk_found", // P1: RiskItem
   "subtask_start", // #70-A: 子任务派生（父频道）
   "subtask_result", // #70-A: 子任务回传（父频道）
   "subtask_failed", // #70-A: 子任务失败（父频道）

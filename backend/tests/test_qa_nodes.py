@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from backend.config import Settings
-from backend.core.agent.nodes import CONFIRM_TIMED_OUT, AgentRuntime
+from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.services.event_bus import EventBus
@@ -64,7 +64,7 @@ class _EchoTool(_FailTool):
         return ToolResult(success=True, data={"note": "ok 中文", "n": 3})
 
 
-def _state_with_call(tool_name: str = "qa_fail", *, need_confirm: bool = False) -> AgentState:
+def _state_with_call(tool_name: str = "qa_fail") -> AgentState:
     return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
@@ -77,12 +77,8 @@ def _state_with_call(tool_name: str = "qa_fail", *, need_confirm: bool = False) 
                 "output": None,
                 "status": "pending",
                 "error": "",
-                "need_confirm": need_confirm,
-                "confirmed": False,
             }
         ],
-        "_confirmed_ids": [],
-        "_rejected_ids": [],
     }
 
 
@@ -143,12 +139,8 @@ def test_tool_node_unknown_tool_does_not_crash():
                 "output": None,
                 "status": "pending",
                 "error": "",
-                "need_confirm": False,
-                "confirmed": False,
             }
         ],
-        "_confirmed_ids": [],
-        "_rejected_ids": [],
     }
     rt.tool_node(state)
     rec = state["_current_tool_calls"][0]
@@ -281,41 +273,6 @@ def test_failed_tool_without_a_reason_still_says_it_failed():
     ]
 
 
-def test_rejected_call_answers_the_model_with_the_verdict():
-    """A call a human said no to used to get no tool message at all: the
-    ``tool_call_id`` stayed unanswered in the conversation while the reason only
-    reached the event face (#95)."""
-    rt, events = _bus_runtime([])
-    state = _state_with_call("gate_probe", need_confirm=True)
-    state["_rejected_ids"] = ["call_1"]
-    rt.tool_node(state)
-
-    assert _tool_messages(state) == [
-        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok": false, "error": "rejected by user"}'}
-    ]
-    # Event face untouched: same record, same status, same one tool_result.
-    rec = state["_current_tool_calls"][0]
-    assert rec["status"] == "skipped"
-    assert rec["error"] == "rejected by user"
-    assert [e["data"]["error"] for e in events if e["type"] == "tool_result"] == ["rejected by user"]
-
-
-def test_a_timeout_is_answered_as_a_timeout_not_as_a_refusal():
-    """The three un-approved buckets stay three (#95 reuses ``_confirm_skip_text``,
-    it does not fold them back into one「rejected by user」boolean)."""
-    rt, _events = _bus_runtime([])
-    state = _state_with_call("gate_probe", need_confirm=True)
-    state["_rejected_ids"] = ["call_1"]
-    state["_current_tool_calls"][0]["confirm_outcome"] = CONFIRM_TIMED_OUT
-    rt.tool_node(state)
-
-    content = _tool_messages(state)[0]["content"]
-    assert "timeout" in content
-    assert "rejected" not in content
-    # One text, two readers: the conversation repeats the event's own reason.
-    assert state["_current_tool_calls"][0]["error"] in content
-
-
 def test_unknown_tool_answers_the_model():
     """The other branch that answered nothing: the name is not in the registry,
     and the conversation kept a silent ``tool_call_id`` (#95)."""
@@ -331,39 +288,6 @@ def test_unknown_tool_answers_the_model():
     assert [e["data"]["error"] for e in events if e["type"] == "tool_result"] == [
         "unknown tool: ghost_tool"
     ]
-
-
-def test_a_call_parked_at_the_gate_stays_unanswered():
-    """#95 deliberately leaves this branch alone: parking at the gate is an
-    intermediate state — the verdict re-enters this node, and answering early
-    would put two tool messages on one ``tool_call_id``."""
-    rt, _events = _bus_runtime([_EchoTool()])
-    state = _state_with_call("gate_probe", need_confirm=True)
-    state["_current_tool_calls"].append(
-        {
-            "id": "call_2", "tool_name": "qa_echo", "input": {}, "output": None,
-            "status": "pending", "error": "", "need_confirm": False, "confirmed": False,
-        }
-    )
-    rt.tool_node(state)
-
-    assert [m["tool_call_id"] for m in _tool_messages(state)] == ["call_2"]
-    assert state["_current_tool_calls"][0]["status"] == "pending"
-
-
-def test_the_verdict_answers_once_on_the_re_entry():
-    """One gate pass parks the call, the next (the static ``human_confirm ->
-    tool`` edge) answers it exactly once — never two messages for one id (#95)."""
-    rt, _events = _bus_runtime([])
-    state = _state_with_call("gate_probe", need_confirm=True)
-    rt.tool_node(state)
-    assert _tool_messages(state) == []
-
-    state["_rejected_ids"] = ["call_1"]
-    rt.tool_node(state)
-
-    ids = [m["tool_call_id"] for m in _tool_messages(state)]
-    assert ids == ["call_1"]
 
 
 def test_success_content_stays_the_payload_verbatim():
