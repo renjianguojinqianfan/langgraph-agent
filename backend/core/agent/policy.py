@@ -16,7 +16,8 @@
 
 判定单位是**一次调用**（工具名 + 入参），不是计划里的一句话：规划期那句「这一步看起来
 危险」是 :mod:`backend.core.agent.risk` 的活，两者不同源、也不互相替代。
-``pattern`` 打在**入参里的字符串值**上（不是 JSON 文本，见 :func:`_string_leaves`）。
+``pattern`` 打在**入参里的文本叶子**上（字符串值，以及数字 / 布尔的文本形式；不是 JSON
+文本，也不看键名，见 :func:`_string_leaves`）。
 
 坏配置一律 warning + 忽略，绝不因为规则表写错把运行炸掉（与 ``risk_danger_keywords``
 同口径）；整表都编不出规则时另发一条「什么都没拦住」——**软档**：出声但照跑
@@ -39,15 +40,21 @@ logger = get_logger("agent.policy")
 
 
 def _string_leaves(value: Any) -> Iterator[str]:
-    """入参里的所有**字符串值**（dict 只走值、list/tuple 递归；键名不算）。
+    """入参里参与匹配的**文本叶子**：字符串值，以及数字 / 布尔的文本形式（键名不算）。
 
     判据是「命令模式打在真实参数文本上」。以前搜 ``json.dumps(args)`` 的整段文本，JSON
     转义会把真实字符变形——真 tab 变成 ``\\t``、引号变成 ``\\"``、Windows 路径变成双反斜杠
     ——照着真实命令写的模式反而漏拦（#136 独立评审 R2 实测：``rm\\t-rf /`` 与
     ``rm -rf "/"`` 都不命中）。顺带把「键名也被匹配」这一类假阳性一并去掉。
+
+    数字 / 布尔仍进匹配面（``str()`` 后比对）：旧实现搜 JSON 文本时 ``{"port": 22}`` 是能被
+    模式 ``22`` 命中的，新实现若只看字符串就是一次**静默收窄**——这一族的毛病（以为拦着、
+    其实没拦）不值得为省一行再犯一次；None 没有文本形态，不参与。
     """
     if isinstance(value, str):
         yield value
+    elif isinstance(value, (int, float)):  # bool 是 int 的子类，str(True) == "True"
+        yield str(value)
     elif isinstance(value, dict):
         for item in value.values():
             yield from _string_leaves(item)
@@ -61,9 +68,10 @@ class BlockRule:
     """一条「命中即拒」的规则。
 
     ``tool`` 是工具名，支持 ``fnmatch`` 通配（如 ``mcp__*__write``）；
-    ``pattern`` 可选，是对**入参里每个字符串值**的不区分大小写正则搜索——即「命令模式」，
-    省略则**该工具的任何一次调用**都拦。``reason`` 为空时由 :meth:`DangerPolicy.check`
-    用**实际工具名**补一句（规则里的通配名对模型没有意义）。
+    ``pattern`` 可选，是对**入参里每个文本叶子**（字符串值，以及数字 / 布尔的文本形式）的
+    不区分大小写正则搜索——即「命令模式」，省略则**该工具的任何一次调用**都拦。
+    ``reason`` 为空时由 :meth:`DangerPolicy.check` 用**实际工具名**补一句（规则里的通配名
+    对模型没有意义）。
     """
 
     tool: str

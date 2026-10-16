@@ -373,14 +373,24 @@ def test_an_over_large_repetition_is_dropped_not_crashed():
 
 
 def test_a_pattern_is_matched_against_the_real_argument_text():
-    """R2：判据打在入参的**字符串值**上，不打在 JSON 文本上。
+    """R2：判据打在入参的**文本叶子**上，不打在 JSON 文本上。
 
-    独立评审实测的三种漏拦（JSON 转义把真实字符变形）：真 tab 变 ``\\t``、引号变 ``\\"``、
-    Windows 路径反斜杠翻倍——照着真实命令写的模式在 JSON 文本上搜不到，于是「该拦的没拦」。
+    这里每一条都要求**旧实现会漏**（复核要求：用例必须真能区分，不能拿一个在两边都命中的
+    模式来冒充）：
+
+    * ``rm\\t-rf /``（真 tab）——模式 ``rm\\s+-rf``：JSON 文本里是 ``rm\\\\t-rf``，``\\s`` 不匹配 ``\\``；
+    * ``rm -rf "/"``——模式**带引号** ``rm -rf "/"``：JSON 文本里引号被转义成 ``\\"``，照真实命令写的模式搜不到；
+    * ``C:\\tmp\\x``——JSON 文本里反斜杠翻倍；
+    * 嵌套 list 里的 ``rm -rf /``——JSON 文本里前面有 ``"``，``^`` 锚点落空。
+
+    **限制（同族，不隐藏）**：模式是对**每个叶子各自** search 的，所以 argv 被拆成
+    ``["rm", "-rf", "/"]`` 时 ``rm\\s+-rf`` 命不中（旧实现搜整段文本时也一样命不中，不是回归）。
     """
     shell = _policy({"tool": "probe", "pattern": r"rm\s+-rf", "reason": "destructive"})
     assert shell.check("probe", {"cmd": "rm\t-rf /"}) == "destructive"  # 真 tab
-    assert shell.check("probe", {"cmd": 'rm -rf "/"'}) == "destructive"  # 引号
+
+    quoted = _policy({"tool": "probe", "pattern": 'rm -rf "/"', "reason": "destructive"})
+    assert quoted.check("probe", {"cmd": 'rm -rf "/"'}) == "destructive"  # 引号
 
     winpath = _policy({"tool": "write", "pattern": r"C:\\tmp", "reason": "outside sandbox"})
     assert winpath.check("write", {"path": r"C:\tmp\x"}) == "outside sandbox"
@@ -388,6 +398,27 @@ def test_a_pattern_is_matched_against_the_real_argument_text():
     # 嵌套结构（list / dict）里的字符串也一样看得到。
     nested = _policy({"tool": "probe", "pattern": "^rm -rf", "reason": "destructive"})
     assert nested.check("probe", {"argv": ["sh", "-c", "rm -rf /"]}) == "destructive"
+
+    # argv 被拆开时命不中：限制就写在这里，别让人以为它兜得住。
+    assert nested.check("probe", {"argv": ["rm", "-rf", "/"]}) is None
+
+
+def test_numbers_and_bools_still_have_a_text_form_to_match():
+    """数字 / 布尔仍进匹配面（``str()``）：旧实现搜 JSON 文本时它们是能被命中的。
+
+    新实现若只看字符串，就是一次**静默收窄**——与本片要治的毛病同族。这条只钉「没收窄」，
+    不主张新旧有别（旧实现同样命中）。
+    """
+    policy = _policy({"tool": "probe", "pattern": "22", "reason": "no"})
+
+    assert policy.check("probe", {"port": 22}) == "no"
+    assert policy.check("probe", {"port": 2200}) == "no"  # 子串照样命中，规则自己写准
+    assert policy.check("probe", {"port": "22"}) == "no"
+    # None 没有文本形态，不参与。
+    assert policy.check("probe", {"note": None}) is None
+    assert _policy({"tool": "probe", "pattern": "^True$", "reason": "no"}).check(
+        "probe", {"flag": True}
+    ) == "no"
 
 
 def test_a_pattern_never_matches_a_key_name():
