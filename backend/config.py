@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     confirm_timeout_sec: float = 1800.0  # wall clock bound on a human verdict -> timed_out (#57 AC5)
     risk_danger_keywords: str = ""  # optional JSON array override of the built-in table
 
+    # ── Danger policy (S2: settings rule table + one hook) ──
+    # JSON array of {"tool": name-or-glob, "pattern"?: regex, "reason"?: text}.
+    # Empty = nothing is blocked (byte-identical to the pre-S2 behaviour).
+    policy_rules: str = "[]"
+
     # ── Sub-agent (P1 item 2) ──
     subagent_enabled: bool = True  # master switch
     subagent_max_concurrency: int = 2  # thread-pool parallelism (1 = serial)
@@ -240,6 +245,17 @@ class Settings(BaseSettings):
         """``mcp_force_confirm`` as entries of ``mcp__{server}__{tool}`` / ``mcp__{server}__*``,
         each optionally ``!``-prefixed to mean "never confirm" (#57 AC3)."""
         return [str(x) for x in self._parse_json_list(self.mcp_force_confirm, [])]
+
+    @property
+    def policy_rules_list(self) -> List[Any]:
+        """``policy_rules`` as the parsed JSON array (#136).
+
+        **只解析，不筛条目**：非对象条目的处置权归消费者
+        （``core/agent/policy.py`` 的 ``_compile``，它 warning 后作废那一条）——在配置层
+        悄悄滤掉，正好让写坏的条目在唯一能报出来的地方看不见（#136 独立评审 R1）。
+        坏 JSON / 非数组仍按 ``_parse_json_list`` 的老口径回退 ``[]``。
+        """
+        return self._parse_json_list(self.policy_rules, [])
 
     @property
     def cors_origin_list(self) -> list[str]:
