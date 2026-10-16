@@ -160,3 +160,23 @@
 2. opencode：文档写 `.env` 为 deny，代码是 ask。计划模式 README 检索片段写「跑 bash 前要问」，`plan.ts` 里没有 bash 规则；未全仓再搜是不是别处补上了。
 3. codex：`workspace-write` 预设与 `FileSystemSandboxKind::Restricted` 的逐行对应没对完；Windows 危险命令文件未逐条读完。POSIX 侧读完了，只有强制 `rm`。
 4. dsh：`danger-full-access` 下 bash 是否还会走进审批缝，未逐行追。
+
+### 6.4 本仓结论（2026-10-16）：S4 走 (b)
+
+D1（S4 删掉确认闸门后，`policy_rules` 默认空表 = 不拦，要不要随片附一份默认规则表）定为 **(b)**：
+**接受默认空表不拦**，README 侧写清「这不是安全边界，真边界在沙箱」——该文案落在 S6 的
+README 身份段（S6 清单已含），所以 (b) **不改任何已排期切片的完成判据**，S4 仍只判「删干净、离线全绿、
+危险动作靠 S2 的钩子」。
+
+依据即 §6.2：四家里没有一家把「出厂一份可配置的危险命令黑名单」当默认安全措施；codex / dsh 的出厂
+默认是**问人 + 沙箱**，而本仓按 ADR 0008 第 6 条不弹框，抄不了「问人」那一半。贴一张正则表反而会造出
+「以为拦着、其实能绕」（argv 拆分 / `rm -fr` / 引号，见 PR #144）的假安全。
+
+两条**另开的跟进项**（不并入 S4，未开票）：
+
+1. **危险工具默认不挂、用户显式打开**的档位设计——形态对照 codex `Default` vs `Full Access`、
+   dsh 的预设表（`workspace-write` + `ask` / `danger-full-access` + `never`）；本仓无真沙箱，
+   该档位只能卡**工具面**（先例：`backend/core/agent/subagent.py` 的 `TOOL_TIERS` 按构造就够不着
+   `code_exec` / HTTP 写 / git 写）。
+2. **`code_exec` 沙箱审计**（`security-scan`）——它的实际强度没被审计过；审计结果决定上面那个档位
+   能不能把 `code_exec` 放进默认档。
