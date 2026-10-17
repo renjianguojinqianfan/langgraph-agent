@@ -2,13 +2,13 @@
 
 > 架构师：高见远（Gao）　|　版本：v0.1　|　日期：2025-08-24
 > 关联文档：PRD（[`docs/prd.md`](prd.md)）
-> 项目根目录：`E:\code\demo\langgraph-agent\`
+> 项目根目录：仓库根（下文相对路径以仓库根为准）
 
 > ⚠️ **状态：v0.1 原始设计档（历史记录），不是现役架构的权威来源。**
 >
 > 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、REST
-> 端点表、SSE 事件表、类图与时序图均为**当时的计划态**，与现状差两代（本文：4 个工具 /
-> 9 个端点 / 12 种事件 / 9 个前端组件；现役：18+ 工具 / 16 个端点 / 事件清单见 §3.4 表 / 14 个组件）。
+> 端点表、SSE 事件表、类图与时序图均为**当时的计划态**。§2 / §4 已按 S5 的单 loop 更新；
+> §5 的跨文件共享约定仍现役；§8 / §9 保留为历史决策与实施计划。
 >
 > **现役事实请查这里**：
 > - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
@@ -88,7 +88,7 @@ langgraph-agent/
 │   │   ├── agent/
 │   │   │   ├── state.py              # AgentState（TypedDict）
 │   │   │   ├── graph.py              # 构建 StateGraph（节点+边）
-│   │   │   ├── nodes.py              # planner/executor/reflect/human_confirm 节点
+│   │   │   ├── nodes.py              # agent / tool / finish 节点（S5 单 loop）
 │   │   │   └── prompts.py           # 系统提示词/工具调用约束
 │   │   ├── llm/
 │   │   │   ├── client.py            # LLMClient 抽象基类 + LLMResponse
@@ -103,7 +103,7 @@ langgraph-agent/
 │   ├── services/
 │   │   ├── event_bus.py             # 进程内 pub/sub（步骤事件）
 │   │   ├── persistence.py           # 内存 + JSON 落盘（预留 SQLite 仓储）
-│   │   └── task_manager.py          # 任务生命周期：run/stop/查询
+│   │   └── task_manager.py          # 任务生命周期：run/stop/resume/续说/模式/计划
 │   └── utils/
 │       ├── sandbox.py               # subprocess 超时/资源/临时目录封装
 │       └── logging.py               # 统一日志
@@ -136,7 +136,11 @@ langgraph-agent/
         │   ├── StepDetail.tsx       # 右：当前 step 入参/出参/日志
         │   ├── InputBar.tsx         # 输入框+发送+停止
         │   ├── ArtifactList.tsx     # 产物列表+下载/预览
-        │   └── ConfirmDialog.tsx    # P1：人工确认弹窗
+        │   ├── PlanPanel.tsx        # 计划区（停下时可改）
+        │   ├── ModeSwitch.tsx       # 计划 / 执行模式开关
+        │   ├── TraceTab.tsx         # Trace 回放
+        │   ├── SubtaskList.tsx      # 子任务面板
+        │   └── KbPanel.tsx          # 知识库面板
         └── pages/
             └── TaskView.tsx         # 单个任务页（组合上述组件）
 ```
@@ -189,7 +193,6 @@ classDiagram
         +str name
         +str description
         +dict args_schema
-        +bool requires_confirm
         +bool registers_artifact
         +run(**kwargs) ToolResult
     }
@@ -224,7 +227,8 @@ classDiagram
         +list artifacts
         +str status
         +bool stop_requested
-        +dict pending_confirm
+        +str mode
+        +int round_steps
     }
 
     %% ── 持久化模型 ──
@@ -264,9 +268,11 @@ classDiagram
         +str title
         +str user_input
         +TaskStatus status
+        +str mode
         +list steps
         +list plan
         +list artifacts
+        +list conversation
         +str final_answer
         +str error
         +str created_at
@@ -390,10 +396,8 @@ classDiagram
 
 ## 4. 程序调用流程（mermaid `sequenceDiagram`）
 
-> ⚠️ **v0.1 时序图**：缺 `risk_scan` / `human_confirm` 重算 / 完成验证
-> 等环节，也没有 checkpointer 挂载与 `durability` 传参。现役拓扑（与 `graph.py` 逐边
-> 一致）见 [`README.md`](../README.md)「编排拓扑」。
-> 下图保留作初始循环设计的讲解版本。
+> 现役拓扑与 `backend/core/agent/graph.py` 逐边一致；下图是一次 plan → build → 停下 → 续说
+> 的典型调用。`POST /replan` 只是借一轮 plan 模式，不改任务上的模式开关。
 
 > 详见 `docs/sequence-diagram.mermaid`。
 
@@ -405,59 +409,46 @@ sequenceDiagram
     participant API as FastAPI 路由
     participant TM as TaskManager
     participant EB as EventBus
-    participant G as LangGraph Graph
+    participant G as LangGraph (agent/tool/finish)
     participant L as LLMClient
-    participant T as BaseTool 实现
+    participant T as BaseTool
 
-    %% 提交任务
-    U->>FE: 输入任务并提交
-    FE->>API: POST /api/tasks {input}
+    U->>FE: 新建任务（可选 mode=plan）
+    FE->>API: POST /api/tasks {input, mode}
     API->>TM: create_task()
     TM->>EB: publish(task_created)
     API-->>FE: {task_id}
     FE->>API: GET /api/tasks/{id}/events (SSE)
     API->>EB: subscribe(task_id)
 
-    %% 执行循环
-    TM->>G: run(task_id)  [独立线程/任务]
-    loop 每个 step (≤ max_steps)
-        G->>L: planner: complete(messages) 生成计划
-        L-->>G: plan / thought
-        G->>EB: publish(plan_update / step_start)
-        G->>L: executor: complete(messages, tools) 决定动作
+    TM->>G: invoke [独立线程]
+    loop 本轮（START → agent → tool → agent …）
+        G->>L: agent.complete(system + messages, tools)
         L-->>G: tool_calls 或 final_answer
+        G->>EB: publish(step_start / tool_call)
         alt 有 tool_call
-            G->>EB: publish(tool_call)
-            opt 危险工具且需确认 (P1)
-                G->>EB: publish(human_confirm_required)
-                FE->>API: POST /api/tasks/{id}/confirm
-                API->>TM: 设置 pending_confirm
-                TM-->>G: approved / rejected
-            end
             G->>T: run(**input)
             T-->>G: ToolResult
             G->>EB: publish(tool_result)
             opt 产物源工具写出真实文件
-                G->>TM: add_artifact(task_id, path)
+                G->>TM: add_artifact()
                 TM->>EB: publish(artifact_created)
             end
-        else final_answer
+            Note over G: tool → agent（本轮预算未尽）
+        else 本轮最后一次调用没有 tool call
             G->>EB: publish(final_answer)
+            G->>G: finish：INTERRUPTED（停下）
         end
-        G->>L: reflect: 完成? (条件边)
-        L-->>G: continue / done
     end
-    G-->>TM: 结束 (COMPLETED/FAILED)
-    TM->>EB: publish(task_completed / task_failed)
-    EB-->>FE: 实时渲染步骤/详情/产物
+    G-->>TM: 状态 INTERRUPTED / FAILED
+    TM->>EB: publish(task_interrupted / task_failed)
+    EB-->>FE: 实时渲染对话 / 计划 / 步骤 / 产物
 
-    %% 停止控制
-    U->>FE: 点击「停止」
-    FE->>API: POST /api/tasks/{id}/stop
-    API->>TM: stop(task_id)  // 置 stop_requested
-    TM->>G: 循环检测 stop_requested -> 中断
-    TM->>EB: publish(task_interrupted)
-    EB-->>FE: 状态置 interrupted
+    U->>FE: 停下后说一句
+    FE->>API: POST /api/tasks/{id}/messages
+    API->>TM: send_message()（同一 thread_id / checkpoint）
+    TM->>EB: publish(task_resumed)
+    TM->>G: 新一轮 invoke
 ```
 
 ---
@@ -469,16 +460,16 @@ sequenceDiagram
 1. **配置管理**：所有配置经 `backend/config.py` 的 `Settings`（`pydantic-settings`），从 `.env` 读取。**禁止**在业务代码中硬编码 Key/路径；通过 `get_settings()` 获取单例。
 2. **LLM 接入抽象层**：业务只依赖 `LLMClient` 抽象。调用统一返回 `LLMResponse{content, tool_calls, raw}`。新增供应商只需新增 `LLMClient` 子类并据 `Settings` 选择；支持 OpenAI / DeepSeek / 本地 Ollama（仅改 `base_url`）。
 3. **工具接口规范 `BaseTool`**：
-   - 每个工具实现 `name / description / args_schema(dict) / requires_confirm / registers_artifact / run(**kwargs)->ToolResult`；
+   - 每个工具实现 `name / description / args_schema(dict) / registers_artifact / run(**kwargs)->ToolResult`；
    - `args_schema` 必须是 JSON Schema（供 LLM function calling 使用）；
    - 工具务必返回 `ToolResult`，**禁止**抛未捕获异常导致进程崩溃（外层统一 try/except 兜底）；
    - 新工具在 `registry.py` 中 `@register` 即被 Agent 自动发现（满足 SC4 上手 <30min）。
 4. **事件/消息协议**：后端 → 前端仅通过 SSE 事件（见 3.4）通信；事件 `data` 为 JSON，字段名与后端模型一致；前端 `types/index.ts` 必须与后端 schema 保持字段对齐（单一事实来源：后端 `schemas.py`）。
-5. **错误与重试约定**：工具失败返回 `ToolResult(success=False, error=...)`；`code_exec`/`http_api` 支持按 `Settings` 重试（P1-4，默认退避 2s×2）。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`，所以模型不必再靠猜。此前对话面只灌 `result.data`，失败时是字面量 `null`，「一轮内自愈」无从谈起。成功路径仍灌 payload 原样。被 `policy_rules` 当场拒掉的调用（S2，`executor` 里那一个钩子）走**第三条**形状：对话面 `{"block": true, "reason": ...}`——「不许做」必须与「做失败了」分得开，否则模型只会照原样重试（ADR 0008 第 6 条）。它的记录面**没有新字段**：`status:"skipped"` + 理由在 `error` 上（与「人拒了」同一格，区别在 `confirm_outcome` 为空 = 从没进过闸门），理由同样只有 `rec["error"]` 一个来源。
-6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在每轮开头检测，为真则提前 `END` 并发布 `task_interrupted`（P0-9：2s 内生效）。
-7. **人工介入**：`requires_confirm=True` 的工具（代码执行、HTTP 写操作）在 `executor` 后插入 `human_confirm` 中断（P1-2）；前端 `ConfirmDialog` 提交 `POST /confirm`。未批准的收口不是一个布尔而是三档可辨的终态（#57 AC5）：`denied`（人明确拒了）/ `timed_out`（等满 `confirm_timeout_sec`，默认 1800s，没人答）/ `aborted`（被 stop 打断），连同 `approved` 写进记录体 `confirm_outcome`，事件 / trace / 持久化三面同源。文案只有 `denied` 保留 `rejected by user`——那才是唯一一句真话。
+5. **错误与重试约定**：工具失败返回 `ToolResult(success=False, error=...)`；`code_exec`/`http_api` 支持按 `Settings` 重试（默认退避 2s×2）。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。被 `policy_rules` 当场拒掉的调用（S2）走**第三条**形状：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开，ADR 0008 决策 6）。
+6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在下一入口检测，为真则走 `finish` 并发布 `task_interrupted`（P0-9：2s 内生效）。
+7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里那一个钩子；命中即当场拒，不执行、不弹框、不进图重入。详见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md) 决策 6 与 `backend/core/agent/policy.py`。
 8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
-9. **成功判定（Q8）**：任务进入最终反思并产出 `final_answer`、期间无未捕获致命异常 → 记 `COMPLETED`（成功）；达到 `max_steps` 未产出或抛出异常 → `FAILED`。
+9. **停下判定（Q8）**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 把任务停成 `INTERRUPTED`；错误 → `FAILED`。没有 `COMPLETED` 终态。
 10. **日志**：统一经 `utils/logging.py`，结构化输出到控制台 + `data_dir/logs/`；不打印明文 API Key。
 
 ---
@@ -544,7 +535,7 @@ httpx>=0.27.0          # 供 http_api 工具使用
 | T05 | 后端服务与 API | `backend/services/event_bus.py`、`backend/services/persistence.py`、`backend/services/task_manager.py`、`backend/api/schemas.py`、`backend/api/routes.py`、`backend/api/sse.py`、`backend/main.py` | T04 | P0 |
 | T06 | 前端骨架与状态管理 | `frontend/src/main.tsx`、`frontend/src/App.tsx`、`frontend/src/index.css`、`frontend/src/types/index.ts`、`frontend/src/store/taskStore.ts`、`frontend/src/api/client.ts` | T01 | P0 |
 | T07 | 前端组件与三栏可视化 | `frontend/src/components/HistoryPanel.tsx`、`TaskPanel.tsx`、`TaskHeader.tsx`、`MessageStream.tsx`、`StepTimeline.tsx`、`StepDetail.tsx`、`InputBar.tsx`、`ArtifactList.tsx`、`pages/TaskView.tsx` | T06 | P0 |
-| T08 | 前端流式渲染与人工介入 | `frontend/src/hooks/useSSE.ts`、`frontend/src/components/ConfirmDialog.tsx`（增强 `StepDetail`/`ArtifactList` 下载预览） | T05, T07 | P0/P1 |
+| T08 | 前端流式渲染与交互 | `frontend/src/hooks/useSSE.ts`、`MessageStream` / `PlanPanel` / `ModeSwitch`（增强 `StepDetail`/`ArtifactList` 下载预览） | T05, T07 | P0/P1 |
 | T09 | 集成联调与一键启动 | `start.py`（联调）、`docker-compose.yml`、`README.md`（补充）、端到端 demo 验证脚本 | T05, T08 | P0 |
 
 ### 7.1 实现顺序建议
@@ -554,7 +545,7 @@ T01(基建) → T02(LLM) ┐
                      ├→ T04(编排) → T05(服务/API) ┐
         T01 → T03(工具) ┘                          ├→ T09(联调)
         T01 → T06(前端骨架) → T07(组件) ───────────┘
-                                            T08(流式/介入) ↑依赖 T05,T07
+                                            T08(流式/交互) ↑依赖 T05,T07
 ```
 
 ---
@@ -563,7 +554,7 @@ T01(基建) → T02(LLM) ┐
 
 > ⚠️ **Q1–Q8 大体仍现役**，两处已被超越：**Q3 持久化**——任务记录仍走 JSON，但
 > P3 已把 sqlite 真正用起来（`langgraph-checkpoint-sqlite` 存对话快照，含格式守卫）；
-> **Q7 人工介入**——已实现并扩展为 EHRB 五类风险扫描 + 图内 `human_confirm` 节点。
+> **Q7 人工介入**——确认闸门已随 ADR 0008 退役，危险动作改由 `policy_rules` + 钩子当场拒。
 > §8.2 的 4 项待定均已落定（能力概述以 [`README.md`](../README.md)「能力」为准）。
 
 ### 8.1 已确认技术决策（面向本地 demo，可后续调整）
@@ -576,8 +567,8 @@ T01(基建) → T02(LLM) ┐
 | **Q4 鉴权** | v1 **本地 demo 不做登录鉴权**；`Settings.auth_enabled=False`；接口预留 `POST /api/auth/token`（P1-6 仅在公网时开启） | 文档注明 |
 | **Q5 沙箱** | **受限 subprocess**（独立临时目录 + 超时 + 基础资源限制）；Docker 作为可选增强，**首版不强制** | 见 `sandbox.py`/`code_exec.py` |
 | **Q6 web search** | **内置可插拔搜索工具**，默认轻量免费方案 **DuckDuckGo**（`ddgs`），预留 SerpAPI 接口（需 Key 时配置） | 见 `web_search.py` |
-| **Q7 人工介入** | **P1 实现**：对危险工具（`requires_confirm=True`，即代码执行 / HTTP 写操作）执行前确认，`human_confirm` 节点中断 | 见 T04/T08 |
-| **Q8 成功率度量** | 任务进入最终反思并产出 `final_answer`、期间无未捕获致命异常 → 记 **成功（COMPLETED）**；否则 `FAILED` | 见 §5.9 |
+| **Q7 人工介入** | **已随 ADR 0008 退役**：没有确认闸门 / 人工确认节点；危险动作由 `policy_rules` + 钩子当场拒 | 见 §5.7 |
+| **Q8 停下度量** | 一轮的最后一次 `agent` 调用没有工具调用 → `INTERRUPTED`（停下）；错误 → `FAILED`；没有 `COMPLETED` | 见 §5.9 |
 
 ### 8.2 仍需用户/产品最终确认的极少数项（非阻塞，已给默认值）
 

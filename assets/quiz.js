@@ -8,7 +8,7 @@
          title: "路由预测测验",
          questions: [
            { q: "题面（支持 HTML）",
-             opts: ["tool", "reflect", "finish"],   // 第 0 个必须是正确答案
+             opts: ["tool", "agent", "finish"],   // 第 0 个必须是正确答案
              explain: "答完后显示的解析（支持 HTML）" }
          ]
        });

@@ -2,7 +2,7 @@
 
 > 本文件是**词汇表入口**，不是第二份词汇表。定义型权威在 `backend/core/agent/state.py`
 > （状态字段与节点名，图拓扑见 `backend/core/agent/graph.py`）与 `AGENTS.md`「跨任务安全边界」表；
-> 已定居决策在 `docs/adr/`（现役 0001–0008）。本文件只放指针与一行速查；技能（tdd /
+> 已定居决策在 `docs/adr/`（现役 0001–0004 + 0008；0005–0007 已随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
 > diagnosing-bugs / wait-what / domain-modeling / triage …）读完本文件，按指针去读权威源。
 > 单上下文仓库：无 `GLOSSARY-MAP.md`。
 
@@ -12,7 +12,7 @@
 |---|---|
 | 节点 / 状态字段术语的定义 | `backend/core/agent/state.py`（节点名见 `graph.py`） |
 | 硬规则与边界不变量 | `AGENTS.md`「跨任务安全边界」表 |
-| 已定居的决策与理由 | `docs/adr/0001`–`0008` |
+| 已定居的决策与理由 | `docs/adr/0001`–`0008`（0005–0007 已退役，保留历史） |
 | 计划 / 执行两模式、停下、交付 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（决策 1–8） |
 | 产物（谁算写出、怎么去重） | [ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md) |
 | 技能组配置（tracker / 标签 / 本文档的消费规则） | `docs/agents/` 三件套 |

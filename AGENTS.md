@@ -13,8 +13,7 @@
 ## 跨任务安全边界（不变量）
 
 > **本表已随 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md) 重估**（2026-10-14）：完成验证栈、
-> 确认闸门、规划期风险扫描、无人值守评测入口一并退役。带 **〔片 Sx〕** 的行指代码里**还没删**、随该片落地；
-> 切法与判据见 `docs/pivot-plan-build.md`。**冻结区已在本片解除**（`resilience.py` / `registry.py` 的 CI 守卫已删）。
+> 确认闸门、规划期风险扫描、无人值守评测入口已退役；现役形态见本表与 `README.md`「编排拓扑」。
 
 | 触发词 | 不变量 | 权威源 |
 |---|---|---|
@@ -37,7 +36,7 @@
 | 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：qoder 实施 + `code-review` 自评审 + `neat-freak` 文档收尾（步 3.5，能力面/接口/配置语义变了必须同步文档）+ 提 PR；opencode 独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
 | 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse` |
-| stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条仍成立（非 INTERRUPTED、无 checkpoint；随闸门退役由三类减为两类） |
+| stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |

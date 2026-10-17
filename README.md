@@ -1,12 +1,13 @@
 # LangGraph 自主任务 Agent
 
-自然语言下发任务 → Agent 自主规划（planner → risk_scan → executor → tool 循环）→ 调用工具完成多步任务，
+自然语言下发任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → 停下时人看产物，
 全程 SSE 实时可视化 + Trace 回放。基于 **LangGraph 1.2.x（StateGraph）**，FastAPI + React 前后端一体。
 
 **离线测试全绿**（零网络、零 Key、MockLLM、禁 LangSmith 外发）· 真实 LLM 自行启服务在网页端跑一遍验证 · CI 三 job 全绿。
 
 这个仓库想证明的不是"能跑通一个 agent demo"，而是 agent 运行时里那几件难做的事被工程化地解决了：
-任务被中途停止后能从检查点续跑、危险操作在执行前被闸门拦住、工具连续失败时熔断降级而不是把循环拖死、
+一个任务是一段多轮对话，停下后能从同一 checkpoint 续说；计划模式只读、执行模式拿全部工具，
+危险动作由设置里的规则表当场拒；工具连续失败时熔断降级而不是把循环拖死；
 外部工具生态（MCP / OpenAPI）能动态接进来而不改内核。
 
 ---
@@ -16,7 +17,7 @@
 ```bash
 python -m venv .venv311 && source .venv311/bin/activate   # Python 3.11（Windows: .venv311\Scripts\activate）
 pip install -r requirements.txt
-cp .env.example .env                                      # 填 llm_api_key；或设 use_mock_llm=true 离线跑
+cp .env.example .env                                      # LLM_API_KEY 走环境变量；或设 use_mock_llm=true 离线跑
 uvicorn backend.main:app --port 8000 --reload
 cd frontend && npm install && npm run dev                 # http://localhost:5173（/api 代理到 :8000）
 ```
@@ -30,14 +31,13 @@ cd frontend && npm install && npm run dev                 # http://localhost:517
 
 ## 能力
 
-- **断点续跑** —— `SqliteSaver` 检查点（`thread_id == task_id`）+ 1.x `durability="sync"`（stop() 后快照必已落盘），`POST /api/tasks/{id}/resume` 从断点复活，消息/计划/确认记录全保留。非 INTERRUPTED、无 checkpoint、停在确认闸口三类一律 409 —— 闸门永不被静默绕过；崩溃遗留的孤儿任务启动时自动对账。→ [P3 架构](docs/incremental-arch-p3-resume.md)
-- **危险操作闸门** —— 规划期 EHRB 五类风险扫描（删除/破坏/财务/隐私/通信）+ `human_confirm` 图内中断节点；批准/拒绝写回 `_confirmed_ids` / `_rejected_ids` 后**重算**是否仍有待确认项（P0 修掉的死循环根因）；写类工具（HTTP 写方法 / `git_commit` / MCP）额外走 per-call 判定（MCP 判定函数抛异常时 **fail-closed**：要求确认而非放行，[#47](https://github.com/renjianguojinqianfan/langgraph-agent/issues/47)）；OpenAPI spec 生成的工具按 method 静态判闸门 —— 非 `GET/HEAD/OPTIONS`（含未知方法）一律需确认（[#59](https://github.com/renjianguojinqianfan/langgraph-agent/issues/59)）；未批准的收口不是一种而是三档：**人明确拒绝 / 超时未答 / 停止打断**，连同批准与评测态自动放行共五个终态值随 `confirm_outcome` 落进事件、trace、持久化**与前端 Step 详情**（[#91](https://github.com/renjianguojinqianfan/langgraph-agent/issues/91) 补上显示面这一角——此前界面上只有 `confirmed` 二值文案，「人拒了 / 没人答 / 被 stop 打断」在 UI 里读不出来），事后读得出到底是哪一种；等人判决有墙钟上界 `confirm_timeout_sec`（默认 1800s），到点记 `timed_out` 而不是冒充「拒绝」（[#57](https://github.com/renjianguojinqianfan/langgraph-agent/issues/57) AC5）。分档与上界都只在 **per-call 闸门**这一层：`risk_policy=pause` 的计划级确认没有可标注的调用记录，仍是裸 bool、无上界
-- **危险动作拦截（S2，[#136](https://github.com/renjianguojinqianfan/langgraph-agent/issues/136)）** —— 设置里的**规则表 + 一个钩子**：`executor` 在算「这次调用要不要人批」之前先问一遍规则表，命中即**当场拒**（不执行，把 `{block, reason}` 当这次调用的结果回给模型，模型自己换路）——**不弹框、不进图重入、不改参数、不 terminate**（后两条与 pi 的 `tool_call` 钩子是有意分歧：pi 能原地改参数且改完不复核，见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md) 的对照表）。规则表是 JSON（`policy_rules`：工具名或 fnmatch 通配 + 可选对入参**文本叶子**（字符串值、数字/布尔的文本形式）的**命令模式**正则 + 理由），**空表 = 不拦**（行为与改造前逐字节一致：记录体、事件载荷、对话面消息都不变，schema 也没有新字段）；判定按**一次调用**算，与规划期那句「这一步看起来危险」（`risk.py`）不同源。子任务那侧没有闸门，规则照样拦——拦截不是闸门。被拒的调用就是一条「没执行」的记录（`status:"skipped"` + 理由在 `error`，`confirm_outcome` 为空 = 它从没进过闸门），拒绝理由照 #95 的老口径同一句话落在事件面与模型面 → [`.env.example`](.env.example) 的 `policy_rules`
+- **多轮续说与断点续跑** —— 一个任务 = 一段多轮对话：`POST /api/tasks/{id}/messages` 在停下后沿同一 `thread_id` / checkpoint 续说，`POST /resume` 保留给停止 / 崩溃后的续跑。`SqliteSaver` 检查点（`thread_id == task_id`）+ 1.x `durability="sync"`（stop() 后快照必已落盘）；非 INTERRUPTED、无 checkpoint 两类一律 409；崩溃遗留的孤儿任务启动时自动对账。checkpoint 格式 v2；v1 旧库按格式守卫拒绝挂载（见 [迁移文档](docs/migration-langgraph-1x.md) §2.4）。→ [P3 架构](docs/incremental-arch-p3-resume.md)
+- **危险动作拦截（S2，[#136](https://github.com/renjianguojinqianfan/langgraph-agent/issues/136)）** —— 设置里的**规则表 + 一个钩子**：`agent` 在调用工具前先问规则表，命中即**当场拒**（不执行，把 `{block, reason}` 当这次调用的结果回给模型，模型自己换路）——**不弹框、不进图重入、不改参数、不 terminate**（与 pi 的 `tool_call` 钩子是有意分歧，见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md) 的对照表）。规则表是 JSON（`policy_rules`：工具名或 fnmatch 通配 + 可选对入参**文本叶子**的命令模式正则 + 理由）；**空表 = 不拦**。判定按一次调用算；子任务那侧没有独立拦截层，规则照样拦。被拒的调用是一条「没执行」的记录（`status:"skipped"` + 理由在 `error`），理由同时落在事件面与模型面 → [`.env.example`](.env.example) 的 `policy_rules`
 - **工具层韧性** —— 熔断（连续失败 3 次短路 / 冷却 30s / half-open 试探）+ 指数退避重试，跳闸发 `tool_circuit_open` 事件；写类工具 `retryable=False`（重试一个已副作用过的调用比重试失败更糟）；MCP 子进程失败隔离
-- **外部工具生态** —— MCP 客户端（stdio，每 server 一线程 + 独立事件循环，工具动态注册成 `mcp__{server}__{tool}`）· OpenAPI spec 一键成工具 · `backend/plugins/` 自动发现（模板见 [`example_tool.py`](backend/plugins/example_tool.py)）· Git 7 工具（参数化无 shell + 危险命令黑名单）。MCP 的**危险性分类读 server 自报的 tool annotations**（`destructiveHint` / `readOnlyHint`），不再猜工具名里的动词；server 两个 hint 都没给 → 记为 `unknown`（不是默认放行）。这个分类只是元数据（`danger_signal`），**不是安全边界**，真边界在子代理收窄与隔离那一侧（[#57](https://github.com/renjianguojinqianfan/langgraph-agent/issues/57)）。这些动态接入的工具**默认不是产物源**——要交付文件得在包装类上显式置 `registers_artifact=True`（[ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md)）。接入方式全是配置项，不改内核：见 [`.env.example`](.env.example) 的 `mcp_*` / `openapi_*` / `plugins_*`
-- **文件精读编辑（P0-A + #17）** —— `read`（行号 + 分页，不一次拉爆上下文）/ `write`（整档写入或新建，自动建父目录、覆写前拍 before-image）/ `edit`（精确 `str_replace`，不整文件重写）/ `glob`（递归名匹配）/ `grep`（内容检索）/ `ls`（浅层列目录，逐项给 name / is_dir / size，列的是**请求的那个目录**）六个沙箱内独立工具，各有自己的 function schema 与韧性/确认策略；旧的 multi-action `file_io`（read/write/list 挤在一个工具里）已退役（[#17](https://github.com/renjianguojinqianfan/langgraph-agent/issues/17)）；六个里**只有 `write` / `edit` 是产物源**（`registers_artifact=True`）——产物的定义是「本任务写出的文件」，登记判据是「类声明 `True` + 结果带指向真实文件的 `data["path"]`」，同一任务内同一路径只记一条（`read` 回读不再产生第二条）；子任务的写由 hand-back **单点回记父任务**（`tool_node` 不再以子任务 id 登记，父任务已终结时拒绝并留痕，[#76](https://github.com/renjianguojinqianfan/langgraph-agent/issues/76)），详见 [ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md)（[#72](https://github.com/renjianguojinqianfan/langgraph-agent/issues/72)）
-- **子 Agent 协作（能力面白名单化，#56）** —— **只有一个入口**：executor 显式调 `spawn_subagent`（`requires_confirm=True`，派生前经人批准）。曾经的关键词自动拆分（`subagent_split` 节点）已删除——用户话里带「报告」两个字，不该等于批准了一次带副作用的派生。子任务能用什么由**代码内置两档**决定，档位是名字集合、与实际装载面取交集：`explore` = 12 件只读（`read`/`ls`/`glob`/`grep`/`kb_query`/`memory_search`/`load_skill`/`web_search` + git 只读四件），`execute`（默认档）= explore + `write` + `edit`，可写沙箱内文件；`spawn_subagent` 的 `tools` 参数**只能收窄**，两种「收窄不进去」的名字一律即拒并回理由（不静默忽略）：档外名字，以及档位声明了但本次没装载的名字（`git_enabled=false` 时的 `git_log`——[#74](https://github.com/renjianguojinqianfan/langgraph-agent/issues/74) 之前它被静默交集掉，探子带空工具面跑完还回 `completed`，父模型收到假成功）；理由尾部只列本次该档实际可用的名字。两档都不含 `code_exec` / `http_request` / git 写类 / MCP / OpenAPI 生成工具，所以这些在子任务里**结构性拿不到**，而不是「看得见但被拒」。子任务仍走简化图（`mode="subtask"`，无 risk/confirm 节点，故永不递归、永不等确认），在线程池上跑并受 `subagent_timeout_sec` 封顶——过界不只折成 `failed`，还会置子任务自身的 stop 旗标，让池线程在下一个节点入口收场、池位归还（[#71](https://github.com/renjianguojinqianfan/langgraph-agent/issues/71)），写沙箱内文件进**父任务回滚账本**，父任务 `stop()` 同样会传播到正在跑的子任务（[#60](https://github.com/renjianguojinqianfan/langgraph-agent/issues/60)）。**可观测性由 #70 裁定 A 补回生产者**（#56 删自动拆分时把唯一生产者一起带走了，字段与面板都还在、永远为空）：一次真实派生回登 `Task.subtasks` 一条（`completed` 与 `failed` 同登，一次都没派出的早退不登），父频道另发 `subtask_start`/`subtask_result`/`subtask_failed` 三条汇总事件——`SubtaskList` 面板吃 REST 字段、Trace 时间线吃事件，两条路都不再是「暂无子任务」
-- **上下文注入（P1-A′）** —— planner/executor 每次 LLM 调用前，system 侧注入三段块：两层 `AGENTS.md`（`~/.agents/AGENTS.md` → 工作区根，根→子全量追加、**永不裁**）+ skills 清单（frontmatter 只取 `name`/`description`，卡片粒度 4000 字符预算，超限从末尾丢整卡）+ 环境事实（沙箱根绝对路径 / OS / 日期）。任务级缓存（任务中途改文件下个任务生效）、不计入压缩预算、`context_inject_enabled=false` 一键回到旧行为（零回归锚：`_build_messages` 默认形态下 system 与改造前逐字节相同）；**#119 另在 executor 的 system 尾部追加 `# Current Plan` 块**（`state["plan"]` 的渲染，与注入块同权：system 侧、不进压缩预算、永不淘汰；每次由 live state 重算，所以重新规划是**整体替换**而非堆叠，planner 侧不加）——此前 `state["plan"]` 在执行面零消费者，planner 每轮 ~10s 的产出对决策是沉没成本。注意这两件事**不同开关**：`context_inject_enabled=false` 只摘掉上面三段，计划块照发（它不属于注入层，关掉注入不该顺手关掉计划的供给）→ [`.env.example`](.env.example) 的 `context_inject_*` 段
+- **外部工具生态** —— MCP 客户端（stdio，每 server 一线程 + 独立事件循环，工具动态注册成 `mcp__{server}__{tool}`）· OpenAPI spec 一键成工具 · `backend/plugins/` 自动发现（模板见 [`example_tool.py`](backend/plugins/example_tool.py)）· Git 7 工具（参数化无 shell + 危险命令黑名单）。MCP 的**危险性分类读 server 自报的 tool annotations**（`destructiveHint` / `readOnlyHint`），不再猜工具名里的动词；server 两个 hint 都没给 → 记为 `unknown`（不是默认放行）。这个分类只是元数据（`danger_signal`），**不是安全边界**；真边界是子代理的档位收窄 + `policy_rules` 钩子（[#57](https://github.com/renjianguojinqianfan/langgraph-agent/issues/57)）。这些动态接入的工具**默认不是产物源**——要交付文件得在包装类上显式置 `registers_artifact=True`（[ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md)）。接入方式全是配置项，不改内核：见 [`.env.example`](.env.example) 的 `mcp_*` / `openapi_*` / `plugins_*`
+- **文件精读编辑（P0-A + #17）** —— `read`（行号 + 分页，不一次拉爆上下文）/ `write`（整档写入或新建，自动建父目录、覆写前拍 before-image）/ `edit`（精确 `str_replace`，不整文件重写）/ `glob`（递归名匹配）/ `grep`（内容检索）/ `ls`（浅层列目录，逐项给 name / is_dir / size，列的是**请求的那个目录**）六个沙箱内独立工具，各有自己的 function schema 与韧性/沙箱策略；旧的 multi-action `file_io`（read/write/list 挤在一个工具里）已退役（[#17](https://github.com/renjianguojinqianfan/langgraph-agent/issues/17)）；六个里**只有 `write` / `edit` 是产物源**（`registers_artifact=True`）——产物的定义是「本任务写出的文件」，登记判据是「类声明 `True` + 结果带指向真实文件的 `data["path"]`」，同一任务内同一路径只记一条（`read` 回读不再产生第二条）；子任务的写由 hand-back **单点回记父任务**（`tool_node` 不再以子任务 id 登记，父任务已终结时拒绝并留痕，[#76](https://github.com/renjianguojinqianfan/langgraph-agent/issues/76)），详见 [ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md)（[#72](https://github.com/renjianguojinqianfan/langgraph-agent/issues/72)）
+- **子 Agent 协作（能力面白名单化，#56）** —— **只有一个入口**：agent 显式调 `spawn_subagent`。曾经的关键词自动拆分节点已删除——用户话里带「报告」两个字，不该等于批准了一次带副作用的派生。子任务能用什么由**代码内置两档**决定，档位是名字集合、与实际装载面取交集：`explore` = 12 件只读（`read`/`ls`/`glob`/`grep`/`kb_query`/`memory_search`/`load_skill`/`web_search` + git 只读四件），`execute`（默认档）= explore + `write` + `edit`，可写沙箱内文件；`spawn_subagent` 的 `tools` 参数**只能收窄**，两种「收窄不进去」的名字一律即拒并回理由（不静默忽略）：档外名字，以及档位声明了但本次没装载的名字（`git_enabled=false` 时的 `git_log`——[#74](https://github.com/renjianguojinqianfan/langgraph-agent/issues/74) 之前它被静默交集掉，探子带空工具面跑完还回 `completed`，父模型收到假成功）；理由尾部只列本次该档实际可用的名字。两档都不含 `code_exec` / `http_request` / git 写类 / MCP / OpenAPI 生成工具，所以这些在子任务里**结构性拿不到**，而不是「看得见但被拒」。子任务共用同一张图，固定 `mode="build"`、只拿声明的档位（没有独立拓扑，所以永不递归），在线程池上跑并受 `subagent_timeout_sec` 封顶——过界不只折成 `failed`，还会置子任务自身的 stop 旗标，让池线程在下一个节点入口收场、池位归还（[#71](https://github.com/renjianguojinqianfan/langgraph-agent/issues/71)），写沙箱内文件进**父任务回滚账本**，父任务 `stop()` 同样会传播到正在跑的子任务（[#60](https://github.com/renjianguojinqianfan/langgraph-agent/issues/60)）。**可观测性由 #70 裁定 A 补回生产者**（#56 删自动拆分时把唯一生产者一起带走了，字段与面板都还在、永远为空）：一次真实派生回登 `Task.subtasks` 一条（`completed` 与 `failed` 同登，一次都没派出的早退不登），父频道另发 `subtask_start`/`subtask_result`/`subtask_failed` 三条汇总事件——`SubtaskList` 面板吃 REST 字段、Trace 时间线吃事件，两条路都不再是「暂无子任务」
+- **上下文注入（P1-A′）** —— `agent` 节点每次 LLM 调用前，system 侧注入三段块：两层 `AGENTS.md`（`~/.agents/AGENTS.md` → 工作区根，根→子全量追加、**永不裁**）+ skills 清单（frontmatter 只取 `name`/`description`，卡片粒度 4000 字符预算，超限从末尾丢整卡）+ 环境事实（沙箱根绝对路径 / OS / 日期）。任务级缓存（任务中途改文件下个任务生效）、不计入压缩预算、`context_inject_enabled=false` 一键回到旧行为（零回归锚：`_build_messages` 默认形态下 system 与改造前逐字节相同）；**#119 另在 system 尾部追加 `# Current Plan` 块**（`state["plan"]` 的渲染，与注入块同权：system 侧、不进压缩预算、永不淘汰；每次由 live state 重算，所以重新规划是**整体替换**而非堆叠；两种模式都渲染，计划模式据此修订而不是从零重来）——执行模式把当前计划当 brief，计划模式用它做修订。注意这两件事**不同开关**：`context_inject_enabled=false` 只摘掉上面三段，计划块照发（它不属于注入层，关掉注入不该顺手关掉计划的供给）→ [`.env.example`](.env.example) 的 `context_inject_*` 段
 - **skills 运行时（P1-A）** —— `load_skill` 工具按名取回两层 skills 目录（`~/.agents/skills` → 工作区根）里 SKILL.md 的**整档正文**，作为 tool result 进对话、不进 system（渐进披露的另一半，清单由 P1-A′ 注入）；同名跨层两份都返回（home 先）、名字只做等值比较（`../`、绝对路径天然不命中）；未命中把可用名单放进结果 `data`（`tool_node` 只序列化 data，模型才能自我纠偏）；它既不是产物源（`registers_artifact` 继承默认 `False`）、结果也不带顶层 `path`，skill 文件不会进产物/KB；零新增配置 → [spec](docs/specs/p1-a-skills-runtime.md)
 - **工具结果逐出（T1.4）+ 上下文压缩 + 知识库** —— 压缩**之前**先搬大件：保护带（最近 10 条）外、单条超 4000 字符的 tool 结果原地换成占位（工具名 + 原文字符数 + 留痕指针 + 头 800/尾 400 预览），纯机械零 LLM 调用、全文留 trace、搬完不超预算则压缩与 LLM 摘要都不触发；超阈值（默认 32000 est. tokens）走截断路径，内含**角色闸门的带内挤压**（[#49](https://github.com/renjianguojinqianfan/langgraph-agent/issues/49)）：保护带自身超预算时从最旧一条起换成便签（两档：带头尾预览 → 仅 tool 结果可降为无预览 marker），每步必须严格变小否则停手（永不空转），够不到预算如实报 `converged=false`——tool 全文在 trace 可回读才许归零，user/assistant 的预览是最后一份信息、永不归零（这道角色门管两种「变裸」路径：最后一档降级，以及**短到装不下预览**的消息——后者曾在 pass 1 被绕过，把唯一一份原文丢成写着「留痕: 无」的裸 marker，#85 评审 F1 已改为宁可原样不动）；也可选 LLM 摘要。带内挤压与「按条数算保护带」这件事无关（[#85](https://github.com/renjianguojinqianfan/langgraph-agent/issues/85)）：`keep_recent >= n`（保护带盖住整条历史）时**照样挤**、够不到预算如实报 `converged=false`，但**永不截断**带内消息；LLM 摘要路径**共享同一道挤压**——摘要顶掉早期条目后带内若仍超预算就继续挤，且 `dropped=0` 时一次摘要调用都不烧。标准库关键词索引的 KB（离线可用），任务中经 `kb_query` / `memory_search` 检索 → [`context.py`](backend/core/agent/context.py)
 - **回滚（P1-B）** —— 每次沙箱内文件写**之前**先把旧版本拍进沙箱外的账本（`data/snapshots/<task_id>/`：`ledger.jsonl` + `NNNN.bak`，文件级 before-image，写多少记多少）；`POST /api/tasks/{id}/rollback` 逆序重放账本，整任务回到起点——只动文件、**不动断点**（与 resume 完全解耦），恢复前先把当前版本拍进 `retention/`（撤销入口 v2）、重复调用返回「已是原样」；活跃任务 409、快照失败 fail-open 不阻塞工具、30 天启动清扫。前端任务头「回滚」按钮 + 行内确认。→ [spec](docs/specs/p1-b-rollback.md)
@@ -51,28 +51,21 @@ cd frontend && npm install && npm run dev                 # http://localhost:517
 
 ```mermaid
 flowchart TD
-    S0([START]) --> planner
-    planner -->|stop/规划失败| finish
-    planner --> risk_scan
-    risk_scan -->|stop| finish
-    risk_scan --> executor
-    executor -->|需确认| human_confirm
-    executor --> tool
-    executor -->|final_answer| finish
-    executor -->|stop| finish
-    human_confirm --> tool
-    tool -->|仍有待确认项| human_confirm
-    tool -->|预算未尽| planner
-    tool -->|stop / 步数用尽| finish
+    S0([START]) --> agent
+    agent -->|本轮最后一次 agent 调用没有 tool call / stop / error| finish
+    agent -->|有 tool call| tool
+    tool -->|stop / 本轮步数用尽| finish
+    tool -->|预算未尽| agent
     finish --> E0([END])
 ```
 
 与 [`backend/core/agent/graph.py`](backend/core/agent/graph.py) 逐边一致（节点 ID 用 `S0`/`E0` 是因为
 mermaid 把小写 `end` 当保留字）。三处值得单独说：
 
-- `human_confirm → tool` 是**静态边**，不是包着常量路由的条件边 —— 决策之后是否真的执行是 tool 节点的事
-  （被拒绝的调用在那里跳过），是否**再次**进闸门由 `_after_tool` 决定；
-- `_after_tool` 的重入判定 + `human_confirm_node` 决策后重算 `_needs_confirm`，两半合起来才是 P0 死循环的完整修复；
+- **只有一个 LLM 节点** `agent`；模式只决定 prompt 与工具面：`plan` = `explore` 只读档 + 计划 prompt，
+  `build` = 全部已挂载工具。模式不是第二个节点，也不是每条消息选一次（ADR 0008 决策 2 / 3）。
+- **一轮的结束 = 这一轮的最后一次 `agent` 调用没有工具调用**；`finish` 把任务停成 `INTERRUPTED`
+  （没有 COMPLETED）。停止、步数用尽、错误也都走 `finish`。
 - 每个路由都是**具名函数 + `Literal` 返回注解**，langgraph 1.x 据此推导 `path_map`，编译出的图自己声明拓扑
   （用 lambda 或漏注解不会报错，只会静默失去这份声明）。
 
@@ -89,7 +82,7 @@ streaming v2 的原因。
 **为什么迁**：0.2.76 是 2024 年的 API 线，仓库教的是过期范式；`checkpoint-sqlite 2.0.11` 上两条 CVE 曾因
 "3.x 破坏 resume serde 兼容"被钉版接受 —— 而那条理由从未被实测过。
 
-**怎么迁**：装上新栈后**破坏面 = 0**（一行生产代码未改即 351 passed），所以重写是 idiom 现代化而非兼容性
+**怎么迁**：装上新栈后**破坏面 = 0**（一行生产代码未改即通过既有离线回归），所以重写是 idiom 现代化而非兼容性
 修复：`add_edge(START, …)` 取代 `set_entry_point`、具名路由 + `Literal` 注解取代匿名 lambda、静态边取代
 常量条件边。显式采用**恰好一个** 1.x 新特性：`durability="sync"`。
 
@@ -105,7 +98,7 @@ checkpointer 时传（1.2.11 在无 checkpointer 时传 `sync` 会 `AttributeErr
 
 **安全闭环**：两条曾被 dismiss 的公告（CVE-2025-67644 / CVE-2026-71433）随 3.1.1 从「已接受」变「已修复」。
 
-**闸门**（迁移当时口径）：351 → **365 passed**（现役基线以 `pytest` 实跑为准）· `--check` 5/5 · 真实模型双场景 PASS · 受保护文件 diff 为空 · CI 全绿。
+迁移当时的闸门记录见 [`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md)；现役门禁以 `pytest` / CI 实跑为准。
 
 → 完整评估、A/B 实测证据（旧钉版理由是怎么被推翻的、为什么"读得回 ≠ 跑得续"）与逐条决策：
 [`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md)
@@ -136,7 +129,7 @@ CI 三 job 在 [`ci.yml`](.github/workflows/ci.yml)：后端 lint + 类型 + 测
 
 ## 与 `interview-agent-py` 的分工
 
-- **本仓库**扛 agent **运行时深度**：图编排、检查点与 resume 语义、风险确认闸门、熔断重试、
+- **本仓库**扛 agent **运行时深度**：图编排、多轮续说与检查点语义、计划/执行两模式、熔断重试、
   MCP / OpenAPI / Git / 插件工具链、SSE 可观测。数据面刻意轻（sqlite + JSON + 标准库索引，零外部服务），
   复杂度全押在编排与状态机上。
 - [**interview-agent-py**](https://github.com/renjianguojinqianfan/interview-agent-py) 扛业务系统的
@@ -151,11 +144,11 @@ CI 三 job 在 [`ci.yml`](.github/workflows/ci.yml)：后端 lint + 类型 + 测
 ## 文档
 
 - **架构与契约**：现役拓扑看上文「编排拓扑」+ [`graph.py`](backend/core/agent/graph.py)；接口契约以运行时
-  Swagger（`http://localhost:8000/docs`）与 [`routes.py`](backend/api/routes.py)（16 REST）为准。
-  [`docs/architecture.md`](docs/architecture.md) 是 **v0.1 原始设计档（历史）**：选型理由与共享约定仍有效，
-  但工具/端点/事件的数量信息已过期两代（文内逐节标了现役指针）
+  Swagger（`http://localhost:8000/docs`）与 [`routes.py`](backend/api/routes.py) 为准。
+  [`docs/architecture.md`](docs/architecture.md) 是架构与共享约定：选型理由仍有效；现役拓扑以本文
+  「编排拓扑」/ `graph.py` 为准，历史章节已在文内标注
 - **增量设计**：[P0](docs/incremental-arch-p0.md)（上下文压缩 / 熔断 / 插件 / trace）·
-  [P1](docs/incremental-prd-p1.md)（风险扫描 / 子 Agent / RAG / 辅助模型 / 鉴权 / OpenAPI）·
+  [P1](docs/incremental-prd-p1.md)（子 Agent / RAG / 辅助模型 / 鉴权 / OpenAPI）·
   [P2](docs/incremental-prd-p2.md)（MCP / Git）· [P3](docs/incremental-arch-p3-resume.md)（断点续跑）
 - **迁移**：[`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md) ·
   [Issue #7](https://github.com/renjianguojinqianfan/langgraph-agent/issues/7) ·
@@ -163,9 +156,10 @@ CI 三 job 在 [`ci.yml`](.github/workflows/ci.yml)：后端 lint + 类型 + 测
 - **能力推导与对标**：[`docs/capability-first-principles.md`](docs/capability-first-principles.md)（从 12+1 条
   物理约束推导必需能力，含 2026-09-15 复核）·
   [`docs/agent-comparison-report.md`](docs/agent-comparison-report.md)（Codex / Qoder / Hermes / dsh 横向对标）·
-  [`docs/roadmap-pawbench.md`](docs/roadmap-pawbench.md)（落地路线 v2）
+  [`docs/roadmap-pawbench.md`](docs/roadmap-pawbench.md)（历史路线图；PawBench / 无人值守评测入口已随 ADR 0008 退役）
+- **切片历史**：[`docs/pivot-plan-build.md`](docs/pivot-plan-build.md)（S0–S5 已合入；现役形态以本文与 ADR 0008 为准）
 - **决策与规范**：[`docs/adr/`](docs/adr/)（ADR；0001 = 原地迁移而非重写 + 简历定位，D1–D9；
-  0002 = 护城河纪律）· [`docs/specs/`](docs/specs/)（spec / 实施计划档案）·
+  0002 = 护城河纪律；0005–0007 已随 0008 退役）· [`docs/specs/`](docs/specs/)（spec / 实施计划档案）·
   [`docs/agents/`](docs/agents/)（技能组配置：issue tracker / triage 标签 / domain 约定）
   ——文档归属约定见 [`docs/agents/domain.md`](docs/agents/domain.md)「文档归属」
 - **配置**：[`.env.example`](.env.example)（按前缀分组，逐项带注释）

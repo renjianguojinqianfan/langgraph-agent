@@ -5,7 +5,7 @@
 
 ## Success looks like
 - 能 3 分钟 STAR 讲清项目，并扛住高频追问：「为什么用 LangGraph 而不是自己写循环」「最大的技术挑战」「并发模型是什么」「LLM 应用怎么测试」
-- 能白板画出 main 拓扑图（planner→executor→tool→reflect 循环 + 确认闸门），并解释每条条件边的路由逻辑
+- 能白板画出 main 拓扑图（agent→tool→agent 循环 + finish；plan/build 两模式），并解释每条条件边的路由逻辑
 - 能徒手写出：纯 Python 最小 Agent 循环、一个 mini StateGraph（不查资料）
 - 能讲清 LangGraph 核心机制：State/Node/Edge、reducer、superstep、checkpointer、interrupt
 - 能把 P0 死循环修复与 P3「state 副本语义」发现讲成完整的工程故事（挑战→错误假设→根因→修复→验证）
