@@ -20,6 +20,7 @@ the ball goes back to the human and the task parks (never "completed").
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -29,7 +30,14 @@ from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
 from .policy import DangerPolicy
-from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, render_plan_section
+from .prompts import (
+    EXECUTOR_SYSTEM,
+    PLANNER_SYSTEM,
+    REPLAN_ANCHOR,
+    REPLAN_RETRY,
+    REPLAN_USER_ANCHOR,
+    render_plan_section,
+)
 from .state import AgentState
 
 logger = get_logger("agent.runtime")
@@ -54,6 +62,19 @@ TERMINAL_TOOL_CALL_STATUSES = frozenset({"success", "failed", "skipped"})
 # ``_feed_tool_failure`` (#95).
 DANGLING_SWEEP_TEXT = "interrupted before execution; swept at loop entry"
 
+#: Provider leakage seen on a real model: a plan round can come back as bare
+#: tool-protocol closing tags with no call and no text. It is not something a
+#: human should read, so the re-plan path retries it and never persists it.
+_TOOL_MARKUP_ONLY = re.compile(
+    r"^\s*(?:</?(?:parameter|invoke|function_call|tool_call)\b[^>]*>\s*)+$",
+    re.IGNORECASE,
+)
+
+
+def _is_tool_markup_only(text: str) -> bool:
+    """True for provider leakage like ``</parameter></invoke>``."""
+    return bool(_TOOL_MARKUP_ONLY.fullmatch(text or ""))
+
 
 class AgentRuntime:
     """Per-task runtime that backs the LangGraph nodes."""
@@ -68,9 +89,14 @@ class AgentRuntime:
         max_steps: int = 15,
         aux_llm: Any = None,
         parent_task_id: str = "",
+        replan: bool = False,
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
+        #: One-off「重新规划」round (the input bar's button): anchor the plan
+        #: prompt to the current task and retry once if the model answers with
+        #: text instead of a JSON plan. False for ordinary plan rounds.
+        self.replan = replan
         # Issue #60: ``TaskManager.stop()`` only flips the id it was handed, so a
         # subtask has to watch its own id *and* the parent's. Watching the parent
         # alone would break ``stop(subtask_id)``.
@@ -330,29 +356,45 @@ class AgentRuntime:
         ``plan_update``). Any other text is the model talking to the user — most
         often the clarifying question ADR 0008 decision 1 explicitly allows —
         and leaves the existing plan untouched.
+
+        The one-off re-plan round (:attr:`replan`) is stricter: its prompt is
+        anchored to the current task and a non-plan reply is retried once, so
+        the「重新规划」button cannot silently drift into another task or write
+        provider protocol leakage into the conversation.
         """
         face = self._tool_face(PLAN_MODE)
         schemas = [t.to_openai_schema() for t in face.values()]
-        try:
-            resp = self.llm.complete(
-                self._build_messages(state, PLANNER_SYSTEM, include_plan=True),
-                tools=schemas,
-            )
-        except Exception as exc:
-            logger.exception("agent LLM error (plan mode)")
-            state["error"] = f"Plan-mode LLM error: {exc}"
-            state["final_answer"] = f"[error] {exc}"
-            state["_last_action"] = "final_answer"
+        system = PLANNER_SYSTEM + (REPLAN_ANCHOR if self.replan else "")
+        resp = self._complete_plan(state, system, schemas)
+        if resp is None:
             return state
-
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
         plan = self._parse_plan(resp.content)
+        if plan is None and self.replan:
+            # The button promises a plan. One stricter retry keeps a malformed
+            # or off-plan reply from becoming the round's answer.
+            logger.info("re-plan round returned no JSON plan; retrying once")
+            retry = self._complete_plan(state, system + REPLAN_RETRY, schemas)
+            if retry is None:
+                return state
+            if retry.tool_calls:
+                return self._handle_tool_calls(state, step, retry)
+            resp = retry
+            plan = self._parse_plan(resp.content)
+
         if plan:
             state["plan"] = plan
             self._publish("plan_update", {"plan": plan})
             answer = f"计划已更新（{len(plan)} 步）。"
+        elif self.replan:
+            # The button promises a plan. After the retry, never surface raw
+            # model text (reasoning dumps / provider markup) as a turn.
+            answer = "未能生成新计划，请再试一次。"
+        elif _is_tool_markup_only(resp.content):
+            # Never persist provider protocol leakage as a conversation turn.
+            answer = "(no content)"
         else:
             # Not a plan: keep the previous plan and surface what the model
             # actually said (e.g. a question) instead of inventing a step.
@@ -368,6 +410,27 @@ class AgentRuntime:
         self._publish("final_answer", {"answer": answer})
         state["_last_action"] = "final_answer"
         return state
+
+    def _complete_plan(
+        self,
+        state: AgentState,
+        system: str,
+        schemas: List[Dict[str, Any]],
+    ) -> Optional[Any]:
+        """One plan-mode LLM call; ``None`` means the error path already settled."""
+        messages = self._build_messages(state, system, include_plan=True)
+        if self.replan:
+            # Request-only anchor: the last real user turn said "execute"; this
+            # round is the「重新规划」action. Never persisted into the task.
+            messages.append({"role": "user", "content": REPLAN_USER_ANCHOR})
+        try:
+            return self.llm.complete(messages, tools=schemas)
+        except Exception as exc:
+            logger.exception("agent LLM error (plan mode)")
+            state["error"] = f"Plan-mode LLM error: {exc}"
+            state["final_answer"] = f"[error] {exc}"
+            state["_last_action"] = "final_answer"
+            return None
 
     def _build_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
         """Build mode: every mounted tool, with the current plan as a brief."""
