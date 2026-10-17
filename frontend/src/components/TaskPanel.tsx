@@ -1,7 +1,6 @@
 import { ArtifactList } from "./ArtifactList";
 import { InputBar } from "./InputBar";
 import { MessageStream } from "./MessageStream";
-import { RiskBanner } from "./RiskBanner";
 import { StepTimeline } from "./StepTimeline";
 import { SubtaskList } from "./SubtaskList";
 import { TaskHeader } from "./TaskHeader";
@@ -85,7 +84,6 @@ export function TaskPanel({ task, tab, onTabChange, onToggleKb, kbOpen }: TaskPa
             </>
           ) : (
             <>
-              <RiskBanner items={task.risk_report ?? []} />
               <MessageStream task={task} />
               <div>
                 <div className="text-xs text-slate-400 mb-1">步骤时间线</div>

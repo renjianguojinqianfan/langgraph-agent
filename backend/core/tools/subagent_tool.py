@@ -1,10 +1,10 @@
 """``spawn_subagent`` tool (P1 item 2).
 
 Lets the main agent delegate an isolated subtask through the ordinary
-function-calling interface. The tool is ``requires_confirm=True`` so the
-existing P0 ``human_confirm`` flow asks the user **before** the subtask is
-spawned (subtasks themselves run a simplified graph with no confirmations, so
-no confirmation can ever get stranded inside a subtask).
+function-calling interface. The tool carries ``requires_confirm=True`` as a
+danger marker (inert since #138 retired the confirmation gate). Subtasks run the
+same graph now, but their tool face is a declared tier that cannot reach a
+dangerous tool, so nothing can get stranded inside a subtask.
 
 The actual execution is delegated to the :class:`SubAgentExecutor` wired by
 :class:`TaskManager` (``SpawnSubagentTool.executor``). When the executor is

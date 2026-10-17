@@ -47,7 +47,6 @@ from backend.services.snapshots import set_current_task_id
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_manager, make_settings
 from backend.tests.test_graph import (
-    _auto_confirm_in_background,
     _declared_edges,
     _run_until_done,
     _runtime,
@@ -227,8 +226,8 @@ def test_main_graph_has_no_split_node():
     assert "subagent_split" not in names
     for src, dst in edges:
         assert "subagent_split" not in (src, dst)
-    # The risk scan now hands straight to the executor.
-    assert ("risk_scan", "executor") in edges
+    # #138: the planner now hands straight to the executor (no risk scan node).
+    assert ("planner", "executor") in edges
 
 
 def test_research_wording_no_longer_produces_subtasks(tmp_path, event_bus):
@@ -379,26 +378,25 @@ def test_check_face_resolves_without_running_anything(tmp_path):
 
 
 # ── tier reachability, judged on the real face (issue #56 AC) ────────────────
-def test_no_tier_mounts_a_confirmation_gated_tool(tmp_path):
-    """子任务图里没有确认闸门，所以「要问人」的工具必须在任何档位都拿不到。"""
-    seen_gated: set = set()
+def test_no_tier_mounts_a_danger_marked_tool(tmp_path):
+    """任何档位都拿不到被标成危险的工具（#56 收窄；#138 之后主图也无闸门了）。"""
+    seen_marked: set = set()
     for label, tm, ex in _mounted_managers(tmp_path):
-        gated = {
+        marked = {
             t.name
             for t in tm._tools
             if getattr(t, "requires_confirm", False)
-            or getattr(t, "needs_per_call_confirm", False)
         }
-        assert gated, f"{label} 装载面没有闸门工具，下面的断言会空转"
-        seen_gated |= gated
+        assert marked, f"{label} 装载面没有危险标记工具，下面的断言会空转"
+        seen_marked |= marked
         names = [t.name for t in tm._tools]
         for tier in (EXPLORE_TIER, EXECUTE_TIER):
             face = ex.check_face(_spec(subtask_id=f"{label}:sub:1", tier=tier))
             assert face == tier_face_names(names, tier)
-            leaked = set(face) & gated
-            assert not leaked, f"{label}/{tier} 档漏进了需要确认的工具 {sorted(leaked)}"
-    # The gated families the issue names are all really present somewhere above.
-    assert {"code_exec", "spawn_subagent", "git_commit", "mcp__demo__fetch"} <= seen_gated
+            leaked = set(face) & marked
+            assert not leaked, f"{label}/{tier} 档漏进了危险标记的工具 {sorted(leaked)}"
+    # The dangerous families the issue names are all really present somewhere above.
+    assert {"code_exec", "spawn_subagent", "git_commit"} <= seen_marked
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):
@@ -662,7 +660,6 @@ def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
     mock = _UnmountedAskMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="t", user_input="派个子任务查提交历史")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     _run_until_done(tm, task_id)
 
     events = event_bus.replay(task_id)
@@ -862,16 +859,12 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
     mock = _EscalatingSubtaskMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="probe", user_input="派一个子任务去探针")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"
     parent_events = event_bus.replay(task_id)
 
-    # The gate really was the spawn call, and it was approved.
-    confirm = [e for e in parent_events if e["type"] == "human_confirm_required"]
-    assert [e["data"]["tool_name"] for e in confirm] == ["spawn_subagent"]
-
+    # The delegation ran as an ordinary tool call (the spawn gate is gone, #138).
     spawn_results = [
         e["data"]
         for e in parent_events
@@ -1066,8 +1059,8 @@ def test_serial_subtasks_when_concurrency_1(tmp_path):
     assert elapsed >= 1.4, f"subtasks ran in parallel despite concurrency=1 (elapsed={elapsed:.2f}s)"
 
 
-# ── the simplified graph, stop propagation and failure folding ───────────────
-def test_subtask_graph_compiles_simplified(tmp_path):
+# ── the shared graph, stop propagation and failure folding ───────────────────
+def test_graph_compiles_without_a_confirm_node(tmp_path):
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _CountingMock())
     runtime = AgentRuntime(
@@ -1076,11 +1069,12 @@ def test_subtask_graph_compiles_simplified(tmp_path):
         llm=tm._llm,
         tools=tm._tools,
         tool_schemas=tm._tool_schemas,
-        confirm_enabled=False,
     )
-    graph = build_graph(runtime, mode="subtask")
+    graph = build_graph(runtime)
     assert graph is not None
-    assert "human_confirm" not in set(graph.get_graph().nodes)
+    nodes = set(graph.get_graph().nodes)
+    assert "human_confirm" not in nodes
+    assert "risk_scan" not in nodes
 
 
 class _KeepLoopingMock(MockLLMClient):
@@ -1254,7 +1248,6 @@ def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
 
     monkeypatch.setattr(tm._subagent, "_exec_one", _boom)
     task_id = tm.create_task(title="crash", user_input="派一个子任务去探针")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"

@@ -98,7 +98,7 @@
 | S2 的取舍 | 由哪条事实支撑 |
 |---|---|
 | 「设置里的表 + 命中即拒 + 理由回模型」 | codex 的 `forbidden` + `justification` 是最接近的既有形态（3.3 的独立档之一）；「理由回模型」有 codex / pi 两家先例（3.2） |
-| **拦截不是安全边界**（跟 `mcp_force_confirm` 同一立场，真边界在子代理收窄/隔离） | 四家里只有 codex 有「机器直接拒」的独立档，其余默认都是**问人**；且它们的真边界都落在沙箱（dsh `sandbox/mode`、codex sandbox、opencode `--auto` 不越 `deny`） |
+| **拦截不是安全边界**（原与 `mcp_force_confirm` 同一立场；该旋钮已随 S4 删除，立场不变：真边界在子代理收窄/隔离） | 四家里只有 codex 有「机器直接拒」的独立档，其余默认都是**问人**；且它们的真边界都落在沙箱（dsh `sandbox/mode`、codex sandbox、opencode `--auto` 不越 `deny`） |
 | 被拒调用**不加新字段**，落在现成的「没执行」两格（`status:"skipped"` + `error`） | 四家都把「表」的产物落在**配置**与**判定结果**上，**没有一家**在调用记录上加「被规则拒」这类布尔字段 |
 | **表写坏时的朝向** | 3.2 第一条：有证据的三家全是 **fail-closed**（dsh 加载即抛/拒，pi 无 UI 即 block，codex 解析失败即报错）；**opencode 未核**。本仓**已定软档**（整表写坏 warning + 照跑），见 §4.1 |
 | 粒度选「正则打在入参的**文本叶子**上」 | 这是**我们的形状**：三家只看 shell 命令。若评审嫌糙，opencode 的「通配符 + 最后匹配赢」是有先例的替代（3.3）。**2026-10-16 据独立评审 R2 改**：从「搜 `json.dumps(args)` 整段文本」改成「逐个文本叶子（字符串值 + 数字/布尔的文本形式）search」——JSON 转义会把真 tab / 引号 / Windows 路径变形，照着真实命令写的模式反而漏拦（实测见 PR #144 评审评论）。**限制**：不跨叶子拼接，argv 写成 `["rm","-rf","/"]` 时命不中（旧实现同样命不中） |
@@ -120,3 +120,63 @@
   `gh api repos/openai/codex/contents/codex-rs/execpolicy/README.md?ref=557e46fbed39631bd84eba696254db78cbc20873 --jq .content | base64 -d`
   （opencode 的 `permissions.mdx`、dsh 的 `approval.md` 同理；pi 见仓内 [research-pi-agent-construction](research-pi-agent-construction.md) 的引用表）。
 - **增量**：补齐 §3.4 的四个未核项；若要跟到新版本，**重新取 SHA** 而不是改旧结论——本文是**带日期的快照**（同 `docs/` 里其他调研文档的规矩：不改写历史，新结论另开一篇或加日期段）。
+
+## 6. 补记（2026-10-16）：未配置时默认
+
+> 回答 D1（S4 删掉确认闸门之后，`policy_rules` 默认空表 = 不拦，要不要随片附一份默认规则）。
+> §1 把「未配置时默认」列进了问卷，§2 没答完。本节只补这一轴，不改上面的快照。
+> 仍是默认分支的文件级快照，**没有锚 release/tag**。
+
+| 家 | 本轮新读的文件（blob SHA） |
+|---|---|
+| codex | `protocol.rs` `e2457f810461`（`AskForApproval`，`OnRequest` 带 `#[default]`）；`core/src/config/mod.rs` `20939cf80bc7`（受信任 → `OnRequest`，不受信任 → `UnlessTrusted`，否则枚举默认）；`approval-presets/src/lib.rs` `c7ce9e578b`（标成 Default 的预设）；`core/src/exec_policy.rs` `7e307e4f4aaa`（空策略、未命中时的判定）；`shell-command/.../is_dangerous_command.rs` `2440f17001da`；`windows_dangerous_commands.rs` `8072b881b130`（只读到强制删除与 URL 启动这一类，未逐条读完） |
+| opencode | `permissions.mdx` `eb8975a882c7`；`packages/schema/src/agent.ts` `c47d5e8e7ef8`；`packages/core/src/plugin/plan.ts` `ef9ed2422a2e` |
+| dsh | `user-approval/src/index.ts` `9a14f04d0b3c`（`policy` 默认 `'ask'`）；预设与审批文档 SHA 同 §0；`tool-bash/README.md` `518a0887f63e` |
+| pi | `security.md` `4f0dc290fe10`；示例不是出厂，见仓内 [research-pi-agent-construction](research-pi-agent-construction.md) |
+
+### 6.1 四家出厂时实际做什么
+
+- **codex 默认是「问人 + 沙箱」，不是一份出厂黑名单。** 没配策略文件时 `ExecPolicyManager` 的默认是 `Policy::empty()`。仓库里搜不到名为 `default.rules` 的文件；README 里的 `src/default.rules` 只是 CLI 示例路径。没有规则命中时，README 写 `decision` 省略。另外有一份**硬编码、很小**的危险命令判断：POSIX 侧只认 `rm` 带 force（会剥掉 `sudo` / `env` / `trap` 再看）；Windows 侧还认 `Remove-Item -Force` 一类和带 URL 的启动。注释原文：优先问人，不直接禁；用户把提问关掉（`Never`）才 `Forbidden`。没被标成危险的命令，在受限沙箱里直接跑，让沙箱去拦；不受限环境也直接跑。标成 Default 的预设文案是：工作区内可读写、可跑命令，上网或改工作区外的文件要批准。
+- **opencode 默认几乎全放行。** 代码里新 agent 的权限是 `*` = `allow`，再加 `.env` 读 = `ask`（文档写的是 `deny`，与代码不一致，以这份代码为准）。文档还说 `doom_loop` 和 `external_directory` 默认 `ask`。`rm *` / `git push *` 那些 deny 是文档里的**配置示例**，不是出厂表。计划模式插件只给 `edit` 加了「目录外 deny、计划目录内 allow」，文件里没有 `bash` / `shell` 规则。
+- **dsh 默认是问人，表不判命令。** `ApprovalService` 的 `policy` 默认 `'ask'`。出厂预设是 `workspace-write` + `ask`；`danger-full-access` + `never` 是另一档，不是默认。`never` 的语义是「每一次询问都直接 `rejected`」，不是「全部放行」。bash 先在沙箱里跑，沙箱拒绝后可以带理由升级再问一次人；没有答案者就 fail-closed。
+- **pi 出厂不问、也不拦。** `security.md` 写明不会在每次工具调用前要批准，真边界是操作系统用户或容器。示例里的正则表不随产品加载。
+
+### 6.2 对 D1 的含义（事实，不是拍板）
+
+四家里**没有一家**把「出厂一份可配置的危险命令黑名单」当默认安全措施。也**没有一家**的出厂默认是「空表 = 危险动作直接跑」——除了 pi，以及 opencode 对 bash 的放行。codex / dsh 的出厂默认是问人，沙箱才是硬边界；把提问关掉是显式的另一档（codex `Never` + 不受限，dsh `danger-full-access` + `never`）。
+
+本仓 ADR 0008 第 6 条已经决定不弹框，所以**抄不了「默认问人」**。在「不能问人」这个前提下，对照物的对应物是：
+
+- codex：提问关掉之后，被标成危险的那一小类变成直接拒，其余靠沙箱。那一小类不是 HTTP 写、也不是 git。
+- dsh：`never` 把询问变成拒绝，不是放行。
+- pi：承认不拦，把边界写在容器上。
+- opencode 的 `--auto` 把「本来要问的」放行、显式 deny 仍拒——这是用户显式打开的更松一档。
+
+因此：(a)「随 S4 附一份覆盖 `code_exec` / HTTP 写的默认规则表」没有出厂先例；(b)「空表不拦，写进 README」对齐的是 pi，比 codex / dsh 的出厂默认更松。两边都不是「别人家的默认安全措施」。别人家在不能问人时真正靠的是沙箱或进程边界，不是正则表。
+
+### 6.3 本节未核
+
+1. 全部四家仍未锚 tag/release。
+2. opencode：文档写 `.env` 为 deny，代码是 ask。计划模式 README 检索片段写「跑 bash 前要问」，`plan.ts` 里没有 bash 规则；未全仓再搜是不是别处补上了。
+3. codex：`workspace-write` 预设与 `FileSystemSandboxKind::Restricted` 的逐行对应没对完；Windows 危险命令文件未逐条读完。POSIX 侧读完了，只有强制 `rm`。
+4. dsh：`danger-full-access` 下 bash 是否还会走进审批缝，未逐行追。
+
+### 6.4 本仓结论（2026-10-16）：S4 走 (b)
+
+D1（S4 删掉确认闸门后，`policy_rules` 默认空表 = 不拦，要不要随片附一份默认规则表）定为 **(b)**：
+**接受默认空表不拦**，README 侧写清「这不是安全边界，真边界在沙箱」——该文案落在 S6 的
+README 身份段（S6 清单已含），所以 (b) **不改任何已排期切片的完成判据**，S4 仍只判「删干净、离线全绿、
+危险动作靠 S2 的钩子」。
+
+依据即 §6.2：四家里没有一家把「出厂一份可配置的危险命令黑名单」当默认安全措施；codex / dsh 的出厂
+默认是**问人 + 沙箱**，而本仓按 ADR 0008 第 6 条不弹框，抄不了「问人」那一半。贴一张正则表反而会造出
+「以为拦着、其实能绕」（argv 拆分 / `rm -fr` / 引号，见 PR #144）的假安全。
+
+两条**另开的跟进项**（不并入 S4，未开票）：
+
+1. **危险工具默认不挂、用户显式打开**的档位设计——形态对照 codex `Default` vs `Full Access`、
+   dsh 的预设表（`workspace-write` + `ask` / `danger-full-access` + `never`）；本仓无真沙箱，
+   该档位只能卡**工具面**（先例：`backend/core/agent/subagent.py` 的 `TOOL_TIERS` 按构造就够不着
+   `code_exec` / HTTP 写 / git 写）。
+2. **`code_exec` 沙箱审计**（`security-scan`）——它的实际强度没被审计过；审计结果决定上面那个档位
+   能不能把 `code_exec` 放进默认档。

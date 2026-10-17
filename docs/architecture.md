@@ -239,8 +239,6 @@ classDiagram
         +any output
         +str status
         +str error
-        +bool need_confirm
-        +bool confirmed
     }
     class PlanStep {
         +int index
@@ -315,7 +313,7 @@ classDiagram
 | `TaskStatus` | `PENDING / RUNNING / COMPLETED / FAILED / INTERRUPTED` |
 | `Task` | `id, title, user_input, status, steps[], plan[], artifacts[], final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
-| `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, need_confirm, confirmed` |
+| `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, circuit_open, retries` |
 | `PlanStep` | `index, description, status(pending/active/done)` |
 | `Artifact` | `id, filename, path, mime, size, created_at` |
 | `ToolResult` | `success:bool, data:Any, error:str` |
@@ -340,7 +338,6 @@ classDiagram
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（见 3.4） | path `id` | `text/event-stream` |
 | GET | `/api/tasks/{id}/artifacts/{aid}` | 下载产物 | path `id,aid` | `application/octet-stream` |
 | GET | `/api/tasks/{id}/artifacts/{aid}/preview` | 预览产物（文本/图片） | path `id,aid` | 按 mime 返回 |
-| POST | `/api/tasks/{id}/confirm` | P1 人工确认 | `{tool_call_id:str, approved:bool}` | `{ok:bool}` |
 | POST | `/api/auth/token` | P1 鉴权（auth_enabled 时） | `{token:str}` | `{ok:bool}` |
 
 **统一响应信封**：`{code:int, data:any, message:str}`（错误时 `code≠0`）。
@@ -371,13 +368,9 @@ classDiagram
 |------------|-----------|------|
 | `task_created` | `{task_id, title, status}` | 任务已创建 |
 | `plan_update` | `{plan: PlanStep[]}` | 规划步骤更新 |
-| `risk_report` | `{items: RiskItem[], policy, semantic_enabled}` | 规划期风险扫描一轮结果（P1）；`policy` = 现役 `risk_policy`，`semantic_enabled` = 本轮是否走了语义分析 |
-| `risk_found` | `RiskItem` | 上表里 `level` ∈ {high, medium} 的**单条**命中，逐条发（P1） |
 | `step_start` | `{index, thought}` | 某 step 开始（LLM 思考文本） |
-| `tool_call` | `ToolCallRecord`（含 `need_confirm`） | 即将/正在调用工具 |
+| `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
-| `human_confirm_required` | `{tool_call_id, tool_name, input}` | 需用户确认（P1） |
-| `human_confirm_resolved` | `{tool_call_id, tool_name, outcome}` | 闸门收口的那一档终态：`approved` / `denied` / `timed_out` / `aborted` / `auto_approved`（#57 AC5-AC6）。被 stop 打断的运行走不到 tool 节点、没有 `tool_result` 可挂标签，故终态必须单独播报一次。刻意不带 `input`：trace 不脱敏，同 id 的 `tool_call` 事件里已有入参 |
 | `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
 | `final_answer` | `{answer:str}` | 最终答案 |
 | `task_completed` | `{task_id, status}` | 完成 |

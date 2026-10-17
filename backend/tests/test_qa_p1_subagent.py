@@ -2,8 +2,8 @@
 
 Issue #56 collapsed the feature to one entry point, so the QA angle is now:
 
-* ``spawn_subagent`` must be ``requires_confirm=True`` (the spawn gate) and a
-  rejected gate must leave nothing running;
+* ``spawn_subagent`` keeps its ``requires_confirm=True`` flag (inert metadata
+  since #138 removed the gate) and the delegation actually runs;
 * the parent's context carries only the folded digest (as a *tool* turn, never
   replayed as an assistant one — #51), never the subtask's internal messages;
 * subtask internal events live on the subtask's own channel, not the parent's;
@@ -11,8 +11,8 @@ Issue #56 collapsed the feature to one entry point, so the QA angle is now:
   ``subtask_failed`` summary events on the **parent** channel only (spawn path) —
   a failing subtask additionally rides back as a failed tool call, and the parent
   stays alive;
-* a subtask can never strand a confirmation (no gate in its graph, and no
-  gated tool on its face);
+* a subtask's face is a declared tier, so a dangerous tool is structurally
+  absent from it;
 * ``subagent_enabled=False`` removes the entry point from the tool face.
 """
 
@@ -34,10 +34,7 @@ from backend.core.agent.subagent import (
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.services.snapshots import set_current_task_id
 from backend.tests.conftest import make_manager, make_settings
-from backend.tests.test_graph import (
-    _auto_confirm_in_background,
-    _run_until_done,
-)
+from backend.tests.test_graph import _run_until_done
 
 #: Only a subtask ever says this; it is how the parent-side assertions tell a
 #: folded digest apart from a leaked internal turn.
@@ -71,17 +68,11 @@ def _main_state(user_input: str) -> Dict[str, Any]:
         "artifacts": [],
         "status": "RUNNING",
         "stop_requested": False,
-        "pending_confirm": {},
         "step_index": 0,
         "final_answer": "",
         "error": "",
         "_last_action": "",
         "_current_tool_calls": [],
-        "_confirmed_ids": [],
-        "_rejected_ids": [],
-        "_needs_confirm": False,
-        "risk_report": [],
-        "_risk_blocked": False,
         "subtasks": [],
         "_is_subtask": False,
     }
@@ -186,32 +177,12 @@ class _SpawnOnceMock(MockLLMClient):
         return LLMResponse(content=self.final_answer)
 
 
-# ── the spawn gate ───────────────────────────────────────────────────────────
+# ── the spawn flag ───────────────────────────────────────────────────────────
 def test_spawn_subagent_tool_requires_confirm(tmp_path):
     settings = make_settings(tmp_path)
     tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
     tool = next(t for t in tm._tools if t.name == "spawn_subagent")
     assert tool.requires_confirm is True
-
-
-def test_rejected_gate_leaves_no_subtask_running(tmp_path, event_bus):
-    """拒绝派生 = 什么都不跑：子任务零轮次、零事件、零产物。"""
-    settings = make_settings(tmp_path)
-    mock = _SpawnOnceMock()
-    tm = make_manager(settings, mock, event_bus=event_bus)
-    task_id = tm.create_task(title="qa-gate", user_input="派个子任务")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=False)
-    task = _run_until_done(tm, task_id)
-
-    assert task.status.value == "COMPLETED"
-    spawn = [
-        e["data"]
-        for e in event_bus.replay(task_id)
-        if e["type"] == "tool_result" and e["data"]["tool_name"] == "spawn_subagent"
-    ]
-    assert spawn and spawn[0]["status"] == "skipped"
-    assert mock.subtask_turns == 0
-    assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
 
 
 # ── context isolation ────────────────────────────────────────────────────────
@@ -224,8 +195,6 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
     """
     settings = make_settings(tmp_path)
     tm = make_manager(settings, _SpawnOnceMock())
-    # confirm_enabled=False: the gate itself is the subject of other cases, and
-    # here the spawn has to execute inline instead of waiting for a human.
     runtime = AgentRuntime(
         task_id="qa-main",
         task_manager=tm,
@@ -233,9 +202,8 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
         tools=tm._tools,
         tool_schemas=tm._tool_schemas,
         aux_llm=tm._aux_llm,
-        confirm_enabled=False,
     )
-    graph = build_graph(runtime, mode="main")
+    graph = build_graph(runtime)
     final = graph.invoke(_main_state("派个子任务给一句话结论"))
 
     assert final["status"] == "COMPLETED"
@@ -266,7 +234,6 @@ def test_subtask_internal_events_stay_on_subtask_channel(tmp_path, event_bus):
     mock = _QaResearchMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="qa-iso", user_input="调研 RAG 最新进展并写报告")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
     assert task.status.value == "COMPLETED"
 
@@ -313,7 +280,6 @@ def test_summary_events_land_on_parent_channel_not_subtask_channel(tmp_path, eve
     mock = _QaResearchMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="qa-events", user_input="调研 RAG 最新进展并写报告")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     _run_until_done(tm, task_id)
 
     subtask_id = next(
@@ -346,7 +312,6 @@ def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
 
     monkeypatch.setattr(tm._subagent, "_exec_one", _boom)
     task_id = tm.create_task(title="qa-crash", user_input="派个子任务")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"
@@ -366,9 +331,9 @@ def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
     assert mock.subtask_turns == 0  # the crash happened before any subtask round
 
 
-# ── the simplified subtask graph has no gate, so it needs none on its face ───
+# ── a subtask's face is a declared tier, never the parent's ──────────────────
 class _GatedAskingMock(MockLLMClient):
-    """Subtask that asks for a confirmation-gated tool, then settles."""
+    """Subtask that asks for a dangerous tool, then settles."""
 
     def __init__(self):
         super().__init__(plan=["试着执行代码"], final_answer="拿不到执行能力")
@@ -388,20 +353,18 @@ class _GatedAskingMock(MockLLMClient):
         return LLMResponse(content=self.final_answer)
 
 
-def test_subtask_never_strands_a_confirmation(tmp_path, event_bus):
-    """子任务图没有确认节点，所以要问人的工具必须在面上就不存在。"""
+def test_subtask_cannot_reach_a_dangerous_tool(tmp_path, event_bus):
+    """要问人（或本就危险）的工具必须在子任务面上就不存在。"""
     settings = make_settings(tmp_path)
     mock = _GatedAskingMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
     res = tm._subagent.run_subtask(_spec("qa:sub:gate", "gate", "试着执行代码"))
 
     # #137 重裁（#46 曾把这里改判成 failed）：验证层退役后，「零成功调用却自称完成」
-    # 不再被机器拦住，子任务照常收尾成 completed；「要问人的工具在子任务面上不存在」
+    # 不再被机器拦住，子任务照常收尾成 completed；「危险工具在子任务面上不存在」
     # 这条钉子没变——工具面拒绝仍在 tool_result 上留痕。
     assert res.status == "completed"
     sub_events = event_bus.replay("qa:sub:gate")
-    types = {e["type"] for e in sub_events}
-    assert "human_confirm_required" not in types
     refused = [e["data"] for e in sub_events if e["type"] == "tool_result"]
     assert refused and refused[0]["status"] == "failed"
     assert "unknown tool" in refused[0]["error"]
@@ -490,7 +453,6 @@ def test_spawned_subtask_lands_on_task_subtasks(tmp_path, event_bus):
     mock = _SpawnOnceMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="qa-obs", user_input="派个子任务给一句话结论")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     task = _run_until_done(tm, task_id)
 
     assert task.status.value == "COMPLETED"
@@ -522,7 +484,6 @@ def test_summary_events_publish_on_the_parent_channel(tmp_path, event_bus):
     mock = _SpawnOnceMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="qa-obs-ev", user_input="派个子任务给一句话结论")
-    _auto_confirm_in_background(tm, event_bus, task_id, approved=True)
     _run_until_done(tm, task_id)
 
     events = event_bus.replay(task_id)

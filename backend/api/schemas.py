@@ -32,11 +32,6 @@ class ToolCallRecord(BaseModel):
     output: Any = None
     status: str = "pending"  # pending | success | failed | skipped
     error: Optional[str] = None
-    need_confirm: bool = False
-    confirmed: bool = False
-    # #57 AC5: 进过闸门的调用带终态分档（approved | denied | timed_out | aborted |
-    # auto_approved）；空串是「没进过闸门」，不是某种失败。
-    confirm_outcome: str = ""
     circuit_open: bool = False  # P0: short-circuited by the circuit breaker
     retries: int = 0  # P0: retries performed by the tool executor
 
@@ -55,15 +50,6 @@ class Artifact(BaseModel):
     mime: str = "application/octet-stream"
     size: int = 0
     created_at: str = ""
-
-
-# ── P1 item 1: risk scan ──
-class RiskItem(BaseModel):
-    step_index: int = 1
-    level: str = "none"  # none | low | medium | high
-    matched_keywords: List[str] = Field(default_factory=list)
-    suggestion: str = ""
-    action: str = "allow"  # confirm | allow | block
 
 
 # ── P1 item 2: sub-agent ──
@@ -114,7 +100,6 @@ class Task(BaseModel):
     error: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""
-    risk_report: List[RiskItem] = Field(default_factory=list)  # P1 item 1
     subtasks: List[SubTask] = Field(default_factory=list)  # P1 item 2
 
 
@@ -122,11 +107,6 @@ class Task(BaseModel):
 class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
     input: str
-
-
-class ConfirmRequest(BaseModel):
-    tool_call_id: str
-    approved: bool
 
 
 class AuthTokenRequest(BaseModel):

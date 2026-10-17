@@ -9,8 +9,8 @@ Covers:
 * call forwarding (``call_tool``) and ToolResult mapping;
 * failure isolation: bad command, killed server -> ``success=False`` not crash;
 * circuit breaker reuse via ``ToolExecutor.dispatch``;
-* per-call confirmation (the server's self-reported ``destructiveHint`` /
-  ``readOnlyHint``, plus the ``mcp_force_confirm`` override — issue #57);
+* danger classification from the server's self-reported ``destructiveHint`` /
+  ``readOnlyHint`` — issue #57; inert metadata since #138 removed the gate;
 * idempotent cleanup (no leaked child processes).
 """
 
@@ -299,13 +299,12 @@ def test_mcp_circuit_breaker_opens_after_failures(tmp_path):
     mgr.cleanup()
 
 
-# ─────────────────── confirmation ───────────────────
-def test_mcp_self_reported_danger_requires_confirm(tmp_path):
-    """判定读 server 自报标注（#57），不再猜动词。
+# ─────────────────── danger classification ───────────────────
+def test_mcp_self_reported_annotations_drive_the_danger_signal(tmp_path):
+    """The server's self-reported annotations (via ``connect_all``) reach McpTool.
 
-    原来这条靠 ``echo`` / ``write_file`` 的名字过动词表得出「读类免问 / 写类必问」；
-    AC2 把「什么都没说」的默认从放行翻成必问，所以免问只可能来自自报——这里直接拿
-    ``connect_all`` 透传上来的 annotations 建工具，语义与旧断言一致，机制换了。
+    #57 replaced the verb table with the protocol's own hints; #138 later retired
+    the confirmation gate, so the classification is inert metadata now.
     """
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
@@ -320,14 +319,13 @@ def test_mcp_self_reported_danger_requires_confirm(tmp_path):
         input_schema={}, manager=mgr, settings=s,
         annotations=discovered["write_file"]["annotations"],
     )
-    assert read_tool.needs_per_call_confirm is True
-    assert read_tool._needs_confirm({}) is False
-    assert write_tool._needs_confirm({}) is True
+    assert read_tool.danger_signal == "safe"
+    assert write_tool.danger_signal == "dangerous"
     mgr.cleanup()
 
 
-def test_mcp_unreported_tool_requires_confirm(tmp_path):
-    """AC2：server 两个 hint 都没给 → 必问（旧默认可是不打扰人）。"""
+def test_mcp_unreported_tool_reads_as_unknown(tmp_path):
+    """AC2：server 两个 hint 都没给 → ``unknown``，不当作 safe。"""
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
     mgr.connect_all()
@@ -335,75 +333,7 @@ def test_mcp_unreported_tool_requires_confirm(tmp_path):
         server_name="echo", tool_name="quiet", description="Nobody knows.",
         input_schema={}, manager=mgr, settings=s,
     )
-    assert unreported._needs_confirm({}) is True
-    mgr.cleanup()
-
-
-def test_mcp_force_confirm_overrides_read_tool(tmp_path):
-    s = _echo_settings(
-        tmp_path,
-        mcp_force_confirm=json.dumps(["mcp__echo__echo"]),
-    )
-    mgr = McpClientManager(s)
-    mgr.connect_all()
-    tool = McpTool(
-        server_name="echo", tool_name="echo", description="Echo text.",
-        input_schema={}, manager=mgr, settings=s,
-    )
-    assert tool._needs_confirm({}) is True
-    mgr.cleanup()
-
-
-def test_mcp_confirm_judgement_fails_closed(tmp_path):
-    """A broken _needs_confirm must REQUIRE confirmation, not bypass the gate.
-
-    Regression for audit finding 3: the executor used to swallow the exception
-    and leave ``need_confirm`` at the static ``requires_confirm`` (False for MCP
-    tools), silently executing a write-like call with no human gate.
-    """
-    from types import SimpleNamespace
-
-    from backend.core.agent.nodes import AgentRuntime
-    from backend.core.llm.client import MockLLMClient
-    from backend.services.event_bus import EventBus
-
-    s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
-    mgr.connect_all()
-    tool = McpTool(
-        server_name="echo", tool_name="echo", description="Echo text.",
-        input_schema={}, manager=mgr, settings=s,
-    )
-
-    def boom(_args):
-        raise RuntimeError("judgement exploded")
-
-    tool._needs_confirm = boom
-
-    mock = MockLLMClient(
-        tool_calls=[{"id": "c1", "name": tool.name, "arguments": {"text": "x"}}]
-    )
-    bus = EventBus()
-    tm = SimpleNamespace(settings=s, event_bus=bus, add_artifact=lambda *a: None)
-    rt = AgentRuntime(
-        "t_mcp", tm, llm=mock, tools=[tool], tool_schemas=[tool.to_openai_schema()],
-        confirm_enabled=True,
-    )
-    state = {
-        "step_index": 1,
-        "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
-        "messages": [{"role": "user", "content": "hi"}],
-        "plan": [], "artifacts": [], "status": "RUNNING", "stop_requested": False,
-        "pending_confirm": {}, "final_answer": "", "error": "",
-        "_last_action": "", "_current_tool_calls": [], "_confirmed_ids": [],
-        "_rejected_ids": [], "_needs_confirm": False, "risk_report": [],
-        "_risk_blocked": False, "subtasks": [], "_is_subtask": False,
-    }
-    rt.executor(state)  # must NOT raise
-    recs = state["_current_tool_calls"]
-    assert len(recs) == 1
-    # Fail-closed: an un-runnable judgement requires confirmation.
-    assert recs[0]["need_confirm"] is True
+    assert unreported.danger_signal == "unknown"
     mgr.cleanup()
 
 

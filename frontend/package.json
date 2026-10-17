@@ -8,8 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "check:sse": "node scripts/check-sse-event-registry.mjs",
-    "check:confirm": "node --experimental-strip-types scripts/check-confirm-face.mjs"
+    "check:sse": "node scripts/check-sse-event-registry.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

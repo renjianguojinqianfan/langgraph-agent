@@ -56,9 +56,8 @@ def render_plan_section(plan: Sequence[Any]) -> str:
         return ""
     lines: List[str] = [PLAN_SECTION]
     for position, raw in enumerate(plan, 1):
-        # ``_parse_plan`` always emits PlanStep dicts; a bare string is the same
-        # legacy shape ``_mark_high_steps_skipped`` and ``risk.scan_keywords``
-        # tolerate, so it degrades to a description instead of raising.
+        # ``_parse_plan`` always emits PlanStep dicts; a bare string is tolerated
+        # here (defensive) so it degrades to a description instead of raising.
         step = raw if isinstance(raw, dict) else {"description": str(raw)}
         index = step.get("index", position)
         description = str(step.get("description", ""))

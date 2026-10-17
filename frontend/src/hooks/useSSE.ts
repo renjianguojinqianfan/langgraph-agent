@@ -19,8 +19,6 @@ const EVENT_TYPES: SSEventType[] = [
   "tool_circuit_open",
   "context_compressed",
   "task_rollback", // P1-B 工作区回滚完成
-  "human_confirm_required",
-  "human_confirm_resolved",
   "artifact_created",
   "final_answer",
   "task_completed",
@@ -28,8 +26,6 @@ const EVENT_TYPES: SSEventType[] = [
   "task_interrupted",
   "task_resumed", // P3 从检查点续跑启动
   "tool_result_evicted", // T1.4 旧的大段 tool 结果换成占位
-  "risk_report", // P1: {items, policy, semantic_enabled}
-  "risk_found", // P1: RiskItem
   "subtask_start", // #70-A: 子任务派生（父频道）
   "subtask_result", // #70-A: 子任务回传（父频道）
   "subtask_failed", // #70-A: 子任务失败（父频道）
@@ -48,8 +44,8 @@ export function useSSE(taskId: string | null, onEvent: (ev: SSEvent) => void) {
     const handler = (e: MessageEvent) => {
       try {
         // wire → `SSEvent` 的唯一折点：EventSource 只给字符串 `type` 与未校验的 JSON，
-        // 判别联合保证的是消费侧，这里保证不了——显式断言一次，字段名对不对由
-        // `src/types/sse-narrowing.assert.ts` 的类型级断言在 `npm run typecheck` 上兜。
+        // 判别联合保证的是消费侧，这里保证不了——显式断言一次；事件词汇表本身由
+        // `npm run check:sse` 在发布点 / 注册表 / 类型 / 文档四处对齐。
         onEvent({ type: e.type as SSEventType, data: JSON.parse(e.data) } as SSEvent);
       } catch {
         /* ignore malformed frames */

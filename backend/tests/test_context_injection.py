@@ -86,7 +86,6 @@ def _runtime(
     *,
     task_id: str = "t1",
     aux: Any = None,
-    confirm_enabled: bool = True,
 ) -> AgentRuntime:
     return AgentRuntime(
         task_id=task_id,
@@ -95,7 +94,6 @@ def _runtime(
         tools=[],
         tool_schemas=[],
         aux_llm=aux,
-        confirm_enabled=confirm_enabled,
     )
 
 
@@ -544,8 +542,8 @@ def test_subtask_runtime_shares(tmp_path: Path, tmp_home: Path) -> None:
     settings = _settings(tmp_path)
     _write(_sandbox(settings) / "AGENTS.md", "ORIGINAL-SANDBOX")
     main_rt = _runtime(settings)
-    # subagent.py 的构造路径：同一 tm/settings，confirm_enabled=False，无 subagent 执行器
-    sub_rt = _runtime(settings, task_id="research:sub:abcd1234", confirm_enabled=False)
+    # subagent.py 的构造路径：同一 tm/settings，同一个图（#138 后无 subtask 拓扑）
+    sub_rt = _runtime(settings, task_id="research:sub:abcd1234")
     main_system = _system_of(main_rt, _state(), PLANNER_SYSTEM)
     sub_system = _system_of(sub_rt, _state(), PLANNER_SYSTEM)
     assert sub_system == main_system

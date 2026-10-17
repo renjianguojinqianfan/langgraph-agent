@@ -6,27 +6,24 @@ ADR 0008 第 6 条：危险动作在执行前被**设置里的规则表**当场�
 （pi 可原地改参数且改完不复核、且 ``block`` 当场产出错误结果；见
 ``docs/research-pi-agent-construction.md`` §5）。
 
-本片是**纯增量**：确认闸门仍由 S4 删除，这里只钉住新钩子的三条判据——
-命中即拒 / 不命中照旧 / 规则表为空零回归。判定单位是**一次调用**（工具名 + 入参），
-不是计划里的一句话（那是 `risk.py` 的规划期扫描，两者不同源）。
+本片是**纯增量**：这里只钉住新钩子的三条判据——命中即拒 / 不命中照旧 / 规则表为空
+零回归。判定单位是**一次调用**（工具名 + 入参）。人工确认闸门与规划期风险扫描已随
+S4（#138）整链删除，危险动作的防护现在就只剩这一条钩子。
 
 零回归口径：记录体、事件载荷、对话面消息**都不多一个键**——被拒的调用就落在「没执行」
-那两格里（``status:"skipped"`` + 理由在 ``error``），没有新字段；它从没进过闸门，
-所以 ``confirm_outcome`` 是空串，这一点也是它与人替拒绝的区别。
+那两格里（``status:"skipped"`` + 理由在 ``error``），没有新字段。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pytest
 
 from backend.api.schemas import StepRecord, ToolCallRecord
 from backend.config import Settings
-from backend.core.agent.graph import _after_executor
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.policy import DangerPolicy
 from backend.core.agent.state import AgentState
@@ -38,9 +35,10 @@ from backend.tests.conftest import make_settings
 TASK_ID = "t_policy_block"
 
 #: 一次调用在 ``executor`` 出口的键集合 —— 空表时一个键都不许增减（#136 AC1）。
-#: （``circuit_open`` / ``retries`` 是 tool_node 真派发之后才写上的 P0 标记，不在这一层。）
+#: （``circuit_open`` / ``retries`` 是 tool_node 真派发之后才写上的 P0 标记，不在这一层。
+#: ``need_confirm`` / ``confirmed`` 两列已随 #138 从记录体契约里删除，故不在集合里。）
 PRE_S2_RECORD_KEYS = frozenset(
-    {"id", "tool_name", "input", "output", "status", "error", "need_confirm", "confirmed"}
+    {"id", "tool_name", "input", "output", "status", "error"}
 )
 
 
@@ -63,9 +61,8 @@ class _Probe(BaseTool):
         "properties": {"cmd": {"type": "string"}},
     }
 
-    def __init__(self, settings: Settings | None = None, *, requires_confirm: bool = False):
+    def __init__(self, settings: Settings | None = None):
         super().__init__(settings)
-        self.requires_confirm = requires_confirm
         self.calls: list[Dict[str, Any]] = []
 
     def run(self, **kwargs: Any) -> ToolResult:
@@ -73,22 +70,12 @@ class _Probe(BaseTool):
         return ToolResult(success=True, data={"ran": True})
 
 
-class _NoGateTM:
-    """TaskManager 的最小替身：**闸门一被碰到就当场失败**。
-
-    本片的核心断言之一就是「命中即拒**不弹框**」，所以替身把 ``request_confirm`` /
-    ``consume_confirm`` 写成抛错——被调用即测试失败，比事后数事件更硬。
-    """
+class _StubTM:
+    """TaskManager 的最小替身：只需要事件总线与停机探针。"""
 
     def __init__(self, settings: Settings):
         self.settings = settings
         self.event_bus = EventBus()
-
-    def request_confirm(self, task_id: str, tool_call_id: str) -> threading.Event:
-        raise AssertionError("a policy block must not ask a human")
-
-    def consume_confirm(self, task_id: str, tool_call_id: str) -> Optional[bool]:
-        raise AssertionError("a policy block must not read a human verdict")
 
     def is_stop_flagged(self, task_id: str) -> bool:
         return False
@@ -104,30 +91,26 @@ def _state() -> AgentState:
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
         "messages": [{"role": "user", "content": "hi"}],
         "plan": [], "artifacts": [], "status": "RUNNING", "stop_requested": False,
-        "pending_confirm": {}, "final_answer": "", "error": "",
-        "_last_action": "", "_current_tool_calls": [], "_confirmed_ids": [],
-        "_rejected_ids": [], "_needs_confirm": False, "risk_report": [],
-        "_risk_blocked": False, "subtasks": [], "_is_subtask": False,
+        "final_answer": "", "error": "",
+        "_last_action": "", "_current_tool_calls": [],
+        "subtasks": [], "_is_subtask": False,
     }
 
 
 def _executor(
     settings: Settings,
     *,
-    requires_confirm: bool = False,
-    confirm_enabled: bool = True,
-    args: Optional[Dict[str, Any]] = None,
-) -> tuple[AgentRuntime, AgentState, _Probe, _NoGateTM]:
+    args: Dict[str, Any] | None = None,
+) -> tuple[AgentRuntime, AgentState, _Probe, _StubTM]:
     """Just the executor pass: one scripted probe call, decisions made, nothing dispatched."""
-    tool = _Probe(settings, requires_confirm=requires_confirm)
-    tm = _NoGateTM(settings)
+    tool = _Probe(settings)
+    tm = _StubTM(settings)
     rt = AgentRuntime(
         TASK_ID,
         tm,
         llm=MockLLMClient(tool_calls=[{"id": "c1", "name": tool.name, "arguments": args or {}}]),
         tools=[tool],
         tool_schemas=[tool.to_openai_schema()],
-        confirm_enabled=confirm_enabled,
     )
     state = _state()
     rt.executor(state)
@@ -137,7 +120,7 @@ def _executor(
 def _run(
     settings: Settings,
     **kwargs: Any,
-) -> tuple[AgentRuntime, AgentState, _Probe, _NoGateTM, EventBus]:
+) -> tuple[AgentRuntime, AgentState, _Probe, _StubTM, EventBus]:
     """One full executor -> tool pass with a scripted single probe call."""
     rt, state, tool, tm = _executor(settings, **kwargs)
     rt.tool_node(state)
@@ -148,7 +131,7 @@ def _rec(state: AgentState) -> Dict[str, Any]:
     return state["_current_tool_calls"][0]
 
 
-def _events(tm: _NoGateTM) -> list[Dict[str, Any]]:
+def _events(tm: _StubTM) -> list[Dict[str, Any]]:
     return tm.event_bus.replay(TASK_ID)
 
 
@@ -183,30 +166,6 @@ def test_hit_denies_the_call_without_executing_it(tmp_path):
     result = [e["data"] for e in _events(tm) if e["type"] == "tool_result"][0]
     assert result["status"] == "skipped"
     assert result["error"] == reason
-
-
-def test_block_wins_over_the_confirm_gate(tmp_path):
-    """命中即拒**先于**闸门：不置 ``need_confirm``，路由也不指向 ``human_confirm``。
-
-    ``_NoGateTM`` 谁碰闸门谁抛错，所以这条同时钉住「不弹框」与「不进图重入」。
-    """
-    settings = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": "no"}))
-    _rt, state, tool, _tm, _bus = _run(settings, requires_confirm=True, confirm_enabled=True)
-
-    assert tool.calls == []
-    assert _rec(state)["need_confirm"] is False
-    assert state["_needs_confirm"] is False
-    assert state["_rejected_ids"] == []
-    assert _after_executor(state) == "tool", "路由仍然指向确认闸门"
-
-
-def test_block_holds_without_a_gate_on_this_runtime(tmp_path):
-    """子任务那侧没有闸门（``confirm_enabled=False``），规则照样拦——拦截不是闸门。"""
-    settings = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": "no"}))
-    _rt, state, tool, _tm, _bus = _run(settings, confirm_enabled=False)
-
-    assert tool.calls == []
-    assert _rec(state)["status"] == "skipped"
 
 
 def test_a_command_pattern_is_matched_against_the_arguments(tmp_path):
@@ -257,7 +216,6 @@ def test_no_rules_is_byte_identical_to_before(tmp_path):
     assert set(rec) == PRE_S2_RECORD_KEYS, "未配置时记录体的键集合变了"
     assert rec["status"] == "pending"
     assert rec["error"] == ""
-    assert rec["need_confirm"] is False
 
     _rt.tool_node(state)
     assert tool.calls == [{"cmd": "ls"}]
@@ -353,7 +311,7 @@ def test_exact_name_and_glob_and_pattern():
 
 
 def test_a_broken_pattern_is_dropped_not_crashed():
-    """正则写错不该把运行炸掉；该条规则作废（与 ``risk_danger_keywords`` 同口径）。"""
+    """正则写错不该把运行炸掉；该条规则作废。"""
     policy = _policy({"tool": "probe", "pattern": "(", "reason": "no"})
 
     assert policy.rules == ()
@@ -490,7 +448,7 @@ def test_settings_expose_the_rule_table_as_a_list(tmp_path):
 
 # ── 持久化面 ────────────────────────────────────────────────────────────────
 def test_a_blocked_call_survives_persistence(tmp_path):
-    """记录体能回看：状态与理由都在，且它从没进过闸门（``confirm_outcome`` 空）。"""
+    """记录体能回看：状态与理由都在。"""
     reason = "no"
     settings = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": reason}))
     _rt, state, _tool, _tm, _bus = _run(settings)
@@ -498,6 +456,5 @@ def test_a_blocked_call_survives_persistence(tmp_path):
     record = StepRecord(**state["steps"][0]).tool_calls[0]
     assert record.status == "skipped"
     assert record.error == reason
-    assert record.confirm_outcome == ""
     # 没人批过它，也没人拒过它：这不是一次闸门判决。
     assert ToolCallRecord(id="x", tool_name="y").status == "pending"

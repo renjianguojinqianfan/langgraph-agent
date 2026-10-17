@@ -139,10 +139,10 @@ def _write_script(tmp_path, payload: Dict[str, Any]) -> str:
 
 
 def test_factory_reads_mock_llm_script_path(tmp_path):
-    """A preset script carrying a confirm-requiring call is what the factory hands out.
+    """A preset script carrying a tool call is what the factory hands out.
 
     This is the seam #108 exists for: offline (no key) the server-side client must be
-    able to drive ``code_exec`` so the human_confirm gate actually opens in the browser.
+    able to drive a real tool from a JSON script.
     """
     path = _write_script(
         tmp_path,
@@ -245,7 +245,7 @@ class _RecordingLLM(LLMClient):
 
 
 def _runtime(settings: Settings, llm: LLMClient) -> AgentRuntime:
-    """A runtime whose executor can be driven directly (no tools, no confirm gate)."""
+    """A runtime whose executor can be driven directly (no tools)."""
     tm = SimpleNamespace(settings=settings, event_bus=EventBus(), add_artifact=lambda *a: None)
     return AgentRuntime(
         task_id="t45",
@@ -253,7 +253,6 @@ def _runtime(settings: Settings, llm: LLMClient) -> AgentRuntime:
         llm=llm,
         tools=[],
         tool_schemas=[],
-        confirm_enabled=False,
     )
 
 

@@ -15,8 +15,7 @@ independent perspective. Coverage gaps addressed here:
 * TaskManager registration: ``git_enabled=true`` loads exactly 7 tools,
   ``git_enabled=false`` loads none, a name conflict keeps the first tool;
 * ``build_git_tools`` auto-creates a missing repo root;
-* end-to-end executor confirmation: ``git_commit`` needs confirm, rejection
-  skips (no commit), approval commits.
+* end-to-end executor pass: ``git_commit`` runs over executor -> tool_node.
 
 All tests are offline (throwaway ``git init`` inside tmp_path).
 """
@@ -279,26 +278,22 @@ def test_build_git_tools_creates_missing_root(tmp_path):
     assert settings.git_repo_path.is_dir()
 
 
-# ─────────────────── end-to-end executor confirmation ───────────────────
+# ─────────────────── end-to-end executor pass ───────────────────
 def _base_state() -> AgentState:
     return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
         "messages": [{"role": "user", "content": "hi"}],
         "plan": [], "artifacts": [], "status": "RUNNING", "stop_requested": False,
-        "pending_confirm": {}, "final_answer": "", "error": "",
-        "_last_action": "", "_current_tool_calls": [], "_confirmed_ids": [],
-        "_rejected_ids": [], "_needs_confirm": False, "risk_report": [],
-        "_risk_blocked": False, "subtasks": [], "_is_subtask": False,
+        "final_answer": "", "error": "",
+        "_last_action": "", "_current_tool_calls": [],
+        "subtasks": [], "_is_subtask": False,
     }
 
 
-def _run_confirm_flow(repo, settings, tool, approved: bool) -> AgentState:
-    """Run executor -> human_confirm -> tool_node with a fake TaskManager."""
-
-    mock = MockLLMClient(
-        tool_calls=[{"id": "c1", "name": tool.name, "arguments": {"message": "qa commit"}}]
-    )
+def _run_executor_flow(settings, tool, args) -> AgentState:
+    """Run executor -> tool_node with a fake TaskManager (one scripted call)."""
+    mock = MockLLMClient(tool_calls=[{"id": "c1", "name": tool.name, "arguments": args}])
     bus = EventBus()
 
     class _FakeTM:
@@ -309,76 +304,25 @@ def _run_confirm_flow(repo, settings, tool, approved: bool) -> AgentState:
             self.settings = s
             self.event_bus = eb
 
-        def request_confirm(self, task_id, tool_call_id):
-            return type("EV", (), {"is_set": lambda self: True})()
-
-        def consume_confirm(self, task_id, tool_call_id):
-            return approved
-
         def add_artifact(self, *a, **kw):
             return None
 
     rt = AgentRuntime(
         "t_qa_git", _FakeTM(settings, bus), llm=mock, tools=[tool],
-        tool_schemas=[tool.to_openai_schema()], confirm_enabled=True,
+        tool_schemas=[tool.to_openai_schema()],
     )
     state = _base_state()
     rt.executor(state)
-    rt.human_confirm_node(state)
     rt.tool_node(state)
     return state
 
 
-def test_git_commit_requires_confirm_and_executes_after_approval(repo, settings):
+def test_git_commit_executes_over_the_loop(repo, settings):
     _git("add", "a.txt", cwd=repo)
     tool = GitCommitTool(GitToolRunner(settings.git_repo_path, settings.git_timeout_sec), settings)
-    state = _run_confirm_flow(repo, settings, tool, approved=True)
+    state = _run_executor_flow(settings, tool, {"message": "qa commit"})
     rec = state["_current_tool_calls"][0]
-    assert rec["need_confirm"] is True
     assert rec["status"] == "success"
     assert len(rec["output"]["commit"]) == 40
     head = _git("log", "--format=%s", "-1", cwd=repo)
     assert head.stdout.strip() == "qa commit"
-
-
-def test_git_commit_rejected_skips_without_side_effect(repo, settings):
-    before = _git("log", "--oneline", cwd=repo).stdout.strip()
-    tool = GitCommitTool(GitToolRunner(settings.git_repo_path, settings.git_timeout_sec), settings)
-    state = _run_confirm_flow(repo, settings, tool, approved=False)
-    rec = state["_current_tool_calls"][0]
-    assert rec["status"] == "skipped"
-    assert rec["error"] == "rejected by user"
-    after = _git("log", "--oneline", cwd=repo).stdout.strip()
-    assert before == after  # no commit happened
-
-
-def test_git_read_tools_do_not_confirm(repo, settings):
-    tool = GitStatusTool(GitToolRunner(settings.git_repo_path, settings.git_timeout_sec), settings)
-    mock = MockLLMClient(
-        tool_calls=[{"id": "c1", "name": tool.name, "arguments": {}}]
-    )
-    bus = EventBus()
-
-    class _FakeTM:
-        def __init__(self, s, eb):
-            self.settings = s
-            self.event_bus = eb
-
-        def request_confirm(self, *a):
-            raise AssertionError("read tool must not confirm")
-
-        def consume_confirm(self, *a):
-            return False
-
-        def add_artifact(self, *a, **kw):
-            return None
-
-    rt = AgentRuntime(
-        "t_qa_git_read", _FakeTM(settings, bus), llm=mock, tools=[tool],
-        tool_schemas=[tool.to_openai_schema()], confirm_enabled=True,
-    )
-    state = _base_state()
-    rt.executor(state)
-    assert state["_current_tool_calls"][0]["need_confirm"] is False
-    rt.tool_node(state)
-    assert state["_current_tool_calls"][0]["status"] == "success"

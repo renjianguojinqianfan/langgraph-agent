@@ -1,9 +1,8 @@
 """#46 第一步：悬空 ``tool_call`` 在循环入口清扫。
 
 定义（规格 §5）：一条 assistant 的 tool_call 没有配对的 ``role: tool`` 结果——
-回合记录永停 ``pending``。真实缺口是「停在确认闸门后被 stop」与「运行中途被
-中断」，危害是 resume / 续跑后把一条没有回答的 ``tool_calls`` 发给 OpenAI 协议
-端点（#95 留下的两个缺口）。
+回合记录永停 ``pending``。真实缺口是「运行中途被中断」，危害是 resume / 续跑后把一条
+没有回答的 ``tool_calls`` 发给 OpenAI 协议端点（#95 留下的两个缺口）。
 
 不变量：**任何一次进入模型之前**（planner 与 executor 两个 LLM 入口），消息面不存在
 孤儿 tool_calls、记录面不存在残留 pending。所以这里测的是节点入口与真图，不是私有函数。
@@ -56,8 +55,6 @@ def _rec(
         "output": None,
         "status": status,
         "error": error,
-        "need_confirm": False,
-        "confirmed": False,
     }
 
 
@@ -84,17 +81,11 @@ def _state(
         "artifacts": [],
         "status": "RUNNING",
         "stop_requested": False,
-        "pending_confirm": {},
         "step_index": 1,
         "final_answer": "",
         "error": "",
         "_last_action": "",
         "_current_tool_calls": [],
-        "_confirmed_ids": [],
-        "_rejected_ids": [],
-        "_needs_confirm": False,
-        "risk_report": [],
-        "_risk_blocked": False,
         "subtasks": [],
         "_is_subtask": False,
     }
@@ -205,7 +196,6 @@ def test_graph_run_leaves_no_orphan_on_the_message_face(tmp_path: Path) -> None:
             tool_calls=[{"id": "g1", "name": "write", "arguments": {"path": "a.txt", "content": "x"}}],
             final_answer="写好了",
         ),
-        risk_scan_enabled=False,
         subagent_enabled=False,
         checkpoint_enabled=False,
     )
@@ -213,7 +203,7 @@ def test_graph_run_leaves_no_orphan_on_the_message_face(tmp_path: Path) -> None:
         messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
         records=[_rec("c1", "pending")],
     )
-    final = build_graph(rt, mode="main").invoke(state)
+    final = build_graph(rt).invoke(state)
 
     assert _orphans(final["messages"]) == []
     assert [

@@ -1,8 +1,9 @@
 """Generic HTTP request tool (P1-1).
 
 Performs GET/POST/PUT/DELETE/etc. with custom headers and body. State-changing
-methods (POST/PUT/DELETE/PATCH) set ``requires_confirm=True`` so the kernel
-asks the user before sending them.
+methods (POST/PUT/DELETE/PATCH) are dangerous by nature; after #138 retired the
+confirmation gate there is no per-call confirmation — the S2 policy table
+(``policy_rules``) is what can block a call.
 """
 
 from __future__ import annotations
@@ -18,15 +19,13 @@ from .registry import register
 
 logger = get_logger("tool.http_api")
 
-WRITE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
-
 
 @register
 class HttpTool(BaseTool):
     name = "http_request"
     description = (
         "Perform an HTTP request to an external API. Supports common methods, "
-        "custom headers and a JSON or text body. Write methods require confirmation."
+        "custom headers and a JSON or text body."
     )
     args_schema = {
         "type": "object",
@@ -48,7 +47,6 @@ class HttpTool(BaseTool):
         },
         "required": ["method", "url"],
     }
-    requires_confirm = False  # effectively gated per-call via _needs_confirm()
     # P0 resilience: network tool — retry transient failures + circuit breaker.
     retryable = True
     max_retries = None  # inherit global Settings.tool_max_retries (default 2)
@@ -56,9 +54,6 @@ class HttpTool(BaseTool):
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)
-
-    def _needs_confirm(self, method: str) -> bool:
-        return method.upper() in WRITE_METHODS
 
     def run(self, **kwargs: Any) -> ToolResult:
         method = str(kwargs.get("method", "GET")).upper()

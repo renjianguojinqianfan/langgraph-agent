@@ -1,4 +1,4 @@
-"""Agent node implementations (Planner / Executor / Tool / Confirm).
+"""Agent node implementations (Planner / Executor / Tool).
 
 :class:`AgentRuntime` owns the per-task references the nodes need (the
 ``TaskManager`` for events & persistence, the ``LLMClient``, and the resolved
@@ -9,14 +9,12 @@ declared in :mod:`backend.core.agent.graph`.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List
 
 from ...config import get_settings
 from ...utils.logging import get_logger
 from ..tools.base import BaseTool, ToolResult
-from ..tools.http_api import WRITE_METHODS
 from . import inject
 from .context import compress_messages, evict_tool_results
 from .policy import DangerPolicy
@@ -25,31 +23,13 @@ from .state import AgentState
 
 logger = get_logger("agent.runtime")
 
-# ── confirmation terminal states (issue #57 AC5) ─────────────────────────────
-#
-# Before #57 the gate had ONE failure state: ``consume_confirm`` answered False
-# and that meant「未批准即拒绝」, so an explicit "no", a human who never answered
-# and a stop() that woke the wait all folded into the same record and the same
-# ``rejected by user`` text. Codex models these as an enum (Denied / TimedOut /
-# Abort) rather than a bool's shadow; these are the same three names.
-#
-# The bucket is written onto the tool-call record itself (``confirm_outcome``),
-# which is what the ``tool_result`` event, the trace and the persisted
-# ``ToolCallRecord`` all carry.
-CONFIRM_APPROVED = "approved"
-CONFIRM_DENIED = "denied"
-CONFIRM_TIMED_OUT = "timed_out"
-CONFIRM_ABORTED = "aborted"
-#: ``auto_approve`` (#57 AC6): the gate still fires, the verdict is simply
-#: pre-supplied by the harness. Distinct from ``approved`` — no human said so.
-CONFIRM_AUTO_APPROVED = "auto_approved"
-
 # ── settled tool-call statuses (issue #100) ─────────────────────────────────
 #
 # The three statuses a call can carry once ``tool_node`` has finished dealing
-# with it — executed, failed, or skipped by the gate. ``_current_tool_calls``
-# lives across a whole round and these are written in place on the record, so
-# this set is what「已执行」means on the loop entry: no second ledger needed.
+# with it — executed, failed, or skipped. The ``skipped`` bucket now comes from
+# the S2 danger hook (#136): ``executor`` settles a rule-hit call on the spot,
+# still routes to ``tool``, and this guard is what keeps the tool node from
+# dispatching it a second time.
 TERMINAL_TOOL_CALL_STATUSES = frozenset({"success", "failed", "skipped"})
 
 # ── dangling tool calls (issue #46) ──────────────────────────────────────────
@@ -72,8 +52,6 @@ class AgentRuntime:
         tool_schemas: List[Dict[str, Any]],
         max_steps: int = 15,
         aux_llm: Any = None,
-        confirm_enabled: bool = True,
-        auto_approve: bool = False,
         parent_task_id: str = "",
     ) -> None:
         self.task_id = task_id
@@ -87,11 +65,6 @@ class AgentRuntime:
         self.tools: Dict[str, BaseTool] = {t.name: t for t in tools}
         self.tool_schemas = tool_schemas
         self.max_steps = max_steps
-        self.confirm_enabled = confirm_enabled  # False for subtask graphs (no human_confirm)
-        # Issue #57 AC6: ``auto_approve`` 只把「必问」换成放行（终态记成 auto_approved），
-        # 判定面、事件面、显式拒绝一概照旧。与 confirm_enabled 是两件事：
-        # 后者是「这台 runtime 根本没有闸门」（子任务图），前者是「人不在场」。
-        self.auto_approve = auto_approve
         self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
         self._aux = aux_llm  # injected aux client (may be None)
         self._aux_computed = aux_llm is not None
@@ -99,9 +72,6 @@ class AgentRuntime:
         # to AGENTS.md intentionally do not take effect. Subtask graphs share this
         # __init__, so they receive the same block with no extra code.
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        # Issue #57 AC5: 等一个判决要有上界，否则「超时未答」这一档不可达。和下面的
-        # 注入块一样按任务快照一次——任务中途改 confirm_timeout_sec 不生效。
-        self.confirm_timeout_sec: float = settings.confirm_timeout_sec
         # S2 (#136): the danger rule table is compiled once per task, same snapshot
         # discipline as the injection block below — mid-task edits take effect on
         # the NEXT task. An empty table compiles to zero rules and `check` always
@@ -155,7 +125,7 @@ class AgentRuntime:
 
         When ``aux_llm_enabled=False`` (or the config is incomplete) this
         returns ``None`` — the degradation path — so no extra LLM call is ever
-        made for summaries / risk semantics. Built at most once per runtime.
+        made for context summaries. Built at most once per runtime.
         """
         if not self._aux_computed:
             self._aux_computed = True
@@ -311,114 +281,15 @@ class AgentRuntime:
         state["_last_action"] = "plan"
         return state
 
-    # ── P1 item 1: planning-phase risk scan (EHRB layer 1) ──
-    def risk_scan(self, state: AgentState) -> AgentState:
-        """Scan the latest plan before the executor runs anything.
-
-        * ``risk_scan_enabled=False`` -> skip entirely (zero regression).
-        * Keyword scan (+ optional semantic analysis via the aux model).
-        * Publishes ``risk_report`` (full) and ``risk_found`` (per hit).
-        * ``risk_policy=confirm``: high-risk round sets ``_risk_blocked`` so the
-          executor raises ``need_confirm`` -> the existing P0 human_confirm flow.
-        * ``risk_policy=pause``: a single plan-level blocking confirmation
-          (confirm key ``risk_plan``); rejection marks high steps skipped.
-
-        The P0 ``_needs_confirm`` recomputation is deliberately untouched.
-        """
-        if self._stopped(state):
-            state["_last_action"] = "stop"
-            return state
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        state["risk_report"] = []
-        state["_risk_blocked"] = False
-        if not settings.risk_scan_enabled:
-            state["_last_action"] = "plan"
-            return state
-
-        from .risk import RiskScanner
-
-        scanner = RiskScanner(
-            settings,
-            aux_llm=self.aux_llm,
-            semantic_enabled=settings.risk_semantic_enabled,
-        )
-        items = scanner.scan(state.get("plan", []) or [])
-        state["risk_report"] = items
-        self._publish(
-            "risk_report",
-            {
-                "items": items,
-                "policy": settings.risk_policy,
-                "semantic_enabled": settings.risk_semantic_enabled,
-            },
-        )
-        hits = [it for it in items if it["level"] in ("high", "medium")]
-        for it in hits:
-            self._publish("risk_found", it)
-
-        has_high = any(it["level"] == "high" for it in items)
-        if settings.risk_policy == "pause" and has_high:
-            # Single plan-level blocking confirmation; no new state machine.
-            if self._plan_confirm(state, items):
-                state["_risk_blocked"] = False
-            else:
-                state["_risk_blocked"] = False
-                self._mark_high_steps_skipped(state, items)
-        else:
-            # Default confirm policy: per-call confirmation via the executor.
-            state["_risk_blocked"] = has_high
-        state["_last_action"] = "plan"
-        return state
-
-    def _plan_confirm(self, state: AgentState, items: List[Dict[str, Any]]) -> bool:
-        """Blocking plan-level confirmation used by ``risk_policy=pause``.
-
-        #57 的终态分档只覆盖 per-call 闸门：这里的返回值只有 plan 一个消费者，
-        没有可标注的 tool-call 记录，也就没有「事件与状态里可区分」的落点。
-        #57 AC6 的 ``auto_approve`` 在这里同样成立——不等人，但也不冒充人批过。
-        """
-        if self.auto_approve:
-            # ``auto_approve``：不向一个不在场的人发问（#57 AC6 的「必问 → 放行」）。
-            return True
-        if self.tm is None:
-            return False
-        key = "risk_plan"
-        ev = self.tm.request_confirm(self.task_id, key)
-        self._publish(
-            "human_confirm_required",
-            {
-                "tool_call_id": key,
-                "tool_name": "risk_scan",
-                "input": {"items": items},
-            },
-        )
-        while not ev.is_set() and not self._stopped(state):
-            ev.wait(0.2)
-        return bool(self.tm.consume_confirm(self.task_id, key))
-
-    def _mark_high_steps_skipped(self, state: AgentState, items: List[Dict[str, Any]]) -> None:
-        """Mark high-risk plan steps as skipped after a rejected pause."""
-        plan = state.get("plan", []) or []
-        for it in items:
-            if it["level"] != "high":
-                continue
-            idx = it["step_index"] - 1
-            if 0 <= idx < len(plan):
-                step = plan[idx]
-                if isinstance(step, dict):
-                    step["status"] = "skipped"
-                else:
-                    plan[idx] = {"index": idx + 1, "description": str(step), "status": "skipped"}
-        state["plan"] = plan
-
     def _sweep_dangling_tool_calls(self, state: AgentState) -> None:
         """Answer every tool call that never got an answer (issue #46).
 
-        Two real gaps leave one hole: a stop while parked on the confirm gate, and
-        an interrupt mid-round. Both leave an assistant ``tool_calls`` turn with no
-        ``role: tool`` reply and a record stuck on ``pending`` — so the next request
-        violates the OpenAI tool-calling protocol, and the persisted task shows a
-        call that will never resolve.
+        A stop / crash mid-round leaves an assistant ``tool_calls`` turn with no
+        ``role: tool`` reply and a record stuck on ``pending`` — so the next
+        request violates the OpenAI tool-calling protocol, and the persisted task
+        shows a call that will never resolve. (The other gap that used to feed
+        this hole — a stop while parked on the confirm gate — is gone with the
+        gate, #138.)
 
         Run at **both** LLM entries (``planner`` and ``executor``), not only before
         the tool round: the first request after a resume is the planner's, so an
@@ -475,48 +346,13 @@ class AgentRuntime:
 
         if resp.tool_calls:
             tcs: List[Dict[str, Any]] = []
-            # P1 item 1: a high-risk round (risk_policy=confirm) raises
-            # need_confirm for every tool call of this round; the P0
-            # human_confirm flow then asks the user before any execution.
-            risk_blocked = bool(state.get("_risk_blocked"))
             for tc in resp.tool_calls:
                 name = tc.get("name", "")
                 args = tc.get("arguments", {}) or {}
-                tool = self.tools.get(name)
                 # S2 (#136): the one hook. A rule hit DENIES this call outright —
                 # the tool never runs and the model gets {block, reason} back.
-                # Decided *before* (and independently of) the confirm judgement:
-                # asking a human about a call the table already refused would be
-                # the dialog ADR 0008 decision 6 rules out, and the args are
-                # passed by reference and never written (#136 AC3).
+                # The args are passed by reference and never written (#136 AC3).
                 block_reason = self.danger_policy.check(name, args)
-                need_confirm = False
-                if block_reason is None and self.confirm_enabled:
-                    need_confirm = bool(tool.requires_confirm) if tool else False
-                    if tool and tool.name == "http_request" and str(args.get("method", "")).upper() in WRITE_METHODS:
-                        need_confirm = True
-                    # P2 item 1: MCP tools run a per-call risk judgement (the
-                    # server's self-reported destructiveHint / readOnlyHint, with
-                    # mcp_force_confirm as the override — issue #57). Duck-typed
-                    # on `needs_per_call_confirm` so this node never imports
-                    # McpTool. A judgement that cannot run fails CLOSED — it
-                    # requires confirmation rather than silently bypassing the
-                    # gate.
-                    if tool and getattr(tool, "needs_per_call_confirm", False):
-                        try:
-                            # cast 在运行时是恒等函数：BaseTool 不声明 _needs_confirm
-                            # （McpTool 才有），这里只把鸭子类型交代给 mypy。
-                            if cast(Any, tool)._needs_confirm(args):
-                                need_confirm = True
-                        except Exception:
-                            need_confirm = True
-                            logger.warning(
-                                "MCP confirm judgement failed for %s; requiring confirmation",
-                                tool.name,
-                                exc_info=True,
-                            )
-                    if risk_blocked:
-                        need_confirm = True
                 rec = {
                     "id": tc.get("id") or f"call_{state['step_index']}_{len(tcs)}",
                     "tool_name": name,
@@ -530,8 +366,6 @@ class AgentRuntime:
                     # ``pending`` stays the only live status, exactly as before.
                     "status": "skipped" if block_reason is not None else "pending",
                     "error": block_reason or "",
-                    "need_confirm": need_confirm,
-                    "confirmed": False,
                 }
                 tcs.append(rec)
 
@@ -575,8 +409,6 @@ class AgentRuntime:
                     self._publish("tool_result", rec)
                     self._feed_blocked(state, rec)
 
-            needs_confirm = any(r["need_confirm"] for r in tcs)
-            state["_needs_confirm"] = needs_confirm
             state["_last_action"] = "tool_call"
         else:
             answer = resp.content or "(no content)"
@@ -598,32 +430,17 @@ class AgentRuntime:
 
         tcs = state.get("_current_tool_calls", []) or []
         step = state["steps"][-1] if state.get("steps") else None
-        confirmed = state.get("_confirmed_ids", []) or []
-        rejected = state.get("_rejected_ids", []) or []
 
         for rec in tcs:
             if rec["status"] in TERMINAL_TOOL_CALL_STATUSES:
-                # Third guard: a call this node already dealt with is left alone
-                # (issue #100). Approving a round that carries >=2 gated calls one
-                # by one re-enters this node along the static ``human_confirm ->
-                # tool`` edge, and ``rec["status"]`` was written in place last time
-                # while ``_current_tool_calls`` stayed live — so the two older
-                # guards (rejected / not yet authorised) let the already-run call
-                # through and it dispatches a second time: writers write twice, one
-                # ``tool_call_id`` grows two tool messages, and 「批准一次」 becomes
-                # 「执行 N 次」 — the promise the gate exists to keep. Idempotency
-                # here is per ``rec``, gated or not; retries are a different
-                # ledger, closed inside ``ToolExecutor.dispatch`` by ``with_retry``
-                # and never routed through a graph re-entry.
-                continue
-            if rec["need_confirm"] and rec["id"] in rejected:
-                rec["status"] = "skipped"
-                rec["error"] = self._confirm_skip_text(rec)
-                self._publish("tool_result", rec)
-                self._feed_tool_failure(state, rec)
-                continue
-            if rec["need_confirm"] and rec["id"] not in confirmed:
-                # Not yet authorised; skip (should be reached via human_confirm first).
+                # A call that already carries a verdict is left alone (issue #100).
+                # In this round the settled records are exactly the ones ``executor``
+                # refused via the S2 danger hook (#136): it publishes their result and
+                # still routes to this node, so without this guard a blocked call would
+                # be looked up and dispatched here. ``rec["status"]`` was written in
+                # place, so the check is per ``rec`` and idempotent; retries are a
+                # different ledger, closed inside ``ToolExecutor.dispatch`` by
+                # ``with_retry``.
                 continue
 
             tool = self.tools.get(rec["tool_name"])
@@ -740,147 +557,6 @@ class AgentRuntime:
         ``tool_result`` event publishes, which the executor always sets on a hit.
         """
         self._feed_tool_reply(state, rec, {"block": True, "reason": rec["error"]})
-
-    def _confirm_skip_text(self, rec: Dict[str, Any]) -> str:
-        """三档未批准各自的文案（#57 AC5）。
-
-        只有 ``denied`` 留着 ``rejected by user`` ——那是唯一一句真话。从前三种
-        情形共用这一句，于是「人没答」「人说不」「被 stop 折回来」在日志里同形，
-        事后无法复原是哪一种（同 #57 取证里子任务那侧的合并捕获）。
-        没有 ``confirm_outcome`` 的记录（从未进过闸门）按旧文案走，不凭空安新终态。
-        """
-        outcome = rec.get("confirm_outcome") or CONFIRM_DENIED
-        if outcome == CONFIRM_TIMED_OUT:
-            return f"no human verdict before the {self.confirm_timeout_sec:g}s confirm timeout"
-        if outcome == CONFIRM_ABORTED:
-            return "interrupted by stop while awaiting confirmation"
-        return "rejected by user"
-
-    def _ask_human(self, state: AgentState, target: Dict[str, Any]) -> str:
-        """Wait for one verdict on ``target`` and name the terminal state.
-
-        分档的判据顺序是这张表的骨架：**先问「人给没给过判决」，再问「是被谁
-        打断的」**。``consume_confirm`` 回 None 表示人不在这个点上答过——它不是
-        一次拒绝，也不该冒充拒绝（#57 之前正是这一步折成了「未批准即拒绝」）。
-        """
-        event = self.tm.request_confirm(self.task_id, target["id"])
-        self._publish(
-            "human_confirm_required",
-            {"tool_call_id": target["id"], "tool_name": target["tool_name"], "input": target["input"]},
-        )
-        # Block until the user decides, the wait expires, or the task is stopped
-        # (≤2s responsiveness). Issue #4: poll the manager-level flag as well —
-        # ``state`` is a per-superstep copy under a checkpointer, so a stop() that
-        # mutates the legacy dict is invisible here unless refreshed from the source.
-        deadline = time.monotonic() + self.confirm_timeout_sec
-        while not event.is_set() and not state.get("stop_requested"):
-            if self._stopped(state):
-                break
-            if time.monotonic() >= deadline:
-                break
-            event.wait(0.2)
-        verdict = self.tm.consume_confirm(self.task_id, target["id"])
-        if verdict:
-            return CONFIRM_APPROVED
-        if verdict is False:
-            return CONFIRM_DENIED
-        # No verdict: whoever ended the wait owns the bucket. The authoritative
-        # manager flag decides, because ``state`` may be a stale copy (#4).
-        stop_checker = getattr(getattr(self, "tm", None), "is_stop_flagged", None)
-        stop_forced = state.get("stop_requested") or (
-            callable(stop_checker) and stop_checker(self.task_id)
-        )
-        return CONFIRM_ABORTED if stop_forced else CONFIRM_TIMED_OUT
-
-    def human_confirm_node(self, state: AgentState) -> AgentState:
-        """Ask about one un-confirmed gated call, then record the terminal state.
-
-        #57 AC5: 拒绝 / 超时未答 / 停止打断 是三档，不是一个布尔的影子。分档写回
-        记录体（``confirm_outcome``），事件、状态、持久化三面同源。
-
-        #57 AC6: ``auto_approve`` 不再整块旁路判定 —— 判定照算、闸门照进、
-        终态照播（只播 ``human_confirm_resolved``；向一个不在场的人发问是伪造事件），
-        换掉的只有「等一个不出现的人」这一格，记成 ``auto_approved``。显式拒绝与
-        ``_needs_confirm`` 重算块都不经过这条路。
-        """
-        tcs = state.get("_current_tool_calls", []) or []
-        confirmed = state.get("_confirmed_ids", []) or []
-        rejected = state.get("_rejected_ids", []) or []
-        target = next(
-            (r for r in tcs if r["need_confirm"] and r["id"] not in confirmed and r["id"] not in rejected),
-            None,
-        )
-        if target is None:
-            state["_last_action"] = "tool_done"
-            return state
-
-        if self.auto_approve:
-            outcome = CONFIRM_AUTO_APPROVED
-        else:
-            outcome = self._ask_human(state, target)
-
-        # Written on the record itself: the tool_result event, the trace and the
-        # persisted ToolCallRecord all carry this dict (#57 AC5).
-        target["confirm_outcome"] = outcome
-        # The asked/replied pair (opencode names its two events the same way):
-        # the outcome needs its own event because a 停止打断 run never reaches the
-        # tool node, so no ``tool_result`` would ever carry the label. No ``input``
-        # here on purpose: the trace does not redact, and the arguments are already
-        # on the ``tool_call`` event under the same id — a second copy would only
-        # double the sensitive surface with no reader.
-        self._publish(
-            "human_confirm_resolved",
-            {
-                "tool_call_id": target["id"],
-                "tool_name": target.get("tool_name", ""),
-                "outcome": outcome,
-            },
-        )
-        if outcome != CONFIRM_APPROVED and outcome != CONFIRM_AUTO_APPROVED:
-            logger.warning(
-                "confirmation for %s ended %s (task %s)",
-                target["tool_name"],
-                outcome,
-                self.task_id,
-            )
-        if outcome in (CONFIRM_APPROVED, CONFIRM_AUTO_APPROVED):
-            state.setdefault("_confirmed_ids", []).append(target["id"])
-        else:
-            state.setdefault("_rejected_ids", []).append(target["id"])
-            if outcome == CONFIRM_ABORTED:
-                # Issue #4: record when the decision was forced by a stop (no
-                # human verdict). The event is shared between approvals and
-                # stop-wakeups and ``state`` may be a stale copy under a
-                # checkpointer, so the authoritative manager flag decides.
-                #
-                # ``timed_out`` deliberately does NOT set this marker (#57 AC5):
-                # it is the resume guard's channel 1, and its documented meaning
-                # is "parked at the gate awaiting a verdict" — a timed-out gate
-                # is no longer awaiting anything, the run moved on and the call
-                # landed in ``_rejected_ids`` (which is exactly what guard
-                # channel 2 checks, and it says *not parked*). Writing it would
-                # turn one unanswered dialog into a task that can never be
-                # resumed, with a message blaming a stop that never happened.
-                state["pending_confirm"] = {
-                    "tool_call_id": target["id"],
-                    "tool_name": target.get("tool_name", ""),
-                    "input": target.get("input", {}),
-                }
-        # NOTE (red line): the `_needs_confirm` recomputation below is the P0
-        # dead-loop fix — DO NOT MODIFY this block.
-
-        # Recompute whether any pending confirmation remains. Previously the
-        # node only appended to _confirmed_ids/_rejected_ids but left
-        # state["_needs_confirm"] as True, so the tool router kept routing the
-        # flow back into human_confirm -> GraphRecursionError on single-tool
-        # flows. For such flows this must now become False so the flow moves on.
-        confirmed_ids = state.get("_confirmed_ids", []) or []
-        rejected_ids = state.get("_rejected_ids", []) or []
-        state["_needs_confirm"] = any(
-            r["need_confirm"] and r["id"] not in confirmed_ids and r["id"] not in rejected_ids
-            for r in tcs
-        )
-        return state
 
     def _call_records(self, state: AgentState) -> List[Dict[str, Any]]:
         """Every tool-call record of this run, across all rounds."""

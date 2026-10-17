@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { compressFaceParts } from "../types";
 import { getTaskTrace, TraceFetchError } from "../api/client";
-import { CONFIRM_OUTCOME_LABEL, SSEvent } from "../types";
+import { SSEvent } from "../types";
 
 type TraceCategory = "all" | "tool" | "circuit" | "compress" | "task";
 
@@ -47,16 +47,6 @@ const TYPE_META: Record<string, TraceMeta> = {
     badge: "bg-violet-500/15 text-violet-300 border-violet-500/40",
     category: "compress",
   },
-  human_confirm_required: {
-    label: "人工确认",
-    badge: "bg-amber-500/15 text-amber-300 border-amber-500/40",
-    category: "task",
-  },
-  human_confirm_resolved: {
-    label: "确认终态",
-    badge: "bg-amber-500/15 text-amber-300 border-amber-500/40",
-    category: "task",
-  },
   artifact_created: {
     label: "产物",
     badge: "bg-green-500/15 text-green-300 border-green-500/40",
@@ -94,8 +84,7 @@ const TYPE_META: Record<string, TraceMeta> = {
   },
 };
 
-// #83（#57 AC5）五档终态文案表已上收到 `types.CONFIRM_OUTCOME_LABEL`——StepDetail（#91 AC2
-// 的新消费者）与本文件的 summarize 共用那一张，别在这儿造第二张。
+// #83: 五档确认终态文案表随确认闸门（#138）退役，summarize 不再渲染 confirm 事件。
 
 const FILTERS: { key: TraceCategory; label: string }[] = [
   { key: "all", label: "全部" },
@@ -123,14 +112,6 @@ function summarize(ev: SSEvent): string {
       )}`;
     case "step_start":
       return `步骤 #${String(d.index ?? "?")}`;
-    case "human_confirm_required":
-      return typeof d.tool_name === "string" ? String(d.tool_name) : "";
-    case "human_confirm_resolved": {
-      const tool = typeof d.tool_name === "string" ? String(d.tool_name) : "";
-      const outcome = typeof d.outcome === "string" ? d.outcome : "";
-      // 认不出的档照原样显示，别把新终态又折成一句通用文案——那正是 #83 要修的。
-      return `${tool} → ${CONFIRM_OUTCOME_LABEL[outcome] ?? outcome}`;
-    }
     case "artifact_created":
       return typeof d.filename === "string" ? String(d.filename) : "";
     case "plan_update":

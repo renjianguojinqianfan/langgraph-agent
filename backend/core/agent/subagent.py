@@ -5,13 +5,12 @@ The main agent can delegate work to **isolated** sub-agents. Isolation means:
 * every subtask runs with its **own** :class:`AgentState` (independent
   ``messages`` / ``plan`` / ``steps`` / ``artifacts``);
 * every subtask runs over a **declared capability tier** (:data:`TOOL_TIERS`),
-  not over "whatever the parent had" — a subtask has no ``human_confirm`` node,
-  so any tool that would need a human has to be structurally absent rather than
-  present-and-refused;
-* every subtask runs with its **own** :class:`AgentRuntime` using a
-  **simplified graph** (``mode="subtask"`` — no risk / confirm nodes, so
-  subtasks can never recurse or block on confirmations that cannot route back
-  to the parent);
+  not over "whatever the parent had" — a potentially dangerous tool is
+  structurally absent from the subtask's face rather than present-and-gated;
+* every subtask runs with its **own** :class:`AgentRuntime` over the same
+  graph (there is no separate subtask topology since #138 removed the confirm
+  gate, so a subtask can never recurse or block on a decision that cannot route
+  back to the parent);
 * subtask internal events are published on the **subtask's own EventBus
   channel** (``<parent>:sub:<hex>``), never on the parent channel.
 
@@ -43,11 +42,10 @@ logger = get_logger("agent.subagent")
 # the git write operations, MCP / OpenAPI / plugin tools and
 # ``spawn_subagent`` itself.
 #
-# Nothing listed here may carry ``requires_confirm`` / ``needs_per_call_confirm``
-# — the subtask graph has no confirm gate, so a gated member would either hang
-# on a confirmation that can never arrive or, worse, run unconfirmed. The
-# member list is held to that by ``test_qa_p1_subagent`` rather than by this
-# comment.
+# A gated member on this face would be unreachable-in-practice rather than
+# refused (the gate is gone, #138), so the member list stays confined to the
+# declared, non-dangerous tiers; ``test_qa_p1_subagent`` holds it to that rather
+# than this comment.
 EXPLORE_TIER = "explore"
 EXECUTE_TIER = "execute"
 
@@ -335,17 +333,11 @@ class SubAgentExecutor:
                 "artifacts": [],
                 "status": "RUNNING",
                 "stop_requested": False,
-                "pending_confirm": {},
                 "step_index": 0,
                 "final_answer": "",
                 "error": "",
                 "_last_action": "",
                 "_current_tool_calls": [],
-                "_confirmed_ids": [],
-                "_rejected_ids": [],
-                "_needs_confirm": False,
-                "risk_report": [],
-                "_risk_blocked": False,
                 "subtasks": [],
                 "_is_subtask": True,
             }
@@ -366,14 +358,14 @@ class SubAgentExecutor:
                 tool_schemas=schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=getattr(self.tm, "_aux_llm", None),
-                confirm_enabled=False,  # subtask internal: no human confirm
                 parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
             )
             from .graph import build_graph
 
-            graph = build_graph(runtime, mode="subtask")
-            # The subtask topology runs 4 nodes per cycle; lift the default
-            # recursion limit (25) so deep subtasks honor settings.max_steps.
+            graph = build_graph(runtime)
+            # The loop spends up to three nodes per cycle (planner → executor →
+            # tool); lift the default recursion limit (25) so deep subtasks
+            # honor settings.max_steps.
             #
             # No checkpointer here, and deliberately no ``durability=`` either
             # (langgraph 1.x): subtasks are never resumed — they fold into the

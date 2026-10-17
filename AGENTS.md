@@ -21,7 +21,6 @@
 | 危险动作拦截 | 危险动作由**设置里的规则表 + 一个钩子**当场拒：命中即不执行，把 `{block, reason}` 当该次调用的结果回给模型；**不弹框、不进图重入**。钩子**不改参数、不 terminate**（与 pi 的有意分歧） | `docs/adr/0008` + `backend/core/agent/policy.py`（规则表）与 `nodes.py::executor`（钩子所在） |
 | 计划 / 执行两模式〔片 S5〕 | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（开关**黏性**）；一轮没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读），执行模式 = 全部已挂载工具 | `docs/adr/0008`（决策）+ `docs/pivot-plan-build.md`（切法） |
 | 熔断与工具挂载 | 熔断计数**按运行各记一本账、不跨父子/子任务共享**是定居决策不是 bug；MCP / Git / OpenAPI 工具由 `task_manager` 显式追加（不经 `@register`）。原「冻结区零改动」随 ADR 0008 解除 | `docs/adr/0003`（+ ADR 0008「三笔账」3） |
-| 确认闸门〔片 S4 删〕 | 整链（`human_confirm_node` 含 `_needs_confirm` 重算块 / `/confirm` / 五档终态 / 前端确认框）已由 ADR 0008 决定**删除**。**S4 落地前别改它**（免得白改）；S4 之后本行消失 | `docs/pivot-plan-build.md` §S4 |
 | 密钥 | 只走环境变量注入；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文，只报 set / not set | `.env.example` 注释 + `backend/config.py`（`llm_api_key` 默认空） |
 | 产物登记语义 | 产物 = 本任务（含子任务）**写出的文件**：只有 `registers_artifact=True` 的工具（现役仅 `write` / `edit`）是产物源，`read` / `ls` / `glob` / `grep` 带的 `path` 与动态包装面一律不登记；去重按「任务内 resolved path」收口在 `add_artifact`。读到同文件不新增产物、重写只一条，都是**定居决策不是 bug**，别照旧直觉「修回去」 | `docs/adr/0004`（判据、影响面与重开条件） |
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
@@ -37,8 +36,8 @@
 |---|---|---|
 | 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：qoder 实施 + `code-review` 自评审 + `neat-freak` 文档收尾（步 3.5，能力面/接口/配置语义变了必须同步文档）+ 提 PR；opencode 独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
-| 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse`，确认框面（关框 / 切任务 / 五档终态）→ `npm run check:confirm`〔片 S4 删：确认框面随闸门退役，该脚本一并删〕 |
-| stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；三类 409 拒绝逐条仍成立〔片 S4 后「停在闸门」那一类随闸门消失，余两类不变〕 |
+| 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse` |
+| stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条仍成立（非 INTERRUPTED、无 checkpoint；随闸门退役由三类减为两类） |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/pivot-plan-build.md`（切法与片号） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划；一轮没有工具调用即停下；状态三值、无「完成」终态。**片 S5 之前代码仍是旧拓扑**，别按新拓扑改旧节点 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
@@ -58,10 +57,9 @@
 .\.venv311\Scripts\python.exe -m uvicorn backend.main:app --port 8000 --reload
 cd frontend; npm run dev
 
-# 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm run check:sse → npm run check:confirm → npm run build
+# 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm run check:sse → npm run build
 npx tsc --noEmit     # 本地快检，0 错误
 npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面必跑，细则见 docs/architecture.md §3.4
-npm run check:confirm # 确认框关框 / 切任务 / 五档终态判据（#91）；无测试框架，断言以 plain-Node 脚本落 frontend/scripts/
 ```
 
 - 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。换位置克隆需同步改配置里的 `.venv311` 绝对路径 entry。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。

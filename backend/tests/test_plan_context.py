@@ -1,8 +1,8 @@
 """#119 plan-context injection tests — ``state["plan"]`` reaches the executor.
 
-Before #119 the only consumers of ``state["plan"]`` were ``risk_scan`` and the
-``plan_update`` event: the executor LLM never saw the plan it was supposedly
-carrying out. These tests pin the fix at the single seam that builds the LLM
+Before #119 the only consumer of ``state["plan"]`` was the ``plan_update``
+event: the executor LLM never saw the plan it was supposedly carrying out.
+These tests pin the fix at the single seam that builds the LLM
 payload (:meth:`AgentRuntime._build_messages`), driven through the real nodes so
 the call site is covered too:
 
@@ -171,8 +171,7 @@ def test_renderer_empty_plan_is_empty_string() -> None:
 
 
 def test_renderer_tolerates_bare_string_steps() -> None:
-    """非 dict 条目（``_mark_high_steps_skipped`` / ``risk.scan_keywords`` 同样容忍的
-    旧形态）降级成一条描述，而不是把 executor 的整次调用炸掉。"""
+    """非 dict 条目降级成一条描述，而不是把 executor 的整次调用炸掉。"""
     assert render_plan_section(["Research X", {"index": 9, "description": "Act"}]) == (
         f"\n\n{PLAN_SECTION}\n1. [pending] Research X\n9. [pending] Act"
     )
@@ -213,7 +212,7 @@ def test_executor_sees_updated_plan(tmp_path: Path) -> None:
 
 
 def test_executor_status_follows_the_plan(tmp_path: Path) -> None:
-    """AC1 的另一半：计划被就地改写（如 risk pause 把高危步置 skipped）后，
+    """AC1 的另一半：计划被就地改写（steps 状态变化）后，
     下一次 executor 看到的是改写后的状态，不是首轮快照。"""
     llm = _FakeLLM(plans=[["Inspect", "Drop the table"]])
     rt = _runtime(_settings(tmp_path), llm)

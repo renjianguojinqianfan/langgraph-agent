@@ -1,19 +1,12 @@
 import { create } from "zustand";
 import {
   Artifact,
-  ConfirmDialogState,
-  RiskItem,
   SSEvent,
   StepRecord,
   Task,
   ToolCallRecord,
   TraceMarker,
 } from "../types";
-import {
-  confirmAfterSwitch,
-  shouldCloseConfirmOnResolved,
-} from "./confirmSlot";
-import { withConfirmOutcome } from "./confirmOutcome";
 
 interface TaskState {
   tasks: Task[];
@@ -22,15 +15,12 @@ interface TaskState {
   events: SSEvent[];
   /** Per-task live markers (circuit open / context compressed) for the flow view. */
   markers: Record<string, TraceMarker[]>;
-  confirm: ConfirmDialogState;
   selectedStep: number | null;
 
   setTasks: (tasks: Task[]) => void;
   setCurrentTask: (id: string | null) => void;
   upsertTask: (task: Task) => void;
   applyEvent: (ev: SSEvent) => void;
-  openConfirm: (c: Omit<ConfirmDialogState, "open">) => void;
-  closeConfirm: () => void;
   setSelectedStep: (index: number | null) => void;
 }
 
@@ -51,7 +41,6 @@ function emptyTask(id: string): Task {
     error: null,
     created_at: "",
     updated_at: "",
-    risk_report: [],
     subtasks: [],
   };
 }
@@ -111,7 +100,6 @@ function applyToTask(task: Task, ev: SSEvent): Task {
                   // The backend attaches these flags on the tool_result event.
                   circuit_open: rec.circuit_open ?? tc.circuit_open,
                   retries: rec.retries ?? tc.retries,
-                  confirm_outcome: rec.confirm_outcome ?? tc.confirm_outcome,
                 }
               : tc
           ),
@@ -119,30 +107,10 @@ function applyToTask(task: Task, ev: SSEvent): Task {
       });
       return { ...task, steps };
     }
-    case "human_confirm_required": {
-      const tcId = ev.data.tool_call_id;
-      const steps = task.steps.map((s) => ({
-        ...s,
-        tool_calls: s.tool_calls.map((tc) =>
-          tc.id === tcId ? { ...tc, need_confirm: true } : tc
-        ),
-      }));
-      return { ...task, steps };
-    }
-    case "human_confirm_resolved": {
-      // #91 AC2 实时面：终态并回 step 记录。approved / denied 走 tool_result 也能带上，
-      // 但 aborted 没有 tool_result，这条事件是它唯一的落点（判据在 confirmOutcome.ts）。
-      const steps = withConfirmOutcome(task.steps, ev.data.tool_call_id, ev.data.outcome);
-      return steps === task.steps ? task : { ...task, steps };
-    }
     case "artifact_created": {
       const art = ev.data as Artifact;
       if (task.artifacts.some((a) => a.id === art.id)) return task;
       return { ...task, artifacts: [...task.artifacts, art] };
-    }
-    case "risk_report": {
-      const items = (ev.data.items ?? []) as RiskItem[];
-      return { ...task, risk_report: items };
     }
     case "final_answer":
       return { ...task, final_answer: ev.data.answer ?? task.final_answer };
@@ -163,19 +131,15 @@ export const useTaskStore = create<TaskState>((set) => ({
   detail: {},
   events: [],
   markers: {},
-  confirm: { open: false },
   selectedStep: null,
 
   setTasks: (tasks) => set({ tasks }),
 
   setCurrentTask: (id) =>
-    set((state) => ({
+    set({
       currentTaskId: id,
       selectedStep: null,
-      // #91 AC1：确认框是全局单格，切换任务时把「属于别的任务」的开着的框清掉，
-      // 否则 A 的僵尸框会盖在 B 上（切走 A、后端才收口那一格残留的正面收口）。
-      confirm: confirmAfterSwitch(state.confirm, id),
-    })),
+    }),
 
   upsertTask: (task) =>
     set((state) => {
@@ -203,33 +167,6 @@ export const useTaskStore = create<TaskState>((set) => ({
         ? state.tasks.map((t) => (t.id === id ? summary : t))
         : [summary, ...state.tasks];
 
-      let confirm = state.confirm;
-      if (ev.type === "human_confirm_required") {
-        const d = ev.data;
-        confirm = {
-          open: true,
-          tool_call_id: d.tool_call_id,
-          tool_name: d.tool_name,
-          input: d.input,
-          task_id: id,
-        };
-      }
-      // #83: 后端自行收口的三种终态（超时未答 / 停止打断 / 评测态自动放行）不会
-      // 有人来点这个按钮。不在这儿关掉，就留一具僵尸弹窗——用户还能对一格已有
-      // 终态的调用点按「批准」，那是一次打到已判完的调用上的假操作。
-      // #91 AC1：关框再加 `confirm.task_id === id`（判据在 shouldCloseConfirmOnResolved），
-      // 消掉「切走任务 A、在 B 视图收到 A 的 resolved」把 B 的框误收 / A 的框残留盖在 B 上。
-      if (
-        ev.type === "human_confirm_resolved" &&
-        shouldCloseConfirmOnResolved(
-          confirm,
-          id,
-          ev.data.tool_call_id
-        )
-      ) {
-        confirm = { open: false };
-      }
-
       // Track flow markers (circuit open / context compressed) per task so the
       // message stream can render them without losing cross-task isolation.
       let markers = state.markers;
@@ -242,13 +179,10 @@ export const useTaskStore = create<TaskState>((set) => ({
       return {
         detail: { ...state.detail, [id]: next },
         tasks,
-        confirm,
         markers,
         events: [...state.events, ev].slice(-500),
       };
     }),
 
-  openConfirm: (c) => set({ confirm: { open: true, ...c } }),
-  closeConfirm: () => set({ confirm: { open: false } }),
   setSelectedStep: (index) => set({ selectedStep: index }),
 }));
