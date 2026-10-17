@@ -989,8 +989,15 @@ class TaskManager:
         message should execute. The plan round therefore borrows plan mode for
         one invoke and restores the task's own mode afterwards.
 
-        No synthetic user message is added: the plan-mode system prompt already
+        Nothing synthetic is persisted: the plan-mode system prompt already
         asks for a plan, and the conversation on disk is the context to revise.
+        For this one-off round only, ``AgentRuntime.replan`` appends a
+        request-only user anchor to the LLM request (never written to the task),
+        so the model does not read the previous "execute" turn as the current
+        instruction. The round is retried once when the model answers with text
+        instead of a JSON plan (real-model review: the unanchored round drifted
+        into an injected skill, and provider markup could otherwise land in the
+        conversation).
         """
         return self._continue(
             task_id, user_text=None, one_off_mode=TaskMode.PLAN
@@ -1140,6 +1147,10 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 aux_llm=self._aux_llm,
+                # The「重新规划」button borrows a plan round; anchor that round
+                # to the current task so a long injected AGENTS / skills
+                # context cannot make the model plan an unrelated task.
+                replan=(one_off_mode is TaskMode.PLAN),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
