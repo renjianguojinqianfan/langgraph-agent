@@ -99,7 +99,8 @@ streaming v2 的原因。
 `uvicorn` / `starlette` 区间不动。
 
 **代价**：迁移前写的旧快照作废 —— 启动时用 `PRAGMA user_version` 打标 + `mode=ro` 只读检测，判定为旧格式
-就告警并拒绝挂载（服务照常起、新任务照跑，只是 resume 落回 409），不做自动迁移；`durability` 只在挂了
+就告警并拒绝挂载（服务照常起、新任务照常跑第一轮；没有 checkpointer，resume 与「续说」都落回 409，
+直到把旧库移走），不做自动迁移；`durability` 只在挂了
 checkpointer 时传（1.2.11 在无 checkpointer 时传 `sync` 会 `AttributeError`），一律经 `_invoke_kwargs()` 取参数。
 
 **安全闭环**：两条曾被 dismiss 的公告（CVE-2025-67644 / CVE-2026-71433）随 3.1.1 从「已接受」变「已修复」。

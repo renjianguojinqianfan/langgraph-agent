@@ -254,10 +254,10 @@ AttributeError 在第一个 superstep 就炸。
 
 这个状态恰好就是「旧库被拒绝挂载」之后的状态（见 §2.4），所以两个决策会相互撞上。
 修法：durability 只在 `self._checkpointer is not None` 时才传（`TaskManager._invoke_kwargs()`）。
-拒绝挂载必须降级成「resume 不可用」，绝不能降级成「任务全崩」。
+拒绝挂载必须降级成「resume 与续说不可用」，绝不能降级成「任务全崩」。
 
-这不是推理出来的，是被测试抓住的：`test_new_tasks_still_run_with_legacy_store_present`
-（旧库在场时新任务仍须跑完）在加上 durability 后立刻变红。先写行为测试、后接新特性，
+这不是推理出来的，是被测试抓住的：`test_new_tasks_run_one_round_with_refused_store_but_cannot_continue`
+（旧库在场时新任务仍须跑完第一轮）在加上 durability 后立刻变红。先写行为测试、后接新特性，
 刚好把这个交互逼出来。
 
 ## 6. 闸门与回滚
@@ -288,12 +288,12 @@ v1 库按 §2.4 的 `older` 行拒绝，处置同样是移走）。
 首跑因此 FAIL（trace 显示无事件、循环正常推进，纯粹是模型延迟），重跑即 PASS。
 另外 `OpenAICompatibleClient` 未设请求 timeout（SDK 默认 600s），单次卡顿会吃掉整个预算。
 
-回滚：`requirements.txt` 恢复旧矩阵 + `pip install -r requirements.txt`。数据侧无需回滚
-（`data/` 不入库；打标只写 `PRAGMA user_version`，旧栈忽略该值，因此打标后的文件在
-回滚后仍可被 2.0.11 正常使用）。
-**2026-10-17 补记（S5 / #139）**：从本版回滚到 S4/master 时，那侧的判据会把 v2 库判成
-`newer` 并拒绝挂载——回滚同样要先把 `data/checkpoints/checkpoints.sqlite{,-wal,-shm}` 移走，
-新任务才能重获续说能力。升级与回滚各一步移库，方向相反、处置相同。
+回滚：`requirements.txt` 恢复旧矩阵 + `pip install -r requirements.txt`。**回滚到 2.0.11**
+时数据侧无需处理：`data/` 不入库，打标只写 `PRAGMA user_version`，而 2.0.11 根本不读这个戳，
+打标后的文件仍可正常使用。
+**2026-10-17 补记（S5 / #139）**：**回滚到本仓库的 S4/master** 是另一回事——那侧的守卫会把
+v2 判成 `newer` 并拒绝挂载。回滚同样要先把 `data/checkpoints/checkpoints.sqlite{,-wal,-shm}`
+移走，新任务才能重获续说能力。升级（v1→v2）与回滚（v2→v1）各一步移库，方向相反、处置相同。
 
 ## 7. Phase 2 待办（本次交付刻意不含）
 

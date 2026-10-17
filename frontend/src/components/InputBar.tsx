@@ -64,7 +64,9 @@ export function InputBar() {
         const id = res.data?.task_id;
         if (id) {
           setCurrent(id);
-          setText("");
+          // Only clear what was sent: a draft typed while the request was in
+          // flight must survive.
+          setText((prev) => (prev.trim() === input ? "" : prev));
         } else {
           setNote(detailText(res) ?? "创建失败");
         }
@@ -76,7 +78,7 @@ export function InputBar() {
         const res = await sendMessage(task.id, input);
         if (res.data?.task) {
           upsert(res.data.task);
-          setText("");
+          setText((prev) => (prev.trim() === input ? "" : prev));
         } else {
           setNote(detailText(res) ?? "发送被拒绝");
         }
@@ -158,7 +160,7 @@ export function InputBar() {
         {failed
           ? "任务出错后不能续说；新建任务重新开始"
           : "Ctrl/⌘ + Enter 发送"}
-        {currentTaskId ? "　·　停下（一轮没有工具调用）后可以继续说" : ""}
+        {currentTaskId ? "　·　这一轮没有工具调用即停下，之后可以继续说" : ""}
       </div>
     </div>
   );

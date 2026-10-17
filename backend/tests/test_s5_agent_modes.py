@@ -21,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, cast
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.schemas import TaskStatus
@@ -441,13 +442,19 @@ def test_rest_mode_plan_messages_and_replan(tmp_path: Path) -> None:
     assert [p.description for p in parked.plan] == ["step"]
 
 
-def test_rest_plan_edit_is_refused_while_running(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "status", [TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.FAILED]
+)
+def test_rest_plan_edit_is_refused_when_not_parked(
+    tmp_path: Path, status: TaskStatus
+) -> None:
+    """Only a parked task is editable (the route and the UI say the same)."""
     client, tm = _api_client(tmp_path)
     task_id = tm.create_task(title="api2", user_input="hi")
     _wait_parked(tm, task_id)  # no live worker: the status alone is the gate
     task = tm.get_task(task_id)
     assert task is not None
-    task.status = TaskStatus.RUNNING
+    task.status = status
     tm.persistence.save_task(task)
 
     r = client.put(f"/api/tasks/{task_id}/plan", json={"plan": [{"description": "x"}]})

@@ -703,7 +703,7 @@ class TaskManager:
         the first superstep). A refused pre-migration store leaves us in exactly
         that no-checkpointer state, and it must degrade to "resume unavailable",
         never to "tasks crash". Caught by
-        test_new_tasks_still_run_with_legacy_store_present.
+        test_new_tasks_run_one_round_with_refused_store_but_cannot_continue.
         """
         return {"durability": _DURABILITY} if self._checkpointer is not None else {}
 
