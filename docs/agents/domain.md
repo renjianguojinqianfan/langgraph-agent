@@ -10,13 +10,11 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grilling` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-> **Current state (2026-10-07):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
+> **Current state (2026-10-17):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
 > authority stays in `backend/core/agent/state.py`; follows upstream's `GLOSSARY.md` convention
-> since #876); `docs/adr/` **does** —
-> seeded with `0001-in-place-migration-and-resume-positioning.md` (migrated in from
-> `.qoder/specs/`) and `0002-moat-discipline-no-attention-reallocation.md`
-> (wayfinder #27/#30). This repo is **single-context** — one `GLOSSARY.md` + one `docs/adr/`
-> at the root. No `GLOSSARY-MAP.md`, no per-package context dirs.
+> since #876); `docs/adr/` holds `0001`–`0008` — `0001`–`0004` + `0008` are live, `0005`–`0007`
+> retired with `0008` (single loop + plan/build two modes). This repo is **single-context** —
+> one `GLOSSARY.md` + one `docs/adr/` at the root. No `GLOSSARY-MAP.md`, no per-package context dirs.
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
 > dirs (`.qoder/`, `.trae/`, `.mimosa/`), which are untracked by design. Full rule table:
@@ -33,10 +31,8 @@ Single-context repo (this repo's layout):
 ├── AGENTS.md                          ← agent operating manual (exists; short entry: positioning /
 │                                        safety boundaries / task routing / verification / Agent skills)
 ├── docs/
-│   ├── adr/                           ← decisions (0001-in-place-migration-and-resume-positioning.md,
-│   │                                     0002-moat-discipline-no-attention-reallocation.md,
-│   │                                     0003-subagent-circuit-breaker-per-runtime.md,
-│   │                                     0004-artifact-is-what-the-task-wrote.md)
+│   ├── adr/                           ← decisions (0001–0004 live; 0005–0007 retired;
+│   │                                     0008 single loop + plan/build two modes)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   │                                     「冻结」只覆盖**已交付增量**的记录——不改写，现状写进权威段
 │   │                                     （README 能力 / architecture）；**未开工增量**的 spec 是活的设计
@@ -48,8 +44,8 @@ Single-context repo (this repo's layout):
 │   ├── migration-langgraph-1x.md      ← 0.2 → 1.2.x migration, measured
 │   ├── capability-first-principles.md ← first-principles capability derivation
 │   ├── agent-comparison-report.md     ←横向对标（Codex/Qoder/Hermes/dsh）
-│   ├── architecture-audit-2026-09-22.md ← 只读架构审计（发现 → issue 映射与状态）
-│   └── roadmap-pawbench.md            ← execution roadmap (v2)
+│   ├── architecture-audit-2026-09-22.md ← 历史只读架构审计（已归档；发现 → issue 映射）
+│   └── roadmap-pawbench.md            ← archived evaluation roadmap (PawBench retired)
 ├── backend/                           ← Python: api / core(agent,llm,tools,kb,mcp) / services / utils
 └── frontend/                          ← React + Vite + TS: components / pages / store / hooks
 ```
@@ -86,8 +82,8 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 > _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
 
 `docs/adr/0001` (in-place migration over rewrite + resume-project positioning, decisions
-D1–D9), `0002` (moat discipline — **部分退役**：「受保护文件零改动」与「`_needs_confirm` 重算块」
-两条随 `0008` 解除，见 0008「三笔账」3), `0003` (circuit-breaker state stays per-runtime, never shared
+D1–D9), `0002` (moat discipline — **部分退役**：「受保护文件零改动」随 `0008` 解除，
+见 0008「三笔账」3), `0003` (circuit-breaker state stays per-runtime, never shared
 across parent/subtasks — so **#60's "每个子任务各记一本账" is by design, not a bug to re-file**),
 `0004` (a product is a file the task *wrote*: only `registers_artifact` tools are product
 sources, deduped per task by resolved path — so **#72's "read 回读不再登记 / 重写只一条" is by

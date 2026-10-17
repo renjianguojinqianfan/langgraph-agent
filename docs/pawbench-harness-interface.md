@@ -1,5 +1,8 @@
 # PawBench harness 接入接口分析（一手来源调研）
 
+> 🗄️ **已归档（2026-10-17，S6 / #140）**：PawBench / 无人值守评测入口已随 ADR 0008 / S1 退役；
+> 本文保留为历史调研，不再维护。现役形态见 [README](../README.md) / [ADR 0008](adr/0008-single-loop-plan-build-modes.md)。
+
 > 生成于 2026-09-14。本文是 [`roadmap-pawbench.md`](roadmap-pawbench.md) 里 **M1 第一件事**
 > 的交付物：从 PawBench 官方仓库源码取证，回答"一个自定义 harness 要接入 PawBench 跑分，
 > 到底要实现什么契约"。能力优先级的推导依据见
@@ -589,7 +592,7 @@ roadmap §三 把 P0-C 列为"评测前置依赖"，本次调研可以把它从�
 | 4 | CLI 白名单 | `run_bench.py` 的 `--agents choices` 加 `"langgraph"` | S3 |
 | 5 | 评测镜像 | fork 内 `docker/Dockerfile.pawbench-langgraph` | 抄 S21：中文字体 + chromium/xvfb（多模态题）+ pytest + 本项目 requirements |
 | 6 | P0-C headless CLI | 本项目内（roadmap 分支 `feat/headless-runner`） | §4.1 八条 |
-| 7 | `scripts/pawbench_run.py` | 本项目内 | 对齐 [`scripts/live_e2e.py`](../scripts/live_e2e.py) 的 live 模式 |
+| 7 | `scripts/pawbench_run.py` | 本项目内 | 对齐 `scripts/live_e2e.py` 的 live 模式（该脚本已随 S1 删除，仅作历史指向） |
 
 `scripts/pawbench_run.py` 的两种模式（对齐 roadmap §一"评测形态"决策）：
 

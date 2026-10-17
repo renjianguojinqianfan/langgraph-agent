@@ -11,11 +11,11 @@
 **主线 A · LangGraph 框架原理**
 1. ✅ LangGraph 心智模型：State/Node/Edge/Conditional Edge（用 graph.py 真代码）
 2. 状态更新机制：节点返回「部分 state」、reducer、superstep——为 P3 副本语义埋伏笔
-3. human-in-the-loop：项目自研确认闸门 vs 官方 interrupt()（为何官方方案依赖 checkpointer）
+3. human-in-the-loop：官方 interrupt() 机制（为何依赖 checkpointer）；本项目危险动作由 `policy_rules` + 钩子当场拒
 4. Checkpointer 断点续跑：thread_id / SqliteSaver / P3「每 superstep 传 state 副本」大坑（最佳面试故事）
 
 **主线 B · Agent 工程通用模式**
-5. Agent 主循环与 ReAct：planner→executor→tool→reflect 对照 ReAct 论文与 Anthropic agents 文章
+5. Agent 主循环与 ReAct：agent→tool→agent 对照 ReAct 论文与 Anthropic agents 文章
 6. 工具层工程：BaseTool 规范、注册表、熔断+指数退避（resilience.py）
 7. ✅ 上下文工程：token 预算与压缩（context.py）→ 讲义 [`lessons/0002-context-budget-and-compaction.html`](lessons/0002-context-budget-and-compaction.html) + 速查卡 [`reference/context-budget-cheatsheet.html`](reference/context-budget-cheatsheet.html)
 8. 工具生态外扩：MCP 客户端与 Git 工具（task_manager 显式加载、不经 @register 的原因）
@@ -66,4 +66,4 @@
 ## 工作区说明
 - teach 状态文件位于仓库根目录（MISSION.md / lessons/ / reference/ / assets/ / learning-records/ / NOTES.md / RESOURCES.md），**已入库**（2026-09-12 杂物 triage 决定：学习痕迹是加分项，前提是索引可读）；入口索引见 `learning-records/README.md`
 - 工具态产物不入库：`.mimosa/`、`.qoder/`（2026-09-15 起整体 ignore；原 `.qoder/specs/` 已迁 `docs/specs/` + `docs/adr/`）、`_write_bh_report.py` 已在 .gitignore；文档归属约定见 `AGENTS.md` §3
-- 项目硬规则照常生效：不碰 conftest 隔离、`_needs_confirm` 重算逻辑、resilience/registry（教学只读不写）
+- 项目硬规则照常生效：不碰 conftest 隔离、产物登记语义、质量门禁（教学只读不写）

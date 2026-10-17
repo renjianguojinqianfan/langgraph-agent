@@ -5,56 +5,43 @@ sequenceDiagram
     participant API as FastAPI 路由
     participant TM as TaskManager
     participant EB as EventBus
-    participant G as LangGraph Graph
+    participant G as LangGraph (agent/tool/finish)
     participant L as LLMClient
-    participant T as BaseTool 实现
+    participant T as BaseTool
 
-    %% 提交任务
-    U->>FE: 输入任务并提交
-    FE->>API: POST /api/tasks {input}
+    U->>FE: 新建任务（可选 mode=plan）
+    FE->>API: POST /api/tasks {input, mode}
     API->>TM: create_task()
     TM->>EB: publish(task_created)
     API-->>FE: {task_id}
     FE->>API: GET /api/tasks/{id}/events (SSE)
     API->>EB: subscribe(task_id)
 
-    %% 执行循环
-    TM->>G: run(task_id)  [独立线程/任务]
-    loop 每个 step (≤ max_steps)
-        G->>L: planner: complete(messages) 生成计划
-        L-->>G: plan / thought
-        G->>EB: publish(plan_update / step_start)
-        G->>L: executor: complete(messages, tools) 决定动作
+    TM->>G: invoke [独立线程]
+    loop 本轮（START → agent → tool → agent …）
+        G->>L: agent.complete(system + messages, tools)
         L-->>G: tool_calls 或 final_answer
+        G->>EB: publish(step_start / tool_call)
         alt 有 tool_call
-            G->>EB: publish(tool_call)
-            opt 危险工具且需确认 (P1)
-                G->>EB: publish(human_confirm_required)
-                FE->>API: POST /api/tasks/{id}/confirm
-                API->>TM: 设置 pending_confirm
-                TM-->>G: approved / rejected
-            end
             G->>T: run(**input)
             T-->>G: ToolResult
             G->>EB: publish(tool_result)
-            opt 产出文件
-                G->>TM: save_artifact()
+            opt 产物源工具写出真实文件
+                G->>TM: add_artifact()
                 TM->>EB: publish(artifact_created)
             end
-        else final_answer
+            Note over G: tool → agent（本轮预算未尽）
+        else 本轮最后一次调用没有 tool call
             G->>EB: publish(final_answer)
+            G->>G: finish：INTERRUPTED（停下）
         end
-        G->>L: reflect: 完成? (条件边)
-        L-->>G: continue / done
     end
-    G-->>TM: 结束 (COMPLETED/FAILED)
-    TM->>EB: publish(task_completed / task_failed)
-    EB-->>FE: 实时渲染步骤/详情/产物
+    G-->>TM: 状态 INTERRUPTED / FAILED
+    TM->>EB: publish(task_interrupted / task_failed)
+    EB-->>FE: 实时渲染对话 / 计划 / 步骤 / 产物
 
-    %% 停止控制
-    U->>FE: 点击「停止」
-    FE->>API: POST /api/tasks/{id}/stop
-    API->>TM: stop(task_id)  // 置 stop_requested
-    TM->>G: 循环检测 stop_requested -> 中断
-    TM->>EB: publish(task_interrupted)
-    EB-->>FE: 状态置 interrupted
+    U->>FE: 停下后说一句
+    FE->>API: POST /api/tasks/{id}/messages
+    API->>TM: send_message()（同一 thread_id / checkpoint）
+    TM->>EB: publish(task_resumed)
+    TM->>G: 新一轮 invoke

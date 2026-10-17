@@ -8,7 +8,7 @@
 - [LangGraph Persistence — 官方文档](https://docs.langchain.com/oss/python/langgraph/persistence)
   Checkpointer 与 thread 级内存机制。用于：断点续跑课（对应项目 P3）。
 - [LangGraph Interrupts — 官方文档](https://docs.langchain.com/oss/python/langgraph/interrupts)
-  human-in-the-loop 的 `interrupt()` 机制，依赖 checkpointer。用于：确认闸门课，与项目自研闸门对比。
+  human-in-the-loop 的 `interrupt()` 机制，依赖 checkpointer。用于：框架原理课；本项目危险动作由 `policy_rules` + 钩子当场拒。
 - [StateGraph 类 API Reference](https://reference.langchain.com/python/langgraph/graph/state/StateGraph)
   add_node / add_edge / add_conditional_edges / compile 的精确签名。
 - [interrupt API Reference](https://reference.langchain.com/python/langgraph/types/interrupt)
@@ -32,9 +32,9 @@
   协议正典：initialize / list_tools / call_tool / transports。
 
 ### 一手教材（本项目自身——最重要的资源）
-- `backend/core/agent/graph.py` — 全项目唯一一张图，110 行，条件边活教材
+- `backend/core/agent/graph.py` — 全项目唯一一张图（agent / tool / finish），条件边活教材
 - `backend/core/agent/state.py` — AgentState TypedDict，状态建模教材
-- `backend/core/agent/nodes.py` — 六个节点的真实实现
+- `backend/core/agent/nodes.py` — 三个节点的真实实现（单 loop、两种模式）
 - `backend/core/tools/resilience.py` — 熔断/重试/ToolExecutor
 - `backend/services/task_manager.py` — resume / 孤儿对账 / 权威停止信号
 - `docs/architecture.md` 与 `docs/incremental-arch-p0..p3.md` — 项目自带架构文档（含每轮迭代的「为什么」）

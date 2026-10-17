@@ -29,10 +29,10 @@
   <h2>四要素</h2>
   <table>
     <tr><th style="width:14%">概念</th><th style="width:34%">一句话</th><th style="width:28%">项目落点</th><th>官方 API</th></tr>
-    <tr><td><b>State</b></td><td>共享黑板，节点间唯一的通信方式，用 <code>TypedDict</code> 声明</td><td><code>AgentState</code>（约 25 个字段）</td><td><code>StateGraph(AgentState)</code></td></tr>
-    <tr><td><b>Node</b></td><td>接收 state、干活、返回 state 更新的函数</td><td>8 个节点方法挂在 <code>AgentRuntime</code> 上</td><td><code>g.add_node(name, fn)</code></td></tr>
-    <tr><td><b>Edge</b></td><td>固定路线，无条件必走</td><td>全项目仅 1 条：<code>finish → END</code></td><td><code>g.add_edge(a, b)</code> / <code>set_entry_point</code></td></tr>
-    <tr><td><b>Conditional Edge</b></td><td>路由函数读 state、返回下一节点名</td><td>7 个出口全部是条件边</td><td><code>g.add_conditional_edges(a, router)</code></td></tr>
+    <tr><td><b>State</b></td><td>共享黑板，节点间唯一的通信方式，用 <code>TypedDict</code> 声明</td><td><code>AgentState</code>（含 <code>mode</code> / <code>round_steps</code>）</td><td><code>StateGraph(AgentState)</code></td></tr>
+    <tr><td><b>Node</b></td><td>接收 state、干活、返回 state 更新的函数</td><td>3 个节点方法挂在 <code>AgentRuntime</code> 上：<code>agent</code> / <code>tool</code> / <code>finish</code></td><td><code>g.add_node(name, fn)</code></td></tr>
+    <tr><td><b>Edge</b></td><td>固定路线，无条件必走</td><td>两条：<code>START → agent</code>、<code>finish → END</code></td><td><code>g.add_edge(a, b)</code></td></tr>
+    <tr><td><b>Conditional Edge</b></td><td>路由函数读 state、返回下一节点名</td><td>两个路由：<code>_after_agent</code>、<code>_after_tool</code></td><td><code>g.add_conditional_edges(a, router)</code></td></tr>
   </table>
 
   <h2>最小可运行示例（背下来，面试白板用）</h2>
@@ -60,17 +60,12 @@ app = g.compile()                   <span class="cm"># 可选：compile(checkpoi
   <p>所有判断按顺序短路求值（与 <code>graph.py</code> 逐行对应）。<b>这是本项目最重要的一张表。</b></p>
   <table class="route">
     <tr><th style="width:20%">出口节点</th><th>路由顺序（命中即走）</th></tr>
-    <tr><td><code>planner</code></td><td><code>stop_requested</code> → finish；否则 → risk_scan</td></tr>
-    <tr><td><code>risk_scan</code></td><td><code>stop_requested</code> → finish；否则 → subagent_split</td></tr>
-    <tr><td><code>subagent_split</code></td><td><code>stop_requested</code> → finish；<code>_last_action == "final_answer"</code> → reflect；否则 → executor</td></tr>
-    <tr><td><code>executor</code></td><td><code>stop_requested</code> → finish；<code>final_answer</code> → reflect；<code>_needs_confirm</code> → human_confirm；否则 → tool</td></tr>
-    <tr><td><code>human_confirm</code></td><td>恒 → tool（确认 = 放行，不是终点）</td></tr>
-    <tr><td><code>tool</code></td><td><code>stop_requested</code> → finish；<code>_needs_confirm</code> → human_confirm；否则 → reflect</td></tr>
-    <tr><td><code>reflect</code></td><td><code>stop_requested</code> → finish；<code>final_answer</code> → finish；<code>step_index ≥ max_steps</code> → finish；否则 → planner（循环！）</td></tr>
-    <tr><td><code>finish</code></td><td>→ END（唯一的普通边）</td></tr>
+    <tr><td><code>agent</code></td><td><code>stop_requested</code> / <code>error</code> → finish；本轮最后一次调用没有 tool call → finish；否则 → tool</td></tr>
+    <tr><td><code>tool</code></td><td><code>stop_requested</code> → finish；<code>round_steps ≥ max_steps</code> → finish；否则 → agent（循环！）</td></tr>
+    <tr><td><code>finish</code></td><td>→ END（固定边；任务停成 INTERRUPTED 或 FAILED）</td></tr>
   </table>
   <p>设计规律：① <code>stop_requested</code> 在每个出口都是第一优先级——宁可少做，不可失控；
-  ② 防失控有三道独立保险：<code>stop_requested</code>（人）→ <code>max_steps</code>（预算）→ LangGraph <code>recursion_limit</code>（框架兜底）。</p>
+  ② 防失控有三道独立保险：<code>stop_requested</code>（人）→ <code>round_steps ≥ max_steps</code>（本轮预算）→ LangGraph <code>recursion_limit</code>（框架兜底）。</p>
 
   <h2>术语表</h2>
   <table>
@@ -78,7 +73,7 @@ app = g.compile()                   <span class="cm"># 可选：compile(checkpoi
     <tr><td><b>State</b></td><td>图共享的状态对象；节点靠它通信</td></tr>
     <tr><td><b>Node</b></td><td>改变状态的函数</td></tr>
     <tr><td><b>Edge / Router</b></td><td>固定边 / 条件边的路由函数</td></tr>
-    <tr><td><b>Entry Point</b></td><td>图的入口节点（本项目：<code>planner</code>）</td></tr>
+    <tr><td><b>Entry Point</b></td><td>图的入口节点（本项目：<code>agent</code>）</td></tr>
     <tr><td><b>END</b></td><td>终结标记，走到即停止</td></tr>
     <tr><td class="later"><b>Superstep</b> <span class="later">（课程 02）</span></td><td class="later">一轮「执行若干节点 + 广播状态更新」的批次单位；副本语义的根源</td></tr>
     <tr><td class="later"><b>Reducer</b> <span class="later">（课程 02）</span></td><td class="later">声明某字段如何合并更新（如 <code>operator.add</code> 追加）</td></tr>

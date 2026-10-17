@@ -1,5 +1,8 @@
 # PawBench 驱动的能力补足路线图
 
+> 🗄️ **已归档（2026-10-17，S6 / #140）**：PawBench / 无人值守评测入口已随 ADR 0008 / S1 退役；
+> 本文保留为历史路线图，不再维护。现役形态见 [README](../README.md) / [ADR 0008](adr/0008-single-loop-plan-build-modes.md)。
+
 > 生成于 2026-09-13。本文是本仓库后续能力补足的执行路线：
 > 以第一性原理（[`capability-first-principles.md`](capability-first-principles.md)）定需求，
 > 以 PawBench 评测定验收与优先级。配套背景见

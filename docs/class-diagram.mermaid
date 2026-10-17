@@ -72,13 +72,14 @@ classDiagram
         +list artifacts
         +str status
         +bool stop_requested
-        +dict pending_confirm
+        +str mode
+        +int round_steps
     }
 
     %% ── 持久化模型 ──
     class TaskStatus {
         <<enum>>
-        PENDING RUNNING COMPLETED FAILED INTERRUPTED
+        PENDING RUNNING FAILED INTERRUPTED
     }
     class ToolCallRecord {
         +str id
@@ -112,9 +113,11 @@ classDiagram
         +str title
         +str user_input
         +TaskStatus status
+        +str mode
         +list steps
         +list plan
         +list artifacts
+        +list conversation
         +str final_answer
         +str error
         +str created_at
