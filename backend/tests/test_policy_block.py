@@ -97,7 +97,7 @@ def _state() -> AgentState:
     }
 
 
-def _executor(
+def _agent_pass(
     settings: Settings,
     *,
     args: Dict[str, Any] | None = None,
@@ -113,7 +113,7 @@ def _executor(
         tool_schemas=[tool.to_openai_schema()],
     )
     state = _state()
-    rt.executor(state)
+    rt.agent(state)
     return rt, state, tool, tm
 
 
@@ -122,7 +122,7 @@ def _run(
     **kwargs: Any,
 ) -> tuple[AgentRuntime, AgentState, _Probe, _StubTM, EventBus]:
     """One full executor -> tool pass with a scripted single probe call."""
-    rt, state, tool, tm = _executor(settings, **kwargs)
+    rt, state, tool, tm = _agent_pass(settings, **kwargs)
     rt.tool_node(state)
     return rt, state, tool, tm, tm.event_bus
 
@@ -162,7 +162,7 @@ def test_hit_denies_the_call_without_executing_it(tmp_path):
     # 事件面：这次调用照样在时间线上，但**没有任何**人工确认事件；
     # 结果体就是这条记录（状态 / 理由与状态面同一份）。
     types = [e["type"] for e in _events(tm)]
-    assert types == ["tool_call", "tool_result"]
+    assert types == ["step_start", "tool_call", "tool_result"]
     result = [e["data"] for e in _events(tm) if e["type"] == "tool_result"][0]
     assert result["status"] == "skipped"
     assert result["error"] == reason
@@ -209,7 +209,7 @@ def test_block_does_not_terminate_the_run(tmp_path):
 def test_no_rules_is_byte_identical_to_before(tmp_path):
     """规则表为空 → 与改造前逐字节一致：executor 出口的记录体连键集合都不变。"""
     settings = _settings(tmp_path)
-    _rt, state, tool, tm = _executor(settings, args={"cmd": "ls"})
+    _rt, state, tool, tm = _agent_pass(settings, args={"cmd": "ls"})
 
     # executor 出口：与改造前逐字节同形（还没派发，所以 status 仍是 pending）。
     rec = _rec(state)
@@ -222,7 +222,7 @@ def test_no_rules_is_byte_identical_to_before(tmp_path):
     assert _rec(state)["status"] == "success"
     # 一次真派发之后仍只有这两个额外的 P0 标记（tool_node 写的）。
     assert set(_rec(state)) == PRE_S2_RECORD_KEYS | {"circuit_open", "retries"}
-    assert [e["type"] for e in _events(tm)] == ["tool_call", "tool_result"]
+    assert [e["type"] for e in _events(tm)] == ["step_start", "tool_call", "tool_result"]
     assert json.loads(_last_tool_message(state)["content"]) == {"ran": True}
 
 
@@ -453,7 +453,7 @@ def test_a_blocked_call_survives_persistence(tmp_path):
     settings = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": reason}))
     _rt, state, _tool, _tm, _bus = _run(settings)
 
-    record = StepRecord(**state["steps"][0]).tool_calls[0]
+    record = StepRecord(**state["steps"][-1]).tool_calls[0]
     assert record.status == "skipped"
     assert record.error == reason
     # 没人批过它，也没人拒过它：这不是一次闸门判决。

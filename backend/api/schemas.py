@@ -6,23 +6,48 @@ Frontend ``src/types/index.ts`` mirrors these field names exactly.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 class TaskStatus(str, Enum):
+    """Task lifecycle (ADR 0008 decision 5).
+
+    Three loop states: RUNNING (跑着) / INTERRUPTED (停下，等你说话) / FAILED
+    (出错). ``PENDING`` is only the instant between ``create_task()`` writing
+    the record and the worker flipping it to RUNNING.
+
+    There is deliberately **no COMPLETED**: a round ends when no tool call
+    comes back, and that is the same "停下" as a human stop — the task can
+    always be continued. ``Persistence._load`` maps the retired value onto
+    ``INTERRUPTED`` so pre-S5 history stays readable.
+    """
+
     PENDING = "PENDING"
     RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     INTERRUPTED = "INTERRUPTED"
+
+
+class TaskMode(str, Enum):
+    """Sticky per-task mode (ADR 0008 decision 3): plan or build."""
+
+    PLAN = "plan"
+    BUILD = "build"
 
 
 class PlanStep(BaseModel):
     index: int
     description: str
     status: str = "pending"  # pending | active | done
+
+
+class PlanItem(BaseModel):
+    """One editable plan row (request side; the server assigns ``index``)."""
+
+    description: str
+    status: Literal["pending", "active", "done"] = "pending"
 
 
 class ToolCallRecord(BaseModel):
@@ -88,14 +113,29 @@ class McpServerInfo(BaseModel):
     error: Optional[str] = None
 
 
+class ChatTurn(BaseModel):
+    """One user/assistant text turn, persisted for the conversation view.
+
+    Tool traffic stays out of here: it already lives in ``Task.steps``. Only
+    what a person would read as the conversation is kept.
+    """
+
+    role: str  # user | assistant
+    content: str = ""
+
+
 class Task(BaseModel):
     id: str
     title: str = ""
     user_input: str = ""
     status: TaskStatus = TaskStatus.PENDING
+    #: Sticky mode (ADR 0008 decision 3): default build, user switches explicitly.
+    mode: TaskMode = TaskMode.BUILD
     steps: List[StepRecord] = Field(default_factory=list)
     plan: List[PlanStep] = Field(default_factory=list)
     artifacts: List[Artifact] = Field(default_factory=list)
+    #: User/assistant text turns across every round of the conversation.
+    conversation: List[ChatTurn] = Field(default_factory=list)
     final_answer: str = ""
     error: Optional[str] = None
     created_at: str = ""
@@ -106,6 +146,25 @@ class Task(BaseModel):
 # ── Request bodies ──
 class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
+    input: str
+    mode: TaskMode = TaskMode.BUILD
+
+
+class UpdateModeRequest(BaseModel):
+    mode: TaskMode
+
+
+class UpdatePlanRequest(BaseModel):
+    """The editable plan (ADR 0008 decision 3 / pivot item 1).
+
+    Indices are assigned server-side (1..n), so the client sends only order,
+    descriptions and (optionally) status per step.
+    """
+
+    plan: List[PlanItem] = Field(default_factory=list)
+
+
+class SendMessageRequest(BaseModel):
     input: str
 
 

@@ -4,7 +4,7 @@
 回合记录永停 ``pending``。真实缺口是「运行中途被中断」，危害是 resume / 续跑后把一条
 没有回答的 ``tool_calls`` 发给 OpenAI 协议端点（#95 留下的两个缺口）。
 
-不变量：**任何一次进入模型之前**（planner 与 executor 两个 LLM 入口），消息面不存在
+不变量：**任何一次进入模型之前**（唯一的 agent 入口），消息面不存在
 孤儿 tool_calls、记录面不存在残留 pending。所以这里测的是节点入口与真图，不是私有函数。
 """
 
@@ -114,7 +114,7 @@ def test_executor_entry_answers_orphan_tool_call(tmp_path: Path) -> None:
         messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
         records=[_rec("c1", "pending")],
     )
-    out = rt.executor(state)
+    out = rt.agent(state)
 
     assert _orphans(out["messages"]) == []
     assert len(_answers(out["messages"], "c1")) == 1
@@ -136,7 +136,7 @@ def test_executor_entry_leaves_answered_call_alone(tmp_path: Path) -> None:
         records=[_rec("c1", "success"), _rec("c2", "success")],
     )
     before = len(state["messages"])
-    out = rt.executor(state)
+    out = rt.agent(state)
 
     assert len([m for m in out["messages"] if m.get("role") == "tool"]) == 2
     assert len(out["messages"]) == before + 1  # only this round's assistant turn
@@ -154,7 +154,7 @@ def test_executor_entry_answers_orphan_whose_record_already_settled(tmp_path: Pa
         messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
         records=[_rec("c1", "failed", error="disk full")],
     )
-    out = rt.executor(state)
+    out = rt.agent(state)
 
     assert _orphans(out["messages"]) == []
     rec = out["steps"][0]["tool_calls"][0]
@@ -164,18 +164,18 @@ def test_executor_entry_answers_orphan_whose_record_already_settled(tmp_path: Pa
     assert "disk full" in answer and "swept at loop entry" not in answer
 
 
-def test_planner_entry_sweeps_before_the_first_llm_call(tmp_path: Path) -> None:
-    """resume 后出门的第一个请求是 planner 的：孤儿必须在它之前就没了。
+def test_agent_entry_sweeps_before_the_first_llm_call(tmp_path: Path) -> None:
+    """resume 后出门的第一个请求是 agent 的：孤儿必须在它之前就没了。
 
-    只在 executor 入口扫，等于让 planner 先把一条没人回答的 tool_calls 发出去——
-    规格要的是「任何一次进入模型之前都干净」，两个 LLM 入口都算入口。
+    #139 合并成单个 LLM 入口后，这个清扫仍然必须在入口做——规格要的是
+    「任何一次进入模型之前都干净」，而现在只有这一处入口。
     """
     rt, _ = _rt(tmp_path, llm=MockLLMClient(plan=["写文件"], final_answer="done"))
     state = _state(
         messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
         records=[_rec("c1", "pending")],
     )
-    out = rt.planner(state)
+    out = rt.agent({**state, "mode": "plan"})
 
     assert _orphans(out["messages"]) == []
     assert out["steps"][0]["tool_calls"][0]["status"] == "skipped"
@@ -184,7 +184,7 @@ def test_planner_entry_sweeps_before_the_first_llm_call(tmp_path: Path) -> None:
 def test_graph_run_leaves_no_orphan_on_the_message_face(tmp_path: Path) -> None:
     """集成层看消息面（规格的测试决策把这一条放在集成层观察）：真图跑完不留孤儿。
 
-    起图时故意带一条悬空 ``tool_calls``；两轮 LLM 入口（planner / executor）都由图自己
+    起图时故意带一条悬空 ``tool_calls``；唯一的 LLM 入口（agent）由图自己
     走到，所以任一入口漏掉清扫都会在这里变红——它不是恒真的观察性断言。
     """
     from backend.core.agent.graph import build_graph
@@ -231,7 +231,7 @@ def test_executor_entry_sweeps_across_rounds(tmp_path: Path) -> None:
             "tool_calls": [_rec("c2", "pending"), _rec("c3", "pending")],
         }
     )
-    out = rt.executor(state)
+    out = rt.agent(state)
 
     assert _orphans(out["messages"]) == []
     settled = [

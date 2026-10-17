@@ -312,7 +312,7 @@ def _run_executor_flow(settings, tool, args) -> AgentState:
         tool_schemas=[tool.to_openai_schema()],
     )
     state = _base_state()
-    rt.executor(state)
+    rt.agent(state)
     rt.tool_node(state)
     return state
 

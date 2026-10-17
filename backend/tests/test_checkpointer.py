@@ -60,6 +60,7 @@ def _full_state() -> AgentState:
     """An AgentState with every field populated to a meaningful value."""
     return {
         "task_id": "t-full",
+        "mode": "build",
         "messages": [
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
@@ -71,6 +72,7 @@ def _full_state() -> AgentState:
         "status": "RUNNING",
         "stop_requested": False,
         "step_index": 3,
+        "round_steps": 2,
         "final_answer": "",
         "error": "",
         "compressed": False,
@@ -385,9 +387,8 @@ def _wait_terminal(tm, task_id: str, timeout: float = 15.0):
     while time.time() < deadline:
         task = tm.get_task(task_id)
         if task is not None and task.status.value in (
-            "COMPLETED",
-            "FAILED",
             "INTERRUPTED",
+            "FAILED",
         ):
             return task
         time.sleep(0.05)
@@ -431,7 +432,7 @@ class TestPreMigrationStoreGuard:
         task_id = tm.create_task(title="fresh", user_input="hello")
         task = _wait_terminal(tm, task_id)
 
-        assert task.status == TaskStatus.COMPLETED
+        assert task.status == TaskStatus.INTERRUPTED
         assert task.final_answer == "done anyway"
 
     def test_empty_legacy_store_is_accepted(self, tmp_path):
@@ -467,12 +468,30 @@ class TestPreMigrationStoreGuard:
         assert tm._checkpointer is None
         assert _user_version(db) == CHECKPOINT_FORMAT_VERSION + 1, "被拒的库不该被改写"
 
+    def test_store_stamped_by_an_older_build_is_refused(self, tmp_path):
+        """#139 起，「旧 build 打的标」也是另一个图：planner/executor → agent。
+
+        v1 的任务停在 END 时看起来还能读，但「换个图接着跑同一段 pregel 调度」
+        从未被证明过；按本仓库的格式判据，拒绝挂载比赌一把更诚实。
+        """
+        older = CHECKPOINT_FORMAT_VERSION - 1
+        if older < 1:  # pragma: no cover - only if the stamp ever resets to 1
+            pytest.skip("no older stamped format exists")
+        settings = make_settings(tmp_path, checkpoint_enabled=True)
+        db = _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite")
+        _stamp(db, older)
+
+        tm = make_manager(settings, MockLLMClient())
+
+        assert tm._checkpointer is None
+        assert _user_version(db) == older, "被拒的库不该被改写"
+
     def test_own_writes_are_not_mistaken_for_legacy_on_restart(self, tmp_path, tm_logs):
         """假阳性会直接废掉 P3：本版本写的库，重启后必须仍被接受。"""
         settings = make_settings(tmp_path, checkpoint_enabled=True)
         tm1 = make_manager(settings, MockLLMClient(final_answer="first era"))
         task_id = tm1.create_task(title="ckpt", user_input="hello")
-        assert _wait_terminal(tm1, task_id).status == TaskStatus.COMPLETED
+        assert _wait_terminal(tm1, task_id).status == TaskStatus.INTERRUPTED
         tm1.shutdown()
 
         db = settings.checkpoint_path / "checkpoints.sqlite"
@@ -599,7 +618,7 @@ class TestDurabilitySync:
         finally:
             tm.shutdown()
 
-        assert task.status == TaskStatus.COMPLETED, task.error
+        assert task.status == TaskStatus.INTERRUPTED, task.error
         assert probe.observed.get("threads"), "tool 节点执行时库里应已有本任务的 thread"
         assert probe.observed.get("last_action") == "tool_call", probe.observed
         calls = probe.observed.get("pending_tool_calls") or []
@@ -630,7 +649,7 @@ class TestUnusableStoreDegradesGracefully:
         assert not any("void by design" in m for m in errors), errors
 
         task_id = tm.create_task(title="t", user_input="hello")
-        assert _wait_terminal(tm, task_id).status == TaskStatus.COMPLETED
+        assert _wait_terminal(tm, task_id).status == TaskStatus.INTERRUPTED
 
     def test_unwritable_store_degrades_to_no_checkpoint(self, tmp_path, tm_logs):
         """打不了标就不能挂载，但异常绝不能逃到 FastAPI lifespan 里。
@@ -661,6 +680,6 @@ class TestUnusableStoreDegradesGracefully:
             assert any("not writable" in m and str(db) in m for m in errors), errors
 
             task_id = tm.create_task(title="t", user_input="hello")
-            assert _wait_terminal(tm, task_id).status == TaskStatus.COMPLETED
+            assert _wait_terminal(tm, task_id).status == TaskStatus.INTERRUPTED
         finally:
             os.chmod(db, 0o666)  # 让 pytest 清理 tmp_path 时删得掉

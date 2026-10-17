@@ -146,7 +146,7 @@ def test_artifact_auto_index(tmp_path, event_bus):
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="kb", user_input="write kb artifact")
     task = _run_until_done(tm, task_id)
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     assert tm._kb is not None
     hits = tm._kb.retrieve("自动入库", top_k=5)
     assert len(hits) >= 1

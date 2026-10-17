@@ -1,6 +1,6 @@
 import { useTaskStore } from "../store/taskStore";
 import { compressFaceParts } from "../types";
-import { Task, TraceMarker } from "../types";
+import { ChatTurn, Task, TraceMarker } from "../types";
 
 /** Render one live circuit-open / compression marker as a flow hint. */
 function MarkerRow({ marker }: { marker: TraceMarker }) {
@@ -36,43 +36,47 @@ function MarkerRow({ marker }: { marker: TraceMarker }) {
   );
 }
 
+function Turn({ turn }: { turn: ChatTurn }) {
+  const mine = turn.role === "user";
+  return (
+    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+          mine ? "bg-sky-600/90 text-white" : "bg-slate-700 text-slate-100"
+        }`}
+      >
+        {turn.content}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The conversation face (#139): one task = one multi-turn conversation.
+ *
+ * Turns come from `Task.conversation` (persisted by the backend at the end of
+ * each round); a pre-S5 task without the field falls back to its first input.
+ * The plan has its own area (`PlanPanel`) and tool traffic its own timeline
+ * (`StepTimeline`), so neither is duplicated here.
+ */
 export function MessageStream({ task }: { task: Task }) {
   const markers = useTaskStore((s) => s.markers[task.id] ?? []);
+  const conversation: ChatTurn[] = task.conversation.length
+    ? task.conversation
+    : task.user_input
+      ? [{ role: "user", content: task.user_input }]
+      : [];
 
   return (
     <div className="space-y-3">
-      {/* User request */}
-      <div className="flex justify-end">
-        <div className="max-w-[80%] bg-sky-600/90 text-white rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
-          {task.user_input}
-        </div>
-      </div>
-
-      {/* Plan */}
-      {task.plan.length > 0 && (
-        <div className="bg-panelMuted/60 rounded-lg p-3 text-sm">
-          <div className="text-xs text-slate-400 mb-1">规划</div>
-          <ol className="list-decimal list-inside space-y-0.5">
-            {task.plan.map((p) => (
-              <li key={p.index}>{p.description}</li>
-            ))}
-          </ol>
-        </div>
-      )}
+      {conversation.map((turn, i) => (
+        <Turn key={i} turn={turn} />
+      ))}
 
       {/* Circuit-open / compression flow markers */}
       {markers.map((m, i) => (
         <MarkerRow key={i} marker={m} />
       ))}
-
-      {/* Final answer */}
-      {task.final_answer && (
-        <div className="flex justify-start">
-          <div className="max-w-[80%] bg-slate-700 rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
-            {task.final_answer}
-          </div>
-        </div>
-      )}
 
       {task.status === "FAILED" && task.error && (
         <div className="text-sm text-red-400 bg-red-950/40 rounded p-2">

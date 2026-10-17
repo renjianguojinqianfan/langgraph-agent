@@ -11,7 +11,7 @@ def _sample_task(task_id="abc") -> Task:
         id=task_id,
         title="demo",
         user_input="do something",
-        status=TaskStatus.COMPLETED,
+        status=TaskStatus.INTERRUPTED,
         steps=[StepRecord(index=1, thought="plan", tool_calls=[], status="done")],
         plan=[PlanStep(index=1, description="step one", status="done")],
         artifacts=[],
@@ -30,7 +30,7 @@ def test_save_and_load_round_trip(settings):
     loaded = p.load_task(task.id)
     assert loaded is not None
     assert loaded.id == task.id
-    assert loaded.status == TaskStatus.COMPLETED
+    assert loaded.status == TaskStatus.INTERRUPTED
     assert loaded.final_answer == "done"
     assert loaded.steps[0].index == 1
     assert loaded.plan[0].description == "step one"

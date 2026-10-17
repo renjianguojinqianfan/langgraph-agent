@@ -336,7 +336,7 @@ def _run_until_done(tm: Any, task_id: str, timeout: float = 15.0) -> Any:
     deadline = time.time() + timeout
     while time.time() < deadline:
         task = tm.get_task(task_id)
-        if task and task.status.value in ("COMPLETED", "FAILED", "INTERRUPTED"):
+        if task and task.status.value in ("INTERRUPTED", "FAILED"):
             return task
         time.sleep(0.05)
     return tm.get_task(task_id)
@@ -384,7 +384,7 @@ def test_tool_node_feeds_skill_content_to_conversation(
     task = _run_until_done(tm, task_id)
 
     assert task is not None
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     tool_messages = [m for m in mock.seen_messages if m.get("role") == "tool"]
     assert tool_messages, "the skill body must be fed back as a tool message"
     assert "SKILL BODY TOKEN." in str(tool_messages[-1]["content"])

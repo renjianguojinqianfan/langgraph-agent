@@ -57,18 +57,13 @@ const TYPE_META: Record<string, TraceMeta> = {
     badge: "bg-green-500/15 text-green-300 border-green-500/40",
     category: "task",
   },
-  task_completed: {
-    label: "完成",
-    badge: "bg-green-500/15 text-green-300 border-green-500/40",
-    category: "task",
-  },
   task_failed: {
     label: "失败",
     badge: "bg-red-500/15 text-red-300 border-red-500/40",
     category: "task",
   },
   task_interrupted: {
-    label: "中断",
+    label: "停下",
     badge: "bg-amber-500/15 text-amber-300 border-amber-500/40",
     category: "task",
   },

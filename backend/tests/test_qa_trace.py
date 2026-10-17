@@ -33,7 +33,7 @@ def _wait_status(tm: TaskManager, tid: str, timeout: float = 15) -> str:
     deadline = time.time() + timeout
     while time.time() < deadline:
         task = tm.get_task(tid)
-        if task and task.status.value in ("COMPLETED", "FAILED", "INTERRUPTED"):
+        if task and task.status.value in ("INTERRUPTED", "FAILED"):
             return task.status.value
         time.sleep(0.05)
     return "TIMEOUT"
@@ -139,7 +139,7 @@ def test_trace_ndjson_valid_and_matches_json_format(tmp_path):
         client.app.state.task_manager = tm
 
         tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
-        assert _wait_status(tm, tid) == "COMPLETED"
+        assert _wait_status(tm, tid) == "INTERRUPTED"
         trace_file = settings.trace_path / f"{tid}.jsonl"
         assert _wait_trace_end(trace_file)
 

@@ -60,14 +60,14 @@ class TestOrphanReconciliation:
     def test_terminal_statuses_are_untouched(self, tmp_path):
         settings = make_settings(tmp_path)
         for tid, status in [
-            ("t-done", "COMPLETED"),
+            ("t-done", "INTERRUPTED"),
             ("t-fail", "FAILED"),
             ("t-int", "INTERRUPTED"),
         ]:
             _make_task_record(settings, tid, status)
 
         rebuilt = make_manager(settings, MockLLMClient())
-        assert rebuilt.get_task("t-done").status == TaskStatus.COMPLETED
+        assert rebuilt.get_task("t-done").status == TaskStatus.INTERRUPTED
         assert rebuilt.get_task("t-fail").status == TaskStatus.FAILED
         assert rebuilt.get_task("t-int").status == TaskStatus.INTERRUPTED
 
@@ -78,7 +78,7 @@ class TestPersistenceDurability:
 
     def test_corrupt_tasks_file_is_preserved_and_start_fresh(self, tmp_path):
         settings = make_settings(tmp_path)
-        _make_task_record(settings, "t-keep", "COMPLETED")
+        _make_task_record(settings, "t-keep", "INTERRUPTED")
 
         # Corrupt the file the way a torn write would.
         tasks_file = settings.data_path / "tasks.json"
@@ -104,7 +104,7 @@ class TestPersistenceDurability:
                     t = Task(
                         id=f"t-{i}-{j}",
                         title="conc",
-                        status=TaskStatus.COMPLETED,
+                        status=TaskStatus.INTERRUPTED,
                         created_at=now,
                         updated_at=now,
                     )
@@ -126,7 +126,7 @@ class TestPersistenceDurability:
     def test_list_all_returns_every_task(self, tmp_path):
         settings = make_settings(tmp_path)
         for i in range(60):
-            _make_task_record(settings, f"t-{i}", "COMPLETED")
+            _make_task_record(settings, f"t-{i}", "INTERRUPTED")
         persistence = Persistence(settings)
         assert len(persistence.list_tasks(limit=50)) == 50  # existing API unchanged
         assert len(persistence.list_all()) == 60

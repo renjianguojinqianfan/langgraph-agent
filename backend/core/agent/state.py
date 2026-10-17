@@ -1,9 +1,10 @@
 """Agent state schema shared by the LangGraph nodes.
 
 This is the single in-memory representation threaded through the
-``Planner -> Executor -> Tool`` loop. Field names mirror the
-persistence / API models (``Task``, ``StepRecord``, ``ToolCallRecord``,
-``PlanStep``, ``Artifact``) so mapping at the end of a run is trivial.
+``Agent -> Tool`` loop (issue #139 / ADR 0008 decision 2). Field names mirror
+the persistence / API models (``Task``, ``StepRecord``, ``ToolCallRecord``,
+``PlanStep``, ``Artifact``, ``ChatTurn``) so mapping at the end of a run is
+trivial.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ class AgentState(TypedDict, total=False):
 
     # ── Public / persisted fields ──
     task_id: str
+    mode: str                              # plan | build (sticky task switch)
     messages: List[Dict[str, Any]]          # OpenAI-style message dicts
     plan: List[Dict[str, Any]]              # PlanStep dicts
     steps: List[Dict[str, Any]]             # StepRecord dicts
@@ -24,12 +26,13 @@ class AgentState(TypedDict, total=False):
     stop_requested: bool
 
     # ── Loop bookkeeping (internal) ──
-    step_index: int
+    step_index: int                         # cumulative across the whole task
+    round_steps: int                        # LLM calls in the current round (budget)
     final_answer: str
     error: str
     compressed: bool  # P0: whether messages were compressed before the last LLM call
     context_tokens: int  # P0: estimated token count of the (possibly compressed) messages
-    _last_action: str                       # plan | tool_call | tool_done | final_answer | stop
+    _last_action: str                       # tool_call | tool_done | final_answer | stop
     _current_tool_calls: List[Dict[str, Any]]
 
     # ── P1 item 2: sub-agent ──

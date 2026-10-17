@@ -1,16 +1,27 @@
-"""Agent node implementations (Planner / Executor / Tool).
+"""Agent node implementation (the single loop of #139 / ADR 0008).
 
 :class:`AgentRuntime` owns the per-task references the nodes need (the
 ``TaskManager`` for events & persistence, the ``LLMClient``, and the resolved
 tool instances) and exposes each graph node as a bound method. Graph edges are
 declared in :mod:`backend.core.agent.graph`.
+
+Since #139 there is **one** LLM node, :meth:`AgentRuntime.agent`. The task's
+mode chooses what it gets (ADR 0008 decisions 2 / 3 / 7):
+
+* ``plan`` — ``PLANNER_SYSTEM`` and the ``explore`` tier only (read-only);
+  a round with no tool call returns the plan;
+* ``build`` — ``EXECUTOR_SYSTEM`` (plus the current plan) and every mounted
+  tool; dangerous calls are refused by the S2 hook (:mod:`.policy`).
+
+A round ends when the node returns no tool call, which is also the loop's exit:
+the ball goes back to the human and the task parks (never "completed").
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ...config import get_settings
 from ...utils.logging import get_logger
@@ -23,11 +34,15 @@ from .state import AgentState
 
 logger = get_logger("agent.runtime")
 
+#: The task-level mode switch (ADR 0008 decision 3). Default is build.
+PLAN_MODE = "plan"
+BUILD_MODE = "build"
+
 # ── settled tool-call statuses (issue #100) ─────────────────────────────────
 #
 # The three statuses a call can carry once ``tool_node`` has finished dealing
 # with it — executed, failed, or skipped. The ``skipped`` bucket now comes from
-# the S2 danger hook (#136): ``executor`` settles a rule-hit call on the spot,
+# the S2 danger hook (#136): ``agent`` settles a rule-hit call on the spot,
 # still routes to ``tool``, and this guard is what keeps the tool node from
 # dispatching it a second time.
 TERMINAL_TOOL_CALL_STATUSES = frozenset({"success", "failed", "skipped"})
@@ -64,6 +79,13 @@ class AgentRuntime:
         self.llm = llm
         self.tools: Dict[str, BaseTool] = {t.name: t for t in tools}
         self.tool_schemas = tool_schemas
+        # #139: plan mode gets the declared read-only tier (`explore`), not a
+        # second hand-written list — the tier vocabulary is unchanged (AC3) and
+        # `spawn_subagent` is naturally absent from it. Intersected with what is
+        # actually mounted, exactly like a subtask's face.
+        from .subagent import EXPLORE_TIER, tier_face_names
+
+        self._explore_names = frozenset(tier_face_names(self.tools.keys(), EXPLORE_TIER))
         self.max_steps = max_steps
         self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
         self._aux = aux_llm  # injected aux client (may be None)
@@ -75,7 +97,7 @@ class AgentRuntime:
         # S2 (#136): the danger rule table is compiled once per task, same snapshot
         # discipline as the injection block below — mid-task edits take effect on
         # the NEXT task. An empty table compiles to zero rules and `check` always
-        # returns None, so the executor's decision path is unchanged (#136 AC1).
+        # returns None, so the agent's decision path is unchanged (#136 AC1).
         self.danger_policy: DangerPolicy = DangerPolicy.from_settings(settings)
         self._inject_block: str = (
             inject.build_inject_block(settings)
@@ -143,17 +165,17 @@ class AgentRuntime:
     ) -> List[Dict[str, Any]]:
         """Build the message list sent to the LLM, compressing history first.
 
-        Compression happens exactly here (shared by planner and executor) so
-        every LLM call sees an up-to-date, bounded context. Under the budget
-        the messages are returned untouched. The P1-A′ injection block rides on
-        the *system* message and is deliberately outside the compression budget.
+        Compression happens exactly here (both modes) so every LLM call sees an
+        up-to-date, bounded context. Under the budget the messages are returned
+        untouched. The P1-A′ injection block rides on the *system* message and
+        is deliberately outside the compression budget.
 
-        ``include_plan`` (the executor's call, issue #119) appends the rendering
-        of ``state["plan"]`` after that block, with the same rights: system-side,
-        outside the budget, never evicted or compressed. It is re-derived from
-        the live state each call, so a re-plan replaces the section instead of
-        adding a second copy — and the planner leaves the flag off, which is why
-        the injection tests' byte-exact planner assertion still holds.
+        ``include_plan`` appends the rendering of ``state["plan"]`` after that
+        block, with the same rights: system-side, outside the budget, never
+        evicted or compressed. It is re-derived from the live state each call,
+        so a re-plan replaces the section instead of adding a second copy. Both
+        modes pass it: build mode reads the plan as its brief (#119), plan mode
+        revises what is already there instead of planning from scratch.
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
         messages = state.get("messages", []) or []
@@ -220,34 +242,69 @@ class AgentRuntime:
         plan_block = render_plan_section(state.get("plan") or []) if include_plan else ""
         return [{"role": "system", "content": system + self._inject_block + plan_block}, *compressed]
 
-    def _parse_plan(self, content: str) -> List[Dict[str, Any]]:
-        content = (content or "").strip()
+    def _parse_plan(self, content: str) -> Optional[List[Dict[str, Any]]]:
+        """Parse a plan-mode reply as a JSON array of steps; ``None`` if it is not one.
+
+        Only an actual JSON array (fenced ```json blocks tolerated) counts as a
+        plan. Everything else is the model **talking to the user** — most often
+        asking the clarifying question ADR 0008 decision 1 expects it to ask.
+        Turning a question into a one-line "plan" (the old line fallback) both
+        destroyed the previous plan and swallowed the question.
+        """
+        raw = (content or "").strip()
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines).strip()
         try:
-            data = json.loads(content)
+            data = json.loads(raw)
         except Exception:
-            data = [ln.strip("- ").strip() for ln in content.splitlines() if ln.strip()]
+            return None
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            return None
         steps: List[Dict[str, Any]] = []
-        if isinstance(data, list):
-            for i, item in enumerate(data, 1):
-                if isinstance(item, dict):
-                    desc = item.get("description") or item.get("step") or str(item)
-                else:
-                    desc = str(item)
-                steps.append({"index": i, "description": desc, "status": "pending"})
-        else:
-            steps.append({"index": 1, "description": str(data), "status": "pending"})
-        return steps
+        for item in data:
+            if isinstance(item, dict):
+                desc = item.get("description") or item.get("step") or item.get("text")
+            else:
+                desc = item
+            description = str(desc or "").strip()
+            if description:
+                steps.append(
+                    {
+                        "index": len(steps) + 1,
+                        "description": description,
+                        "status": "pending",
+                    }
+                )
+        return steps or None
 
     # ── nodes ──
-    def planner(self, state: AgentState) -> AgentState:
+    def agent(self, state: AgentState) -> AgentState:
+        """The one LLM node (ADR 0008 decision 2).
+
+        Creates this round's step, then hands to the mode's round helper. A
+        round ends when the helper returns without a tool call — ``finish``
+        parks the task, i.e. the ball goes back to the human (decision 4/5).
+        """
         if self._stopped(state):
             state["_last_action"] = "stop"
             return state
-        # The loop's first LLM entry — post-resume it is the very first request out
-        # the door, so the orphan sweep runs here as well as in ``executor``.
+        # The loop's LLM entry — post-resume it is the very first request out the
+        # door, so the orphan sweep runs here.
         self._sweep_dangling_tool_calls(state)
 
         state["step_index"] = state.get("step_index", 0) + 1
+        # The step budget is per round, not per task: a conversation may last
+        # many rounds, and a cumulative counter would brick it after max_steps
+        # calls. ``step_index`` stays cumulative so step records/events keep a
+        # unique index across the whole task.
+        state["round_steps"] = state.get("round_steps", 0) + 1
         idx = state["step_index"]
         step: Dict[str, Any] = {
             "index": idx,
@@ -257,29 +314,165 @@ class AgentRuntime:
         }
         state.setdefault("steps", []).append(step)
 
-        # 正常分支产出的永远是 PlanStep dict；异常分支改用 state["error"] 承载
-        # 失败原因、plan 留空（Issue #12），故这里不再需要 List[Any] 的放宽。
-        plan: List[Dict[str, Any]]
-        try:
-            resp = self.llm.complete(self._build_messages(state, PLANNER_SYSTEM))
-            plan = self._parse_plan(resp.content)
-        except Exception as exc:
-            logger.exception("planner LLM error")
-            # Issue #12: surface the real cause instead of degrading it into a
-            # string plan item. ``state["error"]`` makes ``finish`` report FAILED
-            # (and ``graph._after_planner`` short-circuits to finish), so the
-            # provider 403 / network error stays visible instead of being
-            # replaced by a secondary TypeError when the plan is persisted.
-            state["error"] = f"Planner LLM error: {exc}"
-            plan = []
-        state["plan"] = plan
-        self._publish("plan_update", {"plan": plan})
-
-        thought = f"Step {idx}: planning."
+        mode = state.get("mode") or BUILD_MODE
+        thought = f"Step {idx}: planning." if mode == PLAN_MODE else f"Step {idx}: acting."
         step["thought"] = thought
         self._publish("step_start", {"index": idx, "thought": thought})
-        state["_last_action"] = "plan"
+
+        if mode == PLAN_MODE:
+            return self._plan_round(state, step)
+        return self._build_round(state, step)
+
+    def _plan_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
+        """Plan mode: read-only face; no tool call means the round is over.
+
+        A JSON plan array is the round's product (``state["plan"]`` +
+        ``plan_update``). Any other text is the model talking to the user — most
+        often the clarifying question ADR 0008 decision 1 explicitly allows —
+        and leaves the existing plan untouched.
+        """
+        face = self._tool_face(PLAN_MODE)
+        schemas = [t.to_openai_schema() for t in face.values()]
+        try:
+            resp = self.llm.complete(
+                self._build_messages(state, PLANNER_SYSTEM, include_plan=True),
+                tools=schemas,
+            )
+        except Exception as exc:
+            logger.exception("agent LLM error (plan mode)")
+            state["error"] = f"Plan-mode LLM error: {exc}"
+            state["final_answer"] = f"[error] {exc}"
+            state["_last_action"] = "final_answer"
+            return state
+
+        if resp.tool_calls:
+            return self._handle_tool_calls(state, step, resp)
+
+        plan = self._parse_plan(resp.content)
+        if plan:
+            state["plan"] = plan
+            self._publish("plan_update", {"plan": plan})
+            answer = f"计划已更新（{len(plan)} 步）。"
+        else:
+            # Not a plan: keep the previous plan and surface what the model
+            # actually said (e.g. a question) instead of inventing a step.
+            answer = (resp.content or "").strip() or "(no content)"
+        state["final_answer"] = answer
+        assistant_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
+        # Issue #45: thinking-mode providers require the trace back on the next
+        # turn; the plan round is no exception (a missing trace 400s forever).
+        if resp.reasoning_content:
+            assistant_turn["reasoning_content"] = resp.reasoning_content
+        state.setdefault("messages", []).append(assistant_turn)
+        step["thought"] = answer
+        self._publish("final_answer", {"answer": answer})
+        state["_last_action"] = "final_answer"
         return state
+
+    def _build_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
+        """Build mode: every mounted tool, with the current plan as a brief."""
+        try:
+            resp = self.llm.complete(
+                self._build_messages(state, EXECUTOR_SYSTEM, include_plan=True),
+                tools=self.tool_schemas,
+            )
+        except Exception as exc:
+            logger.exception("agent LLM error (build mode)")
+            state["error"] = f"Build-mode LLM error: {exc}"
+            state["final_answer"] = f"[error] {exc}"
+            state["_last_action"] = "final_answer"
+            return state
+
+        if resp.tool_calls:
+            return self._handle_tool_calls(state, step, resp)
+
+        answer = resp.content or "(no content)"
+        state["final_answer"] = answer
+        final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
+        if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn
+            final_turn["reasoning_content"] = resp.reasoning_content
+        state.setdefault("messages", []).append(final_turn)
+        step["thought"] = answer
+        self._publish("final_answer", {"answer": answer})
+        state["_last_action"] = "final_answer"
+        return state
+
+    def _handle_tool_calls(
+        self,
+        state: AgentState,
+        step: Dict[str, Any],
+        resp: Any,
+    ) -> AgentState:
+        """Record this round's calls, apply the danger hook, route to ``tool``.
+
+        Shared by both modes on purpose: the S2 refusal (#136) and the
+        tool-protocol bookkeeping (#45 / #46) must not fork with the mode.
+        """
+        tcs: List[Dict[str, Any]] = []
+        for tc in resp.tool_calls:
+            name = tc.get("name", "")
+            args = tc.get("arguments", {}) or {}
+            # S2 (#136): the one hook. A rule hit DENIES this call outright —
+            # the tool never runs and the model gets {block, reason} back.
+            # The args are passed by reference and never written (#136 AC3).
+            block_reason = self.danger_policy.check(name, args)
+            rec = {
+                "id": tc.get("id") or f"call_{state['step_index']}_{len(tcs)}",
+                "tool_name": name,
+                "input": args,
+                "output": None,
+                # S2 (#136): a rule hit settles the call right here — the status
+                # verb and the reason are the same two fields every other
+                # non-executed call carries (``skipped`` + ``error``).
+                "status": "skipped" if block_reason is not None else "pending",
+                "error": block_reason or "",
+            }
+            tcs.append(rec)
+
+        state["_current_tool_calls"] = tcs
+        # Record the assistant turn so the LLM keeps context.
+        openai_tool_calls = [
+            {
+                "id": r["id"],
+                "type": "function",
+                "function": {"name": r["tool_name"], "arguments": json.dumps(r["input"], ensure_ascii=False)},
+            }
+            for r in tcs
+        ]
+        assistant_turn: Dict[str, Any] = {
+            "role": "assistant",
+            "content": resp.content or "",
+            "tool_calls": openai_tool_calls,
+        }
+        # Issue #45: thinking-mode endpoints (DeepSeek official) reject the
+        # *next* request when the previous turn's reasoning trace is missing.
+        # Written only when non-empty — providers that never report it must
+        # keep sending exactly the same message shape as before.
+        if resp.reasoning_content:
+            assistant_turn["reasoning_content"] = resp.reasoning_content
+        state.setdefault("messages", []).append(assistant_turn)
+        for rec in tcs:
+            step["tool_calls"].append(rec)
+            self._publish("tool_call", rec)
+            if rec["status"] == "skipped":
+                # S2 (#136): a policy refusal is delivered here, at the point of
+                # decision, and never handed to the tool node.
+                self._publish("tool_result", rec)
+                self._feed_blocked(state, rec)
+
+        state["_last_action"] = "tool_call"
+        return state
+
+    def _tool_face(self, mode: str) -> Dict[str, BaseTool]:
+        """The tools this mode may dispatch (ADR 0008 decision 7).
+
+        Enforced at dispatch, not only in the advertised schemas: a model that
+        hallucinates ``write`` while in plan mode gets a refusal from
+        :meth:`tool_node`, never a side effect.
+        """
+        if mode == PLAN_MODE:
+            return {n: t for n, t in self.tools.items() if n in self._explore_names}
+        return self.tools
 
     def _sweep_dangling_tool_calls(self, state: AgentState) -> None:
         """Answer every tool call that never got an answer (issue #46).
@@ -291,13 +484,13 @@ class AgentRuntime:
         this hole — a stop while parked on the confirm gate — is gone with the
         gate, #138.)
 
-        Run at **both** LLM entries (``planner`` and ``executor``), not only before
-        the tool round: the first request after a resume is the planner's, so an
-        entry that only guards the executor would still send the orphan. Only
-        ``pending`` records get reclassified, and a record that already carries a
-        verdict keeps its own words onto the message face too — one text, one
-        source (#95), otherwise the model is told「interrupted before execution」
-        about a call that ran and failed.
+        Run at the **single** LLM entry (``agent``), not only before the tool
+        round: the first request after a resume is the agent's, so a guard that
+        only sits before dispatch would still send the orphan. Only ``pending``
+        records get reclassified, and a record that already carries a verdict
+        keeps its own words onto the message face too — one text, one source
+        (#95), otherwise the model is told「interrupted before execution」about a
+        call that ran and failed.
         """
         messages = state.get("messages") or []
         answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
@@ -323,105 +516,6 @@ class AgentRuntime:
             self._feed_tool_failure(state, {"id": cid, "error": own or DANGLING_SWEEP_TEXT})
         logger.info("task %s swept %d dangling tool call(s) at loop entry", self.task_id, len(orphans))
 
-    def executor(self, state: AgentState) -> AgentState:
-        if self._stopped(state):
-            state["_last_action"] = "stop"
-            return state
-        self._sweep_dangling_tool_calls(state)
-
-        step = state["steps"][-1] if state.get("steps") else None
-        try:
-            resp = self.llm.complete(
-                # include_plan: the plan is the executor's brief (#119) — before
-                # this call it had no consumer on the execution face at all.
-                self._build_messages(state, EXECUTOR_SYSTEM, include_plan=True),
-                tools=self.tool_schemas,
-            )
-        except Exception as exc:
-            logger.exception("executor LLM error")
-            state["error"] = f"Executor LLM error: {exc}"
-            state["final_answer"] = f"[error] {exc}"
-            state["_last_action"] = "final_answer"
-            return state
-
-        if resp.tool_calls:
-            tcs: List[Dict[str, Any]] = []
-            for tc in resp.tool_calls:
-                name = tc.get("name", "")
-                args = tc.get("arguments", {}) or {}
-                # S2 (#136): the one hook. A rule hit DENIES this call outright —
-                # the tool never runs and the model gets {block, reason} back.
-                # The args are passed by reference and never written (#136 AC3).
-                block_reason = self.danger_policy.check(name, args)
-                rec = {
-                    "id": tc.get("id") or f"call_{state['step_index']}_{len(tcs)}",
-                    "tool_name": name,
-                    "input": args,
-                    "output": None,
-                    # S2 (#136): a rule hit settles the call right here — the status
-                    # verb and the reason are the same two fields every other
-                    # non-executed call carries (``skipped`` + ``error``), so the
-                    # record / event / persisted faces need no new column. The
-                    # delivery itself happens with the ``tool_call`` publish below;
-                    # ``pending`` stays the only live status, exactly as before.
-                    "status": "skipped" if block_reason is not None else "pending",
-                    "error": block_reason or "",
-                }
-                tcs.append(rec)
-
-            state["_current_tool_calls"] = tcs
-            # Record the assistant turn so the LLM keeps context.
-            openai_tool_calls = [
-                {
-                    "id": r["id"],
-                    "type": "function",
-                    "function": {"name": r["tool_name"], "arguments": json.dumps(r["input"], ensure_ascii=False)},
-                }
-                for r in tcs
-            ]
-            assistant_turn: Dict[str, Any] = {
-                "role": "assistant",
-                "content": resp.content or "",
-                "tool_calls": openai_tool_calls,
-            }
-            # Issue #45: thinking-mode endpoints (DeepSeek official) reject the
-            # *next* request when the previous turn's reasoning trace is missing.
-            # Written only when non-empty — providers that never report it must
-            # keep sending exactly the same message shape as before.
-            if resp.reasoning_content:
-                assistant_turn["reasoning_content"] = resp.reasoning_content
-            state.setdefault("messages", []).append(assistant_turn)
-            for rec in tcs:
-                if step is not None:
-                    step["tool_calls"].append(rec)
-                self._publish("tool_call", rec)
-                if rec["status"] == "skipped":
-                    # S2 (#136): a policy refusal is delivered here, at the point of
-                    # decision, and never handed to the tool node — there is nothing
-                    # to dispatch, and pi's hook produces its verdict the same way
-                    # (``block`` -> immediate error result, 调研 §5.3). The discriminator
-                    # is exact because these records were built two lines up: in this
-                    # round a call is either ``pending`` (dispatch it as always) or
-                    # ``skipped`` (a rule just refused it). The model is answered so the
-                    # assistant turn's ``tool_calls`` keep one reply each (#46), and the
-                    # tool node skips it on its own terminal-status guard — no second
-                    # branch there.
-                    self._publish("tool_result", rec)
-                    self._feed_blocked(state, rec)
-
-            state["_last_action"] = "tool_call"
-        else:
-            answer = resp.content or "(no content)"
-            state["final_answer"] = answer
-            final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
-            if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn
-                final_turn["reasoning_content"] = resp.reasoning_content
-            state.setdefault("messages", []).append(final_turn)
-            if step is not None:
-                step["thought"] = answer
-            self._publish("final_answer", {"answer": answer})
-            state["_last_action"] = "final_answer"
-        return state
 
     def tool_node(self, state: AgentState) -> AgentState:
         if self._stopped(state):
@@ -430,11 +524,15 @@ class AgentRuntime:
 
         tcs = state.get("_current_tool_calls", []) or []
         step = state["steps"][-1] if state.get("steps") else None
+        # #139: dispatch is limited to the mode's face. Plan mode advertises the
+        # explore tier, and a hallucinated name outside it is refused here — the
+        # face is a structural boundary, not a suggestion in the schema list.
+        face = self._tool_face(state.get("mode") or BUILD_MODE)
 
         for rec in tcs:
             if rec["status"] in TERMINAL_TOOL_CALL_STATUSES:
                 # A call that already carries a verdict is left alone (issue #100).
-                # In this round the settled records are exactly the ones ``executor``
+                # In this round the settled records are exactly the ones ``agent``
                 # refused via the S2 danger hook (#136): it publishes their result and
                 # still routes to this node, so without this guard a blocked call would
                 # be looked up and dispatched here. ``rec["status"]`` was written in
@@ -443,10 +541,16 @@ class AgentRuntime:
                 # ``with_retry``.
                 continue
 
-            tool = self.tools.get(rec["tool_name"])
+            tool = face.get(rec["tool_name"])
             if tool is None:
                 rec["status"] = "failed"
-                rec["error"] = f"unknown tool: {rec['tool_name']}"
+                if rec["tool_name"] in self.tools:
+                    rec["error"] = (
+                        f"tool not available in plan mode: {rec['tool_name']} "
+                        "(planning is read-only)"
+                    )
+                else:
+                    rec["error"] = f"unknown tool: {rec['tool_name']}"
                 self._publish("tool_result", rec)
                 self._feed_tool_failure(state, rec)
                 continue
@@ -536,8 +640,9 @@ class AgentRuntime:
     def _feed_tool_failure(self, state: AgentState, rec: Dict[str, Any]) -> None:
         """Answer one un-successful call on the conversation face (issue #95).
 
-        All three buckets share this line — human-rejected, unknown tool,
-        executed and failed — and each has just written its reason onto
+        Every un-successful call that is not a policy refusal shares this line
+        — unknown tool, a tool outside the plan-mode face, executed and failed,
+        and the dangling sweep — and each has just written its reason onto
         ``rec["error"]``, the very field the ``tool_result`` event publishes: the
         model and the human read one text from one source. A tool that failed
         without saying anything still gets a word, because an empty reason reads
@@ -554,7 +659,7 @@ class AgentRuntime:
         shape ADR 0008 decision 6 asks for, so it re-plans instead of retrying (a
         plain ``{ok: false, error: ...}`` reads like a transient failure). The
         reason is the string already on ``rec["error"]`` — the same text the
-        ``tool_result`` event publishes, which the executor always sets on a hit.
+        ``tool_result`` event publishes, which the agent always sets on a hit.
         """
         self._feed_tool_reply(state, rec, {"block": True, "reason": rec["error"]})
 
@@ -567,20 +672,23 @@ class AgentRuntime:
         ]
 
     def finish(self, state: AgentState) -> AgentState:
-        """Map the run onto a terminal status.
+        """Park the run — there is no "completed" state (ADR 0008 decision 5).
 
-        Order is load-bearing: a stop is a stop and an error is an error before
-        the claim is read. A final answer is ``COMPLETED`` — since #137 nothing
-        judges it any more; a run that never claimed anything is ``FAILED``.
+        A round that answered and a human stop land in the same place:
+        ``INTERRUPTED`` (停下, 等你说话). The task can always be continued by
+        sending another message. Only an error is ``FAILED``.
+
+        The step record is marked ``done`` only when this round actually produced
+        an answer; a stop or a spent step budget leaves it ``failed`` (it did not
+        complete what it started).
         """
         if state.get("stop_requested"):
             state["status"] = "INTERRUPTED"
         elif state.get("error"):
             state["status"] = "FAILED"
-        elif state.get("final_answer"):
-            state["status"] = "COMPLETED"
         else:
-            state["status"] = "FAILED"
+            state["status"] = "INTERRUPTED"
         if state.get("steps"):
-            state["steps"][-1]["status"] = "done" if state["status"] == "COMPLETED" else "failed"
+            answered = bool(state.get("final_answer")) and not state.get("error")
+            state["steps"][-1]["status"] = "done" if answered else "failed"
         return state

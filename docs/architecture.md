@@ -230,7 +230,7 @@ classDiagram
     %% ── 持久化模型 ──
     class TaskStatus {
         <<enum>>
-        PENDING RUNNING COMPLETED FAILED INTERRUPTED
+        PENDING RUNNING FAILED INTERRUPTED
     }
     class ToolCallRecord {
         +str id
@@ -310,8 +310,8 @@ classDiagram
 
 | 模型 | 关键字段 |
 |------|----------|
-| `TaskStatus` | `PENDING / RUNNING / COMPLETED / FAILED / INTERRUPTED` |
-| `Task` | `id, title, user_input, status, steps[], plan[], artifacts[], final_answer, error, created_at, updated_at` |
+| `TaskStatus` | `PENDING / RUNNING / FAILED / INTERRUPTED`（三值循环：跑着 / 停下 / 出错；没有「完成」，ADR 0008 决策 5） |
+| `Task` | `id, title, user_input, status, mode(plan/build), steps[], plan[], artifacts[], conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
 | `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, circuit_open, retries` |
 | `PlanStep` | `index, description, status(pending/active/done)` |
@@ -321,17 +321,18 @@ classDiagram
 
 ### 3.3 REST + SSE 接口定义
 
-> ⚠️ **v0.1：9 个端点。现役 16 个**（权威：`backend/api/routes.py` + Swagger）。
+> 现役端点以 `backend/api/routes.py` + Swagger 为准（本文不写计数）。
 > 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、`GET /kb` +
 > `POST /kb/rebuild` + `DELETE /kb/{doc_id}`（P1）、`GET /mcp/servers`（P2）、
-> `POST /tasks/{id}/rollback`（P1-B）；
-> `/health` 另在 `backend/main.py`。下表其余 9 条契约仍现役。
+> `POST /tasks/{id}/rollback`（P1-B）；S5（#139）新增 `PUT /tasks/{id}/mode`、
+> `PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`、`POST /tasks/{id}/replan`。
+> `/health` 另在 `backend/main.py`。下表其余契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`
 
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 |
 |------|------|------|---------------|------|
-| POST | `/api/tasks` | 下发新任务 | `{title?:str, input:str}` | `{task_id:str}` |
+| POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?:str, input:str, mode?:plan\|build}` | `{task_id:str}` |
 | GET | `/api/tasks` | 历史任务列表 | query: `?limit=50` | `{tasks: Task[]}` |
 | GET | `/api/tasks/{id}` | 任务完整状态 | path `id` | `Task` |
 | POST | `/api/tasks/{id}/stop` | 停止任务 | path `id` | `{ok:bool, status:str}` |
@@ -367,16 +368,15 @@ classDiagram
 | event 类型 | data 字段 | 含义 |
 |------------|-----------|------|
 | `task_created` | `{task_id, title, status}` | 任务已创建 |
-| `plan_update` | `{plan: PlanStep[]}` | 规划步骤更新 |
-| `step_start` | `{index, thought}` | 某 step 开始（LLM 思考文本） |
+| `plan_update` | `{plan: PlanStep[]}` | 计划更新：计划模式一轮产出，或停下时人工编辑（`PUT /tasks/{id}/plan`） |
+| `step_start` | `{index, thought}` | 一轮开始（`agent` 节点每次调用一条，两种模式同形） |
 | `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
 | `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
-| `final_answer` | `{answer:str}` | 最终答案 |
-| `task_completed` | `{task_id, status}` | 完成 |
+| `final_answer` | `{answer:str}` | 本轮的文字回复（不是终态；下一轮会覆盖） |
 | `task_failed` | `{task_id, error}` | 失败 |
-| `task_interrupted` | `{task_id, status}` | 被停止 |
-| `task_resumed` | `{task_id, status}` | 从检查点续跑启动（P3） |
+| `task_interrupted` | `{task_id, status}` | 停下：人按停、一轮没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
+| `task_resumed` | `{task_id, status}` | 从检查点续跑 / 新消息续跑启动（P3；#139 起多轮对话共用） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |
 | `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|

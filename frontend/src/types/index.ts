@@ -3,14 +3,25 @@
 export type TaskStatus =
   | "PENDING"
   | "RUNNING"
-  | "COMPLETED"
   | "FAILED"
   | "INTERRUPTED";
+
+/**
+ * Sticky per-task mode (ADR 0008 decision 3): plan or build. Default build.
+ * There is no COMPLETED status any more — a round ending is a "停下"
+ * (INTERRUPTED) and the task can always be continued (decision 5).
+ */
+export type TaskMode = "plan" | "build";
 
 /**
  * Confirmation-gate / risk-scan faces were removed in slice S4 (#138); the
  * danger hook (`backend/core/agent/policy.py`, S2) is the only guard left.
  */
+
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
 
 export interface PlanStep {
   index: number;
@@ -50,9 +61,12 @@ export interface Task {
   title: string;
   user_input: string;
   status: TaskStatus;
+  mode: TaskMode;
   steps: StepRecord[];
   plan: PlanStep[];
   artifacts: Artifact[];
+  /** User/assistant text turns across every round of the conversation. */
+  conversation: ChatTurn[];
   final_answer: string;
   error?: string | null;
   created_at: string;
@@ -112,6 +126,7 @@ export interface AuthTokenResponse {
 export interface CreateTaskRequest {
   title?: string;
   input: string;
+  mode?: TaskMode;
 }
 
 // --- P1-B: workspace rollback (POST /api/tasks/{id}/rollback) ---
@@ -150,10 +165,9 @@ export type SSEventType =
   | "task_rollback" // P1-B: {task_id, ok, files, already_original}
   | "artifact_created"
   | "final_answer"
-  | "task_completed"
   | "task_failed"
   | "task_interrupted"
-  | "task_resumed" // P3: {task_id, status}
+  | "task_resumed" // P3 / #139: {task_id, status}（续跑或多轮续说）
   | "tool_result_evicted" // T1.4: {tool_call_id, tool_name, original_chars, step_index}
   | "subtask_start" // #70-A: {subtask_id, name, status, parent_task_id}（父频道）
   | "subtask_result" // #70-A: {subtask_id, name, status, summary, artifacts}（父频道）

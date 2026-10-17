@@ -36,7 +36,7 @@ def _wait_done(client, task_id, timeout=15):
     while time.time() < deadline:
         r = client.get(f"/api/tasks/{task_id}")
         status = r.json()["data"]["status"]
-        if status in ("COMPLETED", "FAILED", "INTERRUPTED"):
+        if status in ("INTERRUPTED", "FAILED"):
             return status
         time.sleep(0.05)
     return "TIMEOUT"
@@ -143,7 +143,7 @@ def trace_client(tmp_path):
 def test_trace_api_ndjson(trace_client):
     client, settings = trace_client
     tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
-    assert _wait_done(client, tid) == "COMPLETED"
+    assert _wait_done(client, tid) == "INTERRUPTED"
     trace_file = settings.trace_path / f"{tid}.jsonl"
     assert _wait_trace_closed(trace_file)
 
@@ -154,14 +154,14 @@ def test_trace_api_ndjson(trace_client):
     types = [e["type"] for e in events]
     assert "task_created" in types
     assert "tool_result" in types
-    assert "final_answer" in types or "task_completed" in types
+    assert "final_answer" in types or "task_interrupted" in types
     assert types[-1] == "trace_end"
 
 
 def test_trace_api_json_format(trace_client):
     client, settings = trace_client
     tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
-    assert _wait_done(client, tid) == "COMPLETED"
+    assert _wait_done(client, tid) == "INTERRUPTED"
     trace_file = settings.trace_path / f"{tid}.jsonl"
     assert _wait_trace_closed(trace_file)
 

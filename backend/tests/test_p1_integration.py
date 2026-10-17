@@ -51,8 +51,8 @@ class _ResearchMock(MockLLMClient):
                     ],
                 )
             return LLMResponse(content="研究完成")
-        if self._executor_turn == 0:
-            self._executor_turn += 1
+        if self._turn == 0:
+            self._turn += 1
             return LLMResponse(
                 content="",
                 tool_calls=[
@@ -83,7 +83,7 @@ def test_p1_events_in_main_channel(tmp_path, event_bus):
     task_id = tm.create_task(title="p1", user_input="调研 RAG 最新进展并写报告")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     types = {e["type"] for e in event_bus.replay(task_id)}
     # The delegation is an ordinary tool call on the parent channel — and since
     # #70 ruling A the summary events are back on it as well (they were retired
@@ -115,7 +115,7 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
     task_id = tm.create_task(title="all", user_input="调研 DeepAgent 架构并写报告")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     # One delegation actually ran the research leg.
     assert mock.subtask_turns >= 2
     assert _spawn_result(event_bus.replay(task_id))[0]["status"] == "success"
@@ -142,4 +142,4 @@ def test_p1_openapi_registration_does_not_break_startup(tmp_path, event_bus):
     assert tm is not None
     task_id = tm.create_task(title="t", user_input="hi")
     task = _run_until_done(tm, task_id)
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"

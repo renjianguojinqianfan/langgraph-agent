@@ -6,7 +6,6 @@ import { Task, TaskStatus } from "../types";
 const STATUS_STYLE: Record<TaskStatus, string> = {
   PENDING: "bg-slate-500",
   RUNNING: "bg-blue-500",
-  COMPLETED: "bg-green-600",
   FAILED: "bg-red-600",
   INTERRUPTED: "bg-amber-500",
 };
@@ -14,18 +13,14 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
 const STATUS_LABEL: Record<TaskStatus, string> = {
   PENDING: "等待中",
   RUNNING: "运行中",
-  COMPLETED: "已完成",
   FAILED: "失败",
-  INTERRUPTED: "已停止",
+  INTERRUPTED: "停下",
 };
 
 export function TaskHeader({ task }: { task: Task }) {
   const running = task.status === "RUNNING";
   // P1-B: rollback needs a settled task — the backend answers 409 otherwise.
-  const settled =
-    task.status === "COMPLETED" ||
-    task.status === "FAILED" ||
-    task.status === "INTERRUPTED";
+  const settled = task.status === "FAILED" || task.status === "INTERRUPTED";
   const authEnabled = useAuthStore((s) => s.authEnabled);
   const logout = useAuthStore((s) => s.logout);
   const [confirmRollback, setConfirmRollback] = useState(false);

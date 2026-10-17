@@ -68,7 +68,7 @@ def _wait_done(test_client, task_id, timeout=15):
     while time.time() < deadline:
         r = test_client.get(f"/api/tasks/{task_id}")
         status = r.json()["data"]["status"]
-        if status in ("COMPLETED", "FAILED", "INTERRUPTED"):
+        if status in ("INTERRUPTED", "FAILED"):
             return status
         time.sleep(0.05)
     return "TIMEOUT"
@@ -120,7 +120,7 @@ def test_stop_task_interrupts(client):
     body = r.json()
     assert body["code"] == 0
     assert body["data"]["ok"] is True
-    assert body["data"]["status"] in ("INTERRUPTED", "COMPLETED", "FAILED")
+    assert body["data"]["status"] in ("INTERRUPTED", "INTERRUPTED", "FAILED")
 
 
 def test_stop_unknown_task_returns_404(client):
@@ -130,7 +130,7 @@ def test_stop_unknown_task_returns_404(client):
 
 def test_sse_response_emits_replayed_event_frames(client):
     tid = client.post("/api/tasks", json={"input": "write a file via api"}).json()["data"]["task_id"]
-    assert _wait_done(client, tid) == "COMPLETED"
+    assert _wait_done(client, tid) == "INTERRUPTED"
 
     eb = client.app.state.event_bus
 
@@ -156,7 +156,7 @@ def test_sse_response_emits_replayed_event_frames(client):
                 except StopAsyncIteration:
                     break
                 frames.append(frame)
-                if "final_answer" in frame or "task_completed" in frame:
+                if "final_answer" in frame or "task_interrupted" in frame:
                     break
             return frames
 

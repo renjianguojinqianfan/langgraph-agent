@@ -287,7 +287,8 @@ class GitCommitTool(GitTool):
     requires_confirm = True
     description = (
         "Create a commit with the given message (and optional repo-relative "
-        "path scope). Requires human confirmation. Returns the commit hash."
+        "path scope). The configured danger rules may refuse this call. "
+        "Returns the commit hash."
     )
     args_schema = {
         "type": "object",
@@ -418,7 +419,7 @@ class GitCheckoutTool(GitTool):
     requires_confirm = True
     description = (
         "Switch to the given branch in the configured git repository. "
-        "Requires human confirmation."
+        "The configured danger rules may refuse this call."
     )
     args_schema = {
         "type": "object",
@@ -452,7 +453,7 @@ class GitInitTool(GitTool):
     requires_confirm = True
     description = (
         "Initialise a git repository in the configured repo root (or an "
-        "optional subdirectory). Requires human confirmation."
+        "optional subdirectory). The configured danger rules may refuse this call."
     )
     args_schema = {
         "type": "object",

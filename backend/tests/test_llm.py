@@ -320,8 +320,8 @@ def test_executor_sends_previous_reasoning_content_back(settings):
     )
     rt = _runtime(settings, llm)
     state = _state()
-    rt.executor(state)  # turn 1 -> tool call
-    rt.executor(state)  # turn 2
+    rt.agent(state)  # turn 1 -> tool call
+    rt.agent(state)  # turn 2
 
     assert _assistants(llm.requests[1])[-1]["reasoning_content"] == "先想清楚写什么"
 
@@ -336,8 +336,8 @@ def test_executor_final_answer_turn_carries_reasoning_content(settings):
     )
     rt = _runtime(settings, llm)
     state = _state()
-    rt.executor(state)
-    rt.executor(state)
+    rt.agent(state)
+    rt.agent(state)
 
     assert [a.get("reasoning_content") for a in _assistants(state["messages"])] == ["思考一", "思考二"]
 
@@ -352,8 +352,8 @@ def test_executor_omits_reasoning_content_key_when_provider_has_none(settings):
     )
     rt = _runtime(settings, llm)
     state = _state()
-    rt.executor(state)
-    rt.executor(state)
+    rt.agent(state)
+    rt.agent(state)
 
     assert "reasoning_content" not in _assistants(llm.requests[1])[-1]
     assert all("reasoning_content" not in a for a in _assistants(state["messages"]))

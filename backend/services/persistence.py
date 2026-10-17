@@ -50,6 +50,12 @@ class Persistence:
             raw = json.loads(self._tasks_file.read_text(encoding="utf-8"))
             for item in raw:
                 try:
+                    # ADR 0008 decision 5 / slice S5: ``COMPLETED`` is retired —
+                    # "完成" is just another "停下". Records written before S5
+                    # still carry it, so map it on load instead of dropping the
+                    # user's history as a corrupt record.
+                    if item.get("status") == "COMPLETED":
+                        item["status"] = "INTERRUPTED"
                     task = Task(**item)
                 except Exception:
                     logger.warning("Skipping corrupt task record %s", item.get("id"))

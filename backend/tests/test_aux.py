@@ -80,7 +80,7 @@ def test_zero_extra_llm_calls_without_aux(tmp_path, event_bus):
     assert tm._aux_llm is None
     task_id = tm.create_task(title="t", user_input="do something")
     task = _run_until_done(tm, task_id)
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     # No aux client existed; therefore zero aux calls by construction.
     assert tm._aux_llm is None
 
@@ -101,7 +101,7 @@ def test_aux_mock_zero_calls_when_enabled_but_no_task_triggers(tmp_path, event_b
 
     task_id = tm.create_task(title="qa-aux0", user_input="普通任务")
     task = _run_until_done(tm, task_id)
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     assert aux.call_count == 0, "aux 在没有任何辅助任务时被调用了"
 
 
@@ -137,7 +137,7 @@ def test_injected_aux_is_not_consulted_when_no_task_triggers(tmp_path):
         "_is_subtask": False,
     }
     final = build_graph(runtime).invoke(state)
-    assert final["status"] == "COMPLETED"
+    assert final["status"] == "INTERRUPTED"
     assert injected.call_count == 0
 
 

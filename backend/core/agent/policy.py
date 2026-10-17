@@ -2,7 +2,7 @@
 
 [ADR 0008](../../../docs/adr/0008-single-loop-plan-build-modes.md) 第 6 条把「危险动作」
 收成两件事：一张**设置里的规则表**（``Settings.policy_rules``），和一个接在
-``AgentRuntime.executor`` 里、决定「这次调用执行不执行」的钩子。命中即**拒**：
+``AgentRuntime.agent`` 里、决定「这次调用执行不执行」的钩子。命中即**拒**：
 不执行，把 ``{block, reason}`` 当这次调用的结果回给模型，模型自己换路。
 
 与 pi 的 ``tool_call`` 钩子的三条有意分歧（实证见
