@@ -1,6 +1,7 @@
 import { ArtifactList } from "./ArtifactList";
 import { InputBar } from "./InputBar";
 import { MessageStream } from "./MessageStream";
+import { PlanPanel } from "./PlanPanel";
 import { StepTimeline } from "./StepTimeline";
 import { SubtaskList } from "./SubtaskList";
 import { TaskHeader } from "./TaskHeader";
@@ -85,6 +86,7 @@ export function TaskPanel({ task, tab, onTabChange, onToggleKb, kbOpen }: TaskPa
           ) : (
             <>
               <MessageStream task={task} />
+              <PlanPanel key={task.id} task={task} />
               <div>
                 <div className="text-xs text-slate-400 mb-1">步骤时间线</div>
                 <StepTimeline task={task} />

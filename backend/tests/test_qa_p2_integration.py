@@ -67,7 +67,7 @@ def _run_task_once(tmp_path, index: int) -> tuple[str, set[str]]:
     status = "RUNNING"
     while time.time() < deadline:
         task = tm.get_task(task_id)
-        if task and task.status.value in ("COMPLETED", "FAILED", "INTERRUPTED"):
+        if task and task.status.value in ("INTERRUPTED", "FAILED"):
             status = task.status.value
             break
         time.sleep(0.05)
@@ -75,8 +75,8 @@ def _run_task_once(tmp_path, index: int) -> tuple[str, set[str]]:
     event_types = {e["type"] for e in events}
     # Pre-fix race: the terminal status could be persisted before the event was
     # published, so an observer would see COMPLETED but no task_completed event.
-    if status == "COMPLETED":
-        assert "task_completed" in event_types, (
+    if status == "INTERRUPTED":
+        assert "task_interrupted" in event_types, (
             "terminal status visible but task_completed event missing (publish-before-save race)"
         )
     tm.shutdown()
@@ -89,7 +89,7 @@ def test_smoke_race_regression_multiple_runs(tmp_path):
     for i in range(3):
         status, _ = _run_task_once(tmp_path, i)
         statuses.append(status)
-    assert statuses == ["COMPLETED", "COMPLETED", "COMPLETED"]
+    assert statuses == ["INTERRUPTED", "INTERRUPTED", "INTERRUPTED"]
 
 
 def test_mcp_and_git_coexist(tmp_path):

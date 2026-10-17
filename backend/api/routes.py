@@ -32,6 +32,9 @@ from .schemas import (
     AuthTokenRequest,
     CreateTaskRequest,
     McpServerInfo,
+    SendMessageRequest,
+    UpdateModeRequest,
+    UpdatePlanRequest,
 )
 from .sse import sse_response
 
@@ -60,7 +63,9 @@ def create_task(
 ) -> ApiResponse:
     if not payload.input or not payload.input.strip():
         raise HTTPException(status_code=400, detail="`input` is required.")
-    task_id = _tm(request).create_task(payload.title, payload.input.strip())
+    task_id = _tm(request).create_task(
+        payload.title, payload.input.strip(), mode=payload.mode.value
+    )
     return _envelope(data={"task_id": task_id})
 
 
@@ -109,6 +114,90 @@ def resume_task(
         raise HTTPException(status_code=404, detail="task not found")
     try:
         result = _tm(request).resume(task_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
+@router.put("/tasks/{task_id}/mode")
+def update_mode(
+    task_id: str,
+    payload: UpdateModeRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Flip the sticky plan/build switch (ADR 0008 decision 3).
+
+    Takes effect on the next round; the current one keeps the face it started
+    with. Unknown task -> 404, unknown mode is rejected by the request model.
+    """
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).set_mode(task_id, payload.mode.value)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
+@router.put("/tasks/{task_id}/plan")
+def update_plan(
+    task_id: str,
+    payload: UpdatePlanRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Replace a parked task's plan; the next message runs against the edit."""
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).set_plan(
+            task_id, [p.model_dump() for p in payload.plan]
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
+@router.post("/tasks/{task_id}/messages")
+def send_message(
+    task_id: str,
+    payload: SendMessageRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Say one more thing to a parked task and continue the same conversation.
+
+    This is the multi-turn entry (ADR 0008 decision 1). ``resume`` remains the
+    no-new-message path for a stopped run; both need a durable checkpoint and
+    both answer 409 when the task cannot continue.
+    """
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if not payload.input or not payload.input.strip():
+        raise HTTPException(status_code=400, detail="`input` is required.")
+    try:
+        result = _tm(request).send_message(task_id, payload.input)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
+@router.post("/tasks/{task_id}/replan")
+def replan_task(
+    task_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Run one planning round in plan mode (the input bar's「重新规划」button).
+
+    The sticky task switch is intentionally untouched: the button is an action,
+    not a mode change (ADR 0008 decision 3).
+    """
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).replan(task_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data=result)

@@ -317,7 +317,7 @@ def test_executor_read_tool_executes_directly(tmp_path):
         tool_schemas=[tool.to_openai_schema()],
     )
     state = _mcp_executor_state()
-    rt.executor(state)
+    rt.agent(state)
     # tool_node executes immediately -> success.
     rt.tool_node(state)
     rec = state["_current_tool_calls"][0]

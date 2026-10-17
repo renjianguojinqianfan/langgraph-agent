@@ -20,10 +20,12 @@ from langgraph.types import Durability
 
 from ..api.schemas import (
     Artifact,
+    ChatTurn,
     PlanStep,
     StepRecord,
     SubTask,
     Task,
+    TaskMode,
     TaskStatus,
 )
 from ..config import Settings
@@ -72,7 +74,12 @@ _DURABILITY: Durability = "sync"
 # resets, which makes it the cheapest honest home. The A/B measurement behind
 # this (3.1.1 *can* read 2.0.11 snapshots losslessly, and why we refuse anyway)
 # is recorded in docs/migration-langgraph-1x.md §2.
-CHECKPOINT_FORMAT_VERSION = 1
+#
+# v2 = S5 (#139): planner/executor merged into one ``agent`` node. A v1
+# snapshot was written by a different graph, so continuing its pregel schedule
+# under this build is exactly the "never proven" case the stamp exists to
+# refuse — the store is refused, not silently replayed.
+CHECKPOINT_FORMAT_VERSION = 2
 
 # Where the refusal message sends the operator.
 _CHECKPOINT_FORMAT_DOC = "docs/migration-langgraph-1x.md"
@@ -100,9 +107,10 @@ def _inspect_checkpoint_store(db_path: Path) -> tuple[bool, str, str]:
     """Decide whether an existing checkpoint sqlite file may be mounted.
 
     Returns ``(usable, kind, detail)``. ``kind`` is one of ``new`` / ``empty`` /
-    ``stamped`` (usable) or ``legacy`` / ``newer`` / ``unreadable`` (refused);
-    the caller picks the operator-facing text from ``kind``, because "this
-    predates the migration, move it away" and "this file is broken or locked, go
+    ``stamped`` (usable) or ``legacy`` / ``older`` / ``newer`` / ``unreadable``
+    (refused); the caller picks the operator-facing text from ``kind``, because
+    "this predates the migration, move it away" and "this file is broken or
+    locked, go
     fix the cause" call for opposite remediation.
 
     A store is usable only when it carries *exactly* this build's format stamp.
@@ -132,6 +140,14 @@ def _inspect_checkpoint_store(db_path: Path) -> tuple[bool, str, str]:
             if version > CHECKPOINT_FORMAT_VERSION:
                 return False, "newer", (
                     f"stamped format v{version} by a newer build (this build "
+                    f"writes v{CHECKPOINT_FORMAT_VERSION})"
+                )
+            if version > 0:
+                # Stamped by an older build of this codebase. Since #139 that is
+                # a *different graph* (planner/executor → agent), so its schedule
+                # is not something this build can vouch for either.
+                return False, "older", (
+                    f"stamped format v{version} by an older build (this build "
                     f"writes v{CHECKPOINT_FORMAT_VERSION})"
                 )
             rows = _count_store_rows(conn)
@@ -208,6 +224,11 @@ class TaskManager:
         # teardown to pop them — ``SubAgentExecutor._request_worker_stop``
         # clears those from the subtask future's done callback instead.
         self._stop_flags: Dict[str, bool] = {}
+        # #139: a round-end "停下" is published by _finalize_terminal, while a
+        # human stop publishes immediately from stop(). This set keeps the two
+        # from announcing the same park twice (the event is identical by design:
+        # ADR 0008 decision 5 — all stops look the same).
+        self._interrupt_announced: set[str] = set()
         # Spec Issue #4 (D1/D2): durable checkpointer — one sqlite file per
         # settings identity (checkpoint_path), not per manager instance: the
         # resume contract requires a rebuilt TaskManager to see snapshots
@@ -228,10 +249,13 @@ class TaskManager:
         """Mount the sqlite saver, or refuse a store this build cannot vouch for.
 
         Refusing leaves ``_checkpointer`` as ``None``: the service still starts
-        and new tasks still run, while resume falls through to the existing
-        "no checkpoint" 409 (AGENTS.md「任务路由」: 三类 409 拒绝不可放松). No automatic
-        migration and no partial mount — a refused file is never written to, so
-        moving it away is the whole remediation.
+        and new tasks still run their FIRST round — but without a checkpointer
+        there is nothing to resume or continue from, so ``resume`` and
+        ``send_message`` answer 409 for every task (AGENTS.md「任务路由」: 两类
+        409 拒绝不可放松) until the file is moved away. "New tasks are unaffected"
+        is therefore false and must not be claimed. No automatic migration and
+        no partial mount — a refused file is never written to, so moving it away
+        is the whole remediation.
         """
         import sqlite3
 
@@ -266,8 +290,9 @@ class TaskManager:
             logger.error(
                 "Checkpoint store %s is not writable (%s: %s); refusing to mount. "
                 "Fix the cause (permissions / disk full / stale lock) — do NOT "
-                "delete snapshots for this. Resume stays disabled; new tasks are "
-                "unaffected.",
+                "delete snapshots for this. Resume and continuation stay disabled "
+                "for every task (new ones run one round, then cannot continue) "
+                "until the store is writable.",
                 db_path,
                 type(exc).__name__,
                 exc,
@@ -288,8 +313,9 @@ class TaskManager:
             logger.error(
                 "Checkpoint store %s is unreadable (%s); refusing to mount. This "
                 "is not a migration artifact — check permissions / integrity / "
-                "locks rather than deleting snapshots. Resume stays disabled "
-                "until it is readable; new tasks are unaffected.",
+                "locks rather than deleting snapshots. Resume and continuation "
+                "stay disabled until it is readable; new tasks run one round but "
+                "cannot be continued either.",
                 db_path,
                 detail,
             )
@@ -298,9 +324,11 @@ class TaskManager:
             "Checkpoint store %s refused: %s. Snapshots written under a different "
             "checkpoint format are void by design — reading them back may well "
             "work, but continuing that pregel schedule under this scheduler was "
-            "never proven, and data/ is disposable runtime state. Resume stays "
-            "disabled until the file is moved away; new tasks are unaffected. "
-            "Rationale and measurement: %s.",
+            "never proven, and data/ is disposable runtime state. Resume and "
+            "continuation stay disabled for EVERY task (new ones included) until "
+            "the file is moved away — a new task runs its first round, then "
+            "parks with no checkpoint to continue from. Rationale and "
+            "measurement: %s.",
             db_path,
             detail,
             _CHECKPOINT_FORMAT_DOC,
@@ -493,8 +521,12 @@ class TaskManager:
         self,
         title: Optional[str],
         user_input: str,
+        mode: str = TaskMode.BUILD.value,
     ) -> str:
-        """Start one task."""
+        """Start one task (ADR 0008 decision 1: one task = one conversation).
+
+        ``mode`` is the sticky task switch; default is build (decision 3).
+        """
         task_id = uuid.uuid4().hex
         now = _now()
         task = Task(
@@ -502,6 +534,8 @@ class TaskManager:
             title=(title or user_input[:40]).strip(),
             user_input=user_input,
             status=TaskStatus.PENDING,
+            mode=TaskMode(mode),
+            conversation=[ChatTurn(role="user", content=user_input)],
             created_at=now,
             updated_at=now,
         )
@@ -548,13 +582,15 @@ class TaskManager:
 
         state: AgentState = {
             "task_id": task_id,
+            "mode": task.mode.value,
             "messages": [{"role": "user", "content": task.user_input}],
-            "plan": [],
+            "plan": [p.model_dump() for p in task.plan],
             "steps": [],
             "artifacts": [],
             "status": "RUNNING",
             "stop_requested": False,
             "step_index": 0,
+            "round_steps": 0,
             "final_answer": "",
             "error": "",
             "_last_action": "",
@@ -594,6 +630,7 @@ class TaskManager:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._interrupt_announced.discard(task_id)
             # P0 item 4: always close the trace (success / failure / interrupt)
             # so the JSONL terminates with a trace_end line.
             if self._trace is not None:
@@ -601,25 +638,53 @@ class TaskManager:
 
     # ── control ──
     def stop(self, task_id: str) -> Dict[str, Any]:
-        st = self._active_states.get(task_id)
-        if st is not None:
-            st["stop_requested"] = True
-        # Issue #4: authoritative signal for checkpointer-backed runs — nodes
-        # poll this because their state dicts are per-superstep copies.
-        self._stop_flags[task_id] = True
+        """Ask the live run to stop; a parked task is left alone.
 
+        The stop flag is authoritative for checkpointer-backed runs (nodes poll
+        it because their state dicts are per-superstep copies). It is set ONLY
+        when the run is still live: on a parked/completed record nothing would
+        pop it (a task's flag is cleared in its run teardown), so a harmless
+        second click — or a stop against a parked task — would otherwise poison
+        the next continuation, which the first node entry would then abort.
+        """
         task = self.persistence.load_task(task_id)
-        if task and task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+        live = task is not None and task.status in (
+            TaskStatus.RUNNING,
+            TaskStatus.PENDING,
+        )
+        st = self._active_states.get(task_id)
+        if st is not None or live:
+            if st is not None:
+                st["stop_requested"] = True
+            self._stop_flags[task_id] = True
+
+        if live and task is not None:
             task.status = TaskStatus.INTERRUPTED
             task.updated_at = _now()
             self.persistence.save_task(task)
-            self.event_bus.publish(
-                task_id,
-                "task_interrupted",
-                {"task_id": task_id, "status": TaskStatus.INTERRUPTED.value},
-            )
+            # Claim the announcement before publishing: _finalize_terminal will
+            # see the claim and stay quiet, so a human stop is one event, not two.
+            if self._claim_interrupt(task_id):
+                self.event_bus.publish(
+                    task_id,
+                    "task_interrupted",
+                    {"task_id": task_id, "status": TaskStatus.INTERRUPTED.value},
+                )
             return {"ok": True, "status": TaskStatus.INTERRUPTED.value}
         return {"ok": True, "status": task.status.value if task else "UNKNOWN"}
+
+    def _claim_interrupt(self, task_id: str) -> bool:
+        """Claim the one ``task_interrupted`` announcement for this run.
+
+        ``stop()`` and ``_finalize_terminal`` can race inside the window where
+        finalize has published but not yet persisted the parked status; claiming
+        under the manager lock makes "one stop, one event" hold either way.
+        """
+        with self._lock:
+            if task_id in self._interrupt_announced:
+                return False
+            self._interrupt_announced.add(task_id)
+            return True
 
     def is_stop_flagged(self, task_id: str) -> bool:
         """Peek (not consume) the authoritative stop signal — nodes poll this
@@ -638,17 +703,16 @@ class TaskManager:
         the first superstep). A refused pre-migration store leaves us in exactly
         that no-checkpointer state, and it must degrade to "resume unavailable",
         never to "tasks crash". Caught by
-        test_new_tasks_still_run_with_legacy_store_present.
+        test_new_tasks_run_one_round_with_refused_store_but_cannot_continue.
         """
         return {"durability": _DURABILITY} if self._checkpointer is not None else {}
 
     def _thread_config(self, task_id: str) -> Dict[str, Any]:
         """LangGraph runnable config under the thread_id == task_id convention.
 
-        Also lifts the default recursion limit (25). The main topology runs
-        3 nodes per agent cycle (planner→executor→tool), so ×8 leaves ample
-        headroom (issue #56 dropped a node per cycle and #138 two more — the
-        limit is a ceiling, not a budget).
+        Also lifts the default recursion limit (25). The loop runs 2 nodes per
+        cycle (agent→tool), so ×8 leaves ample headroom — the limit is a ceiling,
+        not a budget.
         """
         return {
             "configurable": {"thread_id": task_id},
@@ -676,33 +740,63 @@ class TaskManager:
         return False
 
     def _finalize_terminal(self, task: Task, final: Dict[str, Any]) -> None:
-        """Map a finished graph state onto the persisted task record.
+        """Map a finished run onto the persisted task record.
 
-        Shared by run() and resume(). Publishes the terminal event BEFORE
-        persisting the terminal status so an observer polling get_task()
-        never sees COMPLETED/FAILED ahead of the event.
+        Shared by run(), resume() and _continue_run(). Publishes the outcome
+        BEFORE persisting the settled status so an observer polling get_task()
+        never sees it ahead of the event.
+
+        Since #139 there is no COMPLETED: a run that ended (round done, human
+        stop, spent budget) is ``INTERRUPTED`` (停下), an error is ``FAILED``.
+        A human stop already published ``task_interrupted`` from stop(); every
+        other park publishes it here — one event per stop, whichever caused it.
         """
         status = final.get("status") or "FAILED"
         task.status = TaskStatus(status)
         task.plan = [PlanStep(**p) for p in final.get("plan", [])]
         task.steps = [StepRecord(**s) for s in final.get("steps", [])]
         task.artifacts = [Artifact(**a) for a in final.get("artifacts", [])]
+        task.conversation = self._conversation_from(final.get("messages"))
         task.final_answer = final.get("final_answer", "")
         task.error = final.get("error")
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()
-        if status == "COMPLETED":
-            self.event_bus.publish(
-                task.id, "task_completed", {"task_id": task.id, "status": status}
-            )
-        elif status == "FAILED":
+        if status == "FAILED":
             self.event_bus.publish(
                 task.id,
                 "task_failed",
                 {"task_id": task.id, "error": task.error or "unknown error"},
             )
-        # INTERRUPTED already published by stop().
+        elif self._claim_interrupt(task.id):
+            # Claim-and-publish under one contract, so a stop() racing this
+            # finalize cannot also announce the same park.
+            self.event_bus.publish(
+                task.id,
+                "task_interrupted",
+                {"task_id": task.id, "status": status},
+            )
         self.persistence.save_task(task)
+
+    @staticmethod
+    def _conversation_from(messages: Any) -> List[ChatTurn]:
+        """User/assistant text turns only (tool traffic lives in ``steps``).
+
+        Assistant turns that carried tool calls are skipped: their ``content``
+        is typically a preamble ("Let me look…") and the tool records already
+        narrate that step. Empty content is dropped so the stream has no blank
+        bubbles.
+        """
+        turns: List[ChatTurn] = []
+        for m in messages or []:
+            role = m.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            if role == "assistant" and m.get("tool_calls"):
+                continue
+            content = str(m.get("content") or "").strip()
+            if content:
+                turns.append(ChatTurn(role=role, content=content))
+        return turns
 
     def resume(self, task_id: str) -> Dict[str, Any]:
         """Continue an INTERRUPTED task from its last durable checkpoint.
@@ -831,9 +925,19 @@ class TaskManager:
             # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
             restored = cast(AgentState, values)
             # Reset *control* flags only; plan / steps / artifacts survive.
+            # Since #139 one invoke is one round: the per-round budget restarts
+            # and the stale answer/error must not leak into this round's finish.
+            # The persisted plan is the user-editable copy (set_plan), so it
+            # seeds over the checkpoint just like a message-driven continuation.
+            restored["plan"] = [p.model_dump() for p in current.plan]
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False
             restored["_current_tool_calls"] = []
+            restored["_last_action"] = ""
+            restored["final_answer"] = ""
+            restored["error"] = ""
+            restored["round_steps"] = 0
+            restored["mode"] = current.mode.value
             self._active_states[task_id] = restored
 
             final = graph.invoke(
@@ -859,6 +963,235 @@ class TaskManager:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._interrupt_announced.discard(task_id)
+            if self._trace is not None:
+                self._trace.close(task_id)
+
+    # ── #139: multi-turn continuation (one task = one conversation) ──
+    def send_message(self, task_id: str, text: str) -> Dict[str, Any]:
+        """Say one more thing to a parked task and continue from there.
+
+        ADR 0008 decisions 1 / 4 / 5: a round ends with no tool call, the task
+        parks, and the next message resumes the SAME conversation (thread_id and
+        checkpoint included) instead of starting a new task. Raises RuntimeError
+        for callers to map to 409, like resume().
+        """
+        text = (text or "").strip()
+        if not text:
+            raise RuntimeError("message is empty")
+        return self._continue(task_id, user_text=text)
+
+    def replan(self, task_id: str) -> Dict[str, Any]:
+        """Run one planning round **without** flipping the sticky switch.
+
+        The「重新规划」button is an action, not a mode change: ADR 0008 decision 3
+        says a finished plan does not silently re-plan, and the next typed
+        message should execute. The plan round therefore borrows plan mode for
+        one invoke and restores the task's own mode afterwards.
+
+        No synthetic user message is added: the plan-mode system prompt already
+        asks for a plan, and the conversation on disk is the context to revise.
+        """
+        return self._continue(
+            task_id, user_text=None, one_off_mode=TaskMode.PLAN
+        )
+
+    def set_mode(self, task_id: str, mode: str) -> Dict[str, Any]:
+        """Flip the sticky task switch; it takes effect on the next round."""
+        try:
+            chosen = TaskMode(mode)
+        except ValueError:
+            raise RuntimeError(f"unknown mode {mode!r} (expected plan or build)") from None
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            task.mode = chosen
+            task.updated_at = _now()
+            self.persistence.save_task(task)
+        return {"ok": True, "mode": chosen.value}
+
+    def set_plan(self, task_id: str, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Replace the editable plan of a parked task (pivot item 1).
+
+        The persisted ``Task.plan`` is the source of truth for user edits: the
+        next continuation seeds ``state["plan"]`` from it, so "改完随后续消息
+        生效" is structural rather than a rule the caller has to remember.
+        """
+        # Same window as resume/rollback: stop() settles the record before the
+        # worker commits its last state, and finalize would overwrite this edit
+        # with the checkpoint's plan. Wait the worker out rather than racing it.
+        thread = self._threads.get(task_id)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                raise RuntimeError(f"task {task_id} is still shutting down")
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            if task.status != TaskStatus.INTERRUPTED:
+                raise RuntimeError(
+                    f"task {task_id} is {task.status.value}; "
+                    "the plan can only be edited while the task is parked "
+                    "(INTERRUPTED)"
+                )
+            steps: List[PlanStep] = []
+            for position, raw in enumerate(plan, 1):
+                description = str((raw or {}).get("description") or "").strip()
+                if not description:
+                    continue
+                status = str((raw or {}).get("status") or "pending")
+                steps.append(
+                    PlanStep(index=len(steps) + 1, description=description, status=status)
+                )
+            task.plan = steps
+            task.updated_at = _now()
+            self.persistence.save_task(task)
+        payload = [p.model_dump() for p in task.plan]
+        self.event_bus.publish(task_id, "plan_update", {"plan": payload})
+        return {"ok": True, "plan": payload}
+
+    def _continue(
+        self,
+        task_id: str,
+        *,
+        user_text: Optional[str],
+        one_off_mode: Optional[TaskMode] = None,
+    ) -> Dict[str, Any]:
+        """Validate, claim and start one continuation round.
+
+        Same compare-and-set discipline as resume(): the status flip happens
+        under the manager lock so two concurrent senders can never both spawn a
+        worker on one thread_id. A continuation always needs a durable
+        checkpoint — that is what "接着跑，含进程重启后" is built on.
+
+        ``one_off_mode`` borrows the other mode for **this round only** (the
+        replan button); the sticky ``Task.mode`` is untouched.
+        """
+        thread = self._threads.get(task_id)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                raise RuntimeError(f"task {task_id} is still shutting down")
+
+        has_checkpoint = self._has_checkpoint(task_id)
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            if task.status != TaskStatus.INTERRUPTED:
+                raise RuntimeError(
+                    f"task {task_id} is {task.status.value}; "
+                    "only a parked (INTERRUPTED) task can continue"
+                )
+            live = self._threads.get(task_id)
+            if live is not None and live.is_alive():
+                raise RuntimeError(f"task {task_id} is already running")
+            if not has_checkpoint:
+                raise RuntimeError(
+                    f"no checkpoint found for task {task_id} "
+                    "(checkpoints disabled, this task predates them, or the "
+                    "store was refused for its format — see the startup log)"
+                )
+            if user_text is not None:
+                task.conversation.append(ChatTurn(role="user", content=user_text))
+            task.status = TaskStatus.RUNNING
+            task.updated_at = _now()
+            self.persistence.save_task(task)
+            self.event_bus.publish(
+                task_id,
+                "task_resumed",
+                {"task_id": task_id, "status": TaskStatus.RUNNING.value},
+            )
+            snapshot = task.model_dump(mode="json")
+
+        if self._trace is not None:
+            self._trace.attach(self.event_bus, task_id)
+
+        t = threading.Thread(
+            target=self._continue_run,
+            args=(task_id, user_text, one_off_mode),
+            daemon=True,
+        )
+        self._threads[task_id] = t
+        t.start()
+        return {"ok": True, "status": TaskStatus.RUNNING.value, "task": snapshot}
+
+    def _continue_run(
+        self,
+        task_id: str,
+        user_text: Optional[str],
+        one_off_mode: Optional[TaskMode] = None,
+    ) -> None:
+        """Run one more round on an existing conversation."""
+        set_current_task_id(task_id)
+        try:
+            current = self.persistence.load_task(task_id)
+            if current is None or current.status != TaskStatus.RUNNING:
+                logger.info("Continuation of %s superseded by newer state; aborting.", task_id)
+                return
+
+            runtime = AgentRuntime(
+                task_id=task_id,
+                task_manager=self,
+                llm=self._llm,
+                tools=self._tools,
+                tool_schemas=self._tool_schemas,
+                max_steps=self.settings.max_steps,
+                aux_llm=self._aux_llm,
+            )
+            graph = build_graph(runtime, checkpointer=self._checkpointer)
+
+            # The previous run ended at END, so this invoke starts a fresh pass
+            # from START over the restored channels — the conversation keeps
+            # growing instead of being replayed or reset.
+            values = self._read_restorable_state(graph, task_id)
+            restored = cast(AgentState, values)
+            if user_text is not None:
+                restored.setdefault("messages", []).append(
+                    {"role": "user", "content": user_text}
+                )
+            # The persisted plan is the user-editable copy (set_plan): seed it
+            # over the checkpoint so an edit takes effect this round.
+            restored["plan"] = [p.model_dump() for p in current.plan]
+            # A one-off round (replan) borrows the other mode without touching
+            # the sticky task switch.
+            restored["mode"] = (one_off_mode or current.mode).value
+            restored["status"] = "RUNNING"
+            restored["stop_requested"] = False
+            restored["_current_tool_calls"] = []
+            restored["_last_action"] = ""
+            restored["final_answer"] = ""
+            restored["error"] = ""
+            # Budget is per round; step_index stays cumulative for record ids.
+            restored["round_steps"] = 0
+            self._active_states[task_id] = restored
+
+            final = graph.invoke(
+                restored, self._thread_config(task_id), **self._invoke_kwargs()
+            )
+
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} vanished during continuation")
+            self._finalize_terminal(task, final)
+        except Exception as exc:
+            logger.exception("continuation crashed for task %s", task_id)
+            task = self.persistence.load_task(task_id)
+            if task is not None:
+                task.status = TaskStatus.FAILED
+                task.error = str(exc)
+                task.updated_at = _now()
+                self.persistence.save_task(task)
+            self.event_bus.publish(
+                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+            )
+        finally:
+            self._active_states.pop(task_id, None)
+            self._threads.pop(task_id, None)
+            self._stop_flags.pop(task_id, None)
+            self._interrupt_announced.discard(task_id)
             if self._trace is not None:
                 self._trace.close(task_id)
 

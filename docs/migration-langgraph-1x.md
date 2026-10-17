@@ -113,15 +113,20 @@ delta channel、`durability` 分级、`Send`/`Command` 路径），"用 1.x 的�
 `executescript` 建表不会重置它，且不需要我们新增表（新增表会与上游 `CREATE TABLE
 IF NOT EXISTS` 的假设共存，多一处耦合面）。
 
-判定规则（`CHECKPOINT_FORMAT_VERSION = 1`）：
+判定规则（`CHECKPOINT_FORMAT_VERSION = 2`）：
+
+> **2026-10-17（S5 / #139）**：`planner` / `executor` 合并为单个 `agent` 节点，图的形状变了，
+> 所以戳记升到 **v2**。v1 是 1.x 迁移那一代（旧两节点图）写的；按同一「未证明即拒绝」的判据，
+> 它现在落进 `older`，与 `legacy` / `newer` 同样需要把库移走。
 
 | 文件状态 | 判定 | kind |
 |---|---|---|
 | 不存在 | 可用（新建并打标） | `new` |
 | 存在、`checkpoints` 与 `writes` 均 0 行、未打标 | 可用（无可腐蚀数据，打标） | `empty` |
-| 存在、`user_version == 1` | 可用（本代码库写的） | `stamped` |
-| 存在、有行、`user_version == 0` | **拒绝挂载**（升级前遗留） | `legacy` |
-| 存在、`user_version > 1` | **拒绝挂载**（更新的 build 写的，本 build 证明不了） | `newer` |
+| 存在、`user_version == 2` | 可用（本代码库写的） | `stamped` |
+| 存在、`user_version == 1` | **拒绝挂载**（1.x 迁移那一代的旧两节点图） | `older` |
+| 存在、有行、`user_version == 0` | **拒绝挂载**（1.x 迁移前遗留） | `legacy` |
+| 存在、`user_version > 2` | **拒绝挂载**（更新的 build 写的，本 build 证明不了） | `newer` |
 | 读不出来（损坏 / 被锁 / 权限 / 不是 sqlite） | **拒绝挂载**（不带崩启动） | `unreadable` |
 
 两个细节是评审后加的：
@@ -137,10 +142,12 @@ IF NOT EXISTS` 的假设共存，多一处耦合面）。
 恰好就是 P3 关心的场景）。§2.1 的 A/B 探测用的就是 `mode=ro`，生产代码必须同一标准。
 
 拒绝挂载 = `self._checkpointer = None` + ERROR 级日志，**不是**拒绝启动：服务照常起，
-新任务照跑，只是 resume 走既有的「no checkpoint → 409」路径（`_has_checkpoint()`
-返回 False）。日志文案按 kind 分支，因为两类原因需要**相反**的补救动作：
+新任务照跑**第一轮**——但没有 checkpointer，resume 与「续说」都走占位符「no checkpoint → 409」
+路径（`_has_checkpoint()` 对全部 thread 返回 False）。也就是说「新任务不受影响」**不成立**：
+移走被拒的库之前，连升级后新建的任务都不能接着跑。日志文案按 kind 分支，因为两类原因需要
+**相反**的补救动作：
 
-- `legacy` / `newer`：格式不被本 build 背书 → 把文件移走就恢复 resume（指向本文档）；
+- `legacy` / `older` / `newer`：格式不被本 build 背书 → 把文件移走就恢复 resume（指向本文档）；
 - `unreadable` / 打标写入失败：权限 / 完整性 / 锁 / 磁盘满 → 去修根因，**不要**删快照
   （删了既修不好下次新建的库，又白白丢掉历史数据）。
 
@@ -247,10 +254,10 @@ AttributeError 在第一个 superstep 就炸。
 
 这个状态恰好就是「旧库被拒绝挂载」之后的状态（见 §2.4），所以两个决策会相互撞上。
 修法：durability 只在 `self._checkpointer is not None` 时才传（`TaskManager._invoke_kwargs()`）。
-拒绝挂载必须降级成「resume 不可用」，绝不能降级成「任务全崩」。
+拒绝挂载必须降级成「resume 与续说不可用」，绝不能降级成「任务全崩」。
 
-这不是推理出来的，是被测试抓住的：`test_new_tasks_still_run_with_legacy_store_present`
-（旧库在场时新任务仍须跑完）在加上 durability 后立刻变红。先写行为测试、后接新特性，
+这不是推理出来的，是被测试抓住的：`test_new_tasks_run_one_round_with_refused_store_but_cannot_continue`
+（旧库在场时新任务仍须跑完第一轮）在加上 durability 后立刻变红。先写行为测试、后接新特性，
 刚好把这个交互逼出来。
 
 ## 6. 闸门与回滚
@@ -273,16 +280,20 @@ AttributeError 在第一个 superstep 就炸。
 
 真实模型跑之前需先做一次运维动作：本地 `data/checkpoints/checkpoints.sqlite`（2.0.11 写的
 104 行）会被新守卫正当拒绝，按日志提示把它移走（重命名为 `*.pre-1x-legacy`）即可；
-新建的库会打上 `format v1` 并被正常挂载。
+新建的库会打上格式戳并被正常挂载（本文写作时为 `format v1`；**S5 / #139 起为 `format v2`**，
+v1 库按 §2.4 的 `older` 行拒绝，处置同样是移走）。
 
 一个观察（不属本次范围，不改）：`scripts/live_e2e.py` 场景 1 的终态预算是硬编码的
 ~60s，而场景 2 用 180s。真实模型一次 planner 调用就花了 ~10s，两轮循环很容易超过 60s：
 首跑因此 FAIL（trace 显示无事件、循环正常推进，纯粹是模型延迟），重跑即 PASS。
 另外 `OpenAICompatibleClient` 未设请求 timeout（SDK 默认 600s），单次卡顿会吃掉整个预算。
 
-回滚：`requirements.txt` 恢复旧矩阵 + `pip install -r requirements.txt`。数据侧无需回滚
-（`data/` 不入库；打标只写 `PRAGMA user_version`，旧栈忽略该值，因此打标后的文件在
-回滚后仍可被 2.0.11 正常使用）。
+回滚：`requirements.txt` 恢复旧矩阵 + `pip install -r requirements.txt`。**回滚到 2.0.11**
+时数据侧无需处理：`data/` 不入库，打标只写 `PRAGMA user_version`，而 2.0.11 根本不读这个戳，
+打标后的文件仍可正常使用。
+**2026-10-17 补记（S5 / #139）**：**回滚到本仓库的 S4/master** 是另一回事——那侧的守卫会把
+v2 判成 `newer` 并拒绝挂载。回滚同样要先把 `data/checkpoints/checkpoints.sqlite{,-wal,-shm}`
+移走，新任务才能重获续说能力。升级（v1→v2）与回滚（v2→v1）各一步移库，方向相反、处置相同。
 
 ## 7. Phase 2 待办（本次交付刻意不含）
 

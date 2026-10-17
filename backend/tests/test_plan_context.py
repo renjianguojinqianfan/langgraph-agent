@@ -1,4 +1,4 @@
-"""#119 plan-context injection tests — ``state["plan"]`` reaches the executor.
+"""#119 plan-context injection tests — ``state["plan"]`` reaches the agent.
 
 Before #119 the only consumer of ``state["plan"]`` was the ``plan_update``
 event: the executor LLM never saw the plan it was supposedly carrying out.
@@ -14,9 +14,8 @@ the call site is covered too:
 * **AC3** — the section rides on the system message, so no ``context_*``
   configuration can evict or compress it away (same fakes as the compression
   suite);
-* the planner side keeps its byte-identical system message — the fix is
-  executor-only, which is also what lets the pre-existing injection tests
-  (``test_context_injection``) keep asserting exact contents.
+* since #139 both modes carry the section: build mode reads the plan as its
+  brief, plan mode revises what is already there (instead of planning blind).
 
 Section anchor ``# Current Plan`` is asserted as a literal string: like the
 injection block's anchors, it is the block's public contract.
@@ -76,6 +75,13 @@ def _state(**kw: Any) -> AgentState:
     base.update(kw)
     # Partial/extra keys by design: these tests drive one or two nodes, not a run.
     return cast(AgentState, base)
+
+
+def _run_agent(rt: AgentRuntime, state: AgentState, mode: str) -> AgentState:
+    """One node call in the given mode; the state dict is mutated in place, as
+    LangGraph does between supersteps."""
+    state["mode"] = mode
+    return rt.agent(state)
 
 
 def _plan(*descriptions: str) -> List[Dict[str, Any]]:
@@ -184,8 +190,8 @@ def test_executor_sees_plan_first_round(tmp_path: Path) -> None:
     rt = _runtime(_settings(tmp_path), llm)
     state = _state()
 
-    rt.planner(state)
-    rt.executor(state)
+    _run_agent(rt, state, "plan")
+    _run_agent(rt, state, "build")
 
     system = llm.executor_systems[-1]
     assert system.startswith(EXECUTOR_SYSTEM)
@@ -200,10 +206,10 @@ def test_executor_sees_updated_plan(tmp_path: Path) -> None:
     rt = _runtime(_settings(tmp_path), llm)
     state = _state()
 
-    rt.planner(state)
-    rt.executor(state)
-    rt.planner(state)
-    rt.executor(state)
+    _run_agent(rt, state, "plan")
+    _run_agent(rt, state, "build")
+    _run_agent(rt, state, "plan")
+    _run_agent(rt, state, "build")
 
     first, second = llm.executor_systems
     assert "Old step" in first
@@ -218,25 +224,30 @@ def test_executor_status_follows_the_plan(tmp_path: Path) -> None:
     rt = _runtime(_settings(tmp_path), llm)
     state = _state()
 
-    rt.planner(state)
+    _run_agent(rt, state, "plan")
     state["plan"][1]["status"] = "skipped"
-    rt.executor(state)
+    _run_agent(rt, state, "build")
 
     system = llm.executor_systems[-1]
     assert "2. [skipped] Drop the table" in system
     assert "2. [pending] Drop the table" not in system
 
 
-def test_planner_system_carries_no_plan(tmp_path: Path) -> None:
-    """注入点在 executor 侧：planner 的 system 不带计划段——因此既有逐字断言
-    （``test_context_injection`` 对 planner 的 byte-identical 检查）不破。"""
+def test_planner_sees_the_current_plan(tmp_path: Path) -> None:
+    """#139：计划模式也读现有计划——重新规划是「改写」，不是从零再猜一遍。
+
+    「重新规划」按钮走的就是这条路：同一段对话、同一份 plan，换 plan 模式的
+    system prompt 再跑一轮。"""
     llm = _FakeLLM(plans=[["Next round plan"]])
     rt = _runtime(_settings(tmp_path), llm)
 
-    rt.planner(_state(plan=_plan("Alpha", "Bravo")))
+    state = _state(plan=_plan("Alpha", "Bravo"))
+    _run_agent(rt, state, "plan")
 
-    # 注入关闭（conftest 环境块）时 planner 的 system 逐字仍是 PLANNER_SYSTEM
-    assert llm.systems(executor=False) == [PLANNER_SYSTEM]
+    # 注入关闭（conftest 环境块）时 plan 模式的 system = prompt + 现有计划段
+    assert llm.systems(executor=False) == [
+        PLANNER_SYSTEM + render_plan_section(_plan("Alpha", "Bravo"))
+    ]
 
 
 # ── AC2: replacement, never stacking ────────────────────────────────────────
@@ -247,8 +258,8 @@ def test_plan_section_appears_once_across_rounds(tmp_path: Path) -> None:
     state = _state()
 
     for _ in range(3):
-        rt.planner(state)
-        rt.executor(state)
+        _run_agent(rt, state, "plan")
+        _run_agent(rt, state, "build")
 
     systems = llm.executor_systems
     assert len(systems) == 3
@@ -288,7 +299,7 @@ def test_plan_section_survives_compression(tmp_path: Path, overrides: Dict[str, 
     rt = _runtime(settings, llm)
     state = _state(messages=_big_history(), plan=_plan("Write the report"))
 
-    rt.executor(state)
+    _run_agent(rt, state, "build")
 
     system = llm.executor_systems[-1]
     assert PLAN_SECTION in system
@@ -308,7 +319,7 @@ def test_plan_section_sits_after_inject_block(tmp_path: Path, tmp_home: Path) ->
     llm = _FakeLLM()
     rt = _runtime(settings, llm)
 
-    rt.executor(_state(plan=_plan("Alpha")))
+    _run_agent(rt, _state(plan=_plan("Alpha")), "build")
 
     system = llm.executor_systems[-1]
     assert system == (
@@ -338,7 +349,7 @@ def test_plan_section_survives_disabled_injection(
     llm = _FakeLLM()
     rt = _runtime(settings, llm)
 
-    rt.executor(_state(plan=_plan("Alpha")))
+    _run_agent(rt, _state(plan=_plan("Alpha")), "build")
 
     system = llm.executor_systems[-1]
     # 注入块确实被这个开关关掉了——两层文件此刻都在盘上有内容，所以「不在」不是空断言。
@@ -356,6 +367,6 @@ def test_executor_with_empty_plan_is_unchanged(tmp_path: Path) -> None:
     llm = _FakeLLM()
     rt = _runtime(settings, llm)
 
-    rt.executor(_state(messages=[{"role": "user", "content": "hi"}], plan=[]))
+    _run_agent(rt, _state(messages=[{"role": "user", "content": "hi"}], plan=[]), "build")
 
     assert llm.executor_systems[-1] == EXECUTOR_SYSTEM

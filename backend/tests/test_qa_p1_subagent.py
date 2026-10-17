@@ -119,8 +119,8 @@ class _QaResearchMock(MockLLMClient):
         if "撰写" in user:
             return LLMResponse(content="报告已完成")
         # Parent's first executor turn delegates; the second one reports.
-        if self._executor_turn == 0:
-            self._executor_turn += 1
+        if self._turn == 0:
+            self._turn += 1
             return LLMResponse(
                 content="",
                 tool_calls=[
@@ -206,7 +206,7 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
     graph = build_graph(runtime)
     final = graph.invoke(_main_state("派个子任务给一句话结论"))
 
-    assert final["status"] == "COMPLETED"
+    assert final["status"] == "INTERRUPTED"
     # #70 裁定 A 重裁（原断 == []，钉 #56 的「生产者已断」）：spawn 路径把折叠回传
     # 回登进图状态，本用例正好是它的图级落点；上下文隔离的本体（消息面只有 tool 轮）
     # 一条没少，见下。
@@ -235,7 +235,7 @@ def test_subtask_internal_events_stay_on_subtask_channel(tmp_path, event_bus):
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="qa-iso", user_input="调研 RAG 最新进展并写报告")
     task = _run_until_done(tm, task_id)
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
 
     parent_events = event_bus.replay(task_id)
     subtask_id = next(
@@ -245,16 +245,11 @@ def test_subtask_internal_events_stay_on_subtask_channel(tmp_path, event_bus):
     )
     sub_events = event_bus.replay(subtask_id)
 
-    # Each side planned for itself: the parent channel carries only the parent's
-    # plan, the subtask's own plan stays on its own channel.
-    parent_plans = [e["data"]["plan"] for e in parent_events if e["type"] == "plan_update"]
-    sub_plans = [e["data"]["plan"] for e in sub_events if e["type"] == "plan_update"]
-    assert parent_plans and all(
-        SUBTASK_INSTRUCTION_FRAGMENT not in str(p) for plan in parent_plans for p in plan
-    ), "子任务的计划回灌进了父频道"
-    assert sub_plans and all(
-        SUBTASK_INSTRUCTION_FRAGMENT in str(p) for plan in sub_plans for p in plan
-    ), "子任务频道上的不是它自己的计划"
+    # Each side runs its own rounds; #139 retired the automatic plan, so the
+    # observable is the step record rather than a plan_update.
+    parent_steps = [e for e in parent_events if e["type"] == "step_start"]
+    sub_steps = [e for e in sub_events if e["type"] == "step_start"]
+    assert parent_steps and sub_steps, "两侧的轮次没有各自落在自己的频道上"
 
     # The subtask's file write is visible only on its own channel.
     assert any(
@@ -314,7 +309,7 @@ def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
     task_id = tm.create_task(title="qa-crash", user_input="派个子任务")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     # #70 裁定 A 重裁（原断 == []，钉 #56 的「无生产者」）：崩掉的子任务也如实登一条
     # failed ——面板上「派出去又折回来的失败」必须看得见，不是「暂无子任务」。
     # 「不跟着子任务一起崩」「失败经工具面回传」两条原钉子一条没少。
@@ -370,25 +365,22 @@ def test_subtask_cannot_reach_a_dangerous_tool(tmp_path, event_bus):
     assert "unknown tool" in refused[0]["error"]
 
 
-def test_subtask_planner_failure_folds_back_as_failed(tmp_path):
-    """A planner LLM error inside a subtask must fold back as ``failed`` with
-    the real cause — not as a silent ``completed`` with an empty summary.
+def test_subtask_llm_failure_folds_back_as_failed(tmp_path):
+    """An LLM error inside a subtask must fold back as ``failed`` with the real
+    cause — not as a silent ``completed`` with an empty summary.
 
-    Regression for the Issue #12 boundary: the subtask graph now ends FAILED
-    (error is set), so the wrapper must read ``final["status"]`` instead of
-    hard-coding ``completed``.
+    Regression for the Issue #12 boundary: a subtask graph that ends with an
+    error must be read from the final state instead of hard-coding ``completed``.
     """
 
-    class _FailingPlannerLLM(MockLLMClient):
-        """Planner call raises; executor calls behave normally."""
+    class _FailingLLM(MockLLMClient):
+        """Every agent call raises (#139: one LLM entry, one failure point)."""
 
         def complete(self, messages, tools=None, **kwargs):
-            if not tools:
-                raise RuntimeError("simulated subtask planner 403")
-            return super().complete(messages, tools, **kwargs)
+            raise RuntimeError("simulated subtask provider 403")
 
     settings = make_settings(tmp_path)
-    tm = make_manager(settings, _FailingPlannerLLM(plan=["p"]))
+    tm = make_manager(settings, _FailingLLM(plan=["p"]))
 
     res = tm._subagent._exec_one(
         _spec("sub:1", "研究子任务", "检索素材", tier=EXPLORE_TIER)
@@ -396,7 +388,8 @@ def test_subtask_planner_failure_folds_back_as_failed(tmp_path):
 
     assert res.status == "failed"
     assert "403" in res.error
-    assert res.summary == "(no final answer)"
+    # The error face carries the same cause the record does (one source, #95).
+    assert "403" in res.summary
     assert res.tool_face == tier_face_names([t.name for t in tm._tools], EXPLORE_TIER)
 
 
@@ -416,7 +409,7 @@ def test_subagent_disabled_removes_the_entry_point(tmp_path, event_bus):
     task_id = tm.create_task(title="qa-off", user_input="调研 RAG 最新进展并写报告")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     assert task.subtasks == []
     types = {e["type"] for e in event_bus.replay(task_id)}
     assert types.isdisjoint({"subtask_start", "subtask_result", "subtask_failed"})
@@ -455,7 +448,7 @@ def test_spawned_subtask_lands_on_task_subtasks(tmp_path, event_bus):
     task_id = tm.create_task(title="qa-obs", user_input="派个子任务给一句话结论")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     assert mock.subtask_turns >= 1
     spawn = [
         e["data"]

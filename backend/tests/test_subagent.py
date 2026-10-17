@@ -112,9 +112,9 @@ class _CountingMock(MockLLMClient):
             return LLMResponse(content=json.dumps(self.plan))
         self.turns += 1
         self.offered = sorted(t["function"]["name"] for t in tools)
-        if self._executor_turn < len(self.tool_calls):
-            tc = self.tool_calls[self._executor_turn]
-            self._executor_turn += 1
+        if self._turn < len(self.tool_calls):
+            tc = self.tool_calls[self._turn]
+            self._turn += 1
             return LLMResponse(content="", tool_calls=[tc])
         return LLMResponse(content=self.final_answer)
 
@@ -226,8 +226,9 @@ def test_main_graph_has_no_split_node():
     assert "subagent_split" not in names
     for src, dst in edges:
         assert "subagent_split" not in (src, dst)
-    # #138: the planner now hands straight to the executor (no risk scan node).
-    assert ("planner", "executor") in edges
+    # #139: one loop, one agent node — no planner/executor split left to hang a
+    # keyword-triggered node off.
+    assert ("agent", "tool") in edges
 
 
 def test_research_wording_no_longer_produces_subtasks(tmp_path, event_bus):
@@ -238,7 +239,7 @@ def test_research_wording_no_longer_produces_subtasks(tmp_path, event_bus):
     task_id = tm.create_task(title="t", user_input="调研 RAG 最新进展并写报告")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     assert task.subtasks == []
 
     events = event_bus.replay(task_id)
@@ -861,7 +862,7 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
     task_id = tm.create_task(title="probe", user_input="派一个子任务去探针")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     parent_events = event_bus.replay(task_id)
 
     # The delegation ran as an ordinary tool call (the spawn gate is gone, #138).
@@ -909,8 +910,8 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
         e["data"]["tool_name"] for e in parent_events if e["type"] in ("tool_call", "tool_result")
     }
     assert parent_tools == {"spawn_subagent"}
-    # The subtask's own channel carries its plan and its tool calls.
-    assert any(e["type"] == "plan_update" for e in sub_events)
+    # The subtask's own channel carries its own rounds and tool calls.
+    assert any(e["type"] == "step_start" for e in sub_events)
 
 
 def test_subtask_writes_and_events_do_not_pollute_the_parent(tmp_path, event_bus):
@@ -952,7 +953,7 @@ def test_subtask_writes_and_events_do_not_pollute_the_parent(tmp_path, event_bus
     assert "artifact_created" not in parent_types
 
     sub_types = {e["type"] for e in event_bus.replay("iso:sub:1")}
-    assert {"plan_update", "tool_call", "tool_result"} <= sub_types
+    assert {"step_start", "tool_call", "tool_result"} <= sub_types
 
     ledger = settings.snapshots_path / task_id / "ledger.jsonl"
     assert ledger.exists()
@@ -1034,14 +1035,16 @@ def test_parallel_subtasks_overlap(tmp_path):
 
     assert len(results) == 2
     assert all(r.status == "completed" for r in results)
-    # Two subtasks of two 0.4s rounds each; with 2 workers ~0.8s, not ~1.6s.
-    assert elapsed < 1.2, f"subtasks did not overlap (elapsed={elapsed:.2f}s)"
+    # #139: one 0.4s LLM round per subtask (the automatic planner round is
+    # gone). With 2 workers ~0.4s, not ~0.8s.
+    assert elapsed < 0.7, f"subtasks did not overlap (elapsed={elapsed:.2f}s)"
 
 
 def test_run_subtask_is_bounded_by_the_wall_clock_timeout(tmp_path):
     """`subagent_timeout_sec` 现役的执行点：跑不完就折成 failed，不挂住父线程。"""
     settings = make_settings(tmp_path, subagent_timeout_sec=1)
-    tm = make_manager(settings, _SleepingMock(sleep=0.9))
+    # #139: one LLM round now, so the single call must outlast the bound.
+    tm = make_manager(settings, _SleepingMock(sleep=1.4))
     ex = SubAgentExecutor(tm, settings)
 
     res = ex.run_subtask(_spec(subtask_id="timeout:sub:1", instruction="think slowly"))
@@ -1056,7 +1059,8 @@ def test_serial_subtasks_when_concurrency_1(tmp_path):
     results, elapsed = _run_two_specs_through_the_pool(settings, tm)
 
     assert len(results) == 2
-    assert elapsed >= 1.4, f"subtasks ran in parallel despite concurrency=1 (elapsed={elapsed:.2f}s)"
+    # One 0.4s round each, serialized: ~0.8s. Parallel would be ~0.4s.
+    assert elapsed >= 0.7, f"subtasks ran in parallel despite concurrency=1 (elapsed={elapsed:.2f}s)"
 
 
 # ── the shared graph, stop propagation and failure folding ───────────────────
@@ -1250,7 +1254,7 @@ def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
     task_id = tm.create_task(title="crash", user_input="派一个子任务去探针")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     # #70 裁定 A 重裁（原断 == []，钉 #56「无生产者」）：崩掉的子任务也如实登一条
     # failed——派出去过又折回来的，面板与 REST 都得说得出。
     assert len(task.subtasks) == 1
@@ -1280,15 +1284,14 @@ def test_subtask_failure_reports_the_cause_not_a_silent_success(tmp_path):
 
     class _CrashMock(MockLLMClient):
         def complete(self, messages, tools=None, **kwargs):
-            if not tools:
-                raise RuntimeError("simulated planner 403")
-            return super().complete(messages, tools, **kwargs)
+            # #139: there is one LLM entry, so a provider failure fires there.
+            raise RuntimeError("simulated provider 403")
 
     tm = make_manager(settings, _CrashMock(plan=["p"]))
     res = tm._subagent.run_subtask(_spec(subtask_id="fail:sub:1", tier=EXPLORE_TIER))
     assert res.status == "failed"
     assert "403" in res.error
-    assert res.summary == "(no final answer)"
+    assert "403" in res.summary
     # The run did start, on the explore face only (no writes).
     assert res.tool_face == tier_face_names(
         [t.name for t in tm._tools], EXPLORE_TIER

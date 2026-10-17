@@ -3,11 +3,12 @@
 Exercises ``build_graph`` + :class:`AgentRuntime` end-to-end with a scripted
 :class:`MockLLMClient` (no LLM key, no network):
 
-* the graph compiles;
-* the compiled graph *declares* its topology (langgraph 1.x derives each
+* the graph compiles and *declares* its topology (langgraph 1.x derives each
   branch's ``path_map`` from the router's ``Literal`` return annotation);
-* a full task produces a ``final_answer`` and a persisted artifact;
-* ``stop`` interrupts the loop within 2 seconds (P0-9).
+* one ``agent`` node, one round = no tool call (issue #139 / ADR 0008);
+* a finished task is parked as ``INTERRUPTED`` — there is no COMPLETED;
+* ``stop`` interrupts the loop within 2 seconds (P0-9);
+* an LLM error is surfaced as ``FAILED``, not degraded.
 
 Also wraps the engineer's offline smoke test so it runs under pytest.
 """
@@ -17,7 +18,7 @@ from __future__ import annotations
 import time
 
 from backend.core.agent.graph import (
-    _after_planner,
+    _after_agent,
     _tool_router,
     build_graph,
 )
@@ -48,7 +49,7 @@ def _run_until_done(tm, task_id, timeout=15):
     deadline = time.time() + timeout
     while time.time() < deadline:
         task = tm.get_task(task_id)
-        if task and task.status.value in ("COMPLETED", "FAILED", "INTERRUPTED"):
+        if task and task.status.value in ("FAILED", "INTERRUPTED"):
             return task
         time.sleep(0.05)
     return tm.get_task(task_id)
@@ -61,7 +62,7 @@ def test_build_graph_compiles(settings):
 
 
 # ── langgraph 1.x: 拓扑静态声明（Issue #7 迁移）──
-def test_main_topology_is_statically_declared(settings):
+def test_topology_is_one_agent_loop_and_statically_declared(settings):
     """1.x 从路由函数的 ``Literal`` 返回注解推导 path_map。
 
     推导失败（lambda / 漏注解）时 langgraph 不知道条件边去哪，编译出的图就
@@ -72,33 +73,38 @@ def test_main_topology_is_statically_declared(settings):
     edges = _declared_edges(compiled)
     nodes = set(compiled.get_graph().nodes)
 
-    assert ("planner", "executor") in edges
-    assert ("planner", "finish") in edges
-    assert ("executor", "tool") in edges
-    assert ("executor", "finish") in edges
-    assert ("tool", "planner") in edges
+    # #139（S5 / ADR 0008 决策 2）：一个 loop、一个 agent 节点。
+    assert ("agent", "tool") in edges
+    assert ("agent", "finish") in edges
+    assert ("tool", "agent") in edges
     assert ("tool", "finish") in edges
-    # planner 不可能直达 tool：这条边一旦出现，就说明 path_map 退化成了
-    # “可能指向任何节点”。
-    assert ("planner", "tool") not in edges
-    # #56 dropped the keyword-triggered ``subagent_split``; #138 (S4) dropped the
-    # ``risk_scan`` node and the ``human_confirm`` gate. Main tasks and subtasks
-    # now share this one topology (``build_graph`` has no ``mode``).
-    for gone in ("subagent_split", "risk_scan", "human_confirm"):
+    # agent 不可能直达 finish 之外的终点；tool 不可能直达 tool。
+    assert ("agent", "agent") not in edges
+    assert ("tool", "tool") not in edges
+    # 合并掉的旧节点与 #56 / #137 / #138 删掉的节点都不该再出现。
+    for gone in ("planner", "executor", "reflect", "subagent_split", "risk_scan", "human_confirm"):
         assert gone not in nodes
         assert all(gone not in (src, dst) for src, dst in edges)
 
 
-def test_tool_router_spends_the_step_budget_into_finish():
-    """步数预算路由（#137 把它从 reflect 路由挪进 tool 路由）：预算未尽回 planner，
-    用尽即 finish；stop 优先于预算。"""
+def test_after_agent_router_ends_the_round_on_no_tool_call():
+    """一轮的结束 = 这一轮没有工具调用（ADR 0008 决策 4）。"""
+    assert _after_agent({"_last_action": "tool_call"}) == "tool"
+    assert _after_agent({"_last_action": "final_answer"}) == "finish"
+    assert _after_agent({"stop_requested": True, "_last_action": "tool_call"}) == "finish"
+    assert _after_agent({"error": "boom"}) == "finish"
+
+
+def test_tool_router_spends_the_round_budget_into_finish():
+    """步数预算按轮计：预算未尽回 agent，用尽即 finish；stop 优先于预算。"""
     router = _tool_router(_runtime(max_steps=3))
-    assert router({"step_index": 2, "_last_action": "tool_done"}) == "planner"
-    assert router({"step_index": 3}) == "finish"
-    assert router({"step_index": 99, "stop_requested": True}) == "finish"
+    assert router({"round_steps": 2, "_last_action": "tool_done"}) == "agent"
+    assert router({"round_steps": 3}) == "finish"
+    assert router({"round_steps": 99, "stop_requested": True}) == "finish"
 
 
-def test_build_graph_runs_and_produces_final_answer(settings, event_bus):
+def test_build_mode_runs_and_parks_without_planning(settings, event_bus):
+    """默认执行模式：不自动出计划；答案即「停下」，不是「完成」。"""
     mock = MockLLMClient(
         plan=["Plan and act"],
         tool_calls=[
@@ -115,17 +121,20 @@ def test_build_graph_runs_and_produces_final_answer(settings, event_bus):
     task = _run_until_done(tm, task_id)
 
     assert task is not None
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
+    assert task.mode.value == "build"
     assert "out.txt" in task.final_answer
     assert any(a.filename == "out.txt" for a in task.artifacts)
 
     events = {e["type"] for e in event_bus.replay(task_id)}
-    assert "plan_update" in events
+    # #139: build mode never re-plans behind the user's back (the old planner
+    # ran on every round). The plan face only fills in plan mode.
+    assert "plan_update" not in events
     assert "tool_call" in events
     assert "tool_result" in events
     assert "artifact_created" in events
     assert "final_answer" in events
-    assert "task_completed" in events
+    assert "task_interrupted" in events
 
 
 # ── stop within 2s (P0-9) ──
@@ -171,30 +180,24 @@ def test_stop_interrupts_loop_within_two_seconds(settings, event_bus):
     # The interrupt must take effect well within the 2s requirement.
     assert (done_at - stop_at) <= 2.0
 
-    events = {e["type"] for e in event_bus.replay(task_id)}
-    assert "task_interrupted" in events
+    interrupted = [e for e in event_bus.replay(task_id) if e["type"] == "task_interrupted"]
+    # One stop, one event — stop() claims the announcement and finalize stays quiet.
+    assert len(interrupted) == 1
 
 
-# ── planner failure is surfaced, not degraded (Issue #12) ──
-class _FailingPlannerLLM(MockLLMClient):
-    """Planner call raises; executor calls behave normally."""
+# ── LLM failure is surfaced, not degraded ──
+class _FailingLLM(MockLLMClient):
+    """Every agent call raises, in either mode."""
 
     def complete(self, messages, tools=None, **kwargs):
-        if not tools:
-            raise RuntimeError("simulated planner provider 403")
-        return super().complete(messages, tools, **kwargs)
+        raise RuntimeError("simulated provider 403")
 
 
-def test_planner_failure_surfaces_error_and_fails_task(settings, event_bus):
-    """A planner LLM error must land in ``state["error"]`` -> FAILED, and the
-    terminal persist step must not crash on a malformed plan.
-
-    Regression for Issue #12: the old code degraded the error into a string
-    plan item and never set ``state["error"]``, so ``_finalize_terminal``
-    raised ``TypeError`` on ``PlanStep(**p)`` and the real cause was lost.
-    """
-    tm = make_manager(settings, _FailingPlannerLLM(plan=["p"]), event_bus=event_bus)
-    task_id = tm.create_task(title="planner-fail", user_input="do something")
+def test_agent_llm_failure_fails_the_task(settings, event_bus):
+    """An LLM error must land in ``state["error"]`` -> FAILED, and the terminal
+    persist step must not crash on an empty/partial plan."""
+    tm = make_manager(settings, _FailingLLM(plan=["p"]), event_bus=event_bus)
+    task_id = tm.create_task(title="llm-fail", user_input="do something")
 
     task = _run_until_done(tm, task_id)
 
@@ -202,14 +205,6 @@ def test_planner_failure_surfaces_error_and_fails_task(settings, event_bus):
     assert task.status.value == "FAILED"
     assert "403" in (task.error or "")
     assert task.plan == []
-
-
-def test_planner_failure_short_circuits_to_finish():
-    """The planner router skips the executor on a stop or a planner failure
-    (Issue #12)."""
-    assert _after_planner({"error": "planner boom"}) == "finish"
-    assert _after_planner({"stop_requested": True}) == "finish"
-    assert _after_planner({}) == "executor"
 
 
 # ── engineer smoke (offline) included in the unified run ──

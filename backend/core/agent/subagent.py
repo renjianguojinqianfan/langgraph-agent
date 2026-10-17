@@ -327,6 +327,10 @@ class SubAgentExecutor:
         try:
             state: AgentState = {
                 "task_id": spec.subtask_id,
+                # A subtask has no mode switch: it always runs the build face
+                # over its declared tier (ADR 0008 decision 7 keeps sub-agents on
+                # the same tiers; plan mode simply never gets spawn_subagent).
+                "mode": "build",
                 "messages": [{"role": "user", "content": spec.instruction}],
                 "plan": [],
                 "steps": [],
@@ -334,6 +338,7 @@ class SubAgentExecutor:
                 "status": "RUNNING",
                 "stop_requested": False,
                 "step_index": 0,
+                "round_steps": 0,
                 "final_answer": "",
                 "error": "",
                 "_last_action": "",
@@ -363,9 +368,8 @@ class SubAgentExecutor:
             from .graph import build_graph
 
             graph = build_graph(runtime)
-            # The loop spends up to three nodes per cycle (planner → executor →
-            # tool); lift the default recursion limit (25) so deep subtasks
-            # honor settings.max_steps.
+            # The loop spends two nodes per cycle (agent → tool); lift the default
+            # recursion limit (25) so deep subtasks honor settings.max_steps.
             #
             # No checkpointer here, and deliberately no ``durability=`` either
             # (langgraph 1.x): subtasks are never resumed — they fold into the
@@ -435,22 +439,23 @@ class SubAgentExecutor:
                         except Exception as exc:  # pragma: no cover - defensive
                             logger.warning("failed to register subtask artifact %s: %s", p, exc)
 
-            # Propagate the subtask graph's terminal status: a subtask whose
-            # graph ends FAILED (e.g. a planner LLM error after Issue #12) must
-            # fold back as failed with the real cause, not as a silent
-            # "completed" carrying an empty summary.
-            #
-            # The mapping is binary: only COMPLETED folds to ``completed``,
-            # everything else to ``failed`` with whatever the graph recorded as
-            # the cause. Until #137 there was a third value (``UNVERIFIED``) to
-            # translate into an actionable miss; that layer is gone, so a bare
-            # status word is all that is left to fall back on.
-            graph_status = final.get("status") or "COMPLETED"
-            completed = graph_status == "COMPLETED"
+            # Propagate the subtask graph's outcome: a subtask whose graph ends
+            # with an error (e.g. an LLM error) must fold back as failed with
+            # the real cause, not as a silent "completed" carrying an empty
+            # summary. Since #139 the graph no longer has a COMPLETED status —
+            # every round parks — so "completed" here means: this subtask
+            # answered and was not stopped or errored.
+            graph_status = final.get("status") or ""
+            stopped = bool(final.get("stop_requested"))
+            answered = bool(final.get("final_answer"))
+            graph_error = str(final.get("error") or "")
+            completed = answered and not stopped and not graph_error
             error = ""
             if not completed:
-                error = str(final.get("error") or "") or (
+                error = graph_error or (
                     f"subtask graph ended {graph_status}"
+                    if graph_status
+                    else "subtask produced no answer"
                 )
             return SubTaskResult(
                 subtask_id=spec.subtask_id,

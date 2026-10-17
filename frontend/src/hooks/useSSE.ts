@@ -21,10 +21,9 @@ const EVENT_TYPES: SSEventType[] = [
   "task_rollback", // P1-B 工作区回滚完成
   "artifact_created",
   "final_answer",
-  "task_completed",
   "task_failed",
   "task_interrupted",
-  "task_resumed", // P3 从检查点续跑启动
+  "task_resumed", // P3 / #139 从检查点续跑、或多轮续说启动
   "tool_result_evicted", // T1.4 旧的大段 tool 结果换成占位
   "subtask_start", // #70-A: 子任务派生（父频道）
   "subtask_result", // #70-A: 子任务回传（父频道）

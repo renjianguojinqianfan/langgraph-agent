@@ -2,11 +2,14 @@ import {
   ApiResponse,
   Artifact,
   AuthTokenResponse,
+  ChatTurn,
   CreateTaskRequest,
   KbDoc,
+  PlanStep,
   RollbackResult,
   SSEvent,
   Task,
+  TaskMode,
 } from "../types";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
@@ -70,6 +73,35 @@ export const getTask = (id: string) => req<Task>(`/tasks/${id}`);
 
 export const stopTask = (id: string) =>
   req<{ ok: boolean; status: string }>(`/tasks/${id}/stop`, { method: "POST" });
+
+// ── #139: multi-turn conversation, plan/build modes, editable plan ──
+export const putMode = (id: string, mode: TaskMode) =>
+  req<{ ok: boolean; mode: TaskMode }>(`/tasks/${id}/mode`, {
+    method: "PUT",
+    body: JSON.stringify({ mode }),
+  });
+
+/** Replace a parked task's plan; it seeds the next round. */
+export const putPlan = (id: string, plan: Array<Pick<PlanStep, "description" | "status">>) =>
+  req<{ ok: boolean; plan: PlanStep[] }>(`/tasks/${id}/plan`, {
+    method: "PUT",
+    body: JSON.stringify({ plan }),
+  });
+
+/** Say one more thing to a parked task and continue the same conversation. */
+export const sendMessage = (id: string, input: string) =>
+  req<{ ok: boolean; status: string; task: Task }>(`/tasks/${id}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ input }),
+  });
+
+/** Run one planning round in plan mode; the sticky task mode is unchanged. */
+export const replanTask = (id: string) =>
+  req<{ ok: boolean; status: string; task: Task }>(`/tasks/${id}/replan`, {
+    method: "POST",
+  });
+
+export type { ChatTurn };
 
 // ── P1-B: workspace rollback ──
 export const rollbackTask = (id: string) =>

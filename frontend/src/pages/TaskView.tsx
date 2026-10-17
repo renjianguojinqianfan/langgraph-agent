@@ -41,6 +41,20 @@ export function TaskView() {
       .catch(() => {});
   }, [currentTaskId, upsertTask]);
 
+  // A round just parked: pull the authoritative record (conversation, plan,
+  // steps). SSE carries the live events but is replayed on every reconnect, so
+  // the persisted snapshot — not event appending — is what the UI must trust.
+  const status = detail?.status;
+  useEffect(() => {
+    if (!currentTaskId) return;
+    if (status !== "INTERRUPTED" && status !== "FAILED") return;
+    getTask(currentTaskId)
+      .then((r) => {
+        if (r.data) upsertTask(r.data);
+      })
+      .catch(() => {});
+  }, [currentTaskId, status, detail?.final_answer, upsertTask]);
+
   // Switching tasks starts on the live run view by default.
   useEffect(() => {
     setTab("run");

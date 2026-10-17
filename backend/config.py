@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     mock_llm_script_path: str = ""  # #108: JSON script for the offline mock (empty / unreadable -> built-in demo script)
 
     # ── Agent / orchestration ──
-    max_steps: int = 15  # default max planner/executor iterations (P0-1)
+    max_steps: int = 15  # max agent LLM calls per round (P0-1; #139 resets per round)
 
     # ── Sandbox ──
     sandbox_timeout: int = 30  # seconds for code execution

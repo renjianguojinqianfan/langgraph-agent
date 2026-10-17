@@ -53,7 +53,7 @@ def _big_script():
     )
 
 
-def _wait(tm, task_id, statuses=("COMPLETED", "FAILED", "INTERRUPTED"), timeout=15):
+def _wait(tm, task_id, statuses=("INTERRUPTED", "FAILED"), timeout=15):
     deadline = time.time() + timeout
     while time.time() < deadline:
         t = tm.get_task(task_id)
@@ -107,14 +107,14 @@ class TestBlackBoxResume:
         assert result["ok"] is True
 
         task = _wait(tm2, task_id)
-        assert task.status.value == "COMPLETED"
+        assert task.status.value == "INTERRUPTED"
         assert task.final_answer == "all done"
         # continued, not restarted: more steps than the interrupted run had.
         assert len(task.steps) >= first_steps
 
         types = {e["type"] for e in bus2.replay(task_id)}
         assert "task_resumed" in types
-        assert "task_completed" in types
+        assert "task_interrupted" in types
 
     def test_trace_file_grows_across_resume(self, tmp_path):
         settings = _ckpt_settings(tmp_path)
@@ -134,7 +134,7 @@ class TestBlackBoxResume:
         tm = make_manager(settings, MockLLMClient(final_answer="done"), event_bus=EventBus())
         task_id = tm.create_task(title="quick", user_input="finish fast")
         _wait(tm, task_id)
-        assert tm.get_task(task_id).status.value == "COMPLETED"
+        assert tm.get_task(task_id).status.value == "INTERRUPTED"
 
         with pytest.raises(RuntimeError):
             tm.resume(task_id)
@@ -190,7 +190,7 @@ class TestBlackBoxResume:
             t.join()
 
         task = _wait(tm2, task_id)
-        assert task.status.value == "COMPLETED"
+        assert task.status.value == "INTERRUPTED"
         assert len(results) == 1 and len(errors) == 1
 
 
@@ -217,10 +217,15 @@ class TestResumeAPI:
         # Wait for a terminal status first.
         deadline = time.time() + 15
         while time.time() < deadline:
-            if tm.get_task(task_id).status.value in ("COMPLETED", "FAILED"):
+            if tm.get_task(task_id).status.value in ("INTERRUPTED", "FAILED"):
                 break
             time.sleep(0.05)
-        r = client.post(f"/api/tasks/{task_id}/resume")  # COMPLETED -> conflict
+        # A parked task is resumable by design (#139); the 409 mapping is what
+        # this test pins, so force a status resume refuses.
+        parked = tm.get_task(task_id)
+        parked.status = TaskStatus.FAILED
+        tm.persistence.save_task(parked)
+        r = client.post(f"/api/tasks/{task_id}/resume")
         assert r.status_code == 409
 
 

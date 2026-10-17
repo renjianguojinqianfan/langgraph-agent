@@ -33,7 +33,7 @@ from .base import BaseTool, ToolResult
 
 logger = get_logger("tool.openapi")
 
-#: Methods considered safe (not confirmed) — informational reads only.
+#: Methods considered safe — informational reads only.
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 #: Security scheme types we can actually apply in P1.

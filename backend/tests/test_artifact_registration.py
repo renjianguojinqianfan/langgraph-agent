@@ -90,7 +90,7 @@ def test_write_then_read_back_registers_one_artifact(tmp_path, event_bus, monkey
     task_id = tm.create_task(title="write and re-read", user_input="write then read")
     task = _run_until_done(tm, task_id)
 
-    assert task is not None and task.status.value == "COMPLETED"
+    assert task is not None and task.status.value == "INTERRUPTED"
     assert [name for name, _ in _outcome(task)] == ["write", "read"]
     assert all(status == "success" for _, status in _outcome(task))
     assert [a.filename for a in task.artifacts] == ["report.md"]
@@ -113,7 +113,7 @@ def test_same_file_written_twice_registers_once(tmp_path, event_bus, monkeypatch
     task_id = tm.create_task(title="write twice", user_input="overwrite the file")
     task = _run_until_done(tm, task_id)
 
-    assert task is not None and task.status.value == "COMPLETED"
+    assert task is not None and task.status.value == "INTERRUPTED"
     assert [name for name, _ in _outcome(task)] == ["write", "write"]
     assert all(status == "success" for _, status in _outcome(task))
     assert (settings.artifacts_path / "report.md").read_text(encoding="utf-8") == "second"

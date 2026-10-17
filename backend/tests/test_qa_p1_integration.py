@@ -59,8 +59,8 @@ class _ResearchMock(MockLLMClient):
                     ],
                 )
             return LLMResponse(content="研究完成")
-        if self._executor_turn == 0:
-            self._executor_turn += 1
+        if self._turn == 0:
+            self._turn += 1
             return LLMResponse(
                 content="",
                 tool_calls=[
@@ -92,7 +92,7 @@ def test_journey_subagent_spawn_summary_artifact_kb(tmp_path, event_bus):
     task_id = tm.create_task(title="qa-journey-b", user_input="调研 RAG 最新进展并写报告")
     task = _run_until_done(tm, task_id)
 
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     types = {e["type"] for e in event_bus.replay(task_id)}
     # The delegation actually ran.
     assert mock.subtask_turns >= 2

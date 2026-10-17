@@ -1,36 +1,148 @@
 import { useState } from "react";
-import { createTask } from "../api/client";
+import { createTask, getTask, putMode, replanTask, sendMessage } from "../api/client";
 import { useTaskStore } from "../store/taskStore";
+import { TaskMode } from "../types";
+import { ModeSwitch } from "./ModeSwitch";
+
+/** FastAPI error bodies carry `{detail}`; the normal envelope carries `message`. */
+function detailText(r: unknown): string | undefined {
+  const d = (r as { detail?: unknown })?.detail;
+  return typeof d === "string" ? d : undefined;
+}
 
 export function InputBar() {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  // Mode for a task that does not exist yet; an existing task carries its own.
+  const [draftMode, setDraftMode] = useState<TaskMode>("build");
+  const [note, setNote] = useState<string | null>(null);
+
+  const currentTaskId = useTaskStore((s) => s.currentTaskId);
+  const task = useTaskStore((s) =>
+    s.currentTaskId ? s.detail[s.currentTaskId] : undefined
+  );
   const setCurrent = useTaskStore((s) => s.setCurrentTask);
+  const upsert = useTaskStore((s) => s.upsertTask);
+
+  const running = task?.status === "RUNNING" || task?.status === "PENDING";
+  const parked = task?.status === "INTERRUPTED";
+  const failed = task?.status === "FAILED";
+  // A selected task whose snapshot has not arrived yet must not be treated as
+  // "new task": sending would silently create a second task.
+  const loading = !!currentTaskId && !task;
+  const canSend = !busy && !loading && !!text.trim() && (!task || parked);
+  const mode: TaskMode = task?.mode ?? draftMode;
+
+  const onMode = async (next: TaskMode) => {
+    setNote(null);
+    if (!task) {
+      setDraftMode(next);
+      return;
+    }
+    try {
+      const r = await putMode(task.id, next);
+      if (r?.data?.ok) {
+        const fresh = await getTask(task.id);
+        if (fresh.data) upsert(fresh.data);
+        if (running) setNote("下一轮生效");
+      } else {
+        setNote(detailText(r) ?? "切换失败");
+      }
+    } catch {
+      setNote("切换失败");
+    }
+  };
 
   const onSubmit = async () => {
     const input = text.trim();
-    if (!input || busy) return;
+    if (!input || busy || loading) return;
     setBusy(true);
-    setText("");
+    setNote(null);
     try {
-      const res = await createTask({ input });
-      const id = res.data?.task_id;
-      if (id) setCurrent(id);
+      if (!task) {
+        const res = await createTask({ input, mode: draftMode });
+        const id = res.data?.task_id;
+        if (id) {
+          setCurrent(id);
+          // Only clear what was sent: a draft typed while the request was in
+          // flight must survive.
+          setText((prev) => (prev.trim() === input ? "" : prev));
+        } else {
+          setNote(detailText(res) ?? "创建失败");
+        }
+      } else if (parked) {
+        // #139: one task = one conversation — speaking to a parked task
+        // continues it in place (same thread_id / checkpoint). A 409 (no
+        // checkpoint, still shutting down, …) must not eat the message: keep
+        // the text and show the server's reason.
+        const res = await sendMessage(task.id, input);
+        if (res.data?.task) {
+          upsert(res.data.task);
+          setText((prev) => (prev.trim() === input ? "" : prev));
+        } else {
+          setNote(detailText(res) ?? "发送被拒绝");
+        }
+      }
     } catch {
-      /* ignore */
+      setNote("发送失败");
     } finally {
       setBusy(false);
     }
   };
 
+  const onReplan = async () => {
+    if (!task || !parked || busy) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await replanTask(task.id);
+      if (r.data?.task) {
+        upsert(r.data.task);
+      } else {
+        setNote(detailText(r) ?? "重新规划被拒绝");
+      }
+    } catch {
+      setNote("重新规划失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const placeholder = loading
+    ? "正在加载任务…"
+    : !task
+      ? "用自然语言描述一个任务，例如：联网查资料并写一份报告…"
+      : parked
+        ? "接着说一句，任务从这里继续…"
+        : running
+          ? "任务运行中…"
+          : failed
+            ? "任务出错，无法继续；请新建任务"
+            : "…";
+
   return (
     <div className="border-t border-slate-800 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <ModeSwitch mode={mode} onChange={onMode} />
+        {task && (
+          <button
+            onClick={onReplan}
+            disabled={busy || !parked}
+            title="按当前对话借一轮计划模式重新出计划（不改模式开关）"
+            className="text-[11px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:text-white disabled:opacity-40"
+          >
+            重新规划
+          </button>
+        )}
+        {note && <span className="text-[11px] text-slate-400">{note}</span>}
+      </div>
       <div className="flex gap-2">
         <textarea
-          className="flex-1 resize-none bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
+          className="flex-1 resize-none bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500 disabled:opacity-50"
           rows={2}
-          placeholder="用自然语言描述一个任务，例如：联网查资料并写一份报告…"
+          placeholder={placeholder}
           value={text}
+          disabled={!!task && !parked}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSubmit();
@@ -38,14 +150,17 @@ export function InputBar() {
         />
         <button
           onClick={onSubmit}
-          disabled={busy || !text.trim()}
+          disabled={!canSend}
           className="px-4 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white text-sm"
         >
           发送
         </button>
       </div>
       <div className="text-[11px] text-slate-500 mt-1">
-        Ctrl/⌘ + Enter 发送
+        {failed
+          ? "任务出错后不能续说；新建任务重新开始"
+          : "Ctrl/⌘ + Enter 发送"}
+        {currentTaskId ? "　·　这一轮没有工具调用即停下，之后可以继续说" : ""}
       </div>
     </div>
   );

@@ -34,9 +34,11 @@ function emptyTask(id: string): Task {
     title: "",
     user_input: "",
     status: "PENDING",
+    mode: "build",
     steps: [],
     plan: [],
     artifacts: [],
+    conversation: [],
     final_answer: "",
     error: null,
     created_at: "",
@@ -113,13 +115,17 @@ function applyToTask(task: Task, ev: SSEvent): Task {
       return { ...task, artifacts: [...task.artifacts, art] };
     }
     case "final_answer":
+      // The conversation itself is refreshed from REST when the round parks
+      // (see TaskView): appending here would duplicate every turn whenever the
+      // SSE buffer is replayed on reconnect.
       return { ...task, final_answer: ev.data.answer ?? task.final_answer };
-    case "task_completed":
-      return { ...task, status: "COMPLETED" };
     case "task_failed":
       return { ...task, status: "FAILED", error: ev.data.error ?? task.error };
     case "task_interrupted":
       return { ...task, status: "INTERRUPTED" };
+    case "task_resumed":
+      // A continuation started (this tab or another one): the task is running.
+      return { ...task, status: "RUNNING" };
     default:
       return task;
   }

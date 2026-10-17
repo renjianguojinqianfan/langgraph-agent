@@ -343,7 +343,7 @@ def _writer_mock(path: str, content: str) -> MockLLMClient:
     )
 
 
-def _wait(tm, task_id, statuses=("COMPLETED", "FAILED", "INTERRUPTED"), timeout=15):
+def _wait(tm, task_id, statuses=("INTERRUPTED", "FAILED"), timeout=15):
     deadline = time.time() + timeout
     while time.time() < deadline:
         t = tm.get_task(task_id)
@@ -369,7 +369,7 @@ def _run_to_completion(settings, path: str, content: str, event_bus=None):
     tm = make_manager(settings, _writer_mock(path, content), event_bus=event_bus)
     task_id = tm.create_task(title="writer", user_input="write a file")
     task = _wait(tm, task_id)
-    assert task.status == TaskStatus.COMPLETED
+    assert task.status == TaskStatus.INTERRUPTED
     _wait_unwound(tm, task_id)
     return tm, task_id
 
@@ -402,13 +402,18 @@ def test_rollback_does_not_touch_task_state_or_checkpoints(tmp_path):
 
 
 def test_rollback_does_not_open_a_resume_path(tmp_path):
-    """Decoupled recovery planes: a rollback never makes resume admissible."""
+    """Decoupled recovery planes: rollback never changes what resume may admit.
+
+    Since #139 a round-end task is parked (INTERRUPTED) and therefore resumable
+    by design; what this pins is that rollback leaves the record exactly where
+    it was instead of flipping it into (or out of) a resumable state.
+    """
     settings = _s(tmp_path, checkpoint_enabled=True)
     tm, task_id = _run_to_completion(settings, "a.txt", "x")
+    before = tm.get_task(task_id).status
     tm.rollback(task_id)
-    # COMPLETED stays COMPLETED — the three resume 409s are untouched.
-    with pytest.raises(RuntimeError):
-        tm.resume(task_id)
+    assert tm.get_task(task_id).status == before
+    assert before == TaskStatus.INTERRUPTED
 
 
 def test_rollback_rejected_while_task_is_active(tmp_path):

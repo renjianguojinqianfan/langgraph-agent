@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterator, List
 
 from ...config import PROJECT_ROOT
 from ...utils.logging import get_logger
+from ..agent.prompts import PLANNER_MARKER
 
 logger = get_logger("llm")
 
@@ -63,13 +64,17 @@ class LLMClient(ABC):
 class MockLLMClient(LLMClient):
     """Offline, deterministic client driven by a scripted plan.
 
-    How it is used by the orchestration graph:
+    How it is used by the single ``agent`` node (issue #139):
 
-    * A **planner** call (``tools is None``) returns ``self.plan`` as JSON.
-    * An **executor** call (``tools`` provided) returns one scripted tool call
-      per turn, then finally a ``final_answer`` once the script is exhausted.
+    * a call with ``tools is None`` is a legacy planner call — return the plan
+      JSON (kept so direct unit tests of the mock still read naturally);
+    * otherwise, remaining scripted ``tool_calls`` are emitted one per turn;
+    * once the script is exhausted, a **plan-mode** call (system prompt is
+      ``PLANNER_SYSTEM``) returns the plan JSON, and a build-mode call returns
+      the final answer.
 
-    This lets the LangGraph loop run end-to-end without any network access.
+    This lets the LangGraph loop run end-to-end without any network access, in
+    either mode.
     """
 
     def __init__(
@@ -81,7 +86,12 @@ class MockLLMClient(LLMClient):
         self.plan = plan or ["Analyse the request", "Act", "Return the result"]
         self.tool_calls = tool_calls or []
         self.final_answer = final_answer
-        self._executor_turn = 0
+        self._turn = 0
+
+    @staticmethod
+    def _is_plan_phase(messages: List[Dict[str, Any]]) -> bool:
+        head = str((messages or [{}])[0].get("content") or "")
+        return PLANNER_MARKER in head
 
     def complete(
         self,
@@ -90,15 +100,17 @@ class MockLLMClient(LLMClient):
         **kwargs: Any,
     ) -> LLMResponse:
         if not tools:
-            # Planner phase: hand back the plan as a JSON array of steps.
+            # Legacy planner call: hand back the plan as a JSON array of steps.
             return LLMResponse(content=json.dumps(self.plan, ensure_ascii=False))
-        # Executor phase: emit scripted tool calls, then a final answer.
-        if self._executor_turn < len(self.tool_calls):
-            tc = self.tool_calls[self._executor_turn]
-            self._executor_turn += 1
-            logger.info("MockLLM executor -> tool_call %s", tc.get("name"))
+        if self._turn < len(self.tool_calls):
+            tc = self.tool_calls[self._turn]
+            self._turn += 1
+            logger.info("MockLLM agent -> tool_call %s", tc.get("name"))
             return LLMResponse(content="", tool_calls=[tc])
-        logger.info("MockLLM executor -> final_answer")
+        if self._is_plan_phase(messages):
+            logger.info("MockLLM agent -> plan (%d step(s))", len(self.plan))
+            return LLMResponse(content=json.dumps(self.plan, ensure_ascii=False))
+        logger.info("MockLLM agent -> final_answer")
         return LLMResponse(content=self.final_answer)
 
     def stream(
@@ -110,8 +122,8 @@ class MockLLMClient(LLMClient):
         yield self.complete(messages, tools, **kwargs)
 
     def reset(self) -> None:
-        """Reset the executor turn counter (useful between tasks in tests)."""
-        self._executor_turn = 0
+        """Reset the turn counter (useful between tasks in tests)."""
+        self._turn = 0
 
 
 def make_default_mock_client() -> MockLLMClient:

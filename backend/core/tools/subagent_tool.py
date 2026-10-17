@@ -40,7 +40,7 @@ class SpawnSubagentTool(BaseTool):
         "Spawn an isolated sub-agent to complete a focused subtask. The "
         "sub-agent has its own context and a declared capability tier "
         f"(default '{DEFAULT_TIER}'); its final answer is returned as the tool "
-        "result. Requires human confirmation before execution."
+        "result. The configured danger rules may refuse this call."
     )
     args_schema = {
         "type": "object",
@@ -59,8 +59,9 @@ class SpawnSubagentTool(BaseTool):
                 "description": (
                     f"Capability tier (default '{DEFAULT_TIER}'): 'explore' is "
                     "read-only, 'execute' also writes files inside the sandbox. "
-                    "Nothing that needs human confirmation is available to a "
-                    "sub-agent in any tier."
+                    "No dangerous tool (code execution, HTTP writes, git "
+                    "writes, nested spawning) is available to a sub-agent in "
+                    "any tier."
                 ),
             },
             "tools": {

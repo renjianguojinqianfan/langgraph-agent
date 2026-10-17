@@ -110,7 +110,7 @@ def test_auto_index_disabled_does_not_index_artifact(tmp_path, event_bus):
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="qa-kb-off", user_input="write file")
     task = _run_until_done(tm, task_id)
-    assert task.status.value == "COMPLETED"
+    assert task.status.value == "INTERRUPTED"
     assert tm._kb is not None
     assert tm._kb.retrieve("不应被自动入库", top_k=5) == []
 
