@@ -189,7 +189,11 @@ def replan_task(
     request: Request,
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
-    """Switch to plan mode and re-plan (the input bar's「重新规划」button)."""
+    """Run one planning round in plan mode (the input bar's「重新规划」button).
+
+    The sticky task switch is intentionally untouched: the button is an action,
+    not a mode change (ADR 0008 decision 3).
+    """
     if _tm(request).get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
     try:

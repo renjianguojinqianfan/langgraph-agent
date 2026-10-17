@@ -27,7 +27,7 @@ class AgentState(TypedDict, total=False):
 
     # ── Loop bookkeeping (internal) ──
     step_index: int                         # cumulative across the whole task
-    round_steps: int                        # LLM calls in the current round (budget)
+    round_steps: int                        # agent calls (steps) this round (budget)
     final_answer: str
     error: str
     compressed: bool  # P0: whether messages were compressed before the last LLM call

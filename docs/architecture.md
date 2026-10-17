@@ -369,13 +369,13 @@ classDiagram
 |------------|-----------|------|
 | `task_created` | `{task_id, title, status}` | 任务已创建 |
 | `plan_update` | `{plan: PlanStep[]}` | 计划更新：计划模式一轮产出，或停下时人工编辑（`PUT /tasks/{id}/plan`） |
-| `step_start` | `{index, thought}` | 一轮开始（`agent` 节点每次调用一条，两种模式同形） |
+| `step_start` | `{index, thought}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形 |
 | `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
 | `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
 | `final_answer` | `{answer:str}` | 本轮的文字回复（不是终态；下一轮会覆盖） |
 | `task_failed` | `{task_id, error}` | 失败 |
-| `task_interrupted` | `{task_id, status}` | 停下：人按停、一轮没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
+| `task_interrupted` | `{task_id, status}` | 停下：人按停、这一轮的最后一次 `agent` 调用没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑 / 新消息续跑启动（P3；#139 起多轮对话共用） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |

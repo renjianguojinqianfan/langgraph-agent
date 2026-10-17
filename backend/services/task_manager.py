@@ -249,10 +249,13 @@ class TaskManager:
         """Mount the sqlite saver, or refuse a store this build cannot vouch for.
 
         Refusing leaves ``_checkpointer`` as ``None``: the service still starts
-        and new tasks still run, while resume/continuation falls through to the
-        existing "no checkpoint" 409 (AGENTS.md「任务路由」: 两类 409 拒绝不可放松).
-        No automatic migration and no partial mount — a refused file is never
-        written to, so moving it away is the whole remediation.
+        and new tasks still run their FIRST round — but without a checkpointer
+        there is nothing to resume or continue from, so ``resume`` and
+        ``send_message`` answer 409 for every task (AGENTS.md「任务路由」: 两类
+        409 拒绝不可放松) until the file is moved away. "New tasks are unaffected"
+        is therefore false and must not be claimed. No automatic migration and
+        no partial mount — a refused file is never written to, so moving it away
+        is the whole remediation.
         """
         import sqlite3
 
@@ -287,8 +290,9 @@ class TaskManager:
             logger.error(
                 "Checkpoint store %s is not writable (%s: %s); refusing to mount. "
                 "Fix the cause (permissions / disk full / stale lock) — do NOT "
-                "delete snapshots for this. Resume stays disabled; new tasks are "
-                "unaffected.",
+                "delete snapshots for this. Resume and continuation stay disabled "
+                "for every task (new ones run one round, then cannot continue) "
+                "until the store is writable.",
                 db_path,
                 type(exc).__name__,
                 exc,
@@ -309,8 +313,9 @@ class TaskManager:
             logger.error(
                 "Checkpoint store %s is unreadable (%s); refusing to mount. This "
                 "is not a migration artifact — check permissions / integrity / "
-                "locks rather than deleting snapshots. Resume stays disabled "
-                "until it is readable; new tasks are unaffected.",
+                "locks rather than deleting snapshots. Resume and continuation "
+                "stay disabled until it is readable; new tasks run one round but "
+                "cannot be continued either.",
                 db_path,
                 detail,
             )
@@ -319,9 +324,11 @@ class TaskManager:
             "Checkpoint store %s refused: %s. Snapshots written under a different "
             "checkpoint format are void by design — reading them back may well "
             "work, but continuing that pregel schedule under this scheduler was "
-            "never proven, and data/ is disposable runtime state. Resume stays "
-            "disabled until the file is moved away; new tasks are unaffected. "
-            "Rationale and measurement: %s.",
+            "never proven, and data/ is disposable runtime state. Resume and "
+            "continuation stay disabled for EVERY task (new ones included) until "
+            "the file is moved away — a new task runs its first round, then "
+            "parks with no checkpoint to continue from. Rationale and "
+            "measurement: %s.",
             db_path,
             detail,
             _CHECKPOINT_FORMAT_DOC,
@@ -1023,10 +1030,11 @@ class TaskManager:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
-            if task.status in (TaskStatus.RUNNING, TaskStatus.PENDING):
+            if task.status != TaskStatus.INTERRUPTED:
                 raise RuntimeError(
                     f"task {task_id} is {task.status.value}; "
-                    "the plan can only be edited while the task is parked"
+                    "the plan can only be edited while the task is parked "
+                    "(INTERRUPTED)"
                 )
             steps: List[PlanStep] = []
             for position, raw in enumerate(plan, 1):
@@ -1083,7 +1091,8 @@ class TaskManager:
             if not has_checkpoint:
                 raise RuntimeError(
                     f"no checkpoint found for task {task_id} "
-                    "(checkpoints disabled or this task predates them)"
+                    "(checkpoints disabled, this task predates them, or the "
+                    "store was refused for its format — see the startup log)"
                 )
             if user_text is not None:
                 task.conversation.append(ChatTurn(role="user", content=user_text))

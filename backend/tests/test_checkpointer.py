@@ -423,10 +423,19 @@ class TestPreMigrationStoreGuard:
             tm.resume("t-legacy")
         assert "no checkpoint" in str(excinfo.value)
 
-    def test_new_tasks_still_run_with_legacy_store_present(self, tmp_path):
-        """拒绝挂载只影响 resume：服务照常起、新任务照常跑完。"""
+    def test_new_tasks_run_one_round_with_refused_store_but_cannot_continue(
+        self, tmp_path
+    ):
+        """拒绝挂载 = 第一轮照跑，但**所有**任务都不能续说，直到把库移走。
+
+        Regression for the S5 review: the old claim「新任务不受影响」was false —
+        without a checkpointer a brand-new task parks with nothing to continue
+        from. Keep the behaviour and the wording in sync (see the startup log /
+        `docs/migration-langgraph-1x.md` §2.4).
+        """
         settings = make_settings(tmp_path, checkpoint_enabled=True)
-        _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite")
+        db = _write_legacy_store(settings.checkpoint_path / "checkpoints.sqlite")
+        _stamp(db, 1)  # the S4/v1 store this build refuses as `older`
         tm = make_manager(settings, MockLLMClient(final_answer="done anyway"))
 
         task_id = tm.create_task(title="fresh", user_input="hello")
@@ -434,6 +443,10 @@ class TestPreMigrationStoreGuard:
 
         assert task.status == TaskStatus.INTERRUPTED
         assert task.final_answer == "done anyway"
+        assert tm._checkpointer is None
+        with pytest.raises(RuntimeError) as excinfo:
+            tm.send_message(task_id, "one more")
+        assert "no checkpoint" in str(excinfo.value)
 
     def test_empty_legacy_store_is_accepted(self, tmp_path):
         """0 行的旧库无可腐蚀数据，放行（否则全新环境会被自己的空文件挡住）。"""

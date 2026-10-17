@@ -95,7 +95,7 @@ export const sendMessage = (id: string, input: string) =>
     body: JSON.stringify({ input }),
   });
 
-/** Switch to plan mode and run one planning round. */
+/** Run one planning round in plan mode; the sticky task mode is unchanged. */
 export const replanTask = (id: string) =>
   req<{ ok: boolean; status: string; task: Task }>(`/tasks/${id}/replan`, {
     method: "POST",

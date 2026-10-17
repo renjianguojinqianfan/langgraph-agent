@@ -9,7 +9,8 @@ Pins the acceptance criteria at the seams the slice actually moved:
 * a parked task continues from the same conversation, checkpoints included;
 * the step budget is per round, so a long conversation cannot brick itself;
 * the plan is editable while parked, and the edit lands in the next round;
-* ``POST /tasks/{id}/replan`` switches to plan mode and re-plans in place.
+* ``POST /tasks/{id}/replan`` borrows plan mode for one round and re-plans
+  in place; the sticky switch is unchanged.
 """
 
 from __future__ import annotations

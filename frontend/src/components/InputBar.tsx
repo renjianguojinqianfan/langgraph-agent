@@ -4,6 +4,12 @@ import { useTaskStore } from "../store/taskStore";
 import { TaskMode } from "../types";
 import { ModeSwitch } from "./ModeSwitch";
 
+/** FastAPI error bodies carry `{detail}`; the normal envelope carries `message`. */
+function detailText(r: unknown): string | undefined {
+  const d = (r as { detail?: unknown })?.detail;
+  return typeof d === "string" ? d : undefined;
+}
+
 export function InputBar() {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,7 +46,7 @@ export function InputBar() {
         if (fresh.data) upsert(fresh.data);
         if (running) setNote("下一轮生效");
       } else {
-        setNote("切换失败");
+        setNote(detailText(r) ?? "切换失败");
       }
     } catch {
       setNote("切换失败");
@@ -52,17 +58,28 @@ export function InputBar() {
     if (!input || busy || loading) return;
     setBusy(true);
     setNote(null);
-    setText("");
     try {
       if (!task) {
         const res = await createTask({ input, mode: draftMode });
         const id = res.data?.task_id;
-        if (id) setCurrent(id);
+        if (id) {
+          setCurrent(id);
+          setText("");
+        } else {
+          setNote(detailText(res) ?? "创建失败");
+        }
       } else if (parked) {
         // #139: one task = one conversation — speaking to a parked task
-        // continues it in place (same thread_id / checkpoint).
+        // continues it in place (same thread_id / checkpoint). A 409 (no
+        // checkpoint, still shutting down, …) must not eat the message: keep
+        // the text and show the server's reason.
         const res = await sendMessage(task.id, input);
-        if (res.data?.task) upsert(res.data.task);
+        if (res.data?.task) {
+          upsert(res.data.task);
+          setText("");
+        } else {
+          setNote(detailText(res) ?? "发送被拒绝");
+        }
       }
     } catch {
       setNote("发送失败");
@@ -77,7 +94,11 @@ export function InputBar() {
     setNote(null);
     try {
       const r = await replanTask(task.id);
-      if (r.data?.task) upsert(r.data.task);
+      if (r.data?.task) {
+        upsert(r.data.task);
+      } else {
+        setNote(detailText(r) ?? "重新规划被拒绝");
+      }
     } catch {
       setNote("重新规划失败");
     } finally {
@@ -105,7 +126,7 @@ export function InputBar() {
           <button
             onClick={onReplan}
             disabled={busy || !parked}
-            title="切到计划模式，按当前对话重新出一份计划"
+            title="按当前对话借一轮计划模式重新出计划（不改模式开关）"
             className="text-[11px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:text-white disabled:opacity-40"
           >
             重新规划
@@ -134,7 +155,7 @@ export function InputBar() {
         </button>
       </div>
       <div className="text-[11px] text-slate-500 mt-1">
-        {task && !parked && !running && failed
+        {failed
           ? "任务出错后不能续说；新建任务重新开始"
           : "Ctrl/⌘ + Enter 发送"}
         {currentTaskId ? "　·　停下（一轮没有工具调用）后可以继续说" : ""}
