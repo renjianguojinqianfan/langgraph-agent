@@ -239,8 +239,6 @@ classDiagram
         +any output
         +str status
         +str error
-        +bool need_confirm
-        +bool confirmed
     }
     class PlanStep {
         +int index
@@ -315,7 +313,7 @@ classDiagram
 | `TaskStatus` | `PENDING / RUNNING / COMPLETED / FAILED / INTERRUPTED` |
 | `Task` | `id, title, user_input, status, steps[], plan[], artifacts[], final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
-| `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, need_confirm, confirmed` |
+| `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, circuit_open, retries` |
 | `PlanStep` | `index, description, status(pending/active/done)` |
 | `Artifact` | `id, filename, path, mime, size, created_at` |
 | `ToolResult` | `success:bool, data:Any, error:str` |

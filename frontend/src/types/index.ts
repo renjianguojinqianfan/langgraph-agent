@@ -25,8 +25,6 @@ export interface ToolCallRecord {
   output: any;
   status: string; // pending | success | failed | skipped
   error?: string | null;
-  need_confirm: boolean;
-  confirmed: boolean;
   circuit_open?: boolean; // P0: short-circuited by the circuit breaker
   retries?: number; // P0: retries performed by the tool executor
 }

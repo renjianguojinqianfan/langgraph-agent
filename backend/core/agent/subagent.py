@@ -363,8 +363,9 @@ class SubAgentExecutor:
             from .graph import build_graph
 
             graph = build_graph(runtime)
-            # The subtask topology runs 4 nodes per cycle; lift the default
-            # recursion limit (25) so deep subtasks honor settings.max_steps.
+            # The loop spends up to three nodes per cycle (planner → executor →
+            # tool); lift the default recursion limit (25) so deep subtasks
+            # honor settings.max_steps.
             #
             # No checkpointer here, and deliberately no ``durability=`` either
             # (langgraph 1.x): subtasks are never resumed — they fold into the

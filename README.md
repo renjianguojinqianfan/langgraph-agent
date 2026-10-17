@@ -23,15 +23,6 @@ cd frontend && npm install && npm run dev                 # http://localhost:517
 
 一键：`python start.py --mock`（离线 Mock，无需 Key）· `python start.py`（真实 Key）· `docker compose up --build`
 
-> **离线驱动确认闸门（#108）**：`use_mock_llm=true` 时再设 `MOCK_LLM_SCRIPT_PATH=scripts/mock_llm_confirm_script.json`，
-> 内置演示脚本就换成这份含两次 `code_exec` 的脚本——**无 Key 也能在浏览器里真实弹出确认框**（内置脚本只走
-> `web_search`/`write`，永远碰不到闸门，凡需人点一次的验收项此前都只能记「跳过」）。脚本读不到或非法 JSON 会
-> WARN 并回落内置脚本，默认离线行为一字不变。两条边界得先知道：**① 脚本内容直入 `MockLLMClient.tool_calls`，
-> 没有工具名白名单**——总闸是 `use_mock_llm`（它为假时本键根本不参与判定），且风险扫描照跑、危险工具照需人批，
-> 所以它是**离线开发态**的面，不是新的授权面；**② 一份脚本按执行轮次依次发放、client 与进程同寿，因此是被
-> 「消耗」而不是「重播」**——任务 A 停在闸门处才会把下一条调用留给任务 B（#91 那两个框并存的场景正是如此），
-> A 若自己跑完就把两条都用掉、B 只拿到 `final_answer`、第三个任务零闸门；要重播得重启进程。
-
 > 虚拟环境请叫 `.venv311`：`start.py` 会拦住仓库根目录的 `.venv`（本地那个是 3.13 且未装依赖，
 > 误用只会得到一堆与真因无关的 ImportError）。
 

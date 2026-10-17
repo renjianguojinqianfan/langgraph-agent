@@ -378,25 +378,25 @@ def test_check_face_resolves_without_running_anything(tmp_path):
 
 
 # ── tier reachability, judged on the real face (issue #56 AC) ────────────────
-def test_no_tier_mounts_a_confirmation_gated_tool(tmp_path):
+def test_no_tier_mounts_a_danger_marked_tool(tmp_path):
     """任何档位都拿不到被标成危险的工具（#56 收窄；#138 之后主图也无闸门了）。"""
-    seen_gated: set = set()
+    seen_marked: set = set()
     for label, tm, ex in _mounted_managers(tmp_path):
-        gated = {
+        marked = {
             t.name
             for t in tm._tools
             if getattr(t, "requires_confirm", False)
         }
-        assert gated, f"{label} 装载面没有闸门工具，下面的断言会空转"
-        seen_gated |= gated
+        assert marked, f"{label} 装载面没有危险标记工具，下面的断言会空转"
+        seen_marked |= marked
         names = [t.name for t in tm._tools]
         for tier in (EXPLORE_TIER, EXECUTE_TIER):
             face = ex.check_face(_spec(subtask_id=f"{label}:sub:1", tier=tier))
             assert face == tier_face_names(names, tier)
-            leaked = set(face) & gated
-            assert not leaked, f"{label}/{tier} 档漏进了需要确认的工具 {sorted(leaked)}"
+            leaked = set(face) & marked
+            assert not leaked, f"{label}/{tier} 档漏进了危险标记的工具 {sorted(leaked)}"
     # The dangerous families the issue names are all really present somewhere above.
-    assert {"code_exec", "spawn_subagent", "git_commit"} <= seen_gated
+    assert {"code_exec", "spawn_subagent", "git_commit"} <= seen_marked
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):

@@ -202,8 +202,8 @@ def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
 
 
 # Auxiliary-model role markers. The aux client is scripted *per role* so the
-# offline test suite can assert which auxiliary task (summary / risk / tool
-# choice) actually consumed the aux model — and prove that when aux is disabled
+# offline test suite can assert which auxiliary task (summary / tool choice)
+# actually consumed the aux model — and prove that when aux is disabled
 # no auxiliary call is ever made (``call_count == 0``).
 #
 # ``_detect_role`` scans the *whole* message text — including any history
@@ -212,7 +212,6 @@ def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
 # collide. The order below is an explicit tie-break for that case, not a
 # guarantee that a collision cannot happen.
 _ROLE_MARKERS: Dict[str, List[str]] = {
-    "risk": ["风险", "risk"],
     "summary": ["摘要", "压缩", "summary"],
     "tool_choice": ["工具选择", "候选工具", "filter_tool"],
 }
@@ -221,13 +220,13 @@ _ROLE_MARKERS: Dict[str, List[str]] = {
 class MockAuxLLMClient(LLMClient):
     """Offline, scripted auxiliary-model client.
 
-    Auxiliary tasks (context summarisation, risk semantic analysis, tool
-    pre-selection) are routed to this client when ``aux_llm_enabled`` and
-    ``aux_llm_use_mock`` are both set. Responses are selected by detecting the
-    task role in the prompt (see :data:`_ROLE_MARKERS`), falling back to
-    ``default``. :attr:`call_count` / :attr:`roles_called` let QA assert that
-    the aux model was (or was not) actually consumed. :attr:`requests` keeps the
-    messages themselves so a test can read what the aux model was *told*.
+    Auxiliary tasks (context summarisation, tool pre-selection) are routed to
+    this client when ``aux_llm_enabled`` and ``aux_llm_use_mock`` are both set.
+    Responses are selected by detecting the task role in the prompt (see
+    :data:`_ROLE_MARKERS`), falling back to ``default``. :attr:`call_count` /
+    :attr:`roles_called` let QA assert that the aux model was (or was not)
+    actually consumed. :attr:`requests` keeps the messages themselves so a test
+    can read what the aux model was *told*.
     """
 
     def __init__(

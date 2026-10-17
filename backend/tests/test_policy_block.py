@@ -36,7 +36,7 @@ TASK_ID = "t_policy_block"
 
 #: 一次调用在 ``executor`` 出口的键集合 —— 空表时一个键都不许增减（#136 AC1）。
 #: （``circuit_open`` / ``retries`` 是 tool_node 真派发之后才写上的 P0 标记，不在这一层。
-#: 闸门自己的 ``need_confirm`` / ``confirmed`` 两列已随 #138 拆除，故不在集合里。）
+#: ``need_confirm`` / ``confirmed`` 两列已随 #138 从记录体契约里删除，故不在集合里。）
 PRE_S2_RECORD_KEYS = frozenset(
     {"id", "tool_name", "input", "output", "status", "error"}
 )

@@ -6,7 +6,7 @@ Git tools plus the security model:
 * all 7 tools work in a real repository (status / diff / commit / log /
   branch / checkout / init);
 * non-git directories return a clear error (no crash);
-* the three state-changing tools require confirmation;
+* the three state-changing tools carry the (inert) danger marker;
 * blacklisted verbs / arguments are rejected outright (no execution);
 * path escapes (``../``) are rejected;
 * option-injection attempts (branch ``--force``, ``-D``) are rejected;
@@ -211,8 +211,8 @@ def test_non_git_directory_clear_error(tmp_path, settings):
     assert "not a git repository" in res.error.lower()
 
 
-# ─────────────────── confirmation flags ───────────────────
-def test_git_requires_confirm_flags(repo, settings):
+# ─────────────────── danger markers (inert since #138) ───────────────────
+def test_git_danger_marker_flags(repo, settings):
     runner = GitToolRunner(settings.git_repo_path, settings.git_timeout_sec)
     assert GitCommitTool(runner, settings).requires_confirm is True
     assert GitCheckoutTool(runner, settings).requires_confirm is True
