@@ -1,7 +1,7 @@
 # 架构审计 — 2026-09-22（只读）
 
 > 🗄️ **历史快照（2026-10-17 起）**：本文的完成验证 / 确认闸门 / 风险扫描等概念已随 ADR 0008 退役；
-> 现役架构见 [README](../README.md)「编排拓扑」与 [ADR 0008](adr/0008-single-loop-plan-build-modes.md)。
+> 现役架构见 [README](../README.md)「核心模型」与 [ADR 0008](adr/0008-single-loop-plan-build-modes.md)。
 
 > **点-时记录**：结论与 `file:line` 以 `db0c9f5`（2026-09-22）为准；此后提交会让行号漂移。
 > **口径**：只读审计（未改任何文件）+ 对照 33 份真实 trace；总体判定 **high_risk**。

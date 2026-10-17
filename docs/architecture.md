@@ -12,7 +12,7 @@
 >
 > **现役事实请查这里**：
 > - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
-> - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「编排拓扑」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
+> - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「核心模型」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
 > - 各轮增量设计 → `docs/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `-p3-resume.md`
 > - 接口契约 → 运行时 Swagger `http://localhost:8000/docs`（权威）+ [`backend/api/routes.py`](../backend/api/routes.py)
 > - 能力边界的第一性原理推导 → [`capability-first-principles.md`](capability-first-principles.md)
@@ -193,6 +193,7 @@ classDiagram
         +str name
         +str description
         +dict args_schema
+        +bool requires_confirm
         +bool registers_artifact
         +run(**kwargs) ToolResult
     }
@@ -460,7 +461,7 @@ sequenceDiagram
 1. **配置管理**：所有配置经 `backend/config.py` 的 `Settings`（`pydantic-settings`），从 `.env` 读取。**禁止**在业务代码中硬编码 Key/路径；通过 `get_settings()` 获取单例。
 2. **LLM 接入抽象层**：业务只依赖 `LLMClient` 抽象。调用统一返回 `LLMResponse{content, tool_calls, raw}`。新增供应商只需新增 `LLMClient` 子类并据 `Settings` 选择；支持 OpenAI / DeepSeek / 本地 Ollama（仅改 `base_url`）。
 3. **工具接口规范 `BaseTool`**：
-   - 每个工具实现 `name / description / args_schema(dict) / registers_artifact / run(**kwargs)->ToolResult`；
+   - 每个工具实现 `name / description / args_schema(dict) / requires_confirm / registers_artifact / run(**kwargs)->ToolResult`；
    - `args_schema` 必须是 JSON Schema（供 LLM function calling 使用）；
    - 工具务必返回 `ToolResult`，**禁止**抛未捕获异常导致进程崩溃（外层统一 try/except 兜底）；
    - 新工具在 `registry.py` 中 `@register` 即被 Agent 自动发现（满足 SC4 上手 <30min）。

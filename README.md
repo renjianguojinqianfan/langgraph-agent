@@ -47,18 +47,20 @@ agent ──有 tool call──> tool ──> agent
 ## 质量门禁
 
 ```bash
+.\.venv311\Scripts\python.exe -m pip install -r requirements-dev.txt   # ruff / mypy / pre-commit
 .\.venv311\Scripts\python.exe -m pytest backend/tests/ -q
 .\.venv311\Scripts\python.exe -m ruff check backend scripts
 .\.venv311\Scripts\python.exe -m mypy
 cd frontend; npx tsc --noEmit; npm run check:sse; npm run build
 ```
 
+提交前钩子每台机器装一次：`.\.venv311\Scripts\python.exe -m pre_commit install`。
 CI 跑后端 lint / 类型 / 测试、前端类型 / 构建、Docker 构建。发布前 / 换供应商：启服务在网页端手动跑一遍（不记模型与时间）。
 
 ## 文档
 
 - 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）
-- 架构与共享约定：[docs/architecture.md](docs/architecture.md)；拓扑以 [graph.py](backend/core/agent/graph.py) 为准
+- 架构（v0.1 历史档；§5 共享约定仍现役）：[docs/architecture.md](docs/architecture.md)；拓扑以 [graph.py](backend/core/agent/graph.py) 为准
 - 切片历史：[docs/pivot-plan-build.md](docs/pivot-plan-build.md)
 - 迁移：[docs/migration-langgraph-1x.md](docs/migration-langgraph-1x.md)
 - 配置：[.env.example](.env.example)；工程约定：[AGENTS.md](AGENTS.md)；术语：[GLOSSARY.md](GLOSSARY.md)
