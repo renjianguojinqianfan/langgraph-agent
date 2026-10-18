@@ -5,7 +5,7 @@
 
 ## 项目定位与适用范围
 
-基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 熔断 / 工具生态 / 两层注入 / 回滚）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/pivot-plan-build.md`。能力见 `README.md`「能力」，交付长史见 `OVERVIEW.md`，设计与 spec 见 `docs/`。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 熔断 / 工具生态 / 两层注入 / 回滚）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/pivot-plan-build.md`。**当前一章（最简 agent：pi 式工具面、计划文件、一条命令启动）**见 [ADR 0009](docs/adr/0009-minimal-agent-chapter.md)，切片 C1–C7 见 `docs/capability-registry-rescope.md` §0.9。能力见 `README.md`「能力」，交付长史见 `OVERVIEW.md`，设计与 spec 见 `docs/`。
 
 - **本文件面向外部开发 agent**（改这个仓库时读）。
 - **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 工作区根 `AGENTS.md`（= 沙箱根）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py`。
@@ -18,7 +18,7 @@
 | 触发词 | 不变量 | 权威源 |
 |---|---|---|
 | 危险动作拦截 | 危险动作由**设置里的规则表 + 一个钩子**当场拒：命中即不执行，把 `{block, reason}` 当该次调用的结果回给模型；**不弹框、不进图重入**。钩子**不改参数、不 terminate**（与 pi 的有意分歧） | `docs/adr/0008` + `backend/core/agent/policy.py`（规则表）与 `nodes.py::agent`（钩子所在） |
-| 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划停下时可改（`PUT /tasks/{id}/plan`），改动随后续消息生效 | `docs/adr/0008`（决策 1–7）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
+| 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /api/tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划停下时可改（`PUT /api/tasks/{id}/plan`），改动随后续消息生效 | `docs/adr/0008`（决策 1–7）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
 | 熔断与工具挂载 | 熔断计数**按运行各记一本账、不跨父子/子任务共享**是定居决策不是 bug；MCP / Git / OpenAPI 工具由 `task_manager` 显式追加（不经 `@register`）。原「冻结区零改动」随 ADR 0008 解除 | `docs/adr/0003`（+ ADR 0008「三笔账」3） |
 | 密钥 | 只走环境变量注入；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文，只报 set / not set | `.env.example` 注释 + `backend/config.py`（`llm_api_key` 默认空） |
 | 产物登记语义 | 产物 = 本任务（含子任务）**写出的文件**：只有 `registers_artifact=True` 的工具（现役仅 `write` / `edit`）是产物源，`read` / `ls` / `glob` / `grep` 带的 `path` 与动态包装面一律不登记；去重按「任务内 resolved path」收口在 `add_artifact`。读到同文件不新增产物、重写只一条，都是**定居决策不是 bug**，别照旧直觉「修回去」 | `docs/adr/0004`（判据、影响面与重开条件） |
@@ -83,7 +83,7 @@ GitHub Issues（`renjianguojinqianfan/langgraph-agent`），走 `gh` CLI；Power
 
 ### Domain docs
 
-Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004 / 0005 / 0006 / 0007 / 0008；0005–0007 已随 0008 退役、0002 部分退役）。See `docs/agents/domain.md`.
+Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004 / 0005 / 0006 / 0007 / 0008 / 0009；0005–0007 已随 0008 退役、0002 部分退役；0009 = 最简 agent 一章，0003 / 0004 将随其切片退役）。See `docs/agents/domain.md`.
 
 ### Implementation workflow
 
