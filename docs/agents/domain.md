@@ -10,7 +10,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grilling` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-> **Current state (2026-10-17):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
+> **Current state (2026-10-19):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
 > authority stays in `backend/core/agent/state.py`; follows upstream's `GLOSSARY.md` convention
 > since #876); `docs/adr/` holds `0001`–`0009` — `0001`–`0004` + `0008` + `0009` are live, `0005`–`0007`
 > retired with `0008` (single loop + plan/build two modes); `0009` is the minimal-agent chapter, whose

@@ -3,6 +3,8 @@
 > **基线**：本地克隆 `E:\code\pi`，HEAD `4dd2b149d155d7369de16ea4dc77c84e9f5ffb24`，`git describe --tags` = `v1.3.0-10-g4dd2b149d`（2026-10-17 读取）。
 > **方法**：只读源码 + 仓库内文档；行号均属该 commit。版本区间用 `git diff --stat` 核对；否定性结论写明检索范围与命中数（见 §4 表头），不靠记忆补。
 > **边界**：`未核实` = 仓库里查不到一手依据，本报告不做推断式补全。本报告只回答「最小 agent 是什么样」，不评价产品好坏。
+>
+> **2026-10-19 注**：该克隆此后已更新到 `482c1381`（多 20 个提交）；[决策日志](capability-registry-rescope.md) §0.5 引用的 pi 行号属 `4dd2b149d`，与本文同基线，引用前仍以各自基线复核。
 
 ## 一句话结论
 
@@ -176,4 +178,4 @@ pi 的最小 agent = **一个 `while` 循环 + 一份可写状态（messages / t
 | 24 | `packages/coding-agent/src/extensions/mcp/index.ts:444` | MCP 是扩展，工具动态注册 |
 | 25 | `git diff --stat v1.0.4..v1.2.0 -- packages/agent`、`git diff --stat v1.2.0..HEAD -- packages/agent` | 版本区间结论（§5） |
 
-本仓侧引用：`backend/core/agent/graph.py:49-51,74,93-101`、`backend/core/agent/state.py:15-40`、`backend/core/agent/nodes.py:89,107,112-114,189-269`、`backend/core/tools/registry.py:32,40-60`、`backend/services/task_manager.py:186-203,211`、`backend/services/event_bus.py:26`、`docs/capability-registry-rescope.md:68-92`。
+本仓侧引用：`backend/core/agent/graph.py:49-51,74,93-101`、`backend/core/agent/state.py:15-40`、`backend/core/agent/nodes.py:89,107,112-114,189-269`、`backend/core/tools/registry.py:32,40-60`、`backend/services/task_manager.py:186-203,211`、`backend/services/event_bus.py:26`、`docs/capability-registry-rescope.md` §5（选项 A–C）。

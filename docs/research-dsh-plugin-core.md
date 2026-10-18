@@ -170,7 +170,7 @@ pi 侧取自本仓 `docs/research-pi-minimal-agent.md`（一手 clone 调研）�
 
 ### 「五声明 / 件清单 / 最小核 profile」还要不要？
 
-- **五声明**：降级成 `plugin.toml` 的机器可读字段（`name/version` 之外的 requires / provides / tools / config keys），文档自动生成。把「文档表格当契约」换成「manifest 当契约」，否则注册表和文档会漂移。旧五声明在 `docs/specs/capability-package-architecture.md:29-41`，其中件清单已被 `docs/capability-registry-rescope.md:10-12` 判为失效。
+- **五声明**：降级成 `plugin.toml` 的机器可读字段（`name/version` 之外的 requires / provides / tools / config keys），文档自动生成。把「文档表格当契约」换成「manifest 当契约」，否则注册表和文档会漂移。旧五声明在 `docs/specs/capability-package-architecture.md` §3（加退役抬头后在 `:34-46`），其中件清单已被 `docs/capability-registry-rescope.md` §1 第 1 条判为失效。
 - **件清单**：**退役**。dsh 的等价物是「启动是否成功 + 缺哪个服务」的诊断（`packages/boot/app-boot/README.md:43,107`），不是一份手写清单；`±1 行` 这种断言把装配问题变成了格式问题。
 - **最小核 profile**：**保留，但只作为一份组合清单 + 一条启动回归**。dsh 的 `sdk-minimal` 证明这可行：没有 `mode="minimal"` 代码分支，只有一个独立的 30 个插件行 patch 和「显式拥有每一行、不继承 base」的声明（`packages/bundle/sdk-minimal/cordis.patch.yml:1-3`；`README.md:12`）。
 
