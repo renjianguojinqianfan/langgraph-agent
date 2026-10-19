@@ -6,7 +6,7 @@ rejected. Successful writes return the absolute path so the kernel can register
 an :class:`~backend.services.persistence.Artifact`.
 
 Each capability is its own ``BaseTool`` so the function schema and the
-per-tool resilience/confirm policy stay focused:
+per-tool confirm policy stay focused:
 
 * :class:`ReadTool` (``read``, line pagination + line numbers),
 * :class:`WriteTool` (``write``, whole-file create/overwrite),
@@ -61,14 +61,11 @@ class _SandboxedTool(BaseTool):
     """Base for the discrete file tools.
 
     Confines every path to ``Settings.artifacts_path``. Local FS operations are
-    deterministic, so no retry, no circuit breaker and no human confirmation
-    (sandbox-confined file writes are not on the AGENTS.md danger list).
+    deterministic and need no human confirmation (sandbox-confined file writes
+    are not on the AGENTS.md danger list).
     """
 
     requires_confirm = False
-    retryable = False
-    max_retries = 0
-    circuit_breaker = False
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)

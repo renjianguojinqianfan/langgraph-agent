@@ -1,16 +1,11 @@
-"""QA integration tests — tool_node resilience pass-through (P0 item 2).
+"""QA integration tests — ``tool_node`` dispatch and its conversation face.
 
-Verifies that the kernel's ``tool_node`` writes ``circuit_open`` / ``retries``
-into the tool-call record and the ``tool_result`` event, and that a
-short-circuited dispatch publishes ``tool_circuit_open`` — end to end through
-:class:`~backend.core.agent.nodes.AgentRuntime` with a real
-:class:`~backend.core.tools.resilience.ToolExecutor`.
+Verifies that one tool call is executed exactly once (#157: no retry, no
+circuit breaker) and that the failure reason lands in the tool message the
+model reads, not only in the events a human reads (#95).
 
 Also covers the node's artifact-extraction guard: a tool result whose ``path``
 is a directory registers no artifact (#17).
-
-And the conversation face of a call that did not succeed: the reason has to land
-in the tool message the model reads, not only in the events a human reads (#95).
 """
 
 from __future__ import annotations
@@ -30,9 +25,6 @@ class _FailTool(BaseTool):
     name = "qa_fail"
     description = "d"
     args_schema = {}
-    retryable = True
-    max_retries = 0
-    circuit_breaker = True
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)
@@ -87,8 +79,14 @@ def _tool_messages(state: AgentState) -> list:
     return [m for m in state.get("messages", []) if m.get("role") == "tool"]
 
 
-def test_tool_node_writes_circuit_open_and_retries():
-    settings = Settings(tool_failure_threshold=1, tool_max_retries=0, tool_cooldown_sec=30)
+def test_tool_node_executes_each_call_once():
+    """One dispatch = one execution, and no retry/breaker fields (#157).
+
+    The old executor retried a failed tool behind the model's back (default
+    ``tool_max_retries=2``), so a deterministic failure ran three times. The
+    model must instead see the single failure and decide what to do next.
+    """
+    settings = Settings()
     tool = _FailTool(settings)
     bus = EventBus()
     events = []
@@ -96,32 +94,19 @@ def test_tool_node_writes_circuit_open_and_retries():
     tm = SimpleNamespace(settings=settings, event_bus=bus, add_artifact=lambda *a: None)
     rt = AgentRuntime("t1", tm, llm=SimpleNamespace(), tools=[tool], tool_schemas=[])
 
-    # First dispatch: executes, fails -> opens the breaker.
     state = _state_with_call()
     rt.tool_node(state)
     rec = state["_current_tool_calls"][0]
-    assert rec["status"] == "failed"
-    assert rec["circuit_open"] is False
-    assert rec["retries"] == 0
     assert tool.calls == 1
-
-    # Second dispatch: short-circuited by the breaker; tool NOT executed.
-    state = _state_with_call()
-    rt.tool_node(state)
-    rec2 = state["_current_tool_calls"][0]
-    assert rec2["status"] == "failed"
-    assert rec2["circuit_open"] is True
-    assert rec2["retries"] == 0
-    assert tool.calls == 1  # unchanged
-
-    # The tool_result event carries the flags; tool_circuit_open was published.
-    tr = [e for e in events if e["type"] == "tool_result"]
-    assert any(e["data"].get("circuit_open") is True for e in tr)
-    assert any(e["type"] == "tool_circuit_open" for e in events)
+    assert rec["status"] == "failed"
+    assert rec["error"] == "boom"
+    assert "retries" not in rec
+    assert "circuit_open" not in rec
+    assert not any(e["type"] == "tool_circuit_open" for e in events)
 
 
 def test_tool_node_unknown_tool_does_not_crash():
-    settings = Settings(tool_failure_threshold=3)
+    settings = Settings()
     bus = EventBus()
     events = []
     bus.subscribe("t2", lambda e: events.append(e))
@@ -162,9 +147,6 @@ class _PathResultTool(BaseTool):
     name = "qa_path_result"
     description = "d"
     args_schema = {}
-    retryable = False
-    max_retries = 0
-    circuit_breaker = False
     registers_artifact = True
 
     def __init__(self, settings: Settings | None = None, target: Path | None = None) -> None:
@@ -234,7 +216,7 @@ def test_read_like_result_on_a_real_file_registers_nothing(tmp_path):
 
 def _bus_runtime(tools: list, task_id: str = "t95") -> tuple:
     """An ``AgentRuntime`` plus the list its events land in."""
-    settings = Settings(tool_failure_threshold=3, tool_max_retries=0, tool_cooldown_sec=30)
+    settings = Settings()
     bus = EventBus()
     events: list = []
     bus.subscribe(task_id, lambda e: events.append(e))

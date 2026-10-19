@@ -27,16 +27,6 @@ function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
       <div className="flex items-center justify-between">
         <span className="font-mono text-sky-300">{tc.tool_name}</span>
         <div className="flex items-center gap-1">
-          {tc.circuit_open && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-red-950 border border-red-500/40 text-red-400">
-              ⚡熔断
-            </span>
-          )}
-          {(tc.retries ?? 0) > 0 && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-amber-950 border border-amber-500/40 text-amber-400">
-              ↻重试×{tc.retries}
-            </span>
-          )}
           <span className="text-slate-400">{tc.status}</span>
         </div>
       </div>

@@ -9,9 +9,7 @@ kernel:
   status is persisted, so once ``get_task()`` reports a terminal status the
   ``task_completed`` event is always already available in the replay buffer —
   run repeatedly to catch the pre-fix race;
-* MCP tools are mounted alongside the built-ins;
-* MCP read tools flow through ``ToolExecutor.dispatch`` (P0 breaker reuse) with
-  a successful result.
+* MCP tools are mounted alongside the built-ins.
 
 All tests are offline.
 """
@@ -25,10 +23,7 @@ from pathlib import Path
 
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
-from backend.core.mcp.client import McpClientManager
-from backend.core.tools.mcp_tool import McpTool
 from backend.core.tools.registry import build_tools
-from backend.core.tools.resilience import ToolExecutor
 from backend.services.event_bus import EventBus
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
@@ -112,35 +107,6 @@ def test_mcp_tools_are_mounted(tmp_path):
     assert "mcp__echo__echo" in names
     assert "mcp__echo__write_file" in names
     tm.shutdown()
-
-
-def test_mcp_read_tool_through_tool_executor(tmp_path):
-    """A read-like MCP tool dispatched via ToolExecutor succeeds (breaker reuse)."""
-    settings = Settings(
-        data_dir=str(tmp_path),
-        artifacts_dir=str(tmp_path / "artifacts"),
-        mcp_enabled=True,
-        mcp_servers=json.dumps(
-            [{"name": "echo", "command": sys.executable, "args": [ECHO_SERVER], "enabled": True}]
-        ),
-        mcp_connect_timeout_sec=15,
-        mcp_timeout_sec=10,
-    )
-    mgr = McpClientManager(settings)
-    mgr.connect_all()
-    tool = McpTool(
-        server_name="echo", tool_name="echo", description="Echo text.",
-        input_schema={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-        manager=mgr, settings=settings,
-    )
-    events: list = []
-    executor = ToolExecutor(settings, publish_fn=lambda et, d: events.append((et, d)))
-    res = executor.dispatch(tool, text="via-executor")
-    assert res.success is True
-    assert res.data["text"] == "echo:via-executor"
-    # A successful dispatch resets the breaker (no tool_circuit_open).
-    assert not any(et == "tool_circuit_open" for et, _ in events)
-    mgr.cleanup()
 
 
 def test_task_manager_shutdown_without_mcp_safe(tmp_path):

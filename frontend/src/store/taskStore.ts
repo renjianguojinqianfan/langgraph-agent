@@ -13,7 +13,7 @@ interface TaskState {
   currentTaskId: string | null;
   detail: Record<string, Task>;
   events: SSEvent[];
-  /** Per-task live markers (circuit open / context compressed) for the flow view. */
+  /** Per-task live markers (context compressed) for the flow view. */
   markers: Record<string, TraceMarker[]>;
   selectedStep: number | null;
 
@@ -99,9 +99,6 @@ function applyToTask(task: Task, ev: SSEvent): Task {
                   output: rec.output,
                   status: rec.status,
                   error: rec.error,
-                  // The backend attaches these flags on the tool_result event.
-                  circuit_open: rec.circuit_open ?? tc.circuit_open,
-                  retries: rec.retries ?? tc.retries,
                 }
               : tc
           ),
@@ -173,10 +170,10 @@ export const useTaskStore = create<TaskState>((set) => ({
         ? state.tasks.map((t) => (t.id === id ? summary : t))
         : [summary, ...state.tasks];
 
-      // Track flow markers (circuit open / context compressed) per task so the
-      // message stream can render them without losing cross-task isolation.
+      // Track flow markers (context compressed) per task so the message stream
+      // can render them without losing cross-task isolation.
       let markers = state.markers;
-      if (ev.type === "tool_circuit_open" || ev.type === "context_compressed") {
+      if (ev.type === "context_compressed") {
         const list = markers[id] ?? [];
         const marker: TraceMarker = { type: ev.type, ts: ev.ts, data: ev.data };
         markers = { ...markers, [id]: [...list, marker].slice(-200) };

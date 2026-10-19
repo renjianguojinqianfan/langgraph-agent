@@ -55,10 +55,6 @@ class LoadSkillTool(BaseTool):
     )
     args_schema = _ARGS_SCHEMA
     requires_confirm = False
-    # Local FS read: deterministic, no retry / breaker (read/glob/grep policy).
-    retryable = False
-    max_retries = 0
-    circuit_breaker = False
 
     def __init__(self, settings: Settings | None = None, home_dir: Optional[Path] = None) -> None:
         super().__init__(settings)

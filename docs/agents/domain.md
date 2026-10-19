@@ -12,9 +12,9 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 > **Current state (2026-10-19):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
 > authority stays in `backend/core/agent/state.py`; follows upstream's `GLOSSARY.md` convention
-> since #876); `docs/adr/` holds `0001`–`0009` — `0001`–`0004` + `0008` + `0009` are live, `0005`–`0007`
-> retired with `0008` (single loop + plan/build two modes); `0009` is the minimal-agent chapter, whose
-> slices will retire `0003` / `0004`. This repo is **single-context** —
+> since #876); `docs/adr/` holds `0001`–`0009` — `0001`, `0002`, `0004`, `0008` and `0009` are live,
+> `0005`–`0007` retired with `0008` (single loop + plan/build two modes), and `0003` retired with
+> slice C2; `0009` is the minimal-agent chapter, whose C5 slice will retire `0004`. This repo is **single-context** —
 > one `GLOSSARY.md` + one `docs/adr/` at the root. No `GLOSSARY-MAP.md`, no per-package context dirs.
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
@@ -85,11 +85,11 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 
 `docs/adr/0001` (in-place migration over rewrite + resume-project positioning, decisions
 D1–D9), `0002` (moat discipline — **部分退役**：「受保护文件零改动」随 `0008` 解除，
-见 0008「三笔账」3), `0003` (circuit-breaker state stays per-runtime, never shared
-across parent/subtasks — so **#60's "每个子任务各记一本账" is by design, not a bug to re-file**),
+见 0008「三笔账」3),
 `0004` (a product is a file the task *wrote*: only `registers_artifact` tools are product
 sources, deduped per task by resolved path — so **#72's "read 回读不再登记 / 重写只一条" is by
-design, not a bug to re-file**), `0008` (single loop + plan/build two modes — **0005–0007 已随之退役**)
+design, not a bug to re-file**), `0008` (single loop + plan/build two modes — **0005–0007 已随之退役；
+0003 随 C2 删除熔断后退役**)
 and `0009` (minimal-agent chapter: pi-style tool face, plan file, one-command start)
 are the live ADRs today. Beyond them, the equivalent
 frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (artifact registration,

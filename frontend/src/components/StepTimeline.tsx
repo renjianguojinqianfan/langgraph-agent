@@ -60,14 +60,6 @@ export function StepTimeline({ task }: { task: Task }) {
                     <span>
                       {tc.tool_name}:{tc.status}
                     </span>
-                    {tc.circuit_open && (
-                      <span className="text-red-400 font-medium">⚡熔断</span>
-                    )}
-                    {(tc.retries ?? 0) > 0 && (
-                      <span className="text-amber-400 font-medium">
-                        ↻重试×{tc.retries}
-                      </span>
-                    )}
                   </span>
                 ))}
               </div>

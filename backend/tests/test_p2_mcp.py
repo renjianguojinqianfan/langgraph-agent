@@ -8,7 +8,6 @@ Covers:
 * connection + tool discovery (name/args_schema match the server inputSchema);
 * call forwarding (``call_tool``) and ToolResult mapping;
 * failure isolation: bad command, killed server -> ``success=False`` not crash;
-* circuit breaker reuse via ``ToolExecutor.dispatch``;
 * danger classification from the server's self-reported ``destructiveHint`` /
   ``readOnlyHint`` — issue #57; inert metadata since #138 removed the gate;
 * idempotent cleanup (no leaked child processes).
@@ -30,7 +29,6 @@ import pytest
 from backend.config import Settings
 from backend.core.mcp.client import McpClientManager, McpServerConfig
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
-from backend.core.tools.resilience import ToolExecutor
 
 ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
 
@@ -234,68 +232,6 @@ def test_mcp_killed_server_returns_failure_not_crash(tmp_path):
     res = tool.run(text="after")
     assert res.success is False
     assert res.error  # explicit error message
-    mgr.cleanup()
-
-
-def test_mcp_circuit_breaker_opens_after_failures(tmp_path):
-    pid_file = tmp_path / "echo.pid"
-    s = _echo_settings(
-        tmp_path,
-        tool_failure_threshold=2,
-        tool_max_retries=0,
-        mcp_timeout_sec=3,
-        mcp_servers=json.dumps(
-            [
-                {
-                    "name": "echo",
-                    "command": sys.executable,
-                    "args": [ECHO_SERVER],
-                    "env": {"ECHO_PID_FILE": str(pid_file)},
-                    "enabled": True,
-                }
-            ]
-        ),
-    )
-    mgr = McpClientManager(s)
-    mgr.connect_all()
-    tool = McpTool(
-        server_name="echo",
-        tool_name="write_file",
-        description="Write a file (write-like).",
-        input_schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-        manager=mgr,
-        settings=s,
-    )
-    # Anything the server did not positively report as read-only must not retry
-    # (retryable=False) so each dispatch is a single attempt — deterministic
-    # circuit counting.
-    assert tool.retryable is False
-    assert tool.max_retries == 0
-
-    events: list = []
-    executor = ToolExecutor(s, publish_fn=lambda et, d: events.append((et, d)))
-
-    deadline = time.time() + 10
-    pid = None
-    while time.time() < deadline:
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text(encoding="utf-8").strip())
-                break
-            except ValueError:
-                pass
-        time.sleep(0.1)
-    assert pid
-    _kill_pid(pid)
-
-    r1 = executor.dispatch(tool, path="a.txt")
-    r2 = executor.dispatch(tool, path="b.txt")
-    assert r1.success is False and r2.success is False
-    # Third dispatch is short-circuited by the open circuit.
-    r3 = executor.dispatch(tool, path="c.txt")
-    assert r3.success is False
-    assert r3.circuit_open is True
-    assert any(et == "tool_circuit_open" for et, _ in events)
     mgr.cleanup()
 
 

@@ -2,19 +2,8 @@ import { useTaskStore } from "../store/taskStore";
 import { compressFaceParts } from "../types";
 import { ChatTurn, Task, TraceMarker } from "../types";
 
-/** Render one live circuit-open / compression marker as a flow hint. */
+/** Render one live compression marker as a flow hint. */
 function MarkerRow({ marker }: { marker: TraceMarker }) {
-  if (marker.type === "tool_circuit_open") {
-    const d = marker.data as { tool_name?: string; cooldown_sec?: number };
-    return (
-      <div className="flex justify-start">
-        <div className="max-w-[80%] text-sm bg-red-950/40 border border-red-500/30 text-red-300 rounded-lg px-3 py-2">
-          <span className="mr-1">⚡</span>
-          工具 {d.tool_name ?? "?"} 熔断，冷却 {d.cooldown_sec ?? "?"}s
-        </div>
-      </div>
-    );
-  }
   const d = marker.data as {
     step_index?: number;
     dropped?: number;
@@ -73,7 +62,7 @@ export function MessageStream({ task }: { task: Task }) {
         <Turn key={i} turn={turn} />
       ))}
 
-      {/* Circuit-open / compression flow markers */}
+      {/* Compression flow markers */}
       {markers.map((m, i) => (
         <MarkerRow key={i} marker={m} />
       ))}

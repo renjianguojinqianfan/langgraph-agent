@@ -75,10 +75,6 @@ class SpawnSubagentTool(BaseTool):
         "required": ["name", "instruction"],
     }
     requires_confirm = True
-    # Local orchestration: no retry, no circuit breaker.
-    retryable = False
-    max_retries = 0
-    circuit_breaker = False
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)

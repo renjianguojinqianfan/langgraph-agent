@@ -16,7 +16,6 @@ const EVENT_TYPES: SSEventType[] = [
   "step_start",
   "tool_call",
   "tool_result",
-  "tool_circuit_open",
   "context_compressed",
   "task_rollback", // P1-B 工作区回滚完成
   "artifact_created",

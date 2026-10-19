@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from ...config import Settings
 
@@ -23,8 +23,6 @@ class ToolResult:
     success: bool
     data: Any = None
     error: str = ""
-    circuit_open: bool = False  # True when the call was short-circuited by a breaker
-    retries: int = 0  # number of retries actually performed by the executor
 
 
 class BaseTool(ABC):
@@ -44,10 +42,6 @@ class BaseTool(ABC):
     # deliverable to register. A wrapper around an external tool (MCP) opts in
     # by setting this True on its class.
     registers_artifact: bool = False
-    # P0 resilience knobs (all optional; built-ins override as needed).
-    retryable: bool = True  # whether transient failures may be retried
-    max_retries: Optional[int] = None  # None -> use global Settings.tool_max_retries
-    circuit_breaker: bool = True  # whether consecutive failures trip a breaker
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings

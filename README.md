@@ -39,7 +39,7 @@ agent ──有 tool call──> tool ──> agent
 
 - **工具**：沙箱文件读写、代码执行、web 搜索、HTTP、MCP。
 - **子 agent**：`spawn_subagent` 单入口，`explore` / `execute` 两档，工具面只能收窄。
-- **韧性**：熔断 + 退避重试；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
+- **失败回传**：工具调用只执行一次（不自动重试、不熔断）；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩。
 - **回滚**：沙箱写入前拍 before-image，`POST /api/tasks/{id}/rollback` 按账本逆序恢复（只动文件、不动 checkpoint）。
 - **观测**：SSE 事件流 + JSONL trace，前端可回放 / 导出。

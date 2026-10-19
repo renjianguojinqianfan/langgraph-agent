@@ -38,10 +38,6 @@ class CodeExecTool(BaseTool):
         "required": ["language", "code"],
     }
     requires_confirm = True
-    # P0 resilience: non-idempotent / user-visible execution — no retry, no breaker.
-    retryable = False
-    max_retries = 0
-    circuit_breaker = False
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)

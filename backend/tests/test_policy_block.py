@@ -35,8 +35,7 @@ from backend.tests.conftest import make_settings
 TASK_ID = "t_policy_block"
 
 #: 一次调用在 ``executor`` 出口的键集合 —— 空表时一个键都不许增减（#136 AC1）。
-#: （``circuit_open`` / ``retries`` 是 tool_node 真派发之后才写上的 P0 标记，不在这一层。
-#: ``need_confirm`` / ``confirmed`` 两列已随 #138 从记录体契约里删除，故不在集合里。）
+#: （``need_confirm`` / ``confirmed`` 两列已随 #138 从记录体契约里删除，故不在集合里。）
 PRE_S2_RECORD_KEYS = frozenset(
     {"id", "tool_name", "input", "output", "status", "error"}
 )
@@ -220,8 +219,8 @@ def test_no_rules_is_byte_identical_to_before(tmp_path):
     _rt.tool_node(state)
     assert tool.calls == [{"cmd": "ls"}]
     assert _rec(state)["status"] == "success"
-    # 一次真派发之后仍只有这两个额外的 P0 标记（tool_node 写的）。
-    assert set(_rec(state)) == PRE_S2_RECORD_KEYS | {"circuit_open", "retries"}
+    # 一次真派发不新增记录字段（重试 / 熔断标记随 #157 删除）。
+    assert set(_rec(state)) == PRE_S2_RECORD_KEYS
     assert [e["type"] for e in _events(tm)] == ["step_start", "tool_call", "tool_result"]
     assert json.loads(_last_tool_message(state)["content"]) == {"ran": True}
 
