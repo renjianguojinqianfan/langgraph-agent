@@ -9,7 +9,7 @@ kernel:
   status is persisted, so once ``get_task()`` reports a terminal status the
   ``task_completed`` event is always already available in the replay buffer —
   run repeatedly to catch the pre-fix race;
-* MCP + Git tools coexist when both switches are enabled;
+* MCP tools are mounted alongside the built-ins;
 * MCP read tools flow through ``ToolExecutor.dispatch`` (P0 breaker reuse) with
   a successful result.
 
@@ -92,8 +92,8 @@ def test_smoke_race_regression_multiple_runs(tmp_path):
     assert statuses == ["INTERRUPTED", "INTERRUPTED", "INTERRUPTED"]
 
 
-def test_mcp_and_git_coexist(tmp_path):
-    """Both switches enabled: MCP tools and Git tools appear together."""
+def test_mcp_tools_are_mounted(tmp_path):
+    """MCP tools appear alongside the built-ins."""
     settings = Settings(
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
@@ -101,9 +101,6 @@ def test_mcp_and_git_coexist(tmp_path):
         mcp_servers=json.dumps(
             [{"name": "echo", "command": sys.executable, "args": [ECHO_SERVER], "enabled": True}]
         ),
-        git_enabled=True,
-        git_repo_dir=str(tmp_path / "repos"),
-        git_timeout_sec=10,
         mcp_connect_timeout_sec=15,
         mcp_timeout_sec=10,
     )
@@ -114,7 +111,6 @@ def test_mcp_and_git_coexist(tmp_path):
     names = {t.name for t in tm._tools}
     assert "mcp__echo__echo" in names
     assert "mcp__echo__write_file" in names
-    assert "git_status" in names and "git_commit" in names
     tm.shutdown()
 
 
@@ -149,7 +145,7 @@ def test_mcp_read_tool_through_tool_executor(tmp_path):
 
 def test_task_manager_shutdown_without_mcp_safe(tmp_path):
     """shutdown() is a no-op when MCP was never enabled (no attribute crash)."""
-    settings = make_settings(tmp_path)  # mcp_enabled=False, git_enabled=False
+    settings = make_settings(tmp_path)  # mcp_enabled=False
     eb = EventBus()
     persistence = Persistence(settings)
     mock = MockLLMClient(final_answer="ok")

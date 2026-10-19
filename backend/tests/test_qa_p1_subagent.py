@@ -201,7 +201,6 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
         llm=tm._llm,
         tools=tm._tools,
         tool_schemas=tm._tool_schemas,
-        aux_llm=tm._aux_llm,
     )
     graph = build_graph(runtime)
     final = graph.invoke(_main_state("派个子任务给一句话结论"))

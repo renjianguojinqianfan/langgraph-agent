@@ -4,7 +4,6 @@ import {
   AuthTokenResponse,
   ChatTurn,
   CreateTaskRequest,
-  KbDoc,
   PlanStep,
   RollbackResult,
   SSEvent,
@@ -95,12 +94,6 @@ export const sendMessage = (id: string, input: string) =>
     body: JSON.stringify({ input }),
   });
 
-/** Run one planning round in plan mode; the sticky task mode is unchanged. */
-export const replanTask = (id: string) =>
-  req<{ ok: boolean; status: string; task: Task }>(`/tasks/${id}/replan`, {
-    method: "POST",
-  });
-
 export type { ChatTurn };
 
 // ── P1-B: workspace rollback ──
@@ -115,15 +108,6 @@ export const loginRequest = (secret: string) =>
   });
 
 export const logoutRequest = () => setAuthToken(null);
-
-// ── P1 item 3: knowledge base management ──
-export const listKbDocs = () => req<{ docs: KbDoc[] }>("/kb");
-
-export const rebuildKb = () =>
-  req<{ ok: boolean; indexed: number }>("/kb/rebuild", { method: "POST" });
-
-export const deleteKbDoc = (docId: string) =>
-  req<{ ok: boolean }>(`/kb/${encodeURIComponent(docId)}`, { method: "DELETE" });
 
 const _withToken = (url: string): string => {
   const token = getAuthToken();

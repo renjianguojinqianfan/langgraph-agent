@@ -106,11 +106,7 @@ def test_auth_disabled_all_endpoints_open(open_client):
     assert r.status_code == 200
     r = open_client.post("/api/tasks", json={"input": "hello"})
     assert r.status_code == 200
-    r = open_client.get("/api/kb")
-    assert r.status_code == 200
-    r = open_client.post("/api/kb/rebuild")
-    assert r.status_code == 200
-    r = open_client.delete("/api/kb/nonexistent")
+    r = open_client.get("/api/mcp/servers")
     assert r.status_code == 200
 
 

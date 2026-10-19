@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createTask, getTask, putMode, replanTask, sendMessage } from "../api/client";
+import { createTask, getTask, putMode, sendMessage } from "../api/client";
 import { useTaskStore } from "../store/taskStore";
 import { TaskMode } from "../types";
 import { ModeSwitch } from "./ModeSwitch";
@@ -90,24 +90,6 @@ export function InputBar() {
     }
   };
 
-  const onReplan = async () => {
-    if (!task || !parked || busy) return;
-    setBusy(true);
-    setNote(null);
-    try {
-      const r = await replanTask(task.id);
-      if (r.data?.task) {
-        upsert(r.data.task);
-      } else {
-        setNote(detailText(r) ?? "重新规划被拒绝");
-      }
-    } catch {
-      setNote("重新规划失败");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const placeholder = loading
     ? "正在加载任务…"
     : !task
@@ -124,16 +106,6 @@ export function InputBar() {
     <div className="border-t border-slate-800 p-3">
       <div className="flex items-center gap-2 mb-2">
         <ModeSwitch mode={mode} onChange={onMode} />
-        {task && (
-          <button
-            onClick={onReplan}
-            disabled={busy || !parked}
-            title="按当前对话借一轮计划模式重新出计划（不改模式开关）"
-            className="text-[11px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:text-white disabled:opacity-40"
-          >
-            重新规划
-          </button>
-        )}
         {note && <span className="text-[11px] text-slate-400">{note}</span>}
       </div>
       <div className="flex gap-2">

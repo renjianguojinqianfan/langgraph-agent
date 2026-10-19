@@ -7,29 +7,14 @@ kernel can discover them automatically via :func:`registry.build_tools`.
 from __future__ import annotations
 
 # Every import below has a side effect: the module's @register decorators fill the
-# shared registry at import time (the P1 kb-retrieval and sub-agent spawner tools
-# included), so none of them is a removable "unused" import — each name is
-# re-exported in __all__ below. Their order is dictated by the ruff isort gate
-# (pyproject.toml) and deliberately carries no grouping narrative.
+# shared registry at import time (the sub-agent spawner included), so none of
+# them is a removable "unused" import — each name is re-exported in __all__
+# below. Their order is dictated by the ruff isort gate (pyproject.toml) and
+# deliberately carries no grouping narrative.
 from .base import BaseTool, ToolResult
 from .code_exec import CodeExecTool
 from .file_io import EditTool, GlobTool, GrepTool, LsTool, ReadTool, WriteTool
-
-# P2 item 2: Git tools are NOT @register'd — TaskManager instantiates them via
-# build_git_tools(settings) so the git_enabled switch can filter them out.
-from .git_tools import (
-    GitBranchTool,
-    GitCheckoutTool,
-    GitCommitTool,
-    GitDiffTool,
-    GitInitTool,
-    GitLogTool,
-    GitStatusTool,
-    GitToolRunner,
-    build_git_tools,
-)
 from .http_api import HttpTool
-from .kb_tools import KbQueryTool, MemorySearchTool
 from .registry import build_tools, get_tool, list_tools, register
 from .skill_tool import LoadSkillTool
 from .subagent_tool import SpawnSubagentTool
@@ -52,16 +37,5 @@ __all__ = [
     "CodeExecTool",
     "HttpTool",
     "SpawnSubagentTool",
-    "MemorySearchTool",
-    "KbQueryTool",
     "LoadSkillTool",
-    "GitToolRunner",
-    "GitStatusTool",
-    "GitDiffTool",
-    "GitCommitTool",
-    "GitLogTool",
-    "GitBranchTool",
-    "GitCheckoutTool",
-    "GitInitTool",
-    "build_git_tools",
 ]

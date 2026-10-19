@@ -9,9 +9,7 @@ P1 additions:
   when ``auth_enabled=false``);
 * protected endpoints opt into ``Depends(verify_token)`` (``sse.py`` stays
   untouched — the SSE route validates ``?token=`` in the route layer before
-  building the streaming response);
-* knowledge-base management: ``GET /api/kb`` / ``POST /api/kb/rebuild`` /
-  ``DELETE /api/kb/{doc_id}``.
+  building the streaming response).
 """
 
 from __future__ import annotations
@@ -22,7 +20,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from ..core.kb.knowledge_base import get_kb_instance
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
 from ..services.task_manager import TaskManager
@@ -183,26 +180,6 @@ def send_message(
     return _envelope(data=result)
 
 
-@router.post("/tasks/{task_id}/replan")
-def replan_task(
-    task_id: str,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    """Run one planning round in plan mode (the input bar's「重新规划」button).
-
-    The sticky task switch is intentionally untouched: the button is an action,
-    not a mode change (ADR 0008 decision 3).
-    """
-    if _tm(request).get_task(task_id) is None:
-        raise HTTPException(status_code=404, detail="task not found")
-    try:
-        result = _tm(request).replan(task_id)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return _envelope(data=result)
-
-
 @router.post("/tasks/{task_id}/rollback")
 def rollback_task(
     task_id: str,
@@ -336,38 +313,6 @@ def auth_token(payload: AuthTokenRequest, request: Request) -> ApiResponse:
             "ok": True,
         }
     )
-
-
-# ── P1 item 3: knowledge base management ──
-@router.get("/kb")
-def kb_list(request: Request, _auth: str = Depends(verify_token)) -> ApiResponse:
-    kb = getattr(_tm(request), "_kb", None) or get_kb_instance()
-    if kb is None:
-        return _envelope(data={"docs": []})
-    docs = kb.list_docs()
-    return _envelope(data={"docs": [d.to_dict() for d in docs]})
-
-
-@router.post("/kb/rebuild")
-def kb_rebuild(request: Request, _auth: str = Depends(verify_token)) -> ApiResponse:
-    kb = getattr(_tm(request), "_kb", None) or get_kb_instance()
-    if kb is None:
-        return _envelope(data={"ok": True, "indexed": 0})
-    count = kb.rebuild()
-    return _envelope(data={"ok": True, "indexed": count})
-
-
-@router.delete("/kb/{doc_id}")
-def kb_delete(
-    doc_id: str,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    kb = getattr(_tm(request), "_kb", None) or get_kb_instance()
-    if kb is None:
-        return _envelope(data={"ok": False}, code=1, message="kb not available")
-    ok = kb.remove(doc_id)
-    return _envelope(data={"ok": ok}, code=0 if ok else 1, message="ok" if ok else "doc not found")
 
 
 # ── P2 item 1: MCP server diagnostics ──

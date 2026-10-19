@@ -8,9 +8,7 @@ Pins the acceptance criteria at the seams the slice actually moved:
 * a round with no tool call parks the task (there is no COMPLETED);
 * a parked task continues from the same conversation, checkpoints included;
 * the step budget is per round, so a long conversation cannot brick itself;
-* the plan is editable while parked, and the edit lands in the next round;
-* ``POST /tasks/{id}/replan`` borrows plan mode for one round and re-plans
-  in place; the sticky switch is unchanged.
+* the plan is editable while parked, and the edit lands in the next round.
 """
 
 from __future__ import annotations
@@ -26,11 +24,6 @@ from fastapi.testclient import TestClient
 
 from backend.api.schemas import TaskStatus
 from backend.core.agent.nodes import AgentRuntime
-from backend.core.agent.prompts import (
-    REPLAN_ANCHOR,
-    REPLAN_RETRY,
-    REPLAN_USER_ANCHOR,
-)
 from backend.core.agent.state import AgentState
 from backend.core.agent.subagent import EXPLORE_TIER, tier_face_names
 from backend.core.llm.client import LLMResponse, MockLLMClient
@@ -53,28 +46,6 @@ class _RecordingLLM(MockLLMClient):
     def complete(self, messages, tools=None, **kwargs):
         self.offered.append(sorted(t["function"]["name"] for t in (tools or [])))
         self.systems.append(str((messages or [{}])[0].get("content") or ""))
-        return super().complete(messages, tools, **kwargs)
-
-
-class _ReplanSequenceLLM(MockLLMClient):
-    """Answer each anchored re-plan call from a scripted list of raw replies."""
-
-    def __init__(self, replies: List[str], **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.replies = list(replies)
-        self.replan_calls = 0
-        self.systems: List[str] = []
-        self.user_contents: List[str] = []
-
-    def complete(self, messages, tools=None, **kwargs):
-        system = str((messages or [{}])[0].get("content") or "")
-        self.systems.append(system)
-        if REPLAN_ANCHOR in system and self.replies:
-            self.replan_calls += 1
-            self.user_contents.append(
-                str((messages or [{}])[-1].get("content") or "")
-            )
-            return LLMResponse(content=self.replies.pop(0))
         return super().complete(messages, tools, **kwargs)
 
 
@@ -378,107 +349,6 @@ def test_continuation_survives_a_process_restart(tmp_path: Path) -> None:
     assert after.status == TaskStatus.INTERRUPTED
 
 
-def test_replan_borrows_plan_mode_without_flipping_the_switch(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path, checkpoint_enabled=True)
-    tm = make_manager(
-        settings, MockLLMClient(plan=["a", "b"], final_answer="done")
-    )
-    task_id = tm.create_task(title="r", user_input="do it")
-    _wait_parked(tm, task_id)
-    fresh = tm.get_task(task_id)
-    assert fresh is not None
-    assert fresh.mode.value == "build"
-
-    tm.replan(task_id)
-    parked = _wait_parked(tm, task_id)
-    assert parked is not None
-
-    # The button is an action, not a mode change (ADR 0008 decision 3): one
-    # planning round runs, then the next typed message executes again.
-    assert parked.mode.value == "build"
-    assert [p.description for p in parked.plan] == ["a", "b"]
-    assert parked.conversation[-1].role == "assistant"
-
-
-def test_replan_anchors_the_one_off_plan_round(tmp_path: Path) -> None:
-    """The re-plan round must say "same task", not start a new one.
-
-    Real-model review: an unanchored re-plan after a build round planned a
-    handoff document from the injected skills instead of revising this task.
-    """
-    settings = make_settings(tmp_path, checkpoint_enabled=True)
-    llm = _ReplanSequenceLLM(
-        [json.dumps(["a", "b"])], plan=["base"], final_answer="done"
-    )
-    tm = make_manager(settings, llm)
-    task_id = tm.create_task(title="anchor", user_input="do it")
-    _wait_parked(tm, task_id)
-
-    assert not any(REPLAN_ANCHOR in s for s in llm.systems)
-
-    tm.replan(task_id)
-    parked = _wait_parked(tm, task_id)
-    assert parked is not None
-    assert llm.replan_calls == 1
-    assert any(REPLAN_ANCHOR in s for s in llm.systems)
-    # The anchor is a request-only user turn: it must never be persisted.
-    assert llm.user_contents == [REPLAN_USER_ANCHOR]
-    assert all(REPLAN_USER_ANCHOR not in t.content for t in parked.conversation)
-    assert [p.description for p in parked.plan] == ["a", "b"]
-    assert parked.mode.value == "build"
-
-
-def test_replan_retries_once_when_the_model_returns_text(tmp_path: Path) -> None:
-    """Provider leakage is retried once; only the plan reaches the conversation."""
-    settings = make_settings(tmp_path, checkpoint_enabled=True)
-    llm = _ReplanSequenceLLM(
-        ["</parameter>\n</invoke>", json.dumps(["new one", "new two"])],
-        plan=["base"],
-        final_answer="done",
-    )
-    tm = make_manager(settings, llm)
-    task_id = tm.create_task(title="retry", user_input="do it")
-    _wait_parked(tm, task_id)
-
-    tm.replan(task_id)
-    parked = _wait_parked(tm, task_id)
-    assert parked is not None
-    assert llm.replan_calls == 2
-    assert any(REPLAN_RETRY in s for s in llm.systems)
-    assert [p.description for p in parked.plan] == ["new one", "new two"]
-    assert parked.mode.value == "build"
-    assert parked.conversation[-1].content == "计划已更新（2 步）。"
-    assert all("</parameter>" not in t.content for t in parked.conversation)
-
-
-def test_replan_never_persists_provider_markup(tmp_path: Path) -> None:
-    """Two bad replies keep the old plan and show a friendly failure."""
-    settings = make_settings(tmp_path, checkpoint_enabled=True)
-    llm = _ReplanSequenceLLM(
-        ["</parameter>\n</invoke>", "</invoke>"],
-        plan=["base"],
-        final_answer="done",
-    )
-    tm = make_manager(settings, llm)
-    task_id = tm.create_task(title="markup", user_input="do it")
-    _wait_parked(tm, task_id)
-    tm.set_plan(task_id, [{"description": "keep me", "status": "pending"}])
-
-    tm.replan(task_id)
-    parked = _wait_parked(tm, task_id)
-    assert parked is not None
-    assert llm.replan_calls == 2
-    assert [p.description for p in parked.plan] == ["keep me"]
-    assert parked.conversation[-1].content == "未能生成新计划，请再试一次。"
-    assert all(REPLAN_USER_ANCHOR not in t.content for t in parked.conversation)
-    assert all(
-        "</parameter>" not in t.content and "</invoke>" not in t.content
-        for t in parked.conversation
-    )
-    assert parked.mode.value == "build"
-    assert parked.status == TaskStatus.INTERRUPTED
-
-
 def test_default_mode_is_build_and_sticky(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))
@@ -517,7 +387,7 @@ def _api_client(tmp_path: Path):
     return TestClient(app), tm
 
 
-def test_rest_mode_plan_messages_and_replan(tmp_path: Path) -> None:
+def test_rest_mode_plan_messages(tmp_path: Path) -> None:
     client, tm = _api_client(tmp_path)
     task_id = tm.create_task(title="api", user_input="hi")
     _wait_parked(tm, task_id)
@@ -538,10 +408,6 @@ def test_rest_mode_plan_messages_and_replan(tmp_path: Path) -> None:
     r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "continue"})
     assert r.status_code == 200
     assert r.json()["data"]["status"] == "RUNNING"
-    _wait_parked(tm, task_id)
-
-    r = client.post(f"/api/tasks/{task_id}/replan")
-    assert r.status_code == 200
     parked = _wait_parked(tm, task_id)
     assert parked is not None
     assert parked.mode.value == "plan"  # the switch was set to plan earlier

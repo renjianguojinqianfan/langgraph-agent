@@ -6,19 +6,15 @@
 * only a tool declaring ``registers_artifact`` is a source of products, so a
   ``read`` of a file the task already wrote registers nothing;
 * :meth:`TaskManager.add_artifact` is deduplicated per task by **resolved** path,
-  so a re-write of the same file lands as one record, one ``artifact_created``
-  event and one knowledge-base ingest call.
+  so a re-write of the same file lands as one record and one
+  ``artifact_created`` event.
 
 Issue #76 adds the subtask half of the same contract: a subtask runs the same
 ``tool_node``, but it never has an ``_active_states`` entry, so the registration
 the tool node used to make under the subtask's own id landed in no ledger at all
-— its whole cost was a phantom event on the subtask channel plus a redundant KB
-ingest. One subtask write must now mean one record (parent ledger), one event
-(parent channel) and one ingest, with the subtask channel registering nothing.
-
-The KB ingest count is asserted because the issue's acceptance list requires the
-event and ingest counts to track the registration count — that is the contract,
-not an implementation detail.
+— its whole cost was a phantom event on the subtask channel. One subtask write
+must now mean one record (parent ledger) and one event (parent channel), with
+the subtask channel registering nothing.
 """
 
 from __future__ import annotations
@@ -34,7 +30,6 @@ import pytest
 from backend.core.agent.subagent import SubTaskSpec
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.core.tools.mcp_tool import McpTool
-from backend.core.tools.openapi_tool import OpenAPITool
 from backend.core.tools.registry import build_tools
 from backend.services.event_bus import EventBus
 from backend.tests.conftest import make_manager, make_settings
@@ -55,8 +50,8 @@ def _outcome(task: Any) -> List[Tuple[str, str]]:
     ]
 
 
-def _manager(tmp_path, tool_calls: List[Dict[str, Any]], event_bus: EventBus, monkeypatch):
-    """A manager over a scripted mock, plus a counting wrapper on the KB."""
+def _manager(tmp_path, tool_calls: List[Dict[str, Any]], event_bus: EventBus):
+    """A manager over a scripted mock."""
     mock = MockLLMClient(
         plan=["produce the file"],
         tool_calls=tool_calls,
@@ -64,28 +59,19 @@ def _manager(tmp_path, tool_calls: List[Dict[str, Any]], event_bus: EventBus, mo
     )
     settings = make_settings(tmp_path)
     tm = make_manager(settings, mock, event_bus=event_bus)
-    ingest: List[str] = []
-    original = tm._kb.add_document
-
-    def _counting_add_document(path: Any) -> Any:
-        ingest.append(str(Path(path).resolve()))
-        return original(path)
-
-    monkeypatch.setattr(tm._kb, "add_document", _counting_add_document)
-    return tm, settings, ingest, mock
+    return tm, settings, mock
 
 
-def test_write_then_read_back_registers_one_artifact(tmp_path, event_bus, monkeypatch):
+def test_write_then_read_back_registers_one_artifact(tmp_path, event_bus):
     """The read is not a product: after write + read of the same file the task
     still owns exactly one artifact."""
-    tm, settings, ingest, _ = _manager(
+    tm, settings, _ = _manager(
         tmp_path,
         [
             _tool_call("w1", "write", {"path": "report.md", "content": "body"}),
             _tool_call("r1", "read", {"path": "report.md"}),
         ],
         event_bus,
-        monkeypatch,
     )
     task_id = tm.create_task(title="write and re-read", user_input="write then read")
     task = _run_until_done(tm, task_id)
@@ -96,19 +82,17 @@ def test_write_then_read_back_registers_one_artifact(tmp_path, event_bus, monkey
     assert [a.filename for a in task.artifacts] == ["report.md"]
     events = [e for e in event_bus.replay(task_id) if e["type"] == "artifact_created"]
     assert len(events) == 1
-    assert ingest == [str((settings.artifacts_path / "report.md").resolve())]
 
 
-def test_same_file_written_twice_registers_once(tmp_path, event_bus, monkeypatch):
+def test_same_file_written_twice_registers_once(tmp_path, event_bus):
     """A rewrite of the same path is one product, not two."""
-    tm, settings, ingest, _ = _manager(
+    tm, settings, _ = _manager(
         tmp_path,
         [
             _tool_call("w1", "write", {"path": "report.md", "content": "first"}),
             _tool_call("w2", "write", {"path": "report.md", "content": "second"}),
         ],
         event_bus,
-        monkeypatch,
     )
     task_id = tm.create_task(title="write twice", user_input="overwrite the file")
     task = _run_until_done(tm, task_id)
@@ -120,7 +104,6 @@ def test_same_file_written_twice_registers_once(tmp_path, event_bus, monkeypatch
     assert [a.filename for a in task.artifacts] == ["report.md"]
     events = [e for e in event_bus.replay(task_id) if e["type"] == "artifact_created"]
     assert len(events) == 1
-    assert ingest == [str((settings.artifacts_path / "report.md").resolve())]
 
 
 def test_add_artifact_dedupes_by_resolved_path(tmp_path, event_bus):
@@ -204,16 +187,16 @@ def test_only_the_sandbox_write_tools_are_product_sources(tmp_path):
     """The registration face is exactly ``write`` + ``edit``.
 
     Every other mounted tool — the read/ls/glob/grep siblings, code execution,
-    HTTP, search, KB, skills, the sub-agent spawner — keeps the ``False``
-    default, and so do the wrappers that are appended dynamically rather than
-    registered (MCP, OpenAPI, plugins): a product is a file the task wrote, so
-    a wrapper that wants its output registered has to say so on its class.
+    HTTP, search, skills, the sub-agent spawner — keeps the ``False`` default,
+    and so do the wrappers that are appended dynamically rather than registered
+    (MCP): a product is a file the task wrote, so a wrapper that wants its
+    output registered has to say so on its class.
 
     Why the dynamic half is locked on the declaration rather than on a run:
-    ``McpTool`` / ``OpenAPITool`` never put a top-level ``path`` in their result
-    data, so a payload-driven test through them would pass with or without #72
-    and prove nothing. The behavioural half — a tool whose result *does* carry
-    ``path`` while declaring nothing — is locked in
+    ``McpTool`` never puts a top-level ``path`` in its result data, so a
+    payload-driven test through it would pass with or without #72 and prove
+    nothing. The behavioural half — a tool whose result *does* carry ``path``
+    while declaring nothing — is locked in
     ``test_qa_nodes.test_read_like_result_on_a_real_file_registers_nothing``.
     """
     settings = make_settings(tmp_path)
@@ -221,17 +204,15 @@ def test_only_the_sandbox_write_tools_are_product_sources(tmp_path):
     assert sorted(t.name for t in mounted if t.registers_artifact) == ["edit", "write"]
 
     assert McpTool.registers_artifact is False
-    assert OpenAPITool.registers_artifact is False
 
 
-def test_registration_is_per_task(tmp_path, event_bus, monkeypatch):
+def test_registration_is_per_task(tmp_path, event_bus):
     """Dedupe is scoped to a task: two tasks touching the same file each own it,
     which is what lets a subtask's file be handed back to the parent."""
-    tm, settings, _, mock = _manager(
+    tm, settings, mock = _manager(
         tmp_path,
         [_tool_call("w1", "write", {"path": "shared.txt", "content": "body"})],
         event_bus,
-        monkeypatch,
     )
     first_id = tm.create_task(title="first", user_input="write shared.txt")
     first = _run_until_done(tm, first_id)
@@ -246,18 +227,16 @@ def test_registration_is_per_task(tmp_path, event_bus, monkeypatch):
     assert first.artifacts[0].path == second.artifacts[0].path
 
 
-def test_subtask_write_registers_once_on_the_parent_channel(
-    tmp_path, event_bus, monkeypatch
-):
+def test_subtask_write_registers_once_on_the_parent_channel(tmp_path, event_bus):
     """#76 A: a subtask's write is registered by the hand-back under the PARENT
     id only — the tool node no longer registers it under the subtask's own id.
 
     A subtask has no ``_active_states`` entry, so the registration the tool node
     used to make there landed in no ledger at all: its whole cost was one
-    phantom ``artifact_created`` on the subtask channel plus one redundant KB
-    ingest (the record itself was minted and dropped). One write must now mean
-    one record on the parent ledger, one event on the parent channel, one KB
-    ingest — and nothing at all on the subtask channel.
+    phantom ``artifact_created`` on the subtask channel (the record itself was
+    minted and dropped). One write must now mean one record on the parent
+    ledger, one event on the parent channel — and nothing at all on the subtask
+    channel.
 
     Driven through ``run_subtask`` because that is exactly the entry
     ``spawn_subagent`` uses (``SpawnSubagentTool.run`` hands it the spec), and
@@ -265,11 +244,10 @@ def test_subtask_write_registers_once_on_the_parent_channel(
     ``test_add_artifact_dedupes_by_resolved_path`` seats one: the subject is the
     registration route, not a parent run.
     """
-    tm, settings, ingest, _ = _manager(
+    tm, settings, _ = _manager(
         tmp_path,
         [_tool_call("s1", "write", {"path": "notes.txt", "content": "sub notes"})],
         event_bus,
-        monkeypatch,
     )
     parent_id = "t-parent-live"
     tm._active_states[parent_id] = {"artifacts": []}
@@ -291,14 +269,13 @@ def test_subtask_write_registers_once_on_the_parent_channel(
     assert written.read_text(encoding="utf-8") == "sub notes"
 
     # The contract: one record on the parent ledger, one event on the parent
-    # channel, one KB ingest — and the subtask channel registers nothing.
+    # channel — and the subtask channel registers nothing.
     ledger = tm._active_states[parent_id]["artifacts"]
     assert [a["filename"] for a in ledger] == ["notes.txt"]
     parent_events = [e for e in event_bus.replay(parent_id) if e["type"] == "artifact_created"]
     assert len(parent_events) == 1
     sub_events = [e for e in event_bus.replay("sub:writes") if e["type"] == "artifact_created"]
     assert sub_events == []
-    assert ingest == [str(written.resolve())]
 
 
 #: Only a subtask ever sees this; the parent's own input must not contain it.

@@ -85,15 +85,14 @@ def _runtime(
     settings: Settings,
     *,
     task_id: str = "t1",
-    aux: Any = None,
+    llm: Any = None,
 ) -> AgentRuntime:
     return AgentRuntime(
         task_id=task_id,
         task_manager=_fake_tm(settings),
-        llm=SimpleNamespace(),
+        llm=llm or SimpleNamespace(),
         tools=[],
         tool_schemas=[],
-        aux_llm=aux,
     )
 
 
@@ -133,7 +132,7 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class _RecordingLLM:
-    """Aux stand-in: records every payload it is asked to complete."""
+    """Main-model stand-in: records every payload it is asked to complete."""
 
     def __init__(self) -> None:
         self.payloads: List[List[Dict[str, Any]]] = []
@@ -550,22 +549,22 @@ def test_subtask_runtime_shares(tmp_path: Path, tmp_home: Path) -> None:
     assert "ORIGINAL-SANDBOX" in sub_system
 
 
-def test_aux_llm_not_injected(tmp_path: Path, tmp_home: Path) -> None:
+def test_summary_call_excludes_the_injected_block(tmp_path: Path, tmp_home: Path) -> None:
     settings = _settings(
         tmp_path, context_keep_recent=2, context_compress_strategy="summarize",
         context_token_budget=8000,
     )
     _write(_sandbox(settings) / "AGENTS.md", "ORIGINAL-SANDBOX")
-    aux = _RecordingLLM()
-    rt = _runtime(settings, aux=aux)
+    llm = _RecordingLLM()
+    rt = _runtime(settings, llm=llm)
     system = _system_of(rt, _state(_big_messages()), PLANNER_SYSTEM)
 
     assert system != PLANNER_SYSTEM  # 主 system 侧确实带注入块
-    assert aux.payloads, "summarize 策略应调用 aux"
+    assert llm.payloads, "summarize 策略应调用主模型"
     payload = " ".join(
-        str(m.get("content") or "") for msgs in aux.payloads for m in msgs
+        str(m.get("content") or "") for msgs in llm.payloads for m in msgs
     )
-    # aux 只碰 messages：注入段标题一个都不该出现
+    # 摘要调用只碰 messages：注入段标题一个都不该出现
     assert AGENTS_SECTION not in payload
     assert SKILLS_SECTION not in payload
     assert ENV_SECTION not in payload

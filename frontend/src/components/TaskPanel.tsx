@@ -12,11 +12,9 @@ interface TaskPanelProps {
   task: Task | null;
   tab: TaskViewTab;
   onTabChange: (tab: TaskViewTab) => void;
-  onToggleKb?: () => void;
-  kbOpen?: boolean;
 }
 
-export function TaskPanel({ task, tab, onTabChange, onToggleKb, kbOpen }: TaskPanelProps) {
+export function TaskPanel({ task, tab, onTabChange }: TaskPanelProps) {
   return (
     <section className="flex-1 flex flex-col min-w-0">
       {task ? (
@@ -59,18 +57,6 @@ export function TaskPanel({ task, tab, onTabChange, onToggleKb, kbOpen }: TaskPa
           >
             Trace / 运行日志
           </button>
-          {onToggleKb && (
-            <button
-              onClick={onToggleKb}
-              className={`ml-auto px-3 py-2 text-sm transition ${
-                kbOpen
-                  ? "text-sky-300"
-                  : "text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              📚 知识库
-            </button>
-          )}
         </div>
       )}
 

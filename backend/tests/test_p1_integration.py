@@ -1,9 +1,8 @@
-"""P1 integration tests — multiple P1 capabilities cooperating (offline).
+"""P1 integration tests — multiple capabilities cooperating (offline).
 
 These exercise the *combination* of the new nodes/events through the real
 LangGraph loop with a scripted mock LLM: the ``spawn_subagent`` delegation and
-its artifact hand-back, knowledge-base auto-indexing, and the aux model
-degradation path.
+its artifact hand-back.
 """
 
 from __future__ import annotations
@@ -94,23 +93,18 @@ def test_p1_events_in_main_channel(tmp_path, event_bus):
     assert spawn[0]["output"]["status"] == "completed"
     assert {"subtask_start", "subtask_result"} <= types
     assert "subtask_failed" not in types
-    # Parent artifacts include the subtask file via KB auto-index + artifact.
+    # Parent artifacts include the subtask file via the hand-back.
     assert any("p1_notes.txt" in a.filename for a in task.artifacts)
 
 
 def test_p1_all_enabled_completes(tmp_path, event_bus):
     settings = make_settings(
         tmp_path,
-        aux_llm_enabled=True,
-        aux_llm_use_mock=True,
         subagent_max_concurrency=2,
-        kb_auto_index_artifacts=True,
         context_compress_strategy="truncate",
     )
     mock = _ResearchMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
-    aux = tm._aux_llm
-    assert aux is not None
 
     task_id = tm.create_task(title="all", user_input="调研 DeepAgent 架构并写报告")
     task = _run_until_done(tm, task_id)
@@ -124,22 +118,3 @@ def test_p1_all_enabled_completes(tmp_path, event_bus):
     assert len(task.subtasks) == 1
     assert task.subtasks[0].status == "completed"
     assert task.subtasks[0].subtask_id.startswith("spawn:sub:")
-    # KB auto-indexed the artifact produced by the research subtask.
-    hits = tm._kb.retrieve("P1 integration notes", top_k=3)
-    assert len(hits) >= 1
-
-
-def test_p1_openapi_registration_does_not_break_startup(tmp_path, event_bus):
-    """openapi_enabled with an invalid spec must warn and continue."""
-
-    settings = make_settings(
-        tmp_path,
-        openapi_enabled=True,
-        openapi_spec_path=str(tmp_path / "missing_spec.yaml"),
-    )
-    # A missing file logs a warning but the manager still starts.
-    tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="done"), event_bus=event_bus)
-    assert tm is not None
-    task_id = tm.create_task(title="t", user_input="hi")
-    task = _run_until_done(tm, task_id)
-    assert task.status.value == "INTERRUPTED"

@@ -36,10 +36,8 @@ logger = get_logger("agent.subagent")
 # ── capability tiers (issue #56) ─────────────────────────────────────────────
 #
 # A tier is a *name set*, and the face a subtask actually gets is that set
-# intersected with the tools really mounted (``git_enabled=false`` therefore
-# drops the git names from the tier with no code change). Everything outside
-# the tiers is unreachable by construction: ``code_exec``, ``http_request``,
-# the git write operations, MCP / OpenAPI / plugin tools and
+# intersected with the tools really mounted. Everything outside the tiers is
+# unreachable by construction: ``code_exec``, ``http_request``, MCP tools and
 # ``spawn_subagent`` itself.
 #
 # A gated member on this face would be unreachable-in-practice rather than
@@ -56,14 +54,8 @@ _EXPLORE_MEMBERS = [
     "ls",
     "glob",
     "grep",
-    "kb_query",
-    "memory_search",
     "load_skill",
     "web_search",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_branch",
 ]
 
 TOOL_TIERS: Dict[str, List[str]] = {
@@ -116,10 +108,9 @@ def resolve_tool_face(
     ``spawn_subagent`` ``tools`` argument) may only **narrow** it. Every name
     the model hands in is checked, and both ways of not being narrowable are
     refused with a reason rather than silently dropped (#74): a name outside
-    the tier, and a tier member that is not mounted in this run
-    (``git_enabled=false`` leaves ``git_log`` declared but unavailable). A
-    silent drop would read as success to the parent — the subtask would go out
-    with a narrowed-to-nothing face and still fold back ``completed``.
+    the tier, and a tier member that is not mounted in this run. A silent drop
+    would read as success to the parent — the subtask would go out with a
+    narrowed-to-nothing face and still fold back ``completed``.
 
     Both refusals end with the same list, and it is the tier's mounted face
     (``tier_face_names(loaded, tier)``) — the names the model can actually
@@ -362,7 +353,6 @@ class SubAgentExecutor:
                 tools=tools,
                 tool_schemas=schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=getattr(self.tm, "_aux_llm", None),
                 parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
             )
             from .graph import build_graph

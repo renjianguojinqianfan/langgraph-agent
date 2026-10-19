@@ -4,8 +4,8 @@ One realistic user journey combining P1 capabilities:
 
 * **Sub-agent delegation + summary + artifact hand-back**: the parent asks for
   an isolated subtask, the subtask writes its notes inside the sandbox, and the
-  file is registered as a parent artifact *and* indexed into the KB (issue #56:
-  delegation is a tool call, never a keyword-triggered split).
+  file is registered as a parent artifact (issue #56: delegation is a tool
+  call, never a keyword-triggered split).
 
 Journey A (the planning-phase risk scan + the human confirm gate it fed) and
 Journey B′ (the gate's refusal path) were removed with the gate in #138.
@@ -85,7 +85,7 @@ def _spawn_results(events):
     ]
 
 
-def test_journey_subagent_spawn_summary_artifact_kb(tmp_path, event_bus):
+def test_journey_subagent_spawn_summary_artifact(tmp_path, event_bus):
     settings = make_settings(tmp_path)
     mock = _ResearchMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -119,7 +119,3 @@ def test_journey_subagent_spawn_summary_artifact_kb(tmp_path, event_bus):
         for e in event_bus.replay(task_id)
         if e["type"] in ("tool_call", "tool_result") and e["data"]["tool_name"] == "write"
     ]
-    # ...and auto-indexed into the KB for the next session (item 3).
-    hits = tm._kb.retrieve("integration notes", top_k=5)
-    assert len(hits) >= 1
-    assert any(h.path.endswith("qa_report_notes.md") for h in hits)
