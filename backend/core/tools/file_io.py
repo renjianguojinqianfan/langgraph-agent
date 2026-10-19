@@ -66,12 +66,29 @@ def _matches_glob(rel: Path, pattern: str) -> bool:
     ``PurePath.match``, which matches suffixes); ``**/`` also matches the
     zero-directory form, as ``glob`` does.
     """
+    if pattern == "**":
+        return True
     if "/" not in pattern:
         return rel.parent == Path(".") and fnmatch.fnmatch(rel.name, pattern)
     pure = PurePath(rel.as_posix())
     if "**" not in pattern:
         return len(pure.parts) == len(PurePath(pattern).parts) and pure.match(pattern)
-    return pure.match(pattern) or (pattern.startswith("**/") and pure.match(pattern[3:]))
+    static = pattern.split("**", 1)[0]
+    if static and not pure.as_posix().startswith(static):
+        return False
+    # Expand every `**/` into zero directories too (glob semantics), e.g.
+    # `sub/**/*.py` must match `sub/x.py`.
+    variants = {pattern}
+    changed = True
+    while changed:
+        changed = False
+        for candidate in list(variants):
+            if "**/" in candidate:
+                shorter = candidate.replace("**/", "", 1)
+                if shorter not in variants:
+                    variants.add(shorter)
+                    changed = True
+    return any(pure.match(candidate) for candidate in variants)
 
 
 class _SandboxedTool(BaseTool):

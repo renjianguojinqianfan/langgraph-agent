@@ -7,6 +7,11 @@ falls back to a walk that only skips ``.git``. ``ls`` and a named ``read`` do
 not use this list: an ignored file stays reachable when asked for by name.
 
 The workspace file list (C5) reuses :func:`workspace_files`.
+
+A nested repository is not expanded: the outer git lists it as a gitlink, and
+its files stay invisible to glob/grep. Point the workspace at the nested repo
+to search there. A non-git directory has no ignore engine, so only ``.git`` is
+skipped (``.qianfan``'s own ``.gitignore`` only works inside a repo).
 """
 
 from __future__ import annotations
@@ -17,6 +22,9 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from ..utils.logging import get_logger
+
+logger = get_logger("workspace.files")
 GIT_TIMEOUT_SEC = 5.0
 
 
@@ -32,8 +40,8 @@ def _git_files(root: Path) -> Optional[list[Path]]:
             timeout=GIT_TIMEOUT_SEC,
         )
         if top.returncode != 0:
-            return None
-        repo = Path(os.fsdecode(top.stdout).strip())
+            return None  # not a repository: the normal fallback
+        repo = Path(os.fsdecode(top.stdout).rstrip("\r\n"))
         listed = subprocess.run(
             [
                 git,
@@ -49,8 +57,13 @@ def _git_files(root: Path) -> Optional[list[Path]]:
             timeout=GIT_TIMEOUT_SEC,
         )
     except Exception:
+        logger.warning("git ls-files failed; falling back to a .git-skipping walk", exc_info=True)
         return None
     if listed.returncode != 0:
+        logger.warning(
+            "git ls-files exited %s; falling back to a .git-skipping walk",
+            listed.returncode,
+        )
         return None
 
     resolved_root = root.resolve()
@@ -71,7 +84,10 @@ def _walk_files(root: Path) -> list[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [name for name in dirnames if name != ".git"]
         for name in filenames:
-            files.append((Path(dirpath) / name).resolve())
+            # No resolve(): a symlink is resolved by the caller, which checks
+            # containment. Resolving here would make a scoped path raise
+            # relative_to (the target can be outside the base).
+            files.append(Path(dirpath) / name)
     return files
 
 

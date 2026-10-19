@@ -6,6 +6,7 @@ when git is not installed (this chapter requires Git Bash).
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -111,6 +112,40 @@ def test_workspace_files_is_the_shared_list(repo):
     assert "ignored.txt" not in names
     assert "node_modules/x.js" not in names
     assert ".qianfan/plan.md" not in names
+
+
+def test_glob_mid_pattern_double_star_matches_zero_directories(repo):
+    settings, workspace = repo
+    (workspace / "sub").mkdir()
+    (workspace / "sub" / "x.py").write_text("x", encoding="utf-8")
+    (workspace / "sub" / "deep").mkdir()
+    (workspace / "sub" / "deep" / "y.py").write_text("y", encoding="utf-8")
+    (workspace / "other").mkdir()
+    (workspace / "other" / "sub").mkdir()
+    (workspace / "other" / "sub" / "z.py").write_text("z", encoding="utf-8")
+
+    matches = set(GlobTool(settings).run(pattern="sub/**/*.py").data["matches"])
+    assert matches == {"sub/x.py", "sub/deep/y.py"}
+
+    all_files = set(GlobTool(settings).run(pattern="**").data["matches"])
+    assert {"tracked.py", "sub/x.py", "sub/deep/y.py"} <= all_files
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation needs privileges on Windows")
+def test_non_git_symlink_escape_is_skipped(tmp_path):
+    workspace = tmp_path / "plain"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("needle outside\n", encoding="utf-8")
+    (workspace / "link.txt").symlink_to(outside)
+    (workspace / "inside.txt").write_text("needle inside\n", encoding="utf-8")
+    settings = _settings(tmp_path, workspace)
+
+    glob = GlobTool(settings).run(pattern="**/*")
+    assert glob.success is True
+    assert glob.data["matches"] == ["inside.txt"]
+    grep = GrepTool(settings).run(pattern="needle")
+    assert {match["file"] for match in grep.data["matches"]} == {"inside.txt"}
 
 
 def test_nested_workspace_filters_to_its_own_subtree(tmp_path):
