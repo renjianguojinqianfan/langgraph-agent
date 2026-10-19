@@ -2,7 +2,7 @@
 
 > 本文件是**词汇表入口**，不是第二份词汇表。定义型权威在 `backend/core/agent/state.py`
 > （状态字段与节点名，图拓扑见 `backend/core/agent/graph.py`）与 `AGENTS.md`「跨任务安全边界」表；
-> 已定居决策在 `docs/adr/`（现役 0001–0004 + 0008；0005–0007 已随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
+> 已定居决策在 `docs/adr/`（现役 0001–0004 + 0008 + 0009；0005–0007 已随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
 > diagnosing-bugs / wait-what / domain-modeling / triage …）读完本文件，按指针去读权威源。
 > 单上下文仓库：无 `GLOSSARY-MAP.md`。
 
@@ -12,7 +12,7 @@
 |---|---|
 | 节点 / 状态字段术语的定义 | `backend/core/agent/state.py`（节点名见 `graph.py`） |
 | 硬规则与边界不变量 | `AGENTS.md`「跨任务安全边界」表 |
-| 已定居的决策与理由 | `docs/adr/0001`–`0008`（0005–0007 已退役，保留历史） |
+| 已定居的决策与理由 | `docs/adr/0001`–`0009`（0005–0007 已退役，保留历史） |
 | 计划 / 执行两模式、停下、交付 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（决策 1–8） |
 | 产物（谁算写出、怎么去重） | [ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md) |
 | 技能组配置（tracker / 标签 / 本文档的消费规则） | `docs/agents/` 三件套 |
@@ -24,7 +24,7 @@
 任务是开关的载体，**开关黏性、默认 build**；模式不是第二个节点，也不是每条消息选一次（ADR 0008 决策 2 / 3）。
 状态三值：`RUNNING`（跑着）/ `INTERRUPTED`（停下，等你说话）/ `FAILED`（出错）——**没有「完成」终态**。
 「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用（`round_steps` 按步计预算）。一次 `agent` 调用返回时没有工具调用，这一轮就结束（停下，决策 4）。
-「续说」= 停下后 `POST /tasks/{id}/messages`，沿同一 `thread_id` / checkpoint 接着跑，不是重开任务（决策 1）。
+「续说」= 停下后 `POST /api/tasks/{id}/messages`，沿同一 `thread_id` / checkpoint 接着跑，不是重开任务（决策 1）。
 「交付」= 停下时人去看产物，不是新状态（决策 8）。
 运行时概念：`checkpoint` / `resume` / 熔断 / 沙箱根 / 两层注入。
 任务与产物：`artifact`（产物，ADR-0004：本任务**写出**的文件，仅 `registers_artifact` 工具为源）/ `thread_id`（= task_id，resume 与续说寻址恒等）。
@@ -38,7 +38,7 @@
 **`plan` 有两个意思，禁用裸词「计划」**：
 
 - `state["plan"]` / `Task.plan`（运行时对象）：`PlanStep` 列表。生产者是计划模式的一轮（或用户停下时的
-  手工编辑 `PUT /tasks/{id}/plan`），消费者是 `plan_update` 事件与两种模式的 system 尾部渲染块
+  手工编辑 `PUT /api/tasks/{id}/plan`），消费者是 `plan_update` 事件与两种模式的 system 尾部渲染块
   （`# Current Plan`，替换语义、不参与压缩淘汰）。执行模式不再自动重算计划（#139）。
 - 票面计划（工作级）：issue/spec 层的拆解与 AC。指它时写「票面 / spec」。
 

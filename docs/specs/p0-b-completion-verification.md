@@ -1,5 +1,8 @@
 # P0-B 完成验证（reflect 落地自检）实现规范
 
+> 🗄️ **2026-10-19 退役提示**：本文描述的完成验证栈已随 [ADR 0008](../adr/0008-single-loop-plan-build-modes.md)
+> 整体退役（`reflect` 节点在 S3 / #137 删除）。**正文一字不动，保留为决策留痕**；现役形态见 README「核心模型」。
+
 > 生成于 2026-09-15，经 `/grilling` 两轮收敛（Round 1 Q1–Q7 + Round 2 Q8–Q13，用户「全按推荐」）。
 > 上游依据：`docs/capability-first-principles.md`（P7 / §六 P0-B）、`docs/roadmap-pawbench.md`（§三 能力清单、M2 前置）。
 > 本文件是 P0-B 的权威设计源。**2026-09-15 经代码实证 review 修订**：补 error 路径守卫、headless 结果暴露、S2 三重收窄（详见 §三 / §4.2 / §4.5）。关联 Issue：#25（初版落地）→ **#46（2026-10-11 第一步修订）**：终态换 `UNVERIFIED`、`degraded` 布尔换 `verification.reason`、新增调用方声明的 `expectation`、循环入口清扫悬空 `tool_call`。**Q4 的安全原则（绝不因验证误判判 FAILED）不变，改的是终态命名与机器边界**——见 [ADR 0005](../adr/0005-terminal-status-unverified.md) / [ADR 0006](../adr/0006-expectations-declared-by-caller.md)，本文各节「#46 修订」标注以那两份为准。**#46（2026-10-13 第二步）**：Q1 里「留 P1」的 **B（`aux_llm` 独立裁判）已落地**，故 Q5 那句「零 LLM 成本」不再无条件成立（只有声明了 `rubric` 的任务才花 aux token，且确定性判据先行、有缺口一次都不叫裁判）；§三 与 §八 里「语义级内容打分仍是 #46 第二步」这类**现在时**表述自本日起作废。决策与残留风险见 [ADR 0007](../adr/0007-grader-error-not-fatal.md)，开工前置的假阴性率实测见 [grader 试测记录](../grader-fn-trial-2026-10-13.md)。**第二步的切片 B（同日）**再补两处：**Q3 的一本账变两本**（`verify_rubric_max_retries`，代价是最坏回环 2→4 轮）与 §八 划给 P1 的**人工复核出口已收编**（`POST /tasks/{id}/review`，旁挂不改写机器判决）。本文各节标「#46 切片 B」的修订以这两处为准。

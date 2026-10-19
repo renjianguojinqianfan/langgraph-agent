@@ -30,8 +30,8 @@ agent ──有 tool call──> tool ──> agent
 
 - **一条 loop、一个 `agent` 节点**；模式只换 prompt 和工具面：`plan` = 只读 `explore` 档，`build` = 全部已挂载工具。默认 `build`，开关黏性。
 - **停下 = 这一轮的最后一次 `agent` 调用没有工具调用**；状态只有 `RUNNING / INTERRUPTED / FAILED`，没有「完成」。
-- **停下后可以继续说**：`POST /tasks/{id}/messages` 沿同一 `thread_id` / checkpoint 续跑；`POST /resume` 保留给停止 / 崩溃后的续跑。
-- **计划可改**：停下时 `PUT /tasks/{id}/plan`，下一条消息按新计划跑；「重新规划」是借一轮 `plan` 模式的动作，不改黏性开关。
+- **停下后可以继续说**：`POST /api/tasks/{id}/messages` 沿同一 `thread_id` / checkpoint 续跑；`POST /api/tasks/{id}/resume` 保留给停止 / 崩溃后的续跑。
+- **计划可改**：停下时 `PUT /api/tasks/{id}/plan`，下一条消息按新计划跑；「重新规划」是借一轮 `plan` 模式的动作，不改黏性开关。
 - **危险动作**由设置里的 `policy_rules` + 一个钩子当场拒：不弹框、不进图重入；空表 = 不拦。
 - **断点续跑**用 `SqliteSaver` + `durability="sync"`；checkpoint 格式 v2，v1 旧库按迁移文档 §2.4 拒绝挂载。
 
@@ -41,7 +41,7 @@ agent ──有 tool call──> tool ──> agent
 - **子 agent**：`spawn_subagent` 单入口，`explore` / `execute` 两档，工具面只能收窄。
 - **韧性**：熔断 + 退避重试；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩与知识库。
-- **回滚**：沙箱写入前拍 before-image，`POST /tasks/{id}/rollback` 按账本逆序恢复（只动文件、不动 checkpoint）。
+- **回滚**：沙箱写入前拍 before-image，`POST /api/tasks/{id}/rollback` 按账本逆序恢复（只动文件、不动 checkpoint）。
 - **观测**：SSE 事件流 + JSONL trace，前端可回放 / 导出。
 
 ## 质量门禁
@@ -59,7 +59,7 @@ CI 跑后端 lint / 类型 / 测试、前端类型 / 构建、Docker 构建。�
 
 ## 文档
 
-- 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）
+- 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）；[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)（当前一章：最简 agent）
 - 架构（v0.1 历史档；§5 共享约定仍现役）：[docs/architecture.md](docs/architecture.md)；拓扑以 [graph.py](backend/core/agent/graph.py) 为准
 - 切片历史：[docs/pivot-plan-build.md](docs/pivot-plan-build.md)
 - 迁移：[docs/migration-langgraph-1x.md](docs/migration-langgraph-1x.md)
