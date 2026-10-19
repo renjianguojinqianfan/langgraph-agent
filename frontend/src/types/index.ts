@@ -36,8 +36,6 @@ export interface ToolCallRecord {
   output: any;
   status: string; // pending | success | failed | skipped
   error?: string | null;
-  circuit_open?: boolean; // P0: short-circuited by the circuit breaker
-  retries?: number; // P0: retries performed by the tool executor
 }
 
 export interface StepRecord {
@@ -142,7 +140,6 @@ export type SSEventType =
   | "step_start"
   | "tool_call"
   | "tool_result"
-  | "tool_circuit_open" // P0: {tool_name, cooldown_sec}
   | "context_compressed" // P0: {step_index, dropped, band_evicted, converged, context_tokens, strategy}
   | "task_rollback" // P1-B: {task_id, ok, files, already_original}
   | "artifact_created"
@@ -171,12 +168,6 @@ export interface SSEvent {
 
 // --- P1: trace replay / live markers ---
 
-/** Payload of the ``tool_circuit_open`` event. */
-export interface ToolCircuitOpenData {
-  tool_name: string;
-  cooldown_sec: number;
-}
-
 /** Payload of the ``context_compressed`` event. */
 export interface ContextCompressedData {
   step_index: number;
@@ -190,13 +181,13 @@ export interface ContextCompressedData {
   strategy: string;
 }
 
-export type TraceMarkerType = "tool_circuit_open" | "context_compressed";
+export type TraceMarkerType = "context_compressed";
 
 /** Live marker rendered in the task flow (MessageStream). */
 export interface TraceMarker {
   type: TraceMarkerType;
   ts?: number;
-  data: ToolCircuitOpenData | ContextCompressedData;
+  data: ContextCompressedData;
 }
 
 /** Tabs shown on the task detail page. */

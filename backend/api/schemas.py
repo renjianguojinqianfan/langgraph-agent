@@ -57,8 +57,6 @@ class ToolCallRecord(BaseModel):
     output: Any = None
     status: str = "pending"  # pending | success | failed | skipped
     error: Optional[str] = None
-    circuit_open: bool = False  # P0: short-circuited by the circuit breaker
-    retries: int = 0  # P0: retries performed by the tool executor
 
 
 class StepRecord(BaseModel):

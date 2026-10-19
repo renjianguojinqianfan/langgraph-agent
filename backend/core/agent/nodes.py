@@ -100,7 +100,6 @@ class AgentRuntime:
 
         self._explore_names = frozenset(tier_face_names(self.tools.keys(), EXPLORE_TIER))
         self.max_steps = max_steps
-        self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
         # P1-A′: discover + merge once per task (task-level cache); mid-task edits
         # to AGENTS.md intentionally do not take effect. Subtask graphs share this
         # __init__, so they receive the same block with no extra code.
@@ -137,20 +136,6 @@ class AgentRuntime:
             state["stop_requested"] = True
             return True
         return False
-
-    @property
-    def tool_executor(self) -> "Any":
-        """Lazily constructed :class:`ToolExecutor` (robust to ``tm=None``).
-
-        Built on first use so ``AgentRuntime(task_manager=None, ...)`` still
-        compiles a graph without touching settings / event bus.
-        """
-        if self._te is None:
-            from ..tools.resilience import ToolExecutor
-
-            settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-            self._te = ToolExecutor(settings, publish_fn=self._publish)
-        return self._te
 
     def _build_messages(
         self, state: AgentState, system: str, *, include_plan: bool = False
@@ -538,9 +523,7 @@ class AgentRuntime:
                 # refused via the S2 danger hook (#136): it publishes their result and
                 # still routes to this node, so without this guard a blocked call would
                 # be looked up and dispatched here. ``rec["status"]`` was written in
-                # place, so the check is per ``rec`` and idempotent; retries are a
-                # different ledger, closed inside ``ToolExecutor.dispatch`` by
-                # ``with_retry``.
+                # place, so the check is per ``rec`` and idempotent.
                 continue
 
             tool = face.get(rec["tool_name"])
@@ -558,7 +541,7 @@ class AgentRuntime:
                 continue
 
             try:
-                result: ToolResult = self.tool_executor.dispatch(tool, **rec["input"])
+                result: ToolResult = tool.run(**rec["input"])
             except Exception as exc:  # final safety net
                 logger.exception("tool %s crashed", rec["tool_name"])
                 result = ToolResult(success=False, error=str(exc))
@@ -566,8 +549,6 @@ class AgentRuntime:
             rec["status"] = "success" if result.success else "failed"
             rec["output"] = result.data
             rec["error"] = result.error or ""
-            rec["circuit_open"] = result.circuit_open
-            rec["retries"] = result.retries
             self._publish("tool_result", rec)
 
             # Feed the tool result back into the conversation: the payload

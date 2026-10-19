@@ -309,9 +309,6 @@ def test_registered_in_build_tools(settings: Settings) -> None:
 def test_policy_flags(settings: Settings) -> None:
     tool = LoadSkillTool(settings)
     assert tool.requires_confirm is False
-    assert tool.retryable is False
-    assert tool.circuit_breaker is False
-    assert tool.max_retries == 0
 
 
 def test_openai_schema_required_name(settings: Settings) -> None:

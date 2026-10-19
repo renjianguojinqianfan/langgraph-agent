@@ -75,13 +75,6 @@ class Settings(BaseSettings):
     context_evict_head_chars: int = 800  # head preview kept inside the placeholder
     context_evict_tail_chars: int = 400  # tail preview kept inside the placeholder
 
-    # ── Tool resilience (P0 item 2) ──
-    tool_failure_threshold: int = 3  # consecutive failures before the circuit opens
-    tool_cooldown_sec: int = 30  # seconds the circuit stays open before half-open probe
-    tool_backoff_base: float = 1.0  # retry backoff base (seconds)
-    tool_backoff_factor: int = 2  # exponential backoff factor
-    tool_max_retries: int = 2  # global default max retries (tools may override)
-
     # ── Trace (P0 item 4) ──
     trace_enabled: bool = True
     trace_dir: str = "data/traces"

@@ -540,10 +540,8 @@ def test_new_tools_sandbox_policy(settings):
         WriteTool(settings),
         LsTool(settings),
     ):
-        # sandbox-confined local FS: no confirm, no retry, no circuit breaker
+        # sandbox-confined local FS: no confirm
         assert tool.requires_confirm is False
-        assert tool.retryable is False
-        assert tool.circuit_breaker is False
 
 
 def test_new_tools_openai_schema_names(settings):

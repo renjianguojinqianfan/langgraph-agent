@@ -6,11 +6,11 @@ independent perspective. Coverage gaps addressed here:
 * settings parsing: ``mcp_servers_list`` edge cases (valid array / invalid JSON
   / non-list / non-dict entries / missing required fields);
 * ``McpTool`` normalisation: name sanitisation, description fallback,
-  ``args_schema`` fallback for missing / non-object schemas, and the resilience
-  knobs as they follow the server's self-reported danger hints (issue #57);
+  ``args_schema`` fallback for missing / non-object schemas, and the inert
+  danger signal derived from the server's self-reported hints (issue #57);
 * ``McpTool.run`` result mapping: ``isError=true`` -> ``success=False``;
   structured content extraction; empty content;
-* executor end-to-end (executor -> tool_node -> success) for an MCP tool;
+* agent end-to-end (agent -> tool_node -> success) for an MCP tool;
 * REST ``GET /api/mcp/servers`` via TestClient (disabled -> empty list;
   connected -> connected + tools_count; failure -> error);
 * TaskManager integration: MCP tools actually land in ``_tools`` and
@@ -166,40 +166,6 @@ def test_mcp_tool_args_schema_fallback(tmp_path):
     mgr.cleanup()
 
 
-def test_mcp_tool_resilience_knobs(tmp_path):
-    """自报只读保留重试；自报破坏性 / 什么都没报 关重试（不重复副作用）。"""
-    s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
-    read = McpTool(
-        server_name="s", tool_name="read_thing", description="Read something.",
-        input_schema={}, manager=mgr, settings=s,
-        annotations={"readOnlyHint": True},
-    )
-    assert read.danger_signal == "safe"
-    assert read.retryable is True
-    assert read.max_retries is None
-    assert read.circuit_breaker is True
-
-    write = McpTool(
-        server_name="s", tool_name="delete_thing", description="Delete something.",
-        input_schema={}, manager=mgr, settings=s,
-        annotations={"destructiveHint": True},
-    )
-    assert write.danger_signal == "dangerous"
-    assert write.retryable is False
-    assert write.max_retries == 0
-    assert write.circuit_breaker is True
-
-    # #57 AC2：没自报 = 未知 = 按可能带副作用对待（与 dangerous 同一组旋钮）。
-    unreported = McpTool(
-        server_name="s", tool_name="mystery", description="No hints at all.",
-        input_schema={}, manager=mgr, settings=s,
-    )
-    assert unreported.danger_signal == "unknown"
-    assert unreported.retryable is False
-    mgr.cleanup()
-
-
 def test_sanitize_name_extra():
     assert sanitize_name("") == ""
     assert sanitize_name("üñïçødé") == "_____d_"  # ASCII letters survive, others replaced
@@ -274,8 +240,8 @@ def test_mcp_tool_manager_exception_maps_to_failure():
     assert "connection lost" in res.error
 
 
-# ─────────────────── executor pass (end-to-end) ───────────────────
-def _mcp_executor_state() -> dict:
+# ─────────────────── agent pass (end-to-end) ───────────────────
+def _mcp_agent_state() -> dict:
     return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
@@ -287,8 +253,8 @@ def _mcp_executor_state() -> dict:
     }
 
 
-def test_executor_read_tool_executes_directly(tmp_path):
-    """A read tool runs over executor -> tool_node (no gate, #138)."""
+def test_agent_read_tool_executes_directly(tmp_path):
+    """A read tool runs over agent -> tool_node (no gate, #138)."""
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
     mgr.connect_all()
@@ -316,7 +282,7 @@ def test_executor_read_tool_executes_directly(tmp_path):
         "t_qa_mcp_read", _FakeTM(), llm=mock, tools=[tool],
         tool_schemas=[tool.to_openai_schema()],
     )
-    state = _mcp_executor_state()
+    state = _mcp_agent_state()
     rt.agent(state)
     # tool_node executes immediately -> success.
     rt.tool_node(state)

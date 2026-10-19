@@ -47,11 +47,6 @@ class HttpTool(BaseTool):
         },
         "required": ["method", "url"],
     }
-    # P0 resilience: network tool — retry transient failures + circuit breaker.
-    retryable = True
-    max_retries = None  # inherit global Settings.tool_max_retries (default 2)
-    circuit_breaker = True
-
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)
 

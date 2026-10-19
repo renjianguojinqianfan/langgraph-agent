@@ -23,11 +23,6 @@ protocol already fills in, and it could only guess at *absence* — a tool named
 signal, and "no self-report" reads as ``unknown`` rather than safe. Per the
 settled boundary the annotation was never a security boundary (that is the
 sub-agent narrowing and isolation side).
-
-Resilience: ``McpTool`` is a standard :class:`BaseTool` subclass — the kernel's
-``ToolExecutor.dispatch`` automatically applies the P0 circuit breaker + retry
-(``resilience.py`` is untouched). Anything not known to be read-only disables
-retry at the instance level so side effects are never repeated.
 """
 
 from __future__ import annotations
@@ -71,8 +66,7 @@ def classify_annotations(annotations: Any) -> str:
 
     #138 (slice S4): this used to answer the confirmation gate's "bother a
     human?" question. The gate is gone; the signal is kept as inert
-    classification metadata. Retry policy does not read it — see
-    :func:`_read_only_claim`.
+    classification metadata.
     """
     if not isinstance(annotations, dict):
         return DANGER_UNKNOWN
@@ -83,18 +77,6 @@ def classify_annotations(annotations: Any) -> str:
     if destructive is False or read_only is True:
         return DANGER_SAFE
     return DANGER_UNKNOWN
-
-
-def _read_only_claim(annotations: Any) -> bool:
-    """Whether the server positively says this tool is read-only.
-
-    Retry policy keys off this rather than off :func:`classify_annotations`,
-    because the two questions are different: ``destructiveHint=False`` is the
-    protocol's words for an **append-only write** — retrying it would repeat a
-    side effect. README's 「写类工具 ``retryable=False``」 is the invariant
-    being protected here.
-    """
-    return isinstance(annotations, dict) and annotations.get("readOnlyHint") is True
 
 
 class McpTool(BaseTool):
@@ -121,22 +103,6 @@ class McpTool(BaseTool):
         #: The server's own verdict (#57). ``unknown`` — i.e. the server said
         #: nothing — is NOT read as safe. Inert since #138 removed the gate.
         self.danger_signal: str = classify_annotations(annotations)
-
-        if _read_only_claim(annotations):
-            # Read-only by the server's own words: keep the BaseTool defaults
-            # (retry + breaker) so transient network failures are retried by
-            # the existing executor.
-            self.retryable = True
-            self.max_retries = None
-            self.circuit_breaker = True
-        else:
-            # Dangerous, unreported, **or an append-only write**
-            # (``destructiveHint=False``): execute exactly once — never retry
-            # (would repeat side effects). The circuit breaker is preserved so
-            # consecutive failures still open the tool circuit (PRD 1.5).
-            self.retryable = False
-            self.max_retries = 0
-            self.circuit_breaker = True
 
     # ── schema helpers ──
     @staticmethod

@@ -319,7 +319,7 @@ classDiagram
 | `TaskStatus` | `PENDING / RUNNING / FAILED / INTERRUPTED`（三值循环：跑着 / 停下 / 出错；没有「完成」，ADR 0008 决策 5） |
 | `Task` | `id, title, user_input, status, mode(plan/build), steps[], plan[], artifacts[], conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
-| `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error, circuit_open, retries` |
+| `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error` |
 | `PlanStep` | `index, description, status(pending/active/done)` |
 | `Artifact` | `id, filename, path, mime, size, created_at` |
 | `ToolResult` | `success:bool, data:Any, error:str` |
@@ -383,7 +383,6 @@ classDiagram
 | `task_interrupted` | `{task_id, status}` | 停下：人按停、这一轮的最后一次 `agent` 调用没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑 / 新消息续跑启动（P3；#139 起多轮对话共用） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
-| `tool_circuit_open` | `{tool_name, cooldown_sec}` | 熔断跳闸：工具未执行、进入冷却（韧性层直发，不经 AgentRuntime） |
 | `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|
 | `task_rollback` | `{task_id, ok, files, already_original}` | 工作区回滚完成（P1-B，`files` = 实际变动的沙箱内路径） |
 | `subtask_start` | `{subtask_id, name, status, parent_task_id}` | 子任务已派生（#70 裁定 A 恢复；**只发在父频道**，子任务自己的频道不带） |
@@ -464,7 +463,7 @@ sequenceDiagram
    - 工具务必返回 `ToolResult`，**禁止**抛未捕获异常导致进程崩溃（外层统一 try/except 兜底）；
    - 新工具在 `registry.py` 中 `@register` 即被 Agent 自动发现（满足 SC4 上手 <30min）。
 4. **事件/消息协议**：后端 → 前端仅通过 SSE 事件（见 3.4）通信；事件 `data` 为 JSON，字段名与后端模型一致；前端 `types/index.ts` 必须与后端 schema 保持字段对齐（单一事实来源：后端 `schemas.py`）。
-5. **错误与重试约定**：工具失败返回 `ToolResult(success=False, error=...)`；`code_exec`/`http_api` 支持按 `Settings` 重试（默认退避 2s×2）。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。被 `policy_rules` 当场拒掉的调用（S2）走**第三条**形状：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开，ADR 0008 决策 6）。
+5. **错误口径**：工具失败返回 `ToolResult(success=False, error=...)`；每次调用只执行一次，失败原因原样回给模型，**不自动重试**。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。被 `policy_rules` 当场拒掉的调用（S2）走**第三条**形状：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开，ADR 0008 决策 6）。
 6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在下一入口检测，为真则走 `finish` 并发布 `task_interrupted`（P0-9：2s 内生效）。
 7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里那一个钩子；命中即当场拒，不执行、不弹框、不进图重入。详见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md) 决策 6 与 `backend/core/agent/policy.py`。
 8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。

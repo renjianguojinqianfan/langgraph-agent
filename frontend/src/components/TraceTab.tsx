@@ -3,7 +3,7 @@ import { compressFaceParts } from "../types";
 import { getTaskTrace, TraceFetchError } from "../api/client";
 import { SSEvent } from "../types";
 
-type TraceCategory = "all" | "tool" | "circuit" | "compress" | "task";
+type TraceCategory = "all" | "tool" | "compress" | "task";
 
 interface TraceMeta {
   label: string;
@@ -36,11 +36,6 @@ const TYPE_META: Record<string, TraceMeta> = {
     label: "工具结果",
     badge: "bg-teal-500/15 text-teal-300 border-teal-500/40",
     category: "tool",
-  },
-  tool_circuit_open: {
-    label: "熔断",
-    badge: "bg-red-500/15 text-red-300 border-red-500/40",
-    category: "circuit",
   },
   context_compressed: {
     label: "上下文压缩",
@@ -84,7 +79,6 @@ const TYPE_META: Record<string, TraceMeta> = {
 const FILTERS: { key: TraceCategory; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "tool", label: "工具" },
-  { key: "circuit", label: "熔断" },
   { key: "compress", label: "压缩" },
   { key: "task", label: "任务事件" },
 ];
@@ -97,10 +91,6 @@ function summarize(ev: SSEvent): string {
     case "tool_call":
     case "tool_result":
       return typeof d.tool_name === "string" ? String(d.tool_name) : "";
-    case "tool_circuit_open":
-      return `工具 ${String(d.tool_name ?? "?")} 熔断，冷却 ${String(
-        d.cooldown_sec ?? "?"
-      )}s`;
     case "context_compressed":
       return `步骤 #${String(d.step_index ?? "?")} ${compressFaceParts(d)}，策略 ${String(
         d.strategy ?? "?"
@@ -208,7 +198,6 @@ export function TraceTab({ taskId }: TraceTabProps) {
     const c: Record<TraceCategory, number> = {
       all: events.length,
       tool: 0,
-      circuit: 0,
       compress: 0,
       task: 0,
     };
