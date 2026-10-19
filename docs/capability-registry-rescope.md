@@ -53,7 +53,7 @@
 | G-34 | 2026-10-19 | 补 G-29 的缺口：**只在两个时机检查——每轮开始前（用户发新消息）与每次压缩之后**；文件与对话里那份不一致、或那份已被挤掉，就**删掉旧的那条、在末尾放最新一份**（对话里始终只有一份计划），并留一行灰字「计划已更新到第 N 版」。任务跑着时改文件，下一条消息生效 | 用户选 (1′)；压缩后从源头补回有先例（Claude Code 补计划，kimi / hermes 补 todo），先删旧份再补有先例（hermes）；本仓默认截断压缩会把计划整条丢掉，不补不行（§0.6b） | (1) 每次调用模型前比对（无先例，一轮中途换计划）；(3) 不补（opencode / codex / dsh 靠摘要留影子，本仓截断不留） |
 | G-35 | 2026-10-19 | **补记第六轮 Q24（原漏记）**：加 **Host 检查**——只接受 Host 为 `127.0.0.1` / `localhost` 的请求（Starlette 自带 `TrustedHostMiddleware`，一行配置、不加依赖），堵 DNS 重绑定；和 bash、只听本机同一个 PR（C3） | Q24 推荐「加」；用户追问「加了之后不适合分发吧」，第七轮答「分发不受影响：每人在自己电脑上用 localhost 打开，只挡远程访问」后未再反对；第八轮切片表 C3「加 Host 检查」获「按表执行」（G-30）。PR #154 评审时发现漏记 | 不加（只靠监听 127.0.0.1 + 跨域收紧） |
 
-> **G-24 后续（已定）**：文件放工作区 `plans/<任务>.md`、计划区换成整份 Markdown（显示排版 + 一个大文本框编辑）、去掉逐步状态——第七轮推荐、用户未反对，第八轮切片表 C6 获「按表执行」（G-30）。**执行阶段怎么拿到计划**被用户追问（「计划在确认后需要每次都重新输入上下文吗？不应该这样吧」），由 G-29 / G-34 定。事实：模型调用不保留记忆，每次都要重发「系统提示 + 至今对话」；默认压缩策略只留最近 10 条消息、更早的换成占位符（`backend/core/agent/context.py:402-422`，`config.py:62,64`），系统提示不在压缩范围内（`nodes.py:269`）。
+> **G-24 后续（已定）**：文件放工作区 `plans/<task_id>.md`、计划区换成整份 Markdown（显示排版 + 一个大文本框编辑）、去掉逐步状态——第七轮推荐、用户未反对，第八轮切片表 C6 获「按表执行」（G-30）。**执行阶段怎么拿到计划**被用户追问（「计划在确认后需要每次都重新输入上下文吗？不应该这样吧」），由 G-29 / G-34 定。事实：模型调用不保留记忆，每次都要重发「系统提示 + 至今对话」；默认压缩策略只留最近 10 条消息、更早的换成占位符（`backend/core/agent/context.py:402-422`，`config.py:62,64`），系统提示不在压缩范围内（`nodes.py:269`）。
 
 > **现状截图（2026-10-19，离线模拟模型，数据隔离在 OS Temp，不进仓库）**：计划区是对话流里的一块卡片，3 行单行输入框 + 每行一个「待办 / 进行中 / 完成」下拉 + 「+ 添加一步」「保存计划」；聊天气泡只剩「计划已更新（3 步）。」，模型写的计划正文不保留。原因在 `backend/core/agent/prompts.py:26-29`（要求只返回 JSON 字符串数组）与 `backend/core/agent/nodes.py:271-311`（只取每项的一行描述）。
 
@@ -93,16 +93,15 @@
 - 节点里 3 处：借子代理的只读档（`backend/core/agent/nodes.py:112`）、拼 trace 路径（`nodes.py:210-211`）、专认 `spawn_subagent`（`nodes.py:676-681`）。
 - 开关全是 `.env` 布尔（`backend/config.py:86-138`），网页与后端都没有设置面。辅助模型与 checkpoint 的「关掉」和「开着但没配好 / 被拒挂」是同一个空值；OpenAPI 两种情况都不留记录。
 
-### 0.4 未决（卡在哪）
+### 0.4 实现语义（已定）
 
-设计树已走完（2026-10-19）。PR #154 评审补出三处实现语义，开工前定，不阻塞 C1：
+设计树已走完（2026-10-19）。PR #154 复核确认三处实现语义（用户同意，2026-10-19）：
 
-- **C6**：计划文件被用户删掉时，算「无计划」还是保留对话里最后一份。
-- **C6**：执行模式下模型用 `write` / `edit` 改了计划文件，是拒写（工具层守卫），还是当作计划更新照 G-34 换上新版。
-  注：bash 不受工具层守卫约束（D1 (b)），守卫只能挡 `write` / `edit`。
-- **C4**：依赖怎么装进 `uv tool install`——mcp 现由 `--no-deps` 安装（`requirements.txt` 注释），
-  `--with-requirements` 与 `[project.dependencies]` 都表达不了逐包 `--no-deps`；C4 开工先实测 `--overrides` / `--excludes` 等选项，
-  判据 = 干净环境装出的版本与 `requirements.txt` 一致、`qianfan` 无 ImportError。
+- **C6 计划文件被删**：算「无计划」——文件是唯一来源，下次核对时把对话里那份也删掉。
+- **C6 模型写计划文件**：不拦，算计划更新，照 G-34 换上新版；优先级说明因此写成「以计划文件当前内容为准」。
+  工具层守卫只能挡 `write` / `edit`，bash 不受约束（D1 (b)），拦不彻底。
+- **C4 依赖装法**：开工实测 `uv tool install -e .` 配 `--with-requirements` / `--overrides` / `--excludes` 的哪种组合；
+  判据 = 干净环境装出的版本与 `requirements.txt` 一致、`qianfan` 无 ImportError；实测命令写进 C4 PR 正文。
 
 ### 0.9 本章切片（G-30）
 
@@ -115,7 +114,7 @@
 | C3 bash + 只听本机 | 新增 bash（工作目录 = 工作区根、环境变量白名单、超时、停止时杀进程树、输出截断、Windows 找 Git Bash）；删 `code_exec` / `http_request`；默认值改到位：`config.py` 与 `.env.example` 的 `host` → `127.0.0.1`、`cors_origins` → 自身来源；Host 检查（G-35）；`.env.example` 的 `HOST` 旁注「本章只支持本机」、`policy_rules` 示例的 `code_exec` 改 `bash` | README「工具」行（代码执行 / HTTP → bash）；README **新增**「这不是安全边界」一节（现无此节，`GLOSSARY.md` 危险动作条与 `research-danger-policy` §6.4 已指向它） |
 | C4 `qianfan` 命令 | pyproject 包信息与 `[project.scripts]`；后端同源托管 `frontend/dist`；自动开浏览器；`uv tool install -e .`（依赖安装方式见 §0.4） | README 启动段；`pyproject.toml` 头注「不放 `[build-system]`、本仓不是可安装包」同步改 |
 | C5 工作区文件 | 「产物」栏换「工作区文件」列表（预览 / 下载；文件端点的路径锁与二进制 / 大小限制可沿用 #54 §6 的设计）；删产物账本与回滚快照（按钮、接口、`artifact_created` / `task_rollback` 事件、`snapshot_*` 配置、启动清理） | ADR 0004 退役；ADR 0008 第 8 条改写；`AGENTS.md`「产物登记语义」行删除；P1-B spec 加退役抬头；`GLOSSARY.md` 的 ADR 0004 指针、「交付」与 `artifact` 条；README 身份段的「停下时人看产物」与「回滚」行；`docs/agents/domain.md` 的 0004 live 行；architecture §3.4 删两事件 |
-| C6 计划文件 | 计划模式回复里的标记 → 存工作区 `plans/<task_id>.md`；计划区换整份 Markdown（显示 + 编辑）；执行阶段按 G-29 / G-34（计划以一条消息进对话，每轮开始前与每次压缩后核对，删旧补新，留一行灰字「计划已更新到第 N 版」）；优先级说明（#153）；删 `Task.plan` 列表、`PlanStep`、`PUT /api/tasks/{id}/plan`、`plan_update`、状态下拉、system 尾部计划块；§0.4 两问开工前定 | ADR 0008「与 pi 的有意分歧」表「计划进度」行修订；`AGENTS.md` 两模式行与任务路由行；`GLOSSARY.md` 的 `plan` 词条与模式条；README「计划可改」行；architecture §3.4 删 `plan_update` |
+| C6 计划文件 | 计划模式回复里的标记 → 存工作区 `plans/<task_id>.md`；计划区换整份 Markdown（显示 + 编辑）；执行阶段按 G-29 / G-34（计划以一条消息进对话，每轮开始前与每次压缩后核对，删旧补新，留一行灰字「计划已更新到第 N 版」）；优先级说明（#153）；删 `Task.plan` 列表、`PlanStep`、`PUT /api/tasks/{id}/plan`、`plan_update`、状态下拉、system 尾部计划块；§0.4 两问已定 | ADR 0008「与 pi 的有意分歧」表「计划进度」行修订；`AGENTS.md` 两模式行与任务路由行；`GLOSSARY.md` 的 `plan` 词条与模式条；README「计划可改」行；architecture §3.4 删 `plan_update` |
 | C7 收尾 | 文档一致性（非归档文档无残影，归档例外按 S6 口径：`docs/pivot-plan-build.md` S6 行）；ADR 0008 三处修订与 ADR 0003 / 0004 退役标记已落；5 个固定场景真模型网页验收（G-28） | 关本章父票（#153 由 C6 关） |
 
 #148（bash 安全审计）在 C3 合并后做。
