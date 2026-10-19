@@ -8,10 +8,11 @@ calls :func:`build_inject_block` once per task and reuses the result for every
 LLM call (task-level cache).
 
 Discovery chain — exactly two layers: ``{home}/.agents/AGENTS.md`` (home layer,
-first) then ``{sandbox_root}/AGENTS.md`` (workspace root == settings
-``artifacts_path``, last). Drive roots and intermediate directories are never
-read, and only the literal ``AGENTS.md`` filename is recognised. Skills share
-the same two-layer shape: ``{layer}/.agents/skills/*/SKILL.md``.
+first) then ``{workspace}/AGENTS.md`` (the task's directory from the runtime
+context, falling back to settings ``artifacts_path``, last). Drive roots and
+intermediate directories are never read, and only the literal ``AGENTS.md``
+filename is recognised. Skills share the same two-layer shape:
+``{layer}/.agents/skills/*/SKILL.md``.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from ...config import Settings
+from ..runtime_context import workspace_root
 
 #: Section anchors — asserted verbatim by the tests (public contract of the block).
 AGENTS_SECTION = "# Project Instructions (AGENTS.md)"
@@ -46,7 +48,7 @@ def build_inject_block(settings: Settings, *, home_dir: Optional[Path] = None) -
     empty; otherwise the block starts with a blank line (``"\\n\\n"``) so
     callers can append it to the system prompt verbatim.
     """
-    sandbox_root = Path(settings.artifacts_path).resolve()
+    sandbox_root = Path(workspace_root(settings)).resolve()
     home = Path(home_dir) if home_dir is not None else Path.home()
     budget = int(getattr(settings, "context_inject_skills_budget", _DEFAULT_SKILLS_BUDGET))
     sections = [

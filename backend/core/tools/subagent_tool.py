@@ -18,7 +18,6 @@ import uuid
 from typing import Any
 
 from ...config import Settings
-from ...services.snapshots import get_current_task_id
 from ...utils.logging import get_logger
 from ..agent.subagent import (
     DEFAULT_TIER,
@@ -27,6 +26,7 @@ from ..agent.subagent import (
     SubTaskSpec,
     TierError,
 )
+from ..runtime_context import get_current_task_id
 from .base import BaseTool, ToolResult
 from .registry import register
 

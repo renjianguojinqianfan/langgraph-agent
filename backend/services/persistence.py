@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from ..api.schemas import Artifact, Task
 from ..config import Settings
+from ..core.runtime_context import normalize_workspace
 from ..utils.logging import get_logger
 
 logger = get_logger("persistence")
@@ -60,6 +61,8 @@ class Persistence:
                 except Exception:
                     logger.warning("Skipping corrupt task record %s", item.get("id"))
                     continue
+                # ADR 0010: pre-workspace records lived in the old sandbox root.
+                task.workspace = normalize_workspace(task.workspace or self.artifacts_path)
                 self._tasks[task.id] = task
         except Exception:
             # Spec Issue #4: a torn/partial tasks.json must never silently wipe
@@ -110,9 +113,13 @@ class Persistence:
         with self._lock:
             return self._tasks.get(task_id)
 
-    def list_tasks(self, limit: int = 50) -> List[Task]:
+    def list_tasks(
+        self, limit: int = 50, workspace: Optional[str] = None
+    ) -> List[Task]:
         with self._lock:
             ordered = sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
+        if workspace is not None:
+            ordered = [t for t in ordered if t.workspace == workspace]
         return ordered[:limit]
 
     def list_all(self) -> List[Task]:

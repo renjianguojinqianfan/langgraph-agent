@@ -38,12 +38,12 @@ import json
 import shutil
 import threading
 import time
-from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import Settings
+from ..core.runtime_context import get_current_task_id
 from ..utils.logging import get_logger
 
 logger = get_logger("services.snapshots")
@@ -52,26 +52,11 @@ LEDGER_NAME = "ledger.jsonl"
 RETENTION_DIR = "retention"
 RETENTION_LEDGER = "retention.jsonl"
 
-# Task id owned by the current worker thread. Set at the TaskManager worker
-# entry points (run / _resume_run) and re-seated by SubAgentExecutor._exec_one,
-# because pool threads start with a fresh context. A write tool with no task
-# binding is simply not captured — never an error.
-_current_task_id: ContextVar[Optional[str]] = ContextVar("snapshot_task_id", default=None)
 
 # One lock for every ledger mutation: subtasks may run on parallel pool threads
 # and capture into the same task ledger, so seq allocation and the backup
 # filename derived from it must never collide.
 _lock = threading.Lock()
-
-
-def set_current_task_id(task_id: Optional[str]) -> None:
-    """Bind (``None`` = clear) the capturing task on the current thread."""
-    _current_task_id.set(task_id or None)
-
-
-def get_current_task_id() -> Optional[str]:
-    """Return the task id writes on this thread are accounted to."""
-    return _current_task_id.get()
 
 
 def _now() -> str:

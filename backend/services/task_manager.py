@@ -35,6 +35,12 @@ from ..core.agent.state import AgentState
 from ..core.agent.subagent import SubAgentExecutor
 from ..core.llm.client import LLMClient
 from ..core.llm.openai_compat import create_llm_client
+from ..core.runtime_context import (
+    get_current_task_id,
+    normalize_workspace,
+    reset_runtime_context,
+    set_runtime_context,
+)
 from ..core.tools.base import BaseTool
 from ..core.tools.bash import BashTool
 from ..core.tools.registry import build_tools
@@ -42,12 +48,7 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from .event_bus import EventBus
 from .persistence import Persistence
-from .snapshots import (
-    cleanup_expired,
-    get_current_task_id,
-    restore_task,
-    set_current_task_id,
-)
+from .snapshots import cleanup_expired, restore_task
 from .trace import TraceRecorder
 
 if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
@@ -181,10 +182,17 @@ class TaskManager:
         persistence: Persistence,
         llm_client: Optional[LLMClient] = None,
         tools: Optional[List[BaseTool]] = None,
+        default_workspace: Optional[Path] = None,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
         self.persistence = persistence
+        #: Where a task without an explicit workspace runs. ``backend.main``
+        #: passes the launch directory (ADR 0010); a directly constructed
+        #: manager falls back to the historical sandbox root.
+        self._default_workspace = normalize_workspace(
+            default_workspace or settings.artifacts_path
+        )
         self._llm = llm_client or create_llm_client(settings)
         self._tools = tools if tools is not None else build_tools(settings)
         # P1 item 2: sub-agent executor (None when disabled).
@@ -458,22 +466,37 @@ class TaskManager:
             self._checkpoint_conn = None
 
     # ── creation / query ──
+    @property
+    def default_workspace(self) -> str:
+        return self._default_workspace
+
+    @staticmethod
+    def _require_workspace(task: Task) -> None:
+        if not Path(task.workspace).is_dir():
+            raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
+
     def create_task(
         self,
         title: Optional[str],
         user_input: str,
         mode: str = TaskMode.BUILD.value,
+        workspace: Optional[str] = None,
     ) -> str:
         """Start one task (ADR 0008 decision 1: one task = one conversation).
 
         ``mode`` is the sticky task switch; default is build (decision 3).
+        ``workspace`` is the page-supplied directory; absent -> the launch dir.
         """
+        chosen = normalize_workspace(workspace or self._default_workspace)
+        if not Path(chosen).is_dir():
+            raise ValueError(f"workspace does not exist: {chosen}")
         task_id = uuid.uuid4().hex
         now = _now()
         task = Task(
             id=task_id,
             title=(title or user_input[:40]).strip(),
             user_input=user_input,
+            workspace=chosen,
             status=TaskStatus.PENDING,
             mode=TaskMode(mode),
             conversation=[ChatTurn(role="user", content=user_input)],
@@ -496,7 +519,11 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[Task]:
         return self.persistence.load_task(task_id)
 
-    def list_tasks(self, limit: int = 50) -> List[Task]:
+    def list_tasks(self, limit: int = 50, workspace: Optional[str] = None) -> List[Task]:
+        target = normalize_workspace(workspace) if workspace else self._default_workspace
+        return self.persistence.list_tasks(limit, workspace=target)
+
+    def list_all_tasks(self, limit: int = 50) -> List[Task]:
         return self.persistence.list_tasks(limit)
 
     def get_artifact(self, task_id: str, artifact_id: str) -> Optional[bytes]:
@@ -509,13 +536,13 @@ class TaskManager:
         t.start()
 
     def run(self, task_id: str) -> None:
-        # P1-B: account every sandbox write on this worker thread to this task
-        # (the contextvar dies with the thread; sub-agents inherit it).
-        set_current_task_id(task_id)
+        # P1-B / ADR 0010: this worker thread is bound to the task and its
+        # workspace; tools read both from the runtime context.
         task = self.persistence.load_task(task_id)
         if task is None:
             logger.warning("run: unknown task %s", task_id)
             return
+        tokens = set_runtime_context(task_id, Path(task.workspace))
 
         task.status = TaskStatus.RUNNING
         task.updated_at = _now()
@@ -571,6 +598,7 @@ class TaskManager:
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
+            reset_runtime_context(tokens)
             # P0 item 4: always close the trace (success / failure / interrupt)
             # so the JSONL terminates with a trace_end line.
             if self._trace is not None:
@@ -779,6 +807,7 @@ class TaskManager:
                     f"task {task_id} is {task.status.value}, "
                     "only INTERRUPTED tasks can be resumed"
                 )
+            self._require_workspace(task)
             live = self._threads.get(task_id)
             if live is not None and live.is_alive():
                 raise RuntimeError(f"task {task_id} is already running")
@@ -843,8 +872,7 @@ class TaskManager:
         raise RuntimeError(f"empty checkpoint state for task {task_id}")
 
     def _resume_run(self, task_id: str) -> None:
-        # P1-B: this worker thread accounts its writes to the same task.
-        set_current_task_id(task_id)
+        tokens = None
         try:
             # A stop() between our RUNNING flip and this point would otherwise
             # be swallowed by the restored control flags below — re-check the
@@ -853,6 +881,7 @@ class TaskManager:
             if current is None or current.status != TaskStatus.RUNNING:
                 logger.info("Resume of %s superseded by newer state; aborting.", task_id)
                 return
+            tokens = set_runtime_context(task_id, Path(current.workspace))
 
             runtime = AgentRuntime(
                 task_id=task_id,
@@ -913,6 +942,8 @@ class TaskManager:
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
+            if tokens is not None:
+                reset_runtime_context(tokens)
             if self._trace is not None:
                 self._trace.close(task_id)
 
@@ -1010,6 +1041,7 @@ class TaskManager:
                     f"task {task_id} is {task.status.value}; "
                     "only a parked (INTERRUPTED) task can continue"
                 )
+            self._require_workspace(task)
             live = self._threads.get(task_id)
             if live is not None and live.is_alive():
                 raise RuntimeError(f"task {task_id} is already running")
@@ -1045,12 +1077,13 @@ class TaskManager:
 
     def _continue_run(self, task_id: str, user_text: Optional[str]) -> None:
         """Run one more round on an existing conversation."""
-        set_current_task_id(task_id)
+        tokens = None
         try:
             current = self.persistence.load_task(task_id)
             if current is None or current.status != TaskStatus.RUNNING:
                 logger.info("Continuation of %s superseded by newer state; aborting.", task_id)
                 return
+            tokens = set_runtime_context(task_id, Path(current.workspace))
 
             runtime = AgentRuntime(
                 task_id=task_id,
@@ -1109,6 +1142,8 @@ class TaskManager:
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
+            if tokens is not None:
+                reset_runtime_context(tokens)
             if self._trace is not None:
                 self._trace.close(task_id)
 

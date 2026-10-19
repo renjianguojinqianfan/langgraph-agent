@@ -16,12 +16,15 @@ interface TaskState {
   /** Per-task live markers (context compressed) for the flow view. */
   markers: Record<string, TraceMarker[]>;
   selectedStep: number | null;
+  /** History filter (ADR 0010 decision 2): this directory, or every task. */
+  historyFilter: "current" | "all";
 
   setTasks: (tasks: Task[]) => void;
   setCurrentTask: (id: string | null) => void;
   upsertTask: (task: Task) => void;
   applyEvent: (ev: SSEvent) => void;
   setSelectedStep: (index: number | null) => void;
+  setHistoryFilter: (filter: "current" | "all") => void;
 }
 
 function makeStep(index: number): StepRecord {
@@ -33,6 +36,7 @@ function emptyTask(id: string): Task {
     id,
     title: "",
     user_input: "",
+    workspace: "",
     status: "PENDING",
     mode: "build",
     steps: [],
@@ -135,8 +139,10 @@ export const useTaskStore = create<TaskState>((set) => ({
   events: [],
   markers: {},
   selectedStep: null,
+  historyFilter: "current",
 
   setTasks: (tasks) => set({ tasks }),
+  setHistoryFilter: (historyFilter) => set({ historyFilter }),
 
   setCurrentTask: (id) =>
     set({

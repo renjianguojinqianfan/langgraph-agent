@@ -60,9 +60,15 @@ def create_task(
 ) -> ApiResponse:
     if not payload.input or not payload.input.strip():
         raise HTTPException(status_code=400, detail="`input` is required.")
-    task_id = _tm(request).create_task(
-        payload.title, payload.input.strip(), mode=payload.mode.value
-    )
+    try:
+        task_id = _tm(request).create_task(
+            payload.title,
+            payload.input.strip(),
+            mode=payload.mode.value,
+            workspace=payload.workspace,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     return _envelope(data={"task_id": task_id})
 
 
@@ -70,9 +76,21 @@ def create_task(
 def list_tasks(
     request: Request,
     limit: int = 50,
+    dir: str = "current",
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
-    tasks = _tm(request).list_tasks(limit=limit)
+    """History filtered by task directory (ADR 0010 decision 2).
+
+    ``dir=all`` returns every task; ``dir=current`` (default) or ``dir=<path>``
+    filters by the normalized workspace, so different spellings of one
+    directory land on the same list.
+    """
+    manager = _tm(request)
+    if dir == "all":
+        tasks = manager.list_all_tasks(limit=limit)
+    else:
+        workspace = None if dir in ("", "current") else dir
+        tasks = manager.list_tasks(limit=limit, workspace=workspace)
     return _envelope(data={"tasks": [t.model_dump(mode="json") for t in tasks]})
 
 

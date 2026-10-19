@@ -26,9 +26,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ...config import Settings
 from ...services.snapshots import capture_before_image
 from ...utils.logging import get_logger
+from ..runtime_context import get_current_workspace, workspace_root
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -67,12 +67,14 @@ class _SandboxedTool(BaseTool):
 
     requires_confirm = False
 
-    def __init__(self, settings: Settings | None = None) -> None:
-        super().__init__(settings)
-        self._root = settings.artifacts_path if settings else Path("data/artifacts")
+    def _workspace(self) -> Path:
+        if self.settings is not None:
+            return workspace_root(self.settings)
+        current = get_current_workspace()
+        return current if current is not None else Path("data/artifacts")
 
     def _root_resolved(self) -> Path:
-        root = self._root.resolve()
+        root = self._workspace().resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
 

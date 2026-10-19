@@ -65,6 +65,9 @@ export function TaskHeader({ task }: { task: Task }) {
       <div className="flex-1 min-w-0">
         <div className="font-semibold truncate">{task.title || "未命名任务"}</div>
         <div className="text-xs text-slate-500 truncate">{task.user_input}</div>
+        <div className="text-[11px] text-slate-600 truncate" title={task.workspace}>
+          目录：{task.workspace || "默认"}
+        </div>
       </div>
       {rollbackNote && (
         <span className="text-xs text-slate-400 truncate max-w-[16rem]">{rollbackNote}</span>

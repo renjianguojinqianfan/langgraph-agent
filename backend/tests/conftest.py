@@ -139,6 +139,7 @@ def make_manager(
         persistence,
         llm_client=mock,
         tools=tools,
+        default_workspace=settings.artifacts_path,
     )
 
     _request = _current_request.get()

@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 from backend.api.schemas import TaskStatus
 from backend.core.agent.subagent import SubAgentExecutor, SubTaskSpec
 from backend.core.llm.client import MockLLMClient
+from backend.core.runtime_context import get_current_task_id, set_current_task_id
 from backend.main import app
 from backend.services import snapshots
 from backend.services.event_bus import EventBus
@@ -37,9 +38,7 @@ from backend.services.persistence import Persistence
 from backend.services.snapshots import (
     capture_before_image,
     cleanup_expired,
-    get_current_task_id,
     restore_task,
-    set_current_task_id,
 )
 from backend.tests.conftest import make_manager, make_settings
 

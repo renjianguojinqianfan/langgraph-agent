@@ -483,8 +483,7 @@ class BashTool(BaseTool):
         if not isinstance(command, str) or not command.strip():
             return ToolResult(success=False, error="`command` is required.")
 
-        # Local import: W1 moves this contextvar out of services/snapshots.
-        from ...services.snapshots import get_current_task_id
+        from ..runtime_context import get_current_task_id, workspace_root
 
         stop_context = contextvars.copy_context()
         stop_checker: Callable[[], bool] = self.stop_checker or _never_stopped
@@ -504,7 +503,7 @@ class BashTool(BaseTool):
             )
 
         timeout = self._resolve_timeout(kwargs.get("timeout"))
-        workdir = settings.artifacts_path
+        workdir = workspace_root(settings)
         try:
             workdir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # pragma: no cover - defensive
