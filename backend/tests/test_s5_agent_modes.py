@@ -71,9 +71,10 @@ def _state(**kw: Any) -> AgentState:
         "task_id": "t1",
         "mode": "build",
         "messages": [{"role": "user", "content": "do the thing"}],
-        "plan": [],
+        "plan_text": "",
+        "plan_version": 0,
+        "plan_hash": "",
         "steps": [],
-        "artifacts": [],
         "status": "RUNNING",
         "stop_requested": False,
         "step_index": 0,
@@ -239,12 +240,12 @@ def test_resume_uses_the_edited_plan(tmp_path: Path) -> None:
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))
     task_id = tm.create_task(title="resume-plan", user_input="hi")
     _wait_parked(tm, task_id)
-    tm.set_plan(task_id, [{"description": "edited step", "status": "active"}])
+    tm.set_plan(task_id, "# Plan\n\n1. edited step")
 
     tm.resume(task_id)
     after = _wait_parked(tm, task_id)
     assert after is not None
-    assert [(p.description, p.status) for p in after.plan] == [("edited step", "active")]
+    assert tm.get_plan(task_id)["text"] == "# Plan\n\n1. edited step"
 
 
 class _ProsePlanLLM:
@@ -259,32 +260,37 @@ class _ProsePlanLLM:
 
 def test_plan_mode_keeps_the_plan_when_the_model_asks_back(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
+    from backend.services import plan_file
+
+    plan_file.write_plan(settings.artifacts_path, "t1", "previous plan")
     rt = _runtime(settings, _ProsePlanLLM(), [])
-    old = [{"index": 1, "description": "previous plan step", "status": "pending"}]
-    state = _state(mode="plan", plan=old)
+    state = _state(mode="plan", plan_text="previous plan")
 
     rt.agent(state)
 
-    # The question reaches the user; the plan is not replaced by a fake step.
-    assert state["plan"] == old
+    # The question reaches the user; the file (and the plan text) is untouched.
+    assert state["plan_text"] == "previous plan"
     assert state["final_answer"] == "Which folder should the report go in?"
     assert state["messages"][-1]["reasoning_content"] == "我需要先确认路径"
 
 
-def test_plan_mode_parses_a_fenced_json_plan(tmp_path: Path) -> None:
-    class _FencedLLM:
+def test_plan_mode_parses_the_agreed_markers(tmp_path: Path) -> None:
+    class _MarkedLLM:
         def complete(self, messages, tools=None, **kwargs):
             return LLMResponse(
-                content='```json\n[{"description": "one"}, {"description": "two"}]\n```'
+                content="<qianfan-plan>\n# Plan\n\n1. one\n2. two\n</qianfan-plan>"
             )
 
     settings = make_settings(tmp_path)
-    rt = _runtime(settings, _FencedLLM(), [])
+    rt = _runtime(settings, _MarkedLLM(), [])
     state = _state(mode="plan")
 
     rt.agent(state)
 
-    assert [p["description"] for p in state["plan"]] == ["one", "two"]
+    assert "1. one" in state["plan_text"]
+    assert state["plan_version"] == 1
+    plan_file = settings.artifacts_path / ".qianfan" / "plans" / "t1.md"
+    assert "2. two" in plan_file.read_text(encoding="utf-8")
 
 
 def test_plan_edit_lands_in_the_next_round(tmp_path: Path) -> None:
@@ -295,19 +301,17 @@ def test_plan_edit_lands_in_the_next_round(tmp_path: Path) -> None:
 
     task_id = tm.create_task(title="p", user_input="plan then build", mode="plan")
     parked = _wait_parked(tm, task_id)
-    assert [p.description for p in parked.plan] == ["old step"]
+    assert parked is not None
+    assert "old step" in tm.get_plan(task_id)["text"]
 
-    tm.set_plan(task_id, [{"description": "edited step", "status": "active"}])
+    tm.set_plan(task_id, "# Plan\n\n1. edited step")
     tm.set_mode(task_id, "build")
     tm.send_message(task_id, "go")
 
     after = _wait_parked(tm, task_id)
-    # The persisted plan is the source of truth: the edit seeded the next round
-    # and came back through finalize instead of the checkpoint's old copy.
-    assert [(p.description, p.status) for p in after.plan] == [("edited step", "active")]
-    events = tm.event_bus.replay(task_id)
-    plan_events = [e["data"]["plan"] for e in events if e["type"] == "plan_update"]
-    assert any(p and p[0]["description"] == "edited step" for p in plan_events)
+    assert after is not None
+    # The file is the source of truth across the round.
+    assert tm.get_plan(task_id)["text"] == "# Plan\n\n1. edited step"
 
 
 def test_step_budget_is_per_round_not_per_task(tmp_path: Path) -> None:
@@ -401,10 +405,11 @@ def test_rest_mode_plan_messages(tmp_path: Path) -> None:
 
     r = client.put(
         f"/api/tasks/{task_id}/plan",
-        json={"plan": [{"description": "hand written"}]},
+        json={"text": "# Plan\n\n1. hand written"},
     )
     assert r.status_code == 200
-    assert r.json()["data"]["plan"][0]["description"] == "hand written"
+    assert r.json()["data"]["version"] == 1
+    assert "hand written" in client.get(f"/api/tasks/{task_id}/plan").json()["data"]["text"]
 
     r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "continue"})
     assert r.status_code == 200
@@ -412,7 +417,7 @@ def test_rest_mode_plan_messages(tmp_path: Path) -> None:
     parked = _wait_parked(tm, task_id)
     assert parked is not None
     assert parked.mode.value == "plan"  # the switch was set to plan earlier
-    assert [p.description for p in parked.plan] == ["step"]
+    assert "step" in tm.get_plan(task_id)["text"]
 
 
 @pytest.mark.parametrize(
@@ -430,7 +435,7 @@ def test_rest_plan_edit_is_refused_when_not_parked(
     task.status = status
     tm.persistence.save_task(task)
 
-    r = client.put(f"/api/tasks/{task_id}/plan", json={"plan": [{"description": "x"}]})
+    r = client.put(f"/api/tasks/{task_id}/plan", json={"text": "# x"})
     assert r.status_code == 409
 
 

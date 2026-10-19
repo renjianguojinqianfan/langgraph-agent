@@ -262,7 +262,13 @@ class TestResumeStateRead:
     def test_retries_transient_empty_then_returns_values(self, tmp_path):
         settings = make_settings(tmp_path)
         tm = make_manager(settings, MockLLMClient(), event_bus=EventBus())
-        good = {"status": "RUNNING", "plan": [], "steps": []}
+        good = {
+            "status": "RUNNING",
+            "plan_text": "",
+            "plan_version": 0,
+            "plan_hash": "",
+            "steps": [],
+        }
         graph = _FakeGraph([_FakeSnap({}), _FakeSnap(None), _FakeSnap(good)])
         vals = tm._read_restorable_state(graph, "t1", attempts=5, pause=0.0)
         assert vals == good

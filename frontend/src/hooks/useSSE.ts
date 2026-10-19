@@ -12,7 +12,6 @@ import { SSEvent, SSEventType } from "../types";
  */
 const EVENT_TYPES: SSEventType[] = [
   "task_created",
-  "plan_update",
   "step_start",
   "tool_call",
   "tool_result",

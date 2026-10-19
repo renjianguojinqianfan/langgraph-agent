@@ -334,7 +334,9 @@ class SubAgentExecutor:
                 # the same tiers; plan mode simply never gets spawn_subagent).
                 "mode": "build",
                 "messages": [{"role": "user", "content": spec.instruction}],
-                "plan": [],
+                "plan_text": "",
+                "plan_version": 0,
+                "plan_hash": "",
                 "steps": [],
                 "status": "RUNNING",
                 "stop_requested": False,

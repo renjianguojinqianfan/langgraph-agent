@@ -19,7 +19,9 @@ class AgentState(TypedDict, total=False):
     task_id: str
     mode: str                              # plan | build (sticky task switch)
     messages: List[Dict[str, Any]]          # OpenAI-style message dicts
-    plan: List[Dict[str, Any]]              # PlanStep dicts
+    plan_text: str                          # current plan file content
+    plan_version: int                       # bumped when the file content changes
+    plan_hash: str                          # sha256 of the content last seen
     steps: List[Dict[str, Any]]             # StepRecord dicts
     status: str
     stop_requested: bool

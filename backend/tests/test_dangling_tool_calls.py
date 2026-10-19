@@ -76,7 +76,9 @@ def _state(
     return {
         "task_id": "t1",
         "messages": list(messages),
-        "plan": [],
+        "plan_text": "",
+        "plan_version": 0,
+        "plan_hash": "",
         "steps": [{"index": 1, "thought": "", "status": "running", "tool_calls": list(records)}],
         "status": "RUNNING",
         "stop_requested": False,

@@ -17,11 +17,6 @@ const TYPE_META: Record<string, TraceMeta> = {
     badge: "bg-sky-500/15 text-sky-300 border-sky-500/40",
     category: "task",
   },
-  plan_update: {
-    label: "规划更新",
-    badge: "bg-sky-500/15 text-sky-300 border-sky-500/40",
-    category: "task",
-  },
   step_start: {
     label: "步骤开始",
     badge: "bg-blue-500/15 text-blue-300 border-blue-500/40",
@@ -97,8 +92,6 @@ function summarize(ev: SSEvent): string {
       )}`;
     case "step_start":
       return `步骤 #${String(d.index ?? "?")}`;
-    case "plan_update":
-      return Array.isArray(d.plan) ? `${d.plan.length} 项计划` : "";
     default:
       return "";
   }

@@ -20,7 +20,6 @@ from langgraph.types import Durability
 
 from ..api.schemas import (
     ChatTurn,
-    PlanStep,
     StepRecord,
     SubTask,
     Task,
@@ -45,6 +44,7 @@ from ..core.tools.bash import BashTool
 from ..core.tools.registry import build_tools
 from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
+from . import plan_file
 from .event_bus import EventBus
 from .persistence import Persistence
 from .trace import TraceRecorder
@@ -466,6 +466,20 @@ class TaskManager:
         if not Path(task.workspace).is_dir():
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
+    @staticmethod
+    def _seed_plan(task: Task) -> Dict[str, Any]:
+        """Plan state from the file, bumping the version when it changed."""
+        text = plan_file.read_plan(Path(task.workspace), task.id)
+        digest = plan_file.plan_hash(text)
+        version = task.plan_version
+        if digest != task.plan_hash and text.strip():
+            version += 1
+        return {
+            "plan_text": text,
+            "plan_version": version,
+            "plan_hash": digest,
+        }
+
     def create_task(
         self,
         title: Optional[str],
@@ -536,11 +550,14 @@ class TaskManager:
         task.updated_at = _now()
         self.persistence.save_task(task)
 
+        seeded = self._seed_plan(task)
         state: AgentState = {
             "task_id": task_id,
             "mode": task.mode.value,
             "messages": [{"role": "user", "content": task.user_input}],
-            "plan": [p.model_dump() for p in task.plan],
+            "plan_text": seeded["plan_text"],
+            "plan_version": seeded["plan_version"],
+            "plan_hash": seeded["plan_hash"],
             "steps": [],
             "status": "RUNNING",
             "stop_requested": False,
@@ -718,8 +735,9 @@ class TaskManager:
         """
         status = final.get("status") or "FAILED"
         task.status = TaskStatus(status)
-        task.plan = [PlanStep(**p) for p in final.get("plan", [])]
         task.steps = [StepRecord(**s) for s in final.get("steps", [])]
+        task.plan_version = int(final.get("plan_version", task.plan_version))
+        task.plan_hash = str(final.get("plan_hash", task.plan_hash))
         task.conversation = self._conversation_from(final.get("messages"))
         task.final_answer = final.get("final_answer", "")
         task.error = final.get("error")
@@ -756,6 +774,8 @@ class TaskManager:
             if role not in ("user", "assistant"):
                 continue
             if role == "assistant" and m.get("tool_calls"):
+                continue
+            if plan_file.is_plan_message(m.get("content")):
                 continue
             content = str(m.get("content") or "").strip()
             if content:
@@ -891,9 +911,11 @@ class TaskManager:
             # Reset *control* flags only; plan / steps survive.
             # Since #139 one invoke is one round: the per-round budget restarts
             # and the stale answer/error must not leak into this round's finish.
-            # The persisted plan is the user-editable copy (set_plan), so it
-            # seeds over the checkpoint just like a message-driven continuation.
-            restored["plan"] = [p.model_dump() for p in current.plan]
+            # The plan file is the source of truth; seed it over the checkpoint.
+            seeded = self._seed_plan(current)
+            restored["plan_text"] = seeded["plan_text"]
+            restored["plan_version"] = seeded["plan_version"]
+            restored["plan_hash"] = seeded["plan_hash"]
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False
             restored["_current_tool_calls"] = []
@@ -962,16 +984,17 @@ class TaskManager:
             self.persistence.save_task(task)
         return {"ok": True, "mode": chosen.value}
 
-    def set_plan(self, task_id: str, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Replace the editable plan of a parked task (pivot item 1).
+    def get_plan(self, task_id: str) -> Dict[str, Any]:
+        task = self.persistence.load_task(task_id)
+        if task is None:
+            raise RuntimeError(f"task {task_id} not found")
+        text = plan_file.read_plan(Path(task.workspace), task_id)
+        return {"text": text, "version": task.plan_version}
 
-        The persisted ``Task.plan`` is the source of truth for user edits: the
-        next continuation seeds ``state["plan"]`` from it, so "改完随后续消息
-        生效" is structural rather than a rule the caller has to remember.
-        """
-        # Same window as resume: stop() settles the record before the
-        # worker commits its last state, and finalize would overwrite this edit
-        # with the checkpoint's plan. Wait the worker out rather than racing it.
+    def set_plan(self, task_id: str, text: str) -> Dict[str, Any]:
+        """Replace the plan file of a parked task; the next round rereads it."""
+        # Same window as resume: stop() settles the record before the worker
+        # commits its last state. Wait the worker out rather than racing it.
         thread = self._threads.get(task_id)
         if thread is not None and thread.is_alive():
             thread.join(timeout=5.0)
@@ -987,21 +1010,14 @@ class TaskManager:
                     "the plan can only be edited while the task is parked "
                     "(INTERRUPTED)"
                 )
-            steps: List[PlanStep] = []
-            for position, raw in enumerate(plan, 1):
-                description = str((raw or {}).get("description") or "").strip()
-                if not description:
-                    continue
-                status = str((raw or {}).get("status") or "pending")
-                steps.append(
-                    PlanStep(index=len(steps) + 1, description=description, status=status)
-                )
-            task.plan = steps
+            plan_file.write_plan(Path(task.workspace), task_id, text)
+            task.plan_hash = plan_file.plan_hash(text)
+            if text.strip():
+                task.plan_version += 1
             task.updated_at = _now()
             self.persistence.save_task(task)
-        payload = [p.model_dump() for p in task.plan]
-        self.event_bus.publish(task_id, "plan_update", {"plan": payload})
-        return {"ok": True, "plan": payload}
+            version = task.plan_version
+        return {"ok": True, "version": version}
 
     def _continue(self, task_id: str, *, user_text: Optional[str]) -> Dict[str, Any]:
         """Validate, claim and start one continuation round.
@@ -1090,9 +1106,11 @@ class TaskManager:
                 restored.setdefault("messages", []).append(
                     {"role": "user", "content": user_text}
                 )
-            # The persisted plan is the user-editable copy (set_plan): seed it
-            # over the checkpoint so an edit takes effect this round.
-            restored["plan"] = [p.model_dump() for p in current.plan]
+            # The plan file is the source of truth; seed it over the checkpoint.
+            seeded = self._seed_plan(current)
+            restored["plan_text"] = seeded["plan_text"]
+            restored["plan_version"] = seeded["plan_version"]
+            restored["plan_hash"] = seeded["plan_hash"]
             restored["mode"] = current.mode.value
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False

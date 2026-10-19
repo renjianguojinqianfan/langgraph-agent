@@ -127,9 +127,6 @@ def test_build_mode_runs_and_parks_without_planning(settings, event_bus):
     assert (settings.artifacts_path / "out.txt").is_file()
 
     events = {e["type"] for e in event_bus.replay(task_id)}
-    # #139: build mode never re-plans behind the user's back (the old planner
-    # ran on every round). The plan face only fills in plan mode.
-    assert "plan_update" not in events
     assert "tool_call" in events
     assert "tool_result" in events
     assert "final_answer" in events
@@ -203,7 +200,7 @@ def test_agent_llm_failure_fails_the_task(settings, event_bus):
     assert task is not None
     assert task.status.value == "FAILED"
     assert "403" in (task.error or "")
-    assert task.plan == []
+    assert task.plan_version == 0
 
 
 # ── engineer smoke (offline) included in the unified run ──
