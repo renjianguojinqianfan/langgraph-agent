@@ -27,6 +27,17 @@ def test_defaults_are_loopback_and_own_origins(monkeypatch):
     assert "http://127.0.0.1:8000" in origins
 
 
+def test_cors_own_origin_follows_the_configured_port():
+    settings = Settings(
+        _env_file=None, cors_origins="http://localhost:5173", port=9000
+    )
+    origins = settings.cors_origin_list
+
+    assert "http://localhost:5173" in origins  # Vite dev server
+    assert "http://localhost:9000" in origins  # own origin at --port 9000
+    assert "http://127.0.0.1:9000" in origins
+
+
 def test_trusted_host_accepts_local_names_and_refuses_a_foreign_host():
     for base_url in ("http://localhost", "http://127.0.0.1"):
         with TestClient(app, base_url=base_url) as client:

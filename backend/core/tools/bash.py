@@ -78,16 +78,22 @@ def _git_bash_candidates(
 ) -> list[str]:
     """bash.exe candidates derived from a Git installation.
 
-    First the installation that owns the ``git`` on PATH (``<root>/cmd/git.exe``
-    -> ``<root>/bin/bash.exe``), then the conventional Windows install roots.
+    The installation that owns the ``git`` on PATH is not always rooted at
+    ``git.exe``'s grandparent: Git for Windows ships ``cmd/git.exe``,
+    ``bin/git.exe`` and ``mingw64/bin/git.exe`` depending on the flavor, so walk
+    a few ancestors and probe both bash homes at each level. Then the
+    conventional Windows install roots.
     """
     candidates: list[str] = []
     git = which("git")
     if git:
-        root = Path(git).resolve().parent.parent
-        candidates.extend(
-            [str(root / "bin" / "bash.exe"), str(root / "usr" / "bin" / "bash.exe")]
-        )
+        current = Path(git).resolve().parent
+        for _ in range(4):
+            candidates.append(str(current / "bin" / "bash.exe"))
+            candidates.append(str(current / "usr" / "bin" / "bash.exe"))
+            if current.parent == current:
+                break
+            current = current.parent
     if os.name == "nt":
         for env_name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
             base = environ.get(env_name)
@@ -98,6 +104,27 @@ def _git_bash_candidates(
             candidates.append(
                 str(Path(local) / "Programs" / "Git" / "bin" / "bash.exe")
             )
+    return candidates
+
+
+def _path_bash_candidates(
+    environ: Mapping[str, str], first: Optional[str]
+) -> list[str]:
+    """The first ``which`` hit, then every PATH entry with the right filename.
+
+    Scanning the entries lets discovery skip the System32 stub and keep looking
+    instead of stopping at ``shutil.which``'s first (possibly useless) hit.
+    """
+    candidates: list[str] = []
+    if first:
+        candidates.append(first)
+    filename = "bash.exe" if os.name == "nt" else "bash"
+    for entry in (environ.get("PATH") or "").split(os.pathsep):
+        if not entry:
+            continue
+        candidate = str(Path(entry) / filename)
+        if candidate not in candidates:
+            candidates.append(candidate)
     return candidates
 
 
@@ -116,13 +143,11 @@ def find_bash(
     lookup = shutil.which if which is None else which
 
     candidates: list[str] = []
-    configured = (getattr(settings, "bash_path", "") or "").strip()
+    configured = (settings.bash_path or "").strip()
     if configured:
         candidates.append(configured)
     candidates.extend(_git_bash_candidates(env, lookup))
-    on_path = lookup("bash")
-    if on_path:
-        candidates.append(on_path)
+    candidates.extend(_path_bash_candidates(env, lookup("bash")))
 
     for candidate in candidates:
         if _is_system32_stub(candidate):
@@ -223,18 +248,29 @@ class BashTool(BaseTool):
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)
-        self._default_timeout = settings.sandbox_timeout if settings else 30
         #: Wired by TaskManager so a long command can observe a task stop.
         self.stop_checker: Optional[Callable[[], bool]] = None
 
+    @property
+    def _settings(self) -> Settings:
+        return self.settings or get_settings()
+
     def _resolve_timeout(self, raw: Any) -> int:
+        default = self._settings.sandbox_timeout
         try:
             value = int(raw)
         except (TypeError, ValueError):
-            value = self._default_timeout
+            value = default
         if value <= 0:
-            value = self._default_timeout
-        return max(MIN_TIMEOUT_SEC, min(value, MAX_TIMEOUT_SEC))
+            value = default
+        if value > MAX_TIMEOUT_SEC:
+            logger.warning(
+                "bash timeout %ss exceeds the %ss cap; clamping",
+                value,
+                MAX_TIMEOUT_SEC,
+            )
+            value = MAX_TIMEOUT_SEC
+        return max(MIN_TIMEOUT_SEC, value)
 
     def _stop_requested(self) -> bool:
         checker = self.stop_checker
@@ -251,10 +287,10 @@ class BashTool(BaseTool):
         if not isinstance(command, str) or not command.strip():
             return ToolResult(success=False, error="`command` is required.")
 
-        settings = self.settings or get_settings()
+        settings = self._settings
         bash = find_bash(settings)
         if bash is None:
-            configured = (getattr(settings, "bash_path", "") or "").strip()
+            configured = (settings.bash_path or "").strip()
             hint = f" (bash_path={configured!r})" if configured else ""
             return ToolResult(
                 success=False,

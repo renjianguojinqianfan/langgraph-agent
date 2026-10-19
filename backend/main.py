@@ -61,10 +61,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # DNS-rebinding guard (ADR 0009 decision 5): the service is opened as localhost,
-# so any other Host name is refused before routing. Added last = outermost.
-app.add_middleware(
-    TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"]
-)
+# so any other Host name is refused before routing. Independent of
+# ``settings.host`` on purpose — this chapter does not support remote access.
+# Added last = outermost.
+TRUSTED_HOSTS = ["127.0.0.1", "localhost"]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 
 app.include_router(router, prefix="/api")
 

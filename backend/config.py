@@ -192,7 +192,14 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         if self.cors_origins in ("*", ""):
             return ["*"]
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        # The app's own origin follows the configured port (start.py exports
+        # PORT), so `--port 9000` does not silently lock its own page out.
+        for name in ("127.0.0.1", "localhost"):
+            own = f"http://{name}:{self.port}"
+            if own not in origins:
+                origins.append(own)
+        return origins
 
 
 @lru_cache

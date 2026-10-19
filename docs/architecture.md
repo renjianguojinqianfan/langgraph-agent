@@ -160,10 +160,14 @@ classDiagram
         +str llm_model
         +int max_steps
         +int sandbox_timeout
+        +str bash_path
         +str search_provider
         +str serpapi_key
         +str artifacts_dir
         +str data_dir
+        +str host
+        +int port
+        +str cors_origins
         +bool auth_enabled
         +get_settings() Settings
     }
@@ -196,8 +200,7 @@ classDiagram
         +run(**kwargs) ToolResult
     }
     class WebSearchTool
-    class CodeExecTool
-    class HttpTool
+    class BashTool
     class _SandboxedTool
     class ReadTool
     class WriteTool
@@ -206,8 +209,7 @@ classDiagram
     class GrepTool
     class LsTool
     BaseTool <|-- WebSearchTool
-    BaseTool <|-- CodeExecTool
-    BaseTool <|-- HttpTool
+    BaseTool <|-- BashTool
     BaseTool <|-- _SandboxedTool
     _SandboxedTool <|-- ReadTool
     _SandboxedTool <|-- WriteTool
@@ -465,7 +467,7 @@ sequenceDiagram
 5. **错误口径**：工具失败返回 `ToolResult(success=False, error=...)`；每次调用只执行一次，失败原因原样回给模型，**不自动重试**。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。被 `policy_rules` 当场拒掉的调用（S2）走**第三条**形状：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开，ADR 0008 决策 6）。
 6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在下一入口检测，为真则走 `finish` 并发布 `task_interrupted`（P0-9：2s 内生效）。
 7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里那一个钩子；命中即当场拒，不执行、不弹框、不进图重入。详见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md) 决策 6 与 `backend/core/agent/policy.py`。
-8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
+8. **产物与路径安全**：`read` / `write` / `edit` / `ls` / `glob` / `grep` 的路径限定在 `Settings.artifacts_dir`，越界路径一律拒绝（P0-4）；`bash` **不受此围栏约束**——工作目录只是起点，见 README「这不是安全边界」。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
 9. **停下判定（Q8）**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 把任务停成 `INTERRUPTED`；错误 → `FAILED`。没有 `COMPLETED` 终态。
 10. **日志**：统一经 `utils/logging.py`，结构化输出到控制台 + `data_dir/logs/`；不打印明文 API Key。
 

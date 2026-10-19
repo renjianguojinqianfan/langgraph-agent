@@ -60,6 +60,9 @@ def main() -> int:
 
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    # Keep the backend's settings in step with --port: CORS derives the app's
+    # own origin from `settings.port`.
+    env["PORT"] = str(args.port)
     if args.mock:
         env["USE_MOCK_LLM"] = "true"
 

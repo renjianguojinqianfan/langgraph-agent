@@ -732,9 +732,7 @@ class _EscalatingSubtaskMock(MockLLMClient):
         return LLMResponse(content=self.final_answer)
 
 
-def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
-    tmp_path, event_bus
-):
+def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(tmp_path, event_bus):
     """票面验收 a：主任务批准派生后，子任务要不到「写外部系统」的工具，也没留下副作用。"""
     settings = make_settings(tmp_path)
     mock = _EscalatingSubtaskMock()

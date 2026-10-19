@@ -15,6 +15,7 @@ Everything is offline; the commands are plain shell builtins / ``sleep``.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -45,7 +46,7 @@ def test_runs_in_the_workspace_root(settings):
     res = tool.run(command="echo hello > probe.txt")
     assert res.success is True, res.error
     assert res.data["exit_code"] == 0
-    assert "hello" in res.data["stdout"] or res.data["stdout"] == ""
+    assert res.data["stdout"] == ""  # the echo was redirected to the file
     assert (settings.artifacts_path / "probe.txt").read_text(encoding="utf-8").strip() == "hello"
 
 
@@ -178,6 +179,18 @@ def test_find_bash_uses_the_git_install_dir(tmp_path):
     assert find_bash(settings, environ={}, which=_which) == str(bash)
 
 
+def test_find_bash_reads_a_mingw64_git_install(tmp_path):
+    """Git for Windows often puts git.exe under <root>/mingw64/bin."""
+    git = _fake_bash(tmp_path / "Git" / "mingw64" / "bin" / "git.exe")
+    bash = _fake_bash(tmp_path / "Git" / "bin" / "bash.exe")
+    settings = _bash_settings(tmp_path)
+
+    def _which(name: str):
+        return str(git) if name == "git" else None
+
+    assert find_bash(settings, environ={}, which=_which) == str(bash)
+
+
 def test_find_bash_falls_back_to_path_and_skips_system32(tmp_path):
     stub = tmp_path / "System32" / "bash.exe"
     stub.parent.mkdir(parents=True)
@@ -197,6 +210,21 @@ def test_find_bash_falls_back_to_path_and_skips_system32(tmp_path):
         return None
 
     assert find_bash(settings, environ={}, which=_which) == str(real)
+
+
+def test_find_bash_keeps_looking_past_a_system32_path_hit(tmp_path):
+    """`which` stops at the first PATH hit; discovery must not."""
+    stub_dir = tmp_path / "Windows" / "System32"
+    stub = _fake_bash(stub_dir / "bash.exe")
+    real_dir = tmp_path / "Git" / "bin"
+    real = _fake_bash(real_dir / "bash.exe")
+    settings = _bash_settings(tmp_path)
+    environ = {"PATH": os.pathsep.join([str(stub_dir), str(real_dir)])}
+
+    def _which(name: str):
+        return str(stub) if name == "bash" else None
+
+    assert find_bash(settings, environ=environ, which=_which) == str(real)
 
 
 def test_find_bash_returns_none_when_nothing_is_found(tmp_path):
@@ -220,3 +248,56 @@ def test_task_manager_wires_bash_to_the_stop_flag(tmp_path):
     finally:
         set_current_task_id(None)
         tm._stop_flags.pop("task-1", None)
+
+
+def test_task_stop_ends_a_running_command(tmp_path):
+    """End to end: stop() -> the bash loop sees the flag -> tree killed -> park."""
+    settings = make_settings(tmp_path, sandbox_timeout=30)
+    mock = MockLLMClient(
+        plan=["run"],
+        tool_calls=[
+            {
+                "id": "b1",
+                "name": "bash",
+                "arguments": {
+                    "command": "echo started > stop_probe.txt; sleep 30",
+                },
+            }
+        ],
+        final_answer="done",
+    )
+    tm = make_manager(settings, mock)
+    task_id = tm.create_task(title="stop", user_input="run a long command")
+
+    started = settings.artifacts_path / "stop_probe.txt"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not started.exists():
+        time.sleep(0.05)
+    assert started.exists(), "the command never started"
+
+    stop_at = time.monotonic()
+    tm.stop(task_id)
+    # stop() persists INTERRUPTED immediately; the final state (with the bash
+    # record) lands when the worker unwinds. Wait for that, not for the status.
+    deadline = time.monotonic() + 10
+    bash_records = []
+    while time.monotonic() < deadline:
+        task = tm.get_task(task_id)
+        bash_records = [
+            tc
+            for step in (task.steps if task else [])
+            for tc in step.tool_calls
+            if tc.tool_name == "bash"
+        ]
+        if bash_records and bash_records[-1].status in ("failed", "success"):
+            break
+        time.sleep(0.05)
+    elapsed = time.monotonic() - stop_at
+
+    task = tm.get_task(task_id)
+    assert task is not None
+    assert task.status.value == "INTERRUPTED"
+    assert elapsed < 5
+    assert bash_records
+    assert bash_records[-1].status == "failed"
+    assert "stopped" in (bash_records[-1].error or "")
