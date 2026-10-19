@@ -17,9 +17,10 @@ Design rules (Issue #34 拍板 12):
   follows it (:func:`capture_before_image` returns False and logs);
 * **undoable in data** — restoring first photographs the files' current state
   into ``retention/`` (the v2 "undo the undo" entry point reads these);
-* **sandbox-root boundary** — only paths inside ``Settings.artifacts_path`` are
-  captured or replayed; ledger entries pointing elsewhere are skipped, so a
-  tampered ledger cannot write outside the sandbox.
+* **workspace-root boundary** — only paths inside the current task's workspace
+  (runtime context; ``Settings.artifacts_path`` outside a run) are captured or
+  replayed; ledger entries pointing elsewhere are skipped, so a tampered ledger
+  cannot write outside that directory.
 
 Layout::
 
@@ -43,7 +44,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import Settings
-from ..core.runtime_context import get_current_task_id
+from ..core.runtime_context import get_current_task_id, workspace_root
 from ..utils.logging import get_logger
 
 logger = get_logger("services.snapshots")
@@ -72,10 +73,10 @@ def _under_root(candidate: Path, root: Path) -> bool:
     return candidate == root or root in candidate.parents
 
 
-def _relative_in_sandbox(path: Path, settings: Settings) -> Optional[str]:
-    """Return the POSIX sandbox-relative path, or None when outside the root."""
+def _relative_in_sandbox(path: Path, root: Path) -> Optional[str]:
+    """Return the POSIX root-relative path, or None when outside the root."""
     try:
-        root = settings.artifacts_path.resolve()
+        root = Path(root).resolve()
         candidate = Path(path).resolve()
     except Exception:
         return None
@@ -145,7 +146,7 @@ def capture_before_image(path: Path, *, settings: Settings | None = None) -> boo
     task_id = get_current_task_id()
     if not task_id:
         return False
-    rel = _relative_in_sandbox(path, settings)
+    rel = _relative_in_sandbox(path, workspace_root(settings))
     if rel is None:
         return False
     target = Path(path)
@@ -237,7 +238,9 @@ def _replay_entry(target: Optional[Path], task_dir: Path, entry: Dict[str, Any])
         logger.warning("replay of %s failed (%s: %s)", rel, type(exc).__name__, exc)
 
 
-def restore_task(task_id: str, *, settings: Settings) -> Dict[str, Any]:
+def restore_task(
+    task_id: str, *, settings: Settings, workspace: Optional[Path] = None
+) -> Dict[str, Any]:
     """Replay the ledger backwards: the sandbox returns to its pre-task state.
 
     Whole-task granularity (拍板 10): every file the task touched ends at the
@@ -253,7 +256,7 @@ def restore_task(task_id: str, *, settings: Settings) -> Dict[str, Any]:
     if not entries:
         return result
 
-    root = settings.artifacts_path.resolve()
+    root = (Path(workspace) if workspace is not None else settings.artifacts_path).resolve()
     # De-duplicate by path in first-write order and confine ONCE: retention,
     # the before/after digests and the replay all use the same resolved target,
     # and an entry that escapes the sandbox is dropped here — before anything

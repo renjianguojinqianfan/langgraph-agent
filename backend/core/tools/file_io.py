@@ -1,9 +1,10 @@
 """Sandbox file tools: the discrete six-piece family.
 
-All paths are confined to ``Settings.artifacts_path`` (the sandbox root). Reads
-outside the root, writes that escape the root, and non-existent files are
-rejected. Successful writes return the absolute path so the kernel can register
-an :class:`~backend.services.persistence.Artifact`.
+All paths are confined to the task's workspace (runtime context, falling back
+to ``Settings.artifacts_path`` outside a run). Reads outside the root, writes
+that escape the root, and non-existent files are rejected. Successful writes
+return the absolute path so the kernel can register an
+:class:`~backend.services.persistence.Artifact`.
 
 Each capability is its own ``BaseTool`` so the function schema and the
 per-tool confirm policy stay focused:
@@ -60,9 +61,10 @@ def _coerce_int(value: Any, default: int) -> int:
 class _SandboxedTool(BaseTool):
     """Base for the discrete file tools.
 
-    Confines every path to ``Settings.artifacts_path``. Local FS operations are
-    deterministic and need no human confirmation (sandbox-confined file writes
-    are not on the AGENTS.md danger list).
+    Confines every path to the task workspace (runtime context, falling back to
+    ``Settings.artifacts_path``). Local FS operations are deterministic and need
+    no human confirmation (workspace-confined file writes are not on the
+    AGENTS.md danger list).
     """
 
     requires_confirm = False

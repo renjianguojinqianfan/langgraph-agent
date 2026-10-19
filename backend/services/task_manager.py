@@ -466,10 +466,6 @@ class TaskManager:
             self._checkpoint_conn = None
 
     # ── creation / query ──
-    @property
-    def default_workspace(self) -> str:
-        return self._default_workspace
-
     @staticmethod
     def _require_workspace(task: Task) -> None:
         if not Path(task.workspace).is_dir():
@@ -1175,7 +1171,9 @@ class TaskManager:
         if self._trace is not None:
             self._trace.attach(self.event_bus, task_id)
         try:
-            result = restore_task(task_id, settings=self.settings)
+            result = restore_task(
+                task_id, settings=self.settings, workspace=Path(task.workspace)
+            )
             self.event_bus.publish(
                 task_id, "task_rollback", {"task_id": task_id, **result}
             )

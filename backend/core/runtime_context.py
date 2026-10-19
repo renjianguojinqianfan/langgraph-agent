@@ -25,16 +25,24 @@ Tokens = Tuple[Token[Optional[str]], Token[Optional[Path]]]
 
 
 def normalize_workspace(value: "str | Path") -> str:
-    """Canonical absolute path used for storage and comparison.
+    """Absolute path used for storage and execution.
 
     Resolves ``~``, relative paths (against the process cwd), ``..`` and
-    symlinks. On Windows ``os.path.normcase`` also folds drive-letter case and
-    slash direction, so two spellings of one directory compare equal.
+    symlinks, keeping the original letter case for display.
     """
     path = Path(value).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
-    return os.path.normcase(str(path.resolve()))
+    return str(path.resolve())
+
+
+def workspace_key(value: "str | Path") -> str:
+    """Comparison key: ``normalize_workspace`` + ``os.path.normcase``.
+
+    On Windows this folds drive-letter case and slash direction, so two
+    spellings of one directory filter identically.
+    """
+    return os.path.normcase(normalize_workspace(value))
 
 
 def get_current_task_id() -> Optional[str]:
@@ -63,7 +71,3 @@ def reset_runtime_context(tokens: Tokens) -> None:
 
 def set_current_task_id(task_id: Optional[str]) -> Token[Optional[str]]:
     return _task_id.set(task_id or None)
-
-
-def reset_current_task_id(token: Token[Optional[str]]) -> None:
-    _task_id.reset(token)

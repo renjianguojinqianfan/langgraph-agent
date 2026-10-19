@@ -106,7 +106,7 @@ def test_every_tool_and_skill_follow_its_own_workspace(tmp_path):
         assert "probe.txt" in json.dumps(_outputs(task, "glob"), ensure_ascii=False)
         assert f"bye {tag}" in json.dumps(_outputs(task, "grep"), ensure_ascii=False)
         bash = _outputs(task, "bash")[0]
-        assert os.path.normcase(bash["cwd"]) == normalize_workspace(a if tag == "A" else b)
+        assert os.path.normcase(bash["cwd"]) == os.path.normcase(normalize_workspace(a if tag == "A" else b))
         assert f"BODY-SENTINEL-{tag}" in json.dumps(_outputs(task, "load_skill"), ensure_ascii=False)
 
     assert "SENTINEL-B" not in json.dumps(task_a, ensure_ascii=False)
@@ -172,7 +172,12 @@ def test_list_filters_by_directory_and_all(tmp_path):
         only_a = client.get("/api/tasks", params={"dir": str(a)}).json()["data"]["tasks"]
         assert [t["id"] for t in only_a] == [id_a]
 
-        spellings = [str(a) + os.sep, str(a) + os.sep + ".", str(a) + os.sep + "nested" + os.sep + ".."]
+        spellings = [
+            str(a) + os.sep,
+            str(a) + os.sep + ".",
+            str(a) + os.sep + "nested" + os.sep + "..",
+            str(a).replace(os.sep, "/"),
+        ]
         if os.name == "nt":
             spellings.append(str(a).upper())
         for spelling in spellings:
@@ -229,6 +234,84 @@ def test_send_message_to_a_deleted_workspace_returns_409(tmp_path):
         assert "workspace" in r.json()["detail"]
     finally:
         client.__exit__(None, None, None)
+
+
+def test_injection_is_built_from_the_runtime_workspace(tmp_path):
+    """The runtime seats the workspace before AgentRuntime builds the block."""
+    settings = make_settings(tmp_path, context_inject_enabled=True)
+    workspace = tmp_path / "inject-run"
+    workspace.mkdir()
+    (workspace / "AGENTS.md").write_text("SENTINEL-RUNTIME", encoding="utf-8")
+
+    class _RecordingMock(MockLLMClient):
+        def __init__(self):
+            super().__init__(final_answer="ok")
+            self.seen: list = []
+
+        def complete(self, messages, tools=None, **kwargs):
+            self.seen.append(messages)
+            return super().complete(messages, tools=tools, **kwargs)
+
+    mock = _RecordingMock()
+    tm = make_manager(settings, mock)
+    with TestClient(app, base_url="http://localhost") as client:
+        getattr(client.app, "state").task_manager = tm
+        r = client.post("/api/tasks", json={"input": "hi", "workspace": str(workspace)})
+        _wait_parked(client, r.json()["data"]["task_id"])
+
+    assert "SENTINEL-RUNTIME" in json.dumps(mock.seen[0], ensure_ascii=False)
+
+
+def test_rollback_uses_the_task_workspace(tmp_path):
+    settings = make_settings(tmp_path, snapshot_enabled=True)
+    workspace = tmp_path / "rollback-ws"
+    workspace.mkdir()
+    target = workspace / "f.txt"
+    target.write_text("v1", encoding="utf-8")
+
+    from backend.services.snapshots import capture_before_image, restore_task
+
+    tokens = set_runtime_context("t-roll", workspace)
+    try:
+        assert capture_before_image(target, settings=settings) is True
+        target.write_text("v2", encoding="utf-8")
+        result = restore_task("t-roll", settings=settings, workspace=workspace)
+    finally:
+        reset_runtime_context(tokens)
+
+    assert result["files"] == ["f.txt"]
+    assert target.read_text(encoding="utf-8") == "v1"
+
+
+def test_malformed_workspace_does_not_quarantine_history(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    records = [
+        {
+            "id": "good",
+            "title": "good",
+            "user_input": "good",
+            "status": "INTERRUPTED",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        },
+        {
+            "id": "bad",
+            "title": "bad",
+            "user_input": "bad",
+            "workspace": "bad\u0000path",
+            "status": "INTERRUPTED",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        },
+    ]
+    (settings.data_path / "tasks.json").write_text(json.dumps(records), encoding="utf-8")
+
+    persistence = Persistence(settings)
+
+    assert persistence.load_task("good") is not None
+    assert persistence.load_task("bad") is None
+    assert not list(settings.data_path.glob("tasks.json.corrupt-*"))
 
 
 def test_subagent_inherits_the_parent_workspace(tmp_path):

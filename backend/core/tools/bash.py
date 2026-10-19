@@ -6,8 +6,9 @@ a wall-clock timeout and a stop watcher. There is **no sandbox**: the child has
 the same account privileges as this process and the working directory is a
 starting point, not a fence — see README「这不是安全边界」.
 
-The working directory is ``Settings.artifacts_path`` (the workspace root the
-file tools use). Output is captured to a bounded tail buffer rather than
+The working directory is the task's workspace (runtime context, falling back
+to ``Settings.artifacts_path`` outside a run). Output is captured to a bounded
+tail buffer rather than
 ``subprocess.run``'s full copy: a runaway command must not be able to exhaust
 memory, and the tail is what the next model turn needs.
 
