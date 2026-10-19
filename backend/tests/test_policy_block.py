@@ -34,7 +34,7 @@ from backend.tests.conftest import make_settings
 
 TASK_ID = "t_policy_block"
 
-#: 一次调用在 ``executor`` 出口的键集合 —— 空表时一个键都不许增减（#136 AC1）。
+#: 一次工具调用记录的键集合 —— 空表时一个键都不许增减（#136 AC1）。
 #: （``need_confirm`` / ``confirmed`` 两列已随 #138 从记录体契约里删除，故不在集合里。）
 PRE_S2_RECORD_KEYS = frozenset(
     {"id", "tool_name", "input", "output", "status", "error"}

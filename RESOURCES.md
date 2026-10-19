@@ -35,7 +35,6 @@
 - `backend/core/agent/graph.py` — 全项目唯一一张图（agent / tool / finish），条件边活教材
 - `backend/core/agent/state.py` — AgentState TypedDict，状态建模教材
 - `backend/core/agent/nodes.py` — 三个节点的真实实现（单 loop、两种模式）
-- `backend/core/tools/resilience.py` — 熔断/重试/ToolExecutor
 - `backend/services/task_manager.py` — resume / 孤儿对账 / 权威停止信号
 - `docs/architecture.md` 与 `docs/incremental-arch-p0..p3.md` — 项目自带架构文档（含每轮迭代的「为什么」）
 - `OVERVIEW.md` — 五轮迭代交付全记录（面试叙事的素材矿）

@@ -10,7 +10,7 @@ independent perspective. Coverage gaps addressed here:
   danger signal derived from the server's self-reported hints (issue #57);
 * ``McpTool.run`` result mapping: ``isError=true`` -> ``success=False``;
   structured content extraction; empty content;
-* executor end-to-end (executor -> tool_node -> success) for an MCP tool;
+* agent end-to-end (agent -> tool_node -> success) for an MCP tool;
 * REST ``GET /api/mcp/servers`` via TestClient (disabled -> empty list;
   connected -> connected + tools_count; failure -> error);
 * TaskManager integration: MCP tools actually land in ``_tools`` and
@@ -240,8 +240,8 @@ def test_mcp_tool_manager_exception_maps_to_failure():
     assert "connection lost" in res.error
 
 
-# ─────────────────── executor pass (end-to-end) ───────────────────
-def _mcp_executor_state() -> dict:
+# ─────────────────── agent pass (end-to-end) ───────────────────
+def _mcp_agent_state() -> dict:
     return {
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
@@ -253,8 +253,8 @@ def _mcp_executor_state() -> dict:
     }
 
 
-def test_executor_read_tool_executes_directly(tmp_path):
-    """A read tool runs over executor -> tool_node (no gate, #138)."""
+def test_agent_read_tool_executes_directly(tmp_path):
+    """A read tool runs over agent -> tool_node (no gate, #138)."""
     s = _echo_settings(tmp_path)
     mgr = McpClientManager(s)
     mgr.connect_all()
@@ -282,7 +282,7 @@ def test_executor_read_tool_executes_directly(tmp_path):
         "t_qa_mcp_read", _FakeTM(), llm=mock, tools=[tool],
         tool_schemas=[tool.to_openai_schema()],
     )
-    state = _mcp_executor_state()
+    state = _mcp_agent_state()
     rt.agent(state)
     # tool_node executes immediately -> success.
     rt.tool_node(state)

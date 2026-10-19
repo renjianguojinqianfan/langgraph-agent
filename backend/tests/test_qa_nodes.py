@@ -82,9 +82,9 @@ def _tool_messages(state: AgentState) -> list:
 def test_tool_node_executes_each_call_once():
     """One dispatch = one execution, and no retry/breaker fields (#157).
 
-    The old executor retried a failed tool behind the model's back (default
-    ``tool_max_retries=2``), so a deterministic failure ran three times. The
-    model must instead see the single failure and decide what to do next.
+    The old executor retried a failed tool twice behind the model's back, so a
+    deterministic failure ran three times. The model must instead see the single
+    failure and decide what to do next.
     """
     settings = Settings()
     tool = _FailTool(settings)

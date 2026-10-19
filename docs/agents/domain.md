@@ -32,8 +32,8 @@ Single-context repo (this repo's layout):
 ├── AGENTS.md                          ← agent operating manual (exists; short entry: positioning /
 │                                        safety boundaries / task routing / verification / Agent skills)
 ├── docs/
-│   ├── adr/                           ← decisions (0001–0004 live; 0005–0007 retired;
-│   │                                     0008 single loop + plan/build two modes;
+│   ├── adr/                           ← decisions (0001 / 0002 / 0004 live; 0003 retired with C2;
+│   │                                     0005–0007 retired; 0008 single loop + plan/build two modes;
 │   │                                     0009 minimal-agent chapter)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   │                                     「冻结」只覆盖**已交付增量**的记录——不改写，现状写进权威段
