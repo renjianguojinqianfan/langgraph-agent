@@ -64,6 +64,17 @@ def _open_at(port: int, no_browser: bool, browser: Callable[[str], None]) -> Non
     print(f"[qianfan] 已有后台在 http://{HOST}:{port}/，本目录：{os.getcwd()}")
 
 
+def _handoff(running: server_lock.ServerLock, no_browser: bool, browser: Callable[[str], None]) -> int:
+    if running.mode != "serve":
+        print(
+            "[qianfan] 开发后台（start.py）在跑，qianfan 不接开发后台；"
+            "请用 http://127.0.0.1:5173，或先停掉 start.py。"
+        )
+        return 2
+    _open_at(running.port, no_browser, browser)
+    return 0
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -90,8 +101,7 @@ def main(
     # live instance instead of starting a second writer of tasks.json.
     running = server_lock.find_running(lock_file, probe=probe_health)
     if running is not None:
-        _open_at(running.port, args.no_browser, browser)
-        return 0
+        return _handoff(running, args.no_browser, browser)
 
     if not (dist / "index.html").is_file():
         print(f"[qianfan] 找不到前端构建产物：{dist}")
@@ -114,9 +124,8 @@ def main(
         # Lost a race with another launcher: hand off to the winner.
         running = server_lock.find_running(lock_file, probe=probe_health)
         if running is not None:
-            _open_at(running.port, args.no_browser, browser)
-            return 0
-        print(f"[qianfan] 无法登记后台实例（{lock_file}），请稍后重试。")
+            return _handoff(running, args.no_browser, browser)
+        print(f"[qianfan] 后台可能正在启动或登记记录损坏（{lock_file}），请稍后再试。")
         return 1
 
     try:

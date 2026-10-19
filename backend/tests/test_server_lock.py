@@ -33,12 +33,13 @@ def _settings(monkeypatch, tmp_path, port=8000):
     return settings
 
 
-def _lock(port=9123, pid=None, instance="tok"):
+def _lock(port=9123, pid=None, instance="tok", mode="serve"):
     return ServerLock(
         pid=os.getpid() if pid is None else pid,
         port=port,
         started_at=server_lock.now_iso(),
         instance=instance,
+        mode=mode,
     )
 
 
@@ -171,3 +172,52 @@ def test_find_running_clears_a_dead_record(tmp_path):
     server_lock.claim_lock(path, _lock(pid=999_999))
     assert server_lock.find_running(path, probe=lambda port, timeout: None, wait=0) is None
     assert server_lock.read_lock(path) is None
+
+
+def test_find_running_drops_a_corrupt_record(tmp_path):
+    path = tmp_path / "data" / "server.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    assert server_lock.find_running(path, probe=lambda port, timeout: None, wait=0) is None
+    assert not path.exists()
+
+
+def test_find_running_keeps_a_booting_backend_record(tmp_path):
+    """A live pid whose health is not up yet must not lose its registration."""
+    path = tmp_path / "data" / "server.json"
+    server_lock.claim_lock(path, _lock(pid=os.getpid()))
+    assert (
+        server_lock.find_running(
+            path, probe=lambda port, timeout: None, wait=0, interval=0
+        )
+        is None
+    )
+    assert server_lock.read_lock(path) is not None
+
+
+def test_release_lock_honours_the_instance_guard(tmp_path):
+    path = tmp_path / "data" / "server.json"
+    server_lock.claim_lock(path, _lock(instance="mine"))
+    server_lock.release_lock(path, "someone-else")
+    assert server_lock.read_lock(path) is not None
+    server_lock.release_lock(path, "mine")
+    assert server_lock.read_lock(path) is None
+
+
+def test_qianfan_refuses_to_hand_off_to_the_dev_backend(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, tmp_path)
+    server_lock.claim_lock(server_lock.lock_path(settings), _lock(instance="dev", mode="dev"))
+
+    served: list = []
+    opened: list = []
+    code = cli.main(
+        [],
+        serve=lambda host, port: served.append(port),
+        open_browser=opened.append,
+        probe=lambda port, timeout: {"instance": "dev"},
+    )
+
+    assert code == 2
+    assert served == []
+    assert opened == []

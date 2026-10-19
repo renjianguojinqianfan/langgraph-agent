@@ -86,22 +86,25 @@ def main() -> int:
     if args.mock:
         env["USE_MOCK_LLM"] = "true"
 
-    # Import only after --install: the launcher itself stays stdlib-only until
-    # the dependencies are in place (backend.server_lock is stdlib-only).
+    # backend.server_lock is stdlib-only; backend.config needs the runtime deps
+    # and is imported only when this launch actually starts the backend.
     from backend import server_lock
-    from backend.config import get_settings
 
-    settings = get_settings()
-    if not args.frontend_only and _refuse_if_running(settings):
-        return 2
-    lock_file = server_lock.lock_path(settings)
-    instance = server_lock.new_instance()
-    env["QIANFAN_INSTANCE"] = instance
+    lock_file = None
+    instance = ""
     claimed = False
 
     procs: list[subprocess.Popen] = []
     try:
         if not args.frontend_only:
+            from backend.config import get_settings
+
+            settings = get_settings()
+            if _refuse_if_running(settings):
+                return 2
+            lock_file = server_lock.lock_path(settings)
+            instance = server_lock.new_instance()
+            env["QIANFAN_INSTANCE"] = instance
             backend_cmd = [
                 sys.executable, "-m", "uvicorn", "backend.main:app",
                 "--host", settings.host, "--port", str(args.port), "--reload",
@@ -113,6 +116,7 @@ def main() -> int:
                 port=args.port,
                 started_at=server_lock.now_iso(),
                 instance=instance,
+                mode="dev",
             )
             if not server_lock.claim_lock(lock_file, lock):
                 print(
@@ -138,7 +142,7 @@ def main() -> int:
                 p.wait(timeout=5)
             except Exception:
                 p.kill()
-        if claimed:
+        if claimed and lock_file is not None:
             server_lock.release_lock(lock_file, instance)
     return 0
 

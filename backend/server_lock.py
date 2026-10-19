@@ -33,6 +33,9 @@ class ServerLock:
     port: int
     started_at: str
     instance: str
+    #: ``serve`` = qianfan (same-origin build); ``dev`` = start.py (Vite on
+    #: :5173, the API port does not necessarily serve the UI).
+    mode: str = "serve"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -40,6 +43,7 @@ class ServerLock:
             "port": self.port,
             "started_at": self.started_at,
             "instance": self.instance,
+            "mode": self.mode,
         }
 
     @classmethod
@@ -49,6 +53,7 @@ class ServerLock:
             port=int(data["port"]),
             started_at=str(data["started_at"]),
             instance=str(data["instance"]),
+            mode=str(data.get("mode") or "serve"),
         )
 
 
@@ -82,6 +87,8 @@ def claim_lock(path: Path, lock: ServerLock) -> bool:
         return False
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(lock.to_dict(), handle)
+        handle.flush()
+        os.fsync(handle.fileno())
     return True
 
 
@@ -90,6 +97,13 @@ def release_lock(path: Path, instance: str) -> None:
     current = read_lock(path)
     if current is None or current.instance != instance:
         return
+    try:
+        Path(path).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _drop_corrupt(path: Path) -> None:
     try:
         Path(path).unlink()
     except FileNotFoundError:
@@ -151,17 +165,21 @@ def find_running(
     lock_file: Path,
     *,
     probe: Callable[[int, float], Optional[Dict[str, Any]]] = probe_health,
-    wait: float = 5.0,
+    wait: float = 15.0,
     interval: float = 0.2,
 ) -> Optional[ServerLock]:
     """Return the live backend, or clear a stale record and return None.
 
-    A live pid whose ``/health`` does not carry the recorded instance id is
-    stale (pid reuse / a different program on the port); a dead pid is stale
-    immediately.
+    Stale = a dead pid, an unreadable record, or a live pid whose ``/health``
+    answers with a *different* instance id (pid reuse / another program on the
+    port). A live pid whose health never answers inside ``wait`` is **kept**:
+    the backend is probably still starting, and deleting its record would let a
+    later launch start a second writer of ``tasks.json``.
     """
     lock = read_lock(lock_file)
     if lock is None:
+        if Path(lock_file).exists():
+            _drop_corrupt(lock_file)
         return None
     if not pid_alive(lock.pid):
         release_lock(lock_file, lock.instance)
@@ -172,9 +190,8 @@ def find_running(
         if health is not None:
             if str(health.get("instance") or "") == lock.instance:
                 return lock
-            break  # another instance owns the port: the record is stale
+            release_lock(lock_file, lock.instance)  # another instance owns the port
+            return None
         if time.monotonic() >= deadline:
-            break
+            return None  # still booting: keep the record
         time.sleep(interval)
-    release_lock(lock_file, lock.instance)
-    return None
