@@ -217,7 +217,9 @@ def test_find_bash_keeps_looking_past_a_system32_path_hit(tmp_path):
     stub_dir = tmp_path / "Windows" / "System32"
     stub = _fake_bash(stub_dir / "bash.exe")
     real_dir = tmp_path / "Git" / "bin"
-    real = _fake_bash(real_dir / "bash.exe")
+    # The System32 stub is a Windows artifact; on POSIX the scanner looks for
+    # a bare ``bash``, so create the file it will actually probe there.
+    real = _fake_bash(real_dir / ("bash.exe" if os.name == "nt" else "bash"))
     settings = _bash_settings(tmp_path)
     environ = {"PATH": os.pathsep.join([str(stub_dir), str(real_dir)])}
 
