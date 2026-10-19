@@ -142,8 +142,20 @@ def test_background_command_returns_without_waiting_for_inherited_pipes(settings
 
     assert res.success is True, res.error
     assert res.data["stdout"].strip() == "started"
-    assert elapsed < 2.0, f"background command took {elapsed:.2f}s"
+    assert elapsed < 1.5, f"background command took {elapsed:.2f}s"
     flag.set()  # reap the background sleep promptly
+
+
+def test_background_mechanism_is_platform_specific():
+    """Windows uses a Job Object; POSIX uses the shell's process group."""
+    from backend.core.tools.bash import _make_job
+
+    if os.name == "nt":
+        job = _make_job()
+        assert job is not None
+        job.close()
+    else:
+        assert _make_job() is None
 
 
 def test_pump_threads_exit_after_return(settings):
@@ -394,3 +406,33 @@ def test_task_stop_reaps_a_background_process_after_the_call_returned(tmp_path):
     tm.stop(task_id)
     time.sleep(3.5)
     assert not marker.exists(), "background process survived the stop after the call returned"
+
+
+def test_stop_reaps_the_background_process_of_a_parked_task(tmp_path):
+    """A finished round parks; a later stop must still reap its background tree."""
+    settings = make_settings(tmp_path, sandbox_timeout=30)
+    marker = settings.artifacts_path / "parked_survivor.txt"
+    mock = MockLLMClient(
+        plan=["run"],
+        tool_calls=[
+            {
+                "id": "b1",
+                "name": "bash",
+                "arguments": {
+                    "command": f"(sleep 3; echo leaked > '{marker.as_posix()}') & echo started",
+                },
+            }
+        ],
+        final_answer="done",
+    )
+    tm = make_manager(settings, mock)
+    task_id = tm.create_task(title="parked", user_input="start a background job")
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and task_id in tm._threads:
+        time.sleep(0.05)
+    assert task_id not in tm._threads, "the round never parked"
+
+    tm.stop(task_id)  # no live run; only the background killer can act
+    time.sleep(3.5)
+    assert not marker.exists(), "a parked task's background process survived the stop"

@@ -577,6 +577,14 @@ class TaskManager:
                 self._trace.close(task_id)
 
     # ── control ──
+    def kill_background(self, task_id: str) -> int:
+        """Reap bash background trees owned by ``task_id`` (S1 / #148 F3)."""
+        killed = 0
+        for tool in self._tools:
+            if isinstance(tool, BashTool):
+                killed += tool.kill_background(task_id)
+        return killed
+
     def stop(self, task_id: str) -> Dict[str, Any]:
         """Ask the live run to stop; a parked task is left alone.
 
@@ -588,6 +596,8 @@ class TaskManager:
         the next continuation, which the first node entry would then abort.
         """
         task = self.persistence.load_task(task_id)
+        # Background trees outlive their call; a parked task still owns them.
+        self.kill_background(task_id)
         live = task is not None and task.status in (
             TaskStatus.RUNNING,
             TaskStatus.PENDING,

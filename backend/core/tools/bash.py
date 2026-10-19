@@ -317,11 +317,12 @@ class _ProcessContainer:
             self.job = None
 
 
-@dataclass
+@dataclass(eq=False)
 class _BackgroundProcess:
     container: _ProcessContainer
     context: contextvars.Context
     checker: Callable[[], bool]
+    task_id: str
 
 
 _CREATE_SUSPENDED = 0x00000004
@@ -415,14 +416,32 @@ class BashTool(BaseTool):
             logger.warning("bash stop checker failed", exc_info=True)
             return False
 
+    def kill_background(self, task_id: str) -> int:
+        """Kill background trees left by a call of ``task_id``; returns the count.
+
+        Called by ``TaskManager.stop`` so a parked task's background processes
+        are reaped too — the stop flag alone only reaches a live run.
+        """
+        with self._background_lock:
+            entries = [entry for entry in self._background if entry.task_id == task_id]
+            for entry in entries:
+                self._background.remove(entry)
+        for entry in entries:
+            entry.container.terminate()
+            entry.container.close()
+        return len(entries)
+
     def _register_background(
         self,
         container: _ProcessContainer,
         context: contextvars.Context,
         checker: Callable[[], bool],
+        task_id: str,
     ) -> None:
         with self._background_lock:
-            self._background.append(_BackgroundProcess(container, context, checker))
+            self._background.append(
+                _BackgroundProcess(container, context, checker, task_id)
+            )
             if self._reaper is None or not self._reaper.is_alive():
                 self._reaper = threading.Thread(
                     target=self._reap_background, name="bash-reaper", daemon=True
@@ -463,8 +482,12 @@ class BashTool(BaseTool):
         if not isinstance(command, str) or not command.strip():
             return ToolResult(success=False, error="`command` is required.")
 
+        # Local import: W1 moves this contextvar out of services/snapshots.
+        from ...services.snapshots import get_current_task_id
+
         stop_context = contextvars.copy_context()
         stop_checker: Callable[[], bool] = self.stop_checker or _never_stopped
+        task_id = get_current_task_id() or ""
         settings = self._settings
         bash = find_bash(settings)
         if bash is None:
@@ -523,6 +546,10 @@ class BashTool(BaseTool):
             except Exception as exc:  # pragma: no cover - OS-facing
                 job.close()
                 proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:  # pragma: no cover - defensive
+                    pass
                 return ToolResult(success=False, error=f"failed to resume bash: {exc}")
             if not assigned:
                 job.close()
@@ -591,7 +618,7 @@ class BashTool(BaseTool):
             error = ""
 
         if container.alive():
-            self._register_background(container, stop_context, stop_checker)
+            self._register_background(container, stop_context, stop_checker, task_id)
         else:
             container.close()
 
