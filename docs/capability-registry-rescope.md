@@ -105,6 +105,8 @@
 
 ### 0.9 本章切片（G-30）
 
+> **2026-10-20 起 C4 及以后的排序与内容以 [`docs/specs/qianfan-daily-form-plan.md`](specs/qianfan-daily-form-plan.md) §4 为准**（[ADR 0010](adr/0010-launch-dir-workspace-and-model-profiles.md)，spec #166）；本节正文冻结为 C1–C3 的过程记录，不再改。
+
 串行，一片一个 PR；每片按 `docs/pivot-plan-build.md` §纪律走（删测试逐条写明删的是哪个已删功能的测试；`AGENTS.md` 局部改动随片；C3 / C5 / C6 合前手跑一次真模型）。动到 SSE 事件的片同步 `docs/architecture.md` §3.4 并跑 `npm run check:sse`（改 architecture 会触发全套 CI）。
 
 | 片 | 内容 | 随片落的文档 |
