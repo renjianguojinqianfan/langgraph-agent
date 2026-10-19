@@ -131,6 +131,61 @@ def test_stop_kills_the_whole_process_tree(settings):
     assert not survived.exists()
 
 
+def test_background_command_returns_without_waiting_for_inherited_pipes(settings):
+    """`cmd &` must not hold the call open through the child's inherited pipes."""
+    tool = BashTool(settings)
+    flag = threading.Event()
+    tool.stop_checker = flag.is_set
+    start = time.monotonic()
+    res = tool.run(command="sleep 5 & echo started", timeout=30)
+    elapsed = time.monotonic() - start
+
+    assert res.success is True, res.error
+    assert res.data["stdout"].strip() == "started"
+    assert elapsed < 2.0, f"background command took {elapsed:.2f}s"
+    flag.set()  # reap the background sleep promptly
+
+
+def test_pump_threads_exit_after_return(settings):
+    tool = BashTool(settings)
+    flag = threading.Event()
+    tool.stop_checker = flag.is_set
+    res = tool.run(command="sleep 5 & echo started", timeout=30)
+    assert res.success is True, res.error
+
+    pumps = [t for t in threading.enumerate() if t.name.startswith("bash-pump")]
+    assert pumps == []
+    flag.set()
+
+
+def test_stop_after_return_kills_the_background_process(settings):
+    """A stop requested after the call returned still reaps its background tree."""
+    marker = settings.artifacts_path / "late_survivor.txt"
+    flag = threading.Event()
+    tool = BashTool(settings)
+    tool.stop_checker = flag.is_set
+
+    res = tool.run(command=f"(sleep 3; echo leaked > '{marker.as_posix()}') & echo started", timeout=30)
+    assert res.success is True, res.error
+    assert not marker.exists()
+
+    flag.set()
+    time.sleep(3.5)
+    assert not marker.exists(), "background process survived the task stop"
+
+
+def test_background_process_runs_when_not_stopped(settings):
+    """Control for the test above: without a stop the marker does appear."""
+    marker = settings.artifacts_path / "ran_without_stop.txt"
+    tool = BashTool(settings)
+    tool.stop_checker = threading.Event().is_set
+
+    res = tool.run(command=f"(sleep 2; echo ran > '{marker.as_posix()}') & echo started", timeout=30)
+    assert res.success is True, res.error
+    time.sleep(2.8)
+    assert marker.exists()
+
+
 def test_long_output_keeps_the_tail(settings):
     tool = BashTool(settings)
     res = tool.run(command="for i in $(seq 1 5000); do echo line-$i; done")
@@ -303,3 +358,39 @@ def test_task_stop_ends_a_running_command(tmp_path):
     assert bash_records
     assert bash_records[-1].status == "failed"
     assert "stopped" in (bash_records[-1].error or "")
+
+
+def test_task_stop_reaps_a_background_process_after_the_call_returned(tmp_path):
+    """The stop flag is read in the call's context, not the reaper's thread."""
+    settings = make_settings(tmp_path, sandbox_timeout=30)
+    marker = settings.artifacts_path / "late_survivor_task.txt"
+    waiting = settings.artifacts_path / "waiting.txt"
+    mock = MockLLMClient(
+        plan=["run"],
+        tool_calls=[
+            {
+                "id": "b1",
+                "name": "bash",
+                "arguments": {
+                    "command": f"(sleep 3; echo leaked > '{marker.as_posix()}') & echo started",
+                },
+            },
+            {
+                "id": "b2",
+                "name": "bash",
+                "arguments": {"command": f"echo waiting > '{waiting.as_posix()}'; sleep 30"},
+            },
+        ],
+        final_answer="done",
+    )
+    tm = make_manager(settings, mock)
+    task_id = tm.create_task(title="background", user_input="start a background job")
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not waiting.exists():
+        time.sleep(0.05)
+    assert waiting.exists(), "the second command never started"
+
+    tm.stop(task_id)
+    time.sleep(3.5)
+    assert not marker.exists(), "background process survived the stop after the call returned"
