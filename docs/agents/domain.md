@@ -10,11 +10,12 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grilling` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-> **Current state (2026-10-19):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
+> **Current state (2026-10-20):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
 > authority stays in `backend/core/agent/state.py`; follows upstream's `GLOSSARY.md` convention
-> since #876); `docs/adr/` holds `0001`–`0009` — `0001`, `0002`, `0004`, `0008` and `0009` are live,
+> since #876); `docs/adr/` holds `0001`–`0010` — `0001`, `0002`, `0004`, `0008`, `0009` and `0010` are live,
 > `0005`–`0007` retired with `0008` (single loop + plan/build two modes), and `0003` retired with
-> slice C2; `0009` is the minimal-agent chapter, whose C5 slice will retire `0004`. This repo is **single-context** —
+> slice C2; `0009` is the minimal-agent chapter, whose C5 slice will retire `0004`; `0010` supplements it with the
+> daily form (launch dir = workspace owned by the task, one shared server, model profiles). This repo is **single-context** —
 > one `GLOSSARY.md` + one `docs/adr/` at the root. No `GLOSSARY-MAP.md`, no per-package context dirs.
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
@@ -34,7 +35,7 @@ Single-context repo (this repo's layout):
 ├── docs/
 │   ├── adr/                           ← decisions (0001 / 0002 / 0004 live; 0003 retired with C2;
 │   │                                     0005–0007 retired; 0008 single loop + plan/build two modes;
-│   │                                     0009 minimal-agent chapter)
+│   │                                     0009 minimal-agent chapter; 0010 daily form)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   │                                     「冻结」只覆盖**已交付增量**的记录——不改写，现状写进权威段
 │   │                                     （README 能力 / architecture）；**未开工增量**的 spec 是活的设计
@@ -89,8 +90,9 @@ D1–D9), `0002` (moat discipline — **部分退役**：「受保护文件零�
 `0004` (a product is a file the task *wrote*: only `registers_artifact` tools are product
 sources, deduped per task by resolved path — so **#72's "read 回读不再登记 / 重写只一条" is by
 design, not a bug to re-file**), `0008` (single loop + plan/build two modes — **0005–0007 已随之退役；
-0003 随 C2 删除熔断后退役**)
-and `0009` (minimal-agent chapter: pi-style tool face, plan file, one-command start)
+0003 随 C2 删除熔断后退役**),
+`0009` (minimal-agent chapter: pi-style tool face, plan file, one-command start)
+and `0010` (daily form: launch dir = workspace owned by the task, one shared server, model profiles)
 are the live ADRs today. Beyond them, the equivalent
 frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (artifact registration,
 conftest isolation, dependency matrix, quality-gate baseline). Treat a contradiction with those
