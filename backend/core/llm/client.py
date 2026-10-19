@@ -157,7 +157,7 @@ def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
     """Build a :class:`MockLLMClient` from a JSON script file (issue #108).
 
     The file lets an offline script exercise a real tool round (``code_exec``,
-    a git write tool, ``spawn_subagent``) — in the browser — without any LLM key.
+    ``http_request``, ``spawn_subagent``) — in the browser — without any LLM key.
     Shape (every key optional; an absent one keeps :class:`MockLLMClient`'s own
     default)::
 

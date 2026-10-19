@@ -59,9 +59,8 @@ class SpawnSubagentTool(BaseTool):
                 "description": (
                     f"Capability tier (default '{DEFAULT_TIER}'): 'explore' is "
                     "read-only, 'execute' also writes files inside the sandbox. "
-                    "No dangerous tool (code execution, HTTP writes, git "
-                    "writes, nested spawning) is available to a sub-agent in "
-                    "any tier."
+                    "No dangerous tool (code execution, HTTP requests, nested "
+                    "spawning) is available to a sub-agent in any tier."
                 ),
             },
             "tools": {
