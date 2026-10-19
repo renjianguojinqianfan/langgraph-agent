@@ -32,17 +32,26 @@ agent ──有 tool call──> tool ──> agent
 - **停下 = 这一轮的最后一次 `agent` 调用没有工具调用**；状态只有 `RUNNING / INTERRUPTED / FAILED`，没有「完成」。
 - **停下后可以继续说**：`POST /api/tasks/{id}/messages` 沿同一 `thread_id` / checkpoint 续跑；`POST /api/tasks/{id}/resume` 保留给停止 / 崩溃后的续跑。
 - **计划可改**：停下时 `PUT /api/tasks/{id}/plan`，下一条消息按新计划跑。
-- **危险动作**由设置里的 `policy_rules` + 一个钩子当场拒：不弹框、不进图重入；空表 = 不拦。
+- **危险动作**由设置里的 `policy_rules` + 一个钩子当场拒：不弹框、不进图重入；空表 = 不拦（不是安全边界，见下）。
 - **断点续跑**用 `SqliteSaver` + `durability="sync"`；checkpoint 格式 v2，v1 旧库按迁移文档 §2.4 拒绝挂载。
 
 ## 能力
 
-- **工具**：沙箱文件读写、代码执行、web 搜索、HTTP、MCP。
+- **工具**：沙箱文件读写（`read` / `write` / `edit` / `ls` / `glob` / `grep`）、`bash`（工作区根、环境白名单、可配超时、停止杀进程树）、`web_search`、MCP。
 - **子 agent**：`spawn_subagent` 单入口，`explore` / `execute` 两档，工具面只能收窄。
 - **失败回传**：工具调用只执行一次（不自动重试、不熔断）；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩。
-- **回滚**：沙箱写入前拍 before-image，`POST /api/tasks/{id}/rollback` 按账本逆序恢复（只动文件、不动 checkpoint）。
+- **回滚**：`write` / `edit` 写入前拍 before-image，`POST /api/tasks/{id}/rollback` 按账本逆序恢复（只动文件、不动 checkpoint；bash 写的文件不进账本）。
 - **观测**：SSE 事件流 + JSONL trace，前端可回放 / 导出。
+
+## 这不是安全边界
+
+本章把监听与 Host 检查收在本机（`127.0.0.1` / `localhost`），但那是**减少暴露面**，不是沙箱：
+
+- `policy_rules` 默认是**空表**——默认什么都不拦。
+- `bash` 拿到的是**运行账号的权限**，与你在终端里敲命令没有区别；工作目录（工作区根）只是起点，不是围墙，`cd ..`、绝对路径、网络都可达。
+- 子进程只继承白名单环境变量，API Key 不会漏进去；这减少泄露，不是权限隔离。
+- 需要真隔离就把整个服务放进容器或虚拟机。
 
 ## 质量门禁
 

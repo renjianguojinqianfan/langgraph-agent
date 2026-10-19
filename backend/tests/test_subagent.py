@@ -41,7 +41,6 @@ from backend.core.agent.subagent import (
     tier_names,
 )
 from backend.core.llm.client import LLMResponse, MockLLMClient
-from backend.core.tools import http_api
 from backend.core.tools.mcp_tool import McpTool
 from backend.services.snapshots import set_current_task_id
 from backend.services.task_manager import TaskManager
@@ -52,11 +51,10 @@ from backend.tests.test_graph import (
     _runtime,
 )
 
-#: Everything #56 puts out of a subtask's reach by construction: external
-#: writes, MCP tools, and the spawn tool itself (anti-recursion).
+#: Everything #56 puts out of a subtask's reach by construction: shell access,
+#: MCP tools, and the spawn tool itself (anti-recursion).
 OUT_OF_TIER_NAMES = (
-    "code_exec",
-    "http_request",
+    "bash",
     "spawn_subagent",
     "mcp__demo__fetch",
     "mcp__demo__create_issue",
@@ -156,25 +154,6 @@ def _mounted_managers(tmp_path) -> List[Tuple[str, TaskManager, SubAgentExecutor
     return out
 
 
-class _RecordingHttpClient:
-    """Stand-in for ``httpx.Client``: records use, refuses to hit the network."""
-
-    calls: List[Any] = []
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        type(self).calls.append(("client", kwargs))
-
-    def __enter__(self) -> "_RecordingHttpClient":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def request(self, **kwargs: Any) -> Any:
-        type(self).calls.append(("request", kwargs))
-        raise AssertionError("a subtask must never reach the HTTP layer")
-
-
 # ── entry B is dead (deletion regression, #56) ───────────────────────────────
 def test_entry_b_split_api_is_gone():
     """入口 B 连同其调度 API 一起删掉：留着名字就是留着可复用的后门。"""
@@ -246,7 +225,7 @@ def test_tier_names_rejects_an_unknown_tier():
 
 
 def test_tier_face_names_intersect_with_the_loaded_face():
-    loaded = ["read", "write", "code_exec", "spawn_subagent"]
+    loaded = ["read", "write", "bash", "spawn_subagent"]
     assert tier_face_names(loaded, EXECUTE_TIER) == ["read", "write"]
     assert tier_face_names(loaded, EXPLORE_TIER) == ["read"]
     assert tier_face_names([], EXECUTE_TIER) == []
@@ -267,9 +246,9 @@ def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
     assert sorted(t.name for t in narrowed) == ["grep", "read"]
 
     with pytest.raises(TierError) as excinfo:
-        resolve_tool_face(tools, EXECUTE_TIER, ["read", "code_exec"])
+        resolve_tool_face(tools, EXECUTE_TIER, ["read", "bash"])
     message = str(excinfo.value)
-    assert "code_exec" in message  # the refused name is named, not silently dropped
+    assert "bash" in message  # the refused name is named, not silently dropped
     assert "read" in message  # and the tier members come along, so the model can fix it
 
     with pytest.raises(TierError):
@@ -282,7 +261,7 @@ def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(
     """#74: 档内但未装载的名字与档外名字同等即拒，不再静默交集成空面。
 
     ``Loaded:`` 钉的是「档∩实装面」：既不含被拒的那个名字（列了等于让模型照着
-    清单再递一次、第二次撞档外拒绝），也不含 ``write`` / ``code_exec`` 这些永远
+    清单再递一次、第二次撞档外拒绝），也不含 ``write`` / ``bash`` 这些永远
     收窄不进去的档外名。清单是字面量，不用 ``tier_face_names`` 自算。
     """
     tm = make_manager(make_settings(tmp_path), _CountingMock())
@@ -309,10 +288,10 @@ def test_out_of_tier_refusal_lists_the_loaded_face_too(tmp_path, ghost_tier):
     assert "ghost_tool" in TOOL_TIERS[EXPLORE_TIER] and "ghost_tool" not in names
 
     with pytest.raises(TierError) as excinfo:
-        resolve_tool_face(tm._tools, EXPLORE_TIER, ["read", "code_exec"])
+        resolve_tool_face(tm._tools, EXPLORE_TIER, ["read", "bash"])
     message = str(excinfo.value)
 
-    assert "code_exec" in message  # 拒的还是拒，被拒的名照旧在
+    assert "bash" in message  # 拒的还是拒，被拒的名照旧在
     assert "ghost_tool" not in message  # 但清单里没有改投不进去的名字
     assert message.endswith("Loaded: glob, grep, load_skill, ls, read, web_search")
 
@@ -348,7 +327,7 @@ def test_no_tier_mounts_a_danger_marked_tool(tmp_path):
             leaked = set(face) & marked
             assert not leaked, f"{label}/{tier} 档漏进了危险标记的工具 {sorted(leaked)}"
     # The dangerous families the issue names are all really present somewhere above.
-    assert {"code_exec", "spawn_subagent"} <= seen_marked
+    assert {"bash", "spawn_subagent"} <= seen_marked
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):
@@ -404,10 +383,10 @@ def test_run_subtask_refuses_a_bad_request_without_a_single_round(tmp_path):
     ex = SubAgentExecutor(tm, settings)
 
     bad_tier = ex.run_subtask(_spec(subtask_id="bad:sub:1", tier="oracle"))
-    widened = ex.run_subtask(_spec(subtask_id="bad:sub:2", tier=EXECUTE_TIER, tools=["code_exec"]))
+    widened = ex.run_subtask(_spec(subtask_id="bad:sub:2", tier=EXECUTE_TIER, tools=["bash"]))
 
     assert bad_tier.status == "failed" and "oracle" in bad_tier.error
-    assert widened.status == "failed" and "code_exec" in widened.error
+    assert widened.status == "failed" and "bash" in widened.error
     assert bad_tier.tool_face == [] and widened.tool_face == []
     assert mock.turns == 0
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
@@ -474,10 +453,10 @@ def test_spawn_subagent_refuses_a_widening_request_before_running(
     assert tm._subagent is not None
     monkeypatch.setattr(tm._subagent, "run_subtask", _recording_run(started))
 
-    res = tool.run(name="widening", instruction="try it", tools=["read", "code_exec"])
+    res = tool.run(name="widening", instruction="try it", tools=["read", "bash"])
 
     assert res.success is False
-    assert "code_exec" in (res.error or "") and "read" in (res.error or "")
+    assert "bash" in (res.error or "") and "read" in (res.error or "")
     assert started == []
     assert mock.turns == 0
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
@@ -704,28 +683,16 @@ class _EscalatingSubtaskMock(MockLLMClient):
             self.offered_to_subtask = sorted(t["function"]["name"] for t in tools)
             self.subtask_turns += 1
             if self.subtask_turns == 1:
-                # The out-of-tier family: an external write and the sandbox
-                # escape hatch. Neither exists on this graph's face.
+                # The out-of-tier family: shell access could write anything.
+                # It does not exist on this graph's face.
                 return LLMResponse(
                     content="",
                     tool_calls=[
                         {
                             "id": "out1",
-                            "name": "http_request",
+                            "name": "bash",
                             "arguments": {
-                                "method": "POST",
-                                "url": "http://hook.example.invalid/side-effect",
-                                "body": {"from": "subtask"},
-                            },
-                        },
-                        {
-                            "id": "out2",
-                            "name": "code_exec",
-                            "arguments": {
-                                "language": "python",
-                                "code": (
-                                    f"open({self.SIDE_EFFECT!r}, 'w').write('nope')"
-                                ),
+                                "command": f"echo nope > {self.SIDE_EFFECT}",
                             },
                         },
                     ],
@@ -766,12 +733,9 @@ class _EscalatingSubtaskMock(MockLLMClient):
 
 
 def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
-    tmp_path, event_bus, monkeypatch
+    tmp_path, event_bus
 ):
     """票面验收 a：主任务批准派生后，子任务要不到「写外部系统」的工具，也没留下副作用。"""
-    _RecordingHttpClient.calls = []
-    monkeypatch.setattr(http_api.httpx, "Client", _RecordingHttpClient)
-
     settings = make_settings(tmp_path)
     mock = _EscalatingSubtaskMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -794,21 +758,20 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(
     ex = tm._subagent
     assert ex is not None
     face = ex.check_face(_spec(subtask_id=subtask_id, tier=EXECUTE_TIER))
-    for name in ("http_request", "code_exec", "spawn_subagent"):
+    for name in ("bash", "spawn_subagent"):
         assert name not in face
         assert name not in mock.offered_to_subtask
     assert set(mock.offered_to_subtask) <= set(TOOL_TIERS[EXECUTE_TIER])
 
-    # 2) No side effect: the attempts failed as "unknown tool", nothing ran.
+    # 2) No side effect: the attempt failed as "unknown tool", nothing ran.
     sub_events = event_bus.replay(subtask_id)
     refused = [
         e["data"]
         for e in sub_events
-        if e["type"] == "tool_result" and e["data"]["tool_name"] in ("http_request", "code_exec")
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "bash"
     ]
-    assert {r["tool_name"] for r in refused} == {"http_request", "code_exec"}
+    assert {r["tool_name"] for r in refused} == {"bash"}
     assert all(r["status"] == "failed" and "unknown tool" in r["error"] for r in refused)
-    assert _RecordingHttpClient.calls == []  # the HTTP layer was never touched
     assert not (settings.artifacts_path / mock.SIDE_EFFECT).exists()
 
     # 3) The tier-legal write did happen, and it handed back to the parent.

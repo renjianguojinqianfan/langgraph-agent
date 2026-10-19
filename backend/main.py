@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .api.routes import router
 from .config import get_settings
@@ -58,6 +59,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+# DNS-rebinding guard (ADR 0009 decision 5): the service is opened as localhost,
+# so any other Host name is refused before routing. Added last = outermost.
+app.add_middleware(
+    TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"]
 )
 
 app.include_router(router, prefix="/api")

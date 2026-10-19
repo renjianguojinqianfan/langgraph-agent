@@ -298,7 +298,7 @@ def _make_client_with_mcp(tmp_path, settings, tools):
     persistence = Persistence(settings)
     mock = MockLLMClient(final_answer="ok")
     tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=tools)
-    with TestClient(app) as tc:
+    with TestClient(app, base_url="http://localhost") as tc:
         tc.app.state.settings = settings
         tc.app.state.event_bus = eb
         tc.app.state.persistence = persistence

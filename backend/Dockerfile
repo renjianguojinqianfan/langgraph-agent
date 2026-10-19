@@ -11,4 +11,7 @@ COPY backend ./backend
 
 EXPOSE 8000
 
+# Inside the container uvicorn must bind all interfaces for the published port
+# to work; docker-compose maps it to the host. TrustedHostMiddleware still
+# accepts only localhost / 127.0.0.1 as the Host name.
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -201,7 +201,7 @@ class TestResumeAPI:
         eb = EventBus()
         persistence = Persistence(settings)
         tm = make_manager(settings, _big_script(), event_bus=eb)
-        with TestClient(app) as c:
+        with TestClient(app, base_url="http://localhost") as c:
             c.app.state.settings = settings
             c.app.state.event_bus = eb
             c.app.state.persistence = persistence

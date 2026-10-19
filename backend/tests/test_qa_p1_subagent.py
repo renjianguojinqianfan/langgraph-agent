@@ -341,7 +341,7 @@ class _GatedAskingMock(MockLLMClient):
             return LLMResponse(
                 content="",
                 tool_calls=[
-                    {"id": "g1", "name": "code_exec", "arguments": {"code": "print(1)"}}
+                    {"id": "g1", "name": "bash", "arguments": {"command": "echo 1"}}
                 ],
             )
         return LLMResponse(content=self.final_answer)

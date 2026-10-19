@@ -54,7 +54,7 @@ def client(tmp_path):
     )
     tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
 
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://localhost") as test_client:
         # Inject offline, deterministic components.
         test_client.app.state.settings = settings
         test_client.app.state.event_bus = eb

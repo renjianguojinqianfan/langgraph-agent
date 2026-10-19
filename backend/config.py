@@ -46,8 +46,9 @@ class Settings(BaseSettings):
     # ── Agent / orchestration ──
     max_steps: int = 15  # max agent LLM calls per round (P0-1; #139 resets per round)
 
-    # ── Sandbox ──
-    sandbox_timeout: int = 30  # seconds for code execution
+    # ── Bash tool ──
+    sandbox_timeout: int = 30  # default wall-clock seconds for one bash command
+    bash_path: str = ""  # explicit bash executable; empty = Git install dir, then PATH
 
     # ── Web search ──
     search_provider: str = "duckduckgo"  # duckduckgo | serpapi
@@ -110,9 +111,13 @@ class Settings(BaseSettings):
     snapshot_retention_days: int = 30  # startup sweep drops task dirs older than this (<=0 = keep)
 
     # ── Server ──
-    host: str = "0.0.0.0"
+    # This chapter is local-only: loopback listener + the app's own origins.
+    host: str = "127.0.0.1"
     port: int = 8000
-    cors_origins: str = "*"  # comma separated
+    cors_origins: str = (
+        "http://127.0.0.1:8000,http://localhost:8000,"
+        "http://127.0.0.1:5173,http://localhost:5173"
+    )  # comma separated: app origin + Vite dev server
 
     # ── Derived absolute paths ──
     @property

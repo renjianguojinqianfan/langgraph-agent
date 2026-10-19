@@ -132,7 +132,7 @@ def trace_client(tmp_path):
         final_answer="done.",
     )
     tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://localhost") as test_client:
         test_client.app.state.settings = settings
         test_client.app.state.event_bus = eb
         test_client.app.state.persistence = persistence
@@ -194,7 +194,7 @@ def test_trace_api_disabled_returns_404(tmp_path):
     persistence = Persistence(settings)
     mock = MockLLMClient()
     tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://localhost") as test_client:
         test_client.app.state.settings = settings
         test_client.app.state.event_bus = eb
         test_client.app.state.persistence = persistence

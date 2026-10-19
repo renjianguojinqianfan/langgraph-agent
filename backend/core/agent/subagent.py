@@ -37,8 +37,7 @@ logger = get_logger("agent.subagent")
 #
 # A tier is a *name set*, and the face a subtask actually gets is that set
 # intersected with the tools really mounted. Everything outside the tiers is
-# unreachable by construction: ``code_exec``, ``http_request``, MCP tools and
-# ``spawn_subagent`` itself.
+# unreachable by construction: ``bash``, MCP tools and ``spawn_subagent`` itself.
 #
 # A gated member on this face would be unreachable-in-practice rather than
 # refused (the gate is gone, #138), so the member list stays confined to the
