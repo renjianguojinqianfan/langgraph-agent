@@ -163,6 +163,56 @@ def test_exactly_one_plan_message_even_after_compression(tmp_path):
         assert "keep me" in texts[0]
 
 
+def test_compression_replaces_an_old_plan_message_with_the_latest(tmp_path):
+    settings = make_settings(tmp_path, context_token_budget=1, context_keep_recent=1)
+    llm = _RecordingLLM(final_answer="done")
+    tm = make_manager(settings, llm)
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    task = _wait(tm, task_id)
+    workspace = Path(task.workspace)
+    plan_file.write_plan(workspace, task_id, "# Plan\n\n1. latest")
+
+    from backend.core.agent.nodes import AgentRuntime
+
+    runtime = AgentRuntime(task_id, tm, llm=llm, tools=[], tool_schemas=[])
+    state = {
+        "task_id": task_id,
+        "mode": "build",
+        "messages": [
+            {"role": "user", "content": plan_file.render_plan_message("# Plan\n\n1. stale")},
+            *[{"role": "user", "content": "x" * 2000} for _ in range(3)],
+            {"role": "assistant", "content": "y" * 2000},
+        ],
+        "plan_text": "",
+        "plan_version": 1,
+        "plan_hash": plan_file.plan_hash("# Plan\n\n1. stale"),
+        "steps": [],
+        "status": "RUNNING",
+        "stop_requested": False,
+        "step_index": 0,
+        "round_steps": 0,
+        "final_answer": "",
+        "error": "",
+        "_last_action": "",
+        "_current_tool_calls": [],
+        "subtasks": [],
+        "_is_subtask": False,
+    }
+    built = runtime._build_messages(state, "system")
+    plans = [m for m in built if plan_file.is_plan_message(m.get("content"))]
+    assert len(plans) == 1
+    assert "latest" in plans[0]["content"]
+    assert "stale" not in plans[0]["content"]
+
+
+def test_a_user_message_that_merely_starts_with_the_prefix_is_kept(tmp_path):
+    messages = [{"role": "user", "content": "[qianfan-plan] I typed this"}]
+    plan_file.sync_plan_message(messages, "# Plan\n\n1. real")
+    contents = [m["content"] for m in messages]
+    assert "[qianfan-plan] I typed this" in contents
+    assert len([c for c in contents if plan_file.is_plan_message(c)]) == 1
+
+
 def test_deleted_file_means_no_plan(tmp_path):
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     llm = _RecordingLLM(final_answer="done")

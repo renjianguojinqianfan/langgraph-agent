@@ -914,7 +914,9 @@ class TaskManager:
             # The plan file is the source of truth; seed it over the checkpoint.
             seeded = self._seed_plan(current)
             restored["plan_text"] = seeded["plan_text"]
-            restored["plan_version"] = seeded["plan_version"]
+            restored["plan_version"] = max(
+                seeded["plan_version"], int(restored.get("plan_version", 0))
+            )
             restored["plan_hash"] = seeded["plan_hash"]
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False
@@ -989,7 +991,7 @@ class TaskManager:
         if task is None:
             raise RuntimeError(f"task {task_id} not found")
         text = plan_file.read_plan(Path(task.workspace), task_id)
-        return {"text": text, "version": task.plan_version}
+        return {"text": text, "version": task.plan_version if text.strip() else 0}
 
     def set_plan(self, task_id: str, text: str) -> Dict[str, Any]:
         """Replace the plan file of a parked task; the next round rereads it."""
@@ -1010,10 +1012,15 @@ class TaskManager:
                     "the plan can only be edited while the task is parked "
                     "(INTERRUPTED)"
                 )
-            plan_file.write_plan(Path(task.workspace), task_id, text)
-            task.plan_hash = plan_file.plan_hash(text)
-            if text.strip():
+            self._require_workspace(task)
+            try:
+                plan_file.write_plan(Path(task.workspace), task_id, text)
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from None
+            digest = plan_file.plan_hash(text)
+            if text.strip() and digest != task.plan_hash:
                 task.plan_version += 1
+            task.plan_hash = digest
             task.updated_at = _now()
             self.persistence.save_task(task)
             version = task.plan_version
@@ -1109,7 +1116,9 @@ class TaskManager:
             # The plan file is the source of truth; seed it over the checkpoint.
             seeded = self._seed_plan(current)
             restored["plan_text"] = seeded["plan_text"]
-            restored["plan_version"] = seeded["plan_version"]
+            restored["plan_version"] = max(
+                seeded["plan_version"], int(restored.get("plan_version", 0))
+            )
             restored["plan_hash"] = seeded["plan_hash"]
             restored["mode"] = current.mode.value
             restored["status"] = "RUNNING"

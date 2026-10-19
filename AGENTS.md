@@ -38,7 +38,7 @@
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
 | 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse` |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
-| 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计 |
+| 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑）+ `backend/services/plan_file.py`（计划文件） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源） |
 | 本章切片（C1–C3 已合；C4 起按 ADR 0010 重排） | `docs/adr/0009` + `docs/adr/0010` + `docs/specs/qianfan-daily-form-plan.md` §4（每片内容与随片文档；C1–C3 见 `docs/capability-registry-rescope.md` §0.9） | 按该片票面验收；规划 §4「随片文档」逐项改完 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |

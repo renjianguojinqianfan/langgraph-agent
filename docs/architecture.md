@@ -303,7 +303,7 @@ classDiagram
 | 模型 | 关键字段 |
 |------|----------|
 | `TaskStatus` | `PENDING / RUNNING / FAILED / INTERRUPTED`（三值循环：跑着 / 停下 / 出错；没有「完成」，ADR 0008 决策 5） |
-| `Task` | `id, title, user_input, workspace, status, mode(plan/build), steps[], plan[], conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
+| `Task` | `id, title, user_input, workspace, status, mode(plan/build), steps[], plan_version, plan_hash, conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
 | `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error` |
 | `Task.plan_version` / `plan_hash` | 计划文件内容的版本与哈希；正文在 `<任务目录>/.qianfan/plans/<task_id>.md`（C6） |

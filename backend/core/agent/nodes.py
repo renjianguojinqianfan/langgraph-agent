@@ -284,11 +284,16 @@ class AgentRuntime:
         plan_text = extract_plan(resp.content)
         if plan_text:
             workspace = workspace_root(self.tm.settings)
-            write_plan(workspace, self.task_id, plan_text)
-            state["plan_text"] = plan_text
-            state["plan_hash"] = plan_hash(plan_text)
-            state["plan_version"] = int(state.get("plan_version", 0)) + 1
-            answer = f"计划已更新到第 {state['plan_version']} 版。"
+            try:
+                write_plan(workspace, self.task_id, plan_text)
+            except ValueError as exc:
+                plan_text = ""
+                answer = f"[error] {exc}"
+            else:
+                state["plan_text"] = plan_text
+                state["plan_hash"] = plan_hash(plan_text)
+                state["plan_version"] = int(state.get("plan_version", 0)) + 1
+                answer = f"计划已更新到第 {state['plan_version']} 版。"
         elif _is_tool_markup_only(resp.content):
             # Never persist provider protocol leakage as a conversation turn.
             answer = "(no content)"
@@ -302,7 +307,17 @@ class AgentRuntime:
         # turn; the plan round is no exception (a missing trace 400s forever).
         if resp.reasoning_content:
             assistant_turn["reasoning_content"] = resp.reasoning_content
-        state.setdefault("messages", []).append(assistant_turn)
+        messages = state.setdefault("messages", [])
+        # One gray "plan updated" line: replace the previous one.
+        messages[:] = [
+            m
+            for m in messages
+            if not (
+                m.get("role") == "assistant"
+                and str(m.get("content") or "").startswith("计划已更新到")
+            )
+        ]
+        messages.append(assistant_turn)
         step["thought"] = answer
         self._publish("final_answer", {"answer": answer})
         state["_last_action"] = "final_answer"
