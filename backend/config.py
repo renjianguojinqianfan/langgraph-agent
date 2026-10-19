@@ -114,6 +114,8 @@ class Settings(BaseSettings):
     # This chapter is local-only: loopback listener + the app's own origins.
     host: str = "127.0.0.1"
     port: int = 8000
+    # Built frontend served by `qianfan` (ADR 0010); relative to PROJECT_ROOT.
+    frontend_dist: str = "frontend/dist"
     cors_origins: str = (
         "http://127.0.0.1:8000,http://localhost:8000,"
         "http://127.0.0.1:5173,http://localhost:5173"
@@ -130,6 +132,13 @@ class Settings(BaseSettings):
     @property
     def artifacts_path(self) -> Path:
         p = Path(self.artifacts_dir)
+        if not p.is_absolute():
+            p = PROJECT_ROOT / p
+        return p
+
+    @property
+    def frontend_dist_path(self) -> Path:
+        p = Path(self.frontend_dist)
         if not p.is_absolute():
             p = PROJECT_ROOT / p
         return p
@@ -190,7 +199,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        if self.cors_origins in ("*", ""):
+        # Audit F6: only an explicit "*" is a wildcard. Clearing the list means
+        # "the app's own origins only", never "everyone".
+        if self.cors_origins.strip() == "*":
             return ["*"]
         origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
         # The app's own origin follows the configured port (start.py exports

@@ -4,20 +4,28 @@
 
 重点是运行时：多轮续说、checkpoint、模式切换、危险动作拦截、工具生态与可观测性，而不是一个 demo 界面。
 
-**离线测试全绿**（零网络、零 Key、MockLLM）· CI 三 job · 发布前在网页端跑一次真实模型。
+**离线测试全绿**（零网络、零 Key、MockLLM）· CI 两个 job · 发布前在网页端跑一次真实模型。
 
 ## 快速开始
 
+日常使用（仓库外任意目录都能敲 `qianfan`；后端与网页同源起在 `127.0.0.1`）：
+
 ```bash
-python -m venv .venv311 && source .venv311/bin/activate   # Windows: .venv311\Scripts\activate
-pip install -r requirements.txt
+uv tool install -e . --overrides overrides.txt   # 每台机器一次
+cd frontend && npm ci && npm run build           # 前端产物；改前端后重跑
 cp .env.example .env        # LLM_API_KEY 走环境变量；或 use_mock_llm=true 离线
-uvicorn backend.main:app --port 8000 --reload
-cd frontend && npm install && npm run dev   # http://localhost:5173
+qianfan                                          # 自动开浏览器；--port / --no-browser 可选
 ```
 
-一键：`python start.py --mock` / `python start.py` / `docker compose up --build`。
-虚拟环境请叫 `.venv311`（`start.py` 会拦住根目录的 `.venv`）。
+`overrides.txt` 只做一件事：mcp 声明 `uvicorn>=0.31.1`，而本仓钉 `uvicorn<0.31`；
+override 让干净环境装出与 `requirements.txt` 一致的版本。缺 `frontend/dist` 时
+`qianfan` 会提示先打包。
+
+改前端时用开发启动（Vite 热重载，后端 `--reload`）：
+
+```bash
+python start.py            # 虚拟环境请叫 .venv311；start.py 会拦住根目录的 .venv
+```
 
 ## 核心模型
 
@@ -64,7 +72,7 @@ cd frontend; npx tsc --noEmit; npm run check:sse; npm run build
 ```
 
 提交前钩子每台机器装一次：`.\.venv311\Scripts\python.exe -m pre_commit install`。
-CI 跑后端 lint / 类型 / 测试、前端类型 / 构建、Docker 构建。发布前 / 换供应商：启服务在网页端手动跑一遍（不记模型与时间）。
+CI 跑后端 lint / 类型 / 测试、前端类型 / 构建。发布前 / 换供应商：启服务在网页端手动跑一遍（不记模型与时间）。
 
 ## 文档
 

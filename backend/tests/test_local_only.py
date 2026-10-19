@@ -38,6 +38,19 @@ def test_cors_own_origin_follows_the_configured_port():
     assert "http://127.0.0.1:9000" in origins
 
 
+def test_empty_cors_means_own_origins_only():
+    """Audit F6: clearing the list must not silently open CORS to everyone."""
+    settings = Settings(_env_file=None, cors_origins="", port=8123)
+
+    origins = settings.cors_origin_list
+    assert "*" not in origins
+    assert set(origins) == {"http://127.0.0.1:8123", "http://localhost:8123"}
+
+
+def test_explicit_wildcard_stays_a_wildcard():
+    assert Settings(_env_file=None, cors_origins="*").cors_origin_list == ["*"]
+
+
 def test_trusted_host_accepts_local_names_and_refuses_a_foreign_host():
     for base_url in ("http://localhost", "http://127.0.0.1"):
         with TestClient(app, base_url=base_url) as client:

@@ -8,10 +8,10 @@
 
 ## 1. 一页结论
 
-- **串行 11 片，一片一个 PR**（几乎每片都碰 `task_manager.py` / `nodes.py` / `config.py`，并行必撞，沿用 G-30）：
+- **串行 12 片，一片一个 PR**（几乎每片都碰 `task_manager.py` / `nodes.py` / `config.py`，并行必撞，沿用 G-30）：
 
 ```
-D0 文档 → C4 命令 → S1 bash 后台进程 → W1 目录属于任务 → W2 共用后台 → W3 跳过忽略文件
+D0 文档 → C4 命令 → S1 bash 后台进程 → S2 搜索源 → W1 目录属于任务 → W2 共用后台 → W3 跳过忽略文件
        → C5 工作区文件 → C6 计划文件 → M1 模型配置·后端 → M2 模型配置·界面 → C7 收尾 → D1 文档全量审计
 ```
 
@@ -73,6 +73,12 @@ D0 文档 → C4 命令 → S1 bash 后台进程 → W1 目录属于任务 → W
 - 内容：shell 退出后不再无界等待继承管道（`bash.py:339-360`）；停止 / 超时时连后台子进程一起收（Windows 需要能收「shell 已退出、孙进程还活着」这种情形，`bash.py:186-187` 现在直接返回）；读管道线程不泄漏。实现手段（Job Object / 进程组 / 有界 drain）在票里定，先写红测试。
 - 判据：`sleep 60 &` 这类命令调用立即返回（额外开销 < 1 秒量级，按实测写进 PR）；停止任务后后台进程不存活；调用返回后无残留读线程；Windows 本机实测 + Linux CI 平台相关测试按 `os.name` 取夹具。
 - 随片文档：README「这不是安全边界」一节按审计改准——**F7**「停止杀整棵进程树」按修后事实写、「只支持本机」照实写；**F8** 工作区外（`data/`、`.git`、`.env`）bash 可读写；**F4** 无 CPU / 内存 / 磁盘上限。合并后（你点头）关 #148。
+
+### S2 `web_search` 加 Exa 搜索源（#175）
+
+- 内容：新增 `exa` 源（`POST https://api.exa.ai/search`，请求头 `x-api-key`，请求体 `query` + `numResults` + `type: "auto"`，摘要取 `highlights` 或截断的 `text`，以 Exa 官方接口参考为准），映射成现有 `{title, snippet, url}`；`search_provider` 增加 `exa`，新增 `exa_api_key`（默认空，只走环境变量 `EXA_API_KEY`，`.env` 留空）；未设 Key / 网络失败 / 非 2xx 返回一条可读失败结果，不抛异常；零新依赖（httpx）。代码默认仍是 duckduckgo。
+- 判据：离线替身覆盖请求地址 / 头 / 体、结果映射、未设 Key / 4xx / 超时、哨兵 Key 不出现在工具返回与日志；`EXA_API_KEY` 已设时真搜索一次（未设则记「未运行」并写明原因）；评审走 `security-review`（密钥面）。
+- 随片文档：`.env.example` 的 `search_provider` 注释加 `exa` 并说明 Key 走环境变量；README 工具段写三种搜索源与「国内网络下 duckduckgo 可能不可达」。
 
 ### W1 工作区属于任务（新票）
 
@@ -175,6 +181,7 @@ D0 文档 → C4 命令 → S1 bash 后台进程 → W1 目录属于任务 → W
 | R12 | Coding Plan 条款 | 不做预设，README 写明；自定义后果自担 | M1 |
 | R13 | 改前端后忘了重新 build，`qianfan` 看到旧界面 | 缺 / 旧 `dist` 给提示；README 写开发流程 | C4 |
 | R14 | 归档移动打断 issue 里的外链 | 已接受；仓库内链接同 PR 改 | D1 |
+| R15 | Exa 真搜索依赖用户的 Key、额度与网络 | 无 Key / 真搜索失败记「未运行」并写明原因，离线验收照跑 | S2 |
 
 **未决（不阻塞本章）**：下一章做什么（前端 beautiful-ui / #54 二选一、Markdown 库、插件 / 预设、分发）；beautiful-ui 是否取代 #54 的视觉方向。
 
@@ -192,10 +199,10 @@ D0 文档 → C4 命令 → S1 bash 后台进程 → W1 目录属于任务 → W
 | `--workspace` 参数、从接口拉模型列表、目录信任提示、系统钥匙串 | 日常用出痛点再加 |
 | 多个后台并行、MCP 按任务目录 | 先换掉 `tasks.json` 单写者存储 / 有真实需要 |
 
-## 9. GitHub 动作草稿（G-32：你说「执行」再执行）
+## 9. GitHub 动作（已执行，2026-10-20）
 
-- **已执行**：spec 票 [#166](https://github.com/renjianguojinqianfan/langgraph-agent/issues/166)（2026-10-20，经 `/to-spec` 发布，标签 `spec` + `ready-for-agent`）——本文的需求面与测试接缝以它为对外入口，后续新票挂在它下面。
-- **改票（末尾追加校准段，原文一字不删）**：#159 C4（F6、删 Docker 与 CI job、工作区本片不动）；#160 C5（范围 = 任务目录 + W3 判断、依赖 W1）；#161 C6（`.qianfan/plans/` 路径、原文显示）；#162 C7（9 个场景、残影词、ADR 0010 核对、截图）；#155 父票（切片重排，链到本文）。
-- **开新票**：S1、W1、W2、W3、M1、M2、D1，票面按 §4 对应小节写，标签按 `docs/agents/triage-labels.md`。
+- **已执行**：spec 票 [#166](https://github.com/renjianguojinqianfan/langgraph-agent/issues/166)（2026-10-20，经 `/to-spec` 发布，标签 `spec`）——本文的需求面与测试接缝以它为对外入口，后续新票挂在它下面。父 spec 按 `docs/agents/triage-labels.md` **只打 `spec`**；`ready-for-agent` 只打轮到的那一片实施票。
+- **已改票（末尾追加校准段，原文一字不删）**：#159 C4（F6、删 Docker 与 CI job、工作区本片不动）；#160 C5（范围 = 任务目录 + W3 判断、依赖 W1）；#161 C6（`.qianfan/plans/` 路径、原文显示）；#162 C7（9 个场景、残影词、ADR 0010 核对、截图）；#155 父票（切片重排，链到本文）。
+- **已开新票**：S1 [#168](https://github.com/renjianguojinqianfan/langgraph-agent/issues/168)、W1 [#169](https://github.com/renjianguojinqianfan/langgraph-agent/issues/169)、W2 [#170](https://github.com/renjianguojinqianfan/langgraph-agent/issues/170)、W3 [#171](https://github.com/renjianguojinqianfan/langgraph-agent/issues/171)、M1 [#172](https://github.com/renjianguojinqianfan/langgraph-agent/issues/172)、M2 [#173](https://github.com/renjianguojinqianfan/langgraph-agent/issues/173)、D1 [#174](https://github.com/renjianguojinqianfan/langgraph-agent/issues/174)；以及 2026-10-20 开跑前环境检查后插入的 S2 [#175](https://github.com/renjianguojinqianfan/langgraph-agent/issues/175)（本机 duckduckgo 连接超时；票面见 §4 新小节）。
 - **#148**：S1 合并后评论审计结论（链到审计文档）并关闭。
-- **PR**：D0 走 docs 分支 + PR（G-33：不提交 `prototype/`、`.agents/`、`S4-test-deletions.md`）。
+- **PR**：D0 文档 PR [#167](https://github.com/renjianguojinqianfan/langgraph-agent/pull/167) 已合（`316a510`）；C4 起每片一个堆叠 PR（目标 `master`）。

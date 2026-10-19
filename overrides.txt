@@ -1,0 +1,7 @@
+# Dependency overrides for `uv tool install -e .` (see README).
+#
+# mcp declares `uvicorn>=0.31.1`, but this repo pins `uvicorn>=0.30.0,<0.31.0`
+# (AGENTS.md「依赖面」). The same combination already runs in .venv311, where
+# mcp is installed with --no-deps. The override lets a clean tool environment
+# reproduce the pinned versions instead of raising uvicorn.
+uvicorn[standard]>=0.30.0,<0.31.0
