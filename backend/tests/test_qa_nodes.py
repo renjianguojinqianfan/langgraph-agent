@@ -10,7 +10,6 @@ is a directory registers no artifact (#17).
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from backend.config import Settings
@@ -18,7 +17,6 @@ from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_settings
 
 
 class _FailTool(BaseTool):
@@ -132,79 +130,6 @@ def test_tool_node_unknown_tool_does_not_crash():
     assert rec["status"] == "failed"
     assert "unknown tool" in rec["error"]
     assert any(e["type"] == "tool_result" for e in events)
-
-
-# ──────────── artifact extraction: only a real file is a product ────────────
-class _PathResultTool(BaseTool):
-    """Succeeds and advertises ``path`` — the shape write tools return, and the
-    shape the retired ``file_io`` list returned for a *directory*.
-
-    Declares ``registers_artifact`` like a write tool does: the point of these
-    two tests is the file/directory guard, not the registration source (#72
-    keeps both axes covered by separate cases).
-    """
-
-    name = "qa_path_result"
-    description = "d"
-    args_schema = {}
-    registers_artifact = True
-
-    def __init__(self, settings: Settings | None = None, target: Path | None = None) -> None:
-        super().__init__(settings)
-        self._target = target
-
-    def run(self, **kwargs) -> ToolResult:
-        return ToolResult(success=True, data={"path": str(self._target)})
-
-
-class _ReadLikePathTool(_PathResultTool):
-    """Same result shape, but a read tool: advertises the file it looked at
-    without writing it, so it is not a source of products (#72)."""
-
-    name = "qa_read_like"
-    registers_artifact = False
-
-
-def _run_tool_node(tmp_path, target: Path, tool: BaseTool | None = None) -> list:
-    settings = make_settings(tmp_path)
-    bus = EventBus()
-    registered: list = []
-    tm = SimpleNamespace(
-        settings=settings,
-        event_bus=bus,
-        add_artifact=lambda *a: registered.append(a[1]),
-    )
-    subject = tool or _PathResultTool(settings, target)
-    rt = AgentRuntime("t9", tm, llm=SimpleNamespace(), tools=[subject], tool_schemas=[])
-    state = _state_with_call(subject.name)
-    rt.tool_node(state)
-    assert state["_current_tool_calls"][0]["status"] == "success"
-    return registered
-
-
-def test_directory_result_registers_no_artifact(tmp_path):
-    """A directory under ``path`` must not become a task artifact — a product is a
-    file (ADR 0004). Before #72 it registered, and the 0-byte「产物」that reached
-    the then-live verification layer looped the task back (PR #69 live, run 1)."""
-    target = tmp_path / "sandbox-dir"
-    target.mkdir()
-    assert _run_tool_node(tmp_path, target) == []
-
-
-def test_file_result_registers_the_artifact(tmp_path):
-    target = tmp_path / "produced.txt"
-    target.write_text("body", encoding="utf-8")
-    assert _run_tool_node(tmp_path, target) == [target]
-
-
-def test_read_like_result_on_a_real_file_registers_nothing(tmp_path):
-    """A tool that only looked at a file is not a product of the task (#72):
-    the path it advertises must not reach ``add_artifact``, even though the
-    file exists and would pass the directory guard."""
-    target = tmp_path / "read-back.txt"
-    target.write_text("body", encoding="utf-8")
-    settings = make_settings(tmp_path)
-    assert _run_tool_node(tmp_path, target, _ReadLikePathTool(settings, target)) == []
 
 
 # ─────────── #95: the reason a tool failed reaches the model ───────────

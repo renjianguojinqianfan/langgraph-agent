@@ -66,15 +66,6 @@ class StepRecord(BaseModel):
     status: str = "pending"  # pending | running | done | failed
 
 
-class Artifact(BaseModel):
-    id: str
-    filename: str
-    path: str
-    mime: str = "application/octet-stream"
-    size: int = 0
-    created_at: str = ""
-
-
 # ── P1 item 2: sub-agent ──
 class SubTask(BaseModel):
     subtask_id: str
@@ -116,7 +107,6 @@ class Task(BaseModel):
     mode: TaskMode = TaskMode.BUILD
     steps: List[StepRecord] = Field(default_factory=list)
     plan: List[PlanStep] = Field(default_factory=list)
-    artifacts: List[Artifact] = Field(default_factory=list)
     #: User/assistant text turns across every round of the conversation.
     conversation: List[ChatTurn] = Field(default_factory=list)
     final_answer: str = ""

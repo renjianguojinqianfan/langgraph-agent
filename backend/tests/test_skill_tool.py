@@ -385,7 +385,6 @@ def test_tool_node_feeds_skill_content_to_conversation(
     tool_messages = [m for m in mock.seen_messages if m.get("role") == "tool"]
     assert tool_messages, "the skill body must be fed back as a tool message"
     assert "SKILL BODY TOKEN." in str(tool_messages[-1]["content"])
-    assert task.artifacts == []
 
 
 def test_catalogue_cards_all_loadable(tmp_path: Path) -> None:

@@ -45,13 +45,11 @@ export interface StepRecord {
   status: string; // pending | running | done | failed
 }
 
-export interface Artifact {
-  id: string;
-  filename: string;
+/** One file in the task workspace (C5). */
+export interface WorkspaceFile {
   path: string;
-  mime: string;
   size: number;
-  created_at: string;
+  mtime: string;
 }
 
 export interface Task {
@@ -64,7 +62,6 @@ export interface Task {
   mode: TaskMode;
   steps: StepRecord[];
   plan: PlanStep[];
-  artifacts: Artifact[];
   /** User/assistant text turns across every round of the conversation. */
   conversation: ChatTurn[];
   final_answer: string;
@@ -116,13 +113,6 @@ export interface CreateTaskRequest {
 // --- P1-B: workspace rollback (POST /api/tasks/{id}/rollback) ---
 
 /** Result of a whole-task rollback (docs/specs/p1-b-rollback.md). */
-export interface RollbackResult {
-  ok: boolean;
-  /** Sandbox-relative paths that actually changed (empty = already original). */
-  files: string[];
-  already_original: boolean;
-}
-
 export interface ApiResponse<T = any> {
   code: number;
   data: T;
@@ -145,8 +135,6 @@ export type SSEventType =
   | "tool_call"
   | "tool_result"
   | "context_compressed" // P0: {step_index, dropped, band_evicted, converged, context_tokens, strategy}
-  | "task_rollback" // P1-B: {task_id, ok, files, already_original}
-  | "artifact_created"
   | "final_answer"
   | "task_failed"
   | "task_interrupted"

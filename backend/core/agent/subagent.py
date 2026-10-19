@@ -337,7 +337,6 @@ class SubAgentExecutor:
                 "messages": [{"role": "user", "content": spec.instruction}],
                 "plan": [],
                 "steps": [],
-                "artifacts": [],
                 "status": "RUNNING",
                 "stop_requested": False,
                 "step_index": 0,
@@ -404,40 +403,6 @@ class SubAgentExecutor:
             tool_count = sum(
                 len(s.get("tool_calls", []) or []) for s in final.get("steps", []) or []
             )
-
-            # Register subtask-produced files as artifacts of the parent task so
-            # they remain downloadable from the main task view.
-            #
-            # The hand-back is the ONLY registration a subtask write gets (#76 A:
-            # the tool node no longer registers under the subtask's own id, which
-            # had no ledger to land in). If the parent's run is already over the
-            # ledger is gone, and the refusal has to be loud: ``add_artifact``
-            # would mint a record nothing holds and fire an ``artifact_created``
-            # promising a product the task does not own. Landing the record on a
-            # finished task is ticket #106's (裁 B) job — here the drop merely
-            # becomes attributable. One narrow race survives on purpose: the
-            # liveness check and the registration are two steps, so a parent
-            # finishing exactly in between still mints the phantom record;
-            # closing that means moving the decision inside ``add_artifact``'s
-            # lock, which is #106's change anyway.
-            if spec.parent_task_id and unique:
-                if not self.tm.has_active_state(spec.parent_task_id):
-                    logger.warning(
-                        "late hand-back refused: parent task %s has no active run; "
-                        "%d artifact(s) from subtask %s not registered: %s",
-                        spec.parent_task_id,
-                        len(unique),
-                        spec.subtask_id,
-                        unique,
-                    )
-                else:
-                    for p in unique:
-                        try:
-                            path_obj = Path(p)
-                            if path_obj.exists():
-                                self.tm.add_artifact(spec.parent_task_id, path_obj)
-                        except Exception as exc:  # pragma: no cover - defensive
-                            logger.warning("failed to register subtask artifact %s: %s", p, exc)
 
             # Propagate the subtask graph's outcome: a subtask whose graph ends
             # with an error (e.g. an LLM error) must fold back as failed with

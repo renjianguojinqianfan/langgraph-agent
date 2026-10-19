@@ -262,27 +262,6 @@ def test_injection_is_built_from_the_runtime_workspace(tmp_path):
     assert "SENTINEL-RUNTIME" in json.dumps(mock.seen[0], ensure_ascii=False)
 
 
-def test_rollback_uses_the_task_workspace(tmp_path):
-    settings = make_settings(tmp_path, snapshot_enabled=True)
-    workspace = tmp_path / "rollback-ws"
-    workspace.mkdir()
-    target = workspace / "f.txt"
-    target.write_text("v1", encoding="utf-8")
-
-    from backend.services.snapshots import capture_before_image, restore_task
-
-    tokens = set_runtime_context("t-roll", workspace)
-    try:
-        assert capture_before_image(target, settings=settings) is True
-        target.write_text("v2", encoding="utf-8")
-        result = restore_task("t-roll", settings=settings, workspace=workspace)
-    finally:
-        reset_runtime_context(tokens)
-
-    assert result["files"] == ["f.txt"]
-    assert target.read_text(encoding="utf-8") == "v1"
-
-
 def test_malformed_workspace_does_not_quarantine_history(tmp_path):
     settings = make_settings(tmp_path)
     settings.data_path.mkdir(parents=True, exist_ok=True)

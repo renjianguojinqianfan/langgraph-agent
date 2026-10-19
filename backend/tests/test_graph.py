@@ -124,7 +124,7 @@ def test_build_mode_runs_and_parks_without_planning(settings, event_bus):
     assert task.status.value == "INTERRUPTED"
     assert task.mode.value == "build"
     assert "out.txt" in task.final_answer
-    assert any(a.filename == "out.txt" for a in task.artifacts)
+    assert (settings.artifacts_path / "out.txt").is_file()
 
     events = {e["type"] for e in event_bus.replay(task_id)}
     # #139: build mode never re-plans behind the user's back (the old planner
@@ -132,7 +132,6 @@ def test_build_mode_runs_and_parks_without_planning(settings, event_bus):
     assert "plan_update" not in events
     assert "tool_call" in events
     assert "tool_result" in events
-    assert "artifact_created" in events
     assert "final_answer" in events
     assert "task_interrupted" in events
 

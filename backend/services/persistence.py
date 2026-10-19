@@ -1,24 +1,21 @@
 """Persistence: in-memory store + JSON file on disk (P1-3).
 
-Tasks and artifacts are kept in memory and periodically flushed to
-``<data_dir>/tasks.json``. Artifact *files* live under ``artifacts_dir``. The
-interface is intentionally narrow so a SQLite-backed implementation can replace
-it later without touching the service layer.
+Tasks are kept in memory and periodically flushed to
+``<data_dir>/tasks.json``. The interface is intentionally narrow so a
+SQLite-backed implementation can replace it later without touching the service
+layer.
 """
 
 from __future__ import annotations
 
 import json
-import mimetypes
 import os
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..api.schemas import Artifact, Task
+from ..api.schemas import Task
 from ..config import Settings
 from ..core.runtime_context import normalize_workspace, workspace_key
 from ..utils.logging import get_logger
@@ -34,9 +31,9 @@ class Persistence:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.data_path = settings.data_path
-        self.artifacts_path = settings.artifacts_path
         self.data_path.mkdir(parents=True, exist_ok=True)
-        self.artifacts_path.mkdir(parents=True, exist_ok=True)
+        # The historical/default workspace for tasks without an explicit dir.
+        settings.artifacts_path.mkdir(parents=True, exist_ok=True)
         self._tasks_file = self.data_path / "tasks.json"
         # Worker threads run save_task concurrently with the request thread;
         # every mutation of ``self._tasks`` and the dump below is serialized.
@@ -60,7 +57,7 @@ class Persistence:
                     task = Task(**item)
                     # ADR 0010: pre-workspace records lived in the old sandbox root.
                     task.workspace = normalize_workspace(
-                        task.workspace or self.artifacts_path
+                        task.workspace or self.settings.artifacts_path
                     )
                 except Exception:
                     logger.warning("Skipping corrupt task record %s", item.get("id"))
@@ -134,36 +131,3 @@ class Persistence:
         with self._lock:
             return sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
 
-    # ── artifacts ──
-    def register_artifact(self, path: Path) -> Artifact:
-        """Record an existing file on disk as an :class:`Artifact`."""
-        path = Path(path)
-        stat = path.stat()
-        mime, _ = mimetypes.guess_type(str(path))
-        art = Artifact(
-            id=uuid.uuid4().hex,
-            filename=path.name,
-            path=str(path),
-            mime=mime or "application/octet-stream",
-            size=stat.st_size,
-            created_at=_now(),
-        )
-        return art
-
-    def read_artifact(self, artifact_id: str) -> Optional[bytes]:
-        for task in self._tasks.values():
-            for art in task.artifacts:
-                if art.id == artifact_id:
-                    p = Path(art.path)
-                    if p.exists():
-                        return p.read_bytes()
-        return None
-
-    def find_artifact(self, task_id: str, artifact_id: str) -> Optional[Artifact]:
-        task = self._tasks.get(task_id)
-        if not task:
-            return None
-        for art in task.artifacts:
-            if art.id == artifact_id:
-                return art
-        return None

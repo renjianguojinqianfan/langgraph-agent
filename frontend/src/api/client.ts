@@ -1,14 +1,13 @@
 import {
   ApiResponse,
-  Artifact,
   AuthTokenResponse,
   ChatTurn,
   CreateTaskRequest,
   PlanStep,
-  RollbackResult,
   SSEvent,
   Task,
   TaskMode,
+  WorkspaceFile,
 } from "../types";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
@@ -96,10 +95,6 @@ export const sendMessage = (id: string, input: string) =>
 
 export type { ChatTurn };
 
-// ── P1-B: workspace rollback ──
-export const rollbackTask = (id: string) =>
-  req<RollbackResult>(`/tasks/${id}/rollback`, { method: "POST" });
-
 // ── P1 item 5: auth ──
 export const loginRequest = (secret: string) =>
   req<AuthTokenResponse>("/auth/token", {
@@ -114,11 +109,17 @@ const _withToken = (url: string): string => {
   return token ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : url;
 };
 
-export const artifactUrl = (id: string, aid: string) =>
-  _withToken(`${API_BASE}/tasks/${id}/artifacts/${aid}`);
+// ── C5: task workspace files ──
+export const listFiles = (id: string) =>
+  req<{ files: WorkspaceFile[]; truncated: boolean }>(`/tasks/${id}/files`);
 
-export const previewUrl = (id: string, aid: string) =>
-  _withToken(`${API_BASE}/tasks/${id}/artifacts/${aid}/preview`);
+export const previewFile = (id: string, path: string) =>
+  req<{ path: string; content: string; size: number; truncated: boolean }>(
+    `/tasks/${id}/files/preview?path=${encodeURIComponent(path)}`
+  );
+
+export const fileDownloadUrl = (id: string, path: string) =>
+  _withToken(`${API_BASE}/tasks/${id}/files/download?path=${encodeURIComponent(path)}`);
 
 /** Raised when the trace endpoint is unreachable / the file is missing. */
 export class TraceFetchError extends Error {
@@ -184,4 +185,3 @@ export async function getTaskTrace(taskId: string): Promise<TraceResult> {
   return { events, raw: text };
 }
 
-export type { Artifact };

@@ -98,3 +98,15 @@ def workspace_files(root: Path) -> list[Path]:
     if git_files is not None:
         return sorted(git_files)
     return sorted(_walk_files(resolved))
+
+
+def resolve_in_workspace(root: Path, rel: str) -> Optional[Path]:
+    """Resolve ``rel`` under ``root``; None when it escapes (API + tools share it)."""
+    try:
+        resolved = root.resolve()
+        candidate = (resolved / rel).resolve()
+    except Exception:
+        return None
+    if candidate != resolved and resolved not in candidate.parents:
+        return None
+    return candidate

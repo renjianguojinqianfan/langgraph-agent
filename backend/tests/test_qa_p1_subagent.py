@@ -65,7 +65,6 @@ def _main_state(user_input: str) -> Dict[str, Any]:
         "messages": [{"role": "user", "content": user_input}],
         "plan": [],
         "steps": [],
-        "artifacts": [],
         "status": "RUNNING",
         "stop_requested": False,
         "step_index": 0,
@@ -259,8 +258,8 @@ def test_subtask_internal_events_stay_on_subtask_channel(tmp_path, event_bus):
         for e in parent_events
         if e["type"] in ("tool_call", "tool_result") and e["data"]["tool_name"] == "write"
     ]
-    # The parent channel only learned that an artifact appeared.
-    assert any(e["type"] == "artifact_created" for e in parent_events)
+    # The parent channel never learns about the subtask's writes.
+    assert not any(e["type"] == "artifact_created" for e in parent_events)
 
 
 def test_summary_events_land_on_parent_channel_not_subtask_channel(tmp_path, event_bus):

@@ -89,7 +89,6 @@ def _run(settings: Settings) -> int:
     print("task_id     :", task_id)
     print("final status:", task.status.value if task else "MISSING")
     print("event types :", sorted(event_types))
-    print("artifacts   :", [a.filename for a in (task.artifacts if task else [])])
 
     hello = settings.artifacts_path / "hello.txt"
     file_ok = hello.exists() and "autonomous agent" in hello.read_text(encoding="utf-8")
@@ -103,7 +102,6 @@ def _run(settings: Settings) -> int:
         "no surprise plan": "plan_update" not in event_types,
         "tool_call event": "tool_call" in event_types,
         "tool_result event": "tool_result" in event_types,
-        "artifact_created event": "artifact_created" in event_types,
         "final_answer event": "final_answer" in event_types,
         "task_interrupted event": "task_interrupted" in event_types,
         "hello.txt written": file_ok,

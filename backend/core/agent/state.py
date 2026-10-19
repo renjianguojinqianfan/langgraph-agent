@@ -21,7 +21,6 @@ class AgentState(TypedDict, total=False):
     messages: List[Dict[str, Any]]          # OpenAI-style message dicts
     plan: List[Dict[str, Any]]              # PlanStep dicts
     steps: List[Dict[str, Any]]             # StepRecord dicts
-    artifacts: List[Dict[str, Any]]         # Artifact dicts
     status: str
     stop_requested: bool
 

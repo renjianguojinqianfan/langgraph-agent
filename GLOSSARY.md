@@ -14,7 +14,6 @@
 | 硬规则与边界不变量 | `AGENTS.md`「跨任务安全边界」表 |
 | 已定居的决策与理由 | `docs/adr/0001`–`0009`（0003 随 C2 退役；0005–0007 随 0008 退役，均保留历史） |
 | 计划 / 执行两模式、停下、交付 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（决策 1–8） |
-| 产物（谁算写出、怎么去重） | [ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md) |
 | 技能组配置（tracker / 标签 / 本文档的消费规则） | `docs/agents/` 三件套 |
 
 ## 速查术语（权威定义以上方指针为准）
@@ -25,10 +24,10 @@
 状态三值：`RUNNING`（跑着）/ `INTERRUPTED`（停下，等你说话）/ `FAILED`（出错）——**没有「完成」终态**。
 「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用（`round_steps` 按步计预算）。一次 `agent` 调用返回时没有工具调用，这一轮就结束（停下，决策 4）。
 「续说」= 停下后 `POST /api/tasks/{id}/messages`，沿同一 `thread_id` / checkpoint 接着跑，不是重开任务（决策 1）。
-「交付」= 停下时人去看产物，不是新状态（决策 8）。
+「交付」= 停下时人去看工作区里的文件，不是新状态（决策 8）。
 运行时概念：`checkpoint` / `resume` / `workspace`（任务目录）/ 运行上下文 / 两层注入。
-工作区：`Task.workspace`（绝对路径，存储前用 `normalize_workspace` 解析 `~`、相对路径、`..` 与符号链接；比较用 `workspace_key`，Windows 上再折叠盘符大小写与斜杠方向，所以同一目录的不同写法过滤结果一致）。新建任务取页面 `?dir=`，缺省为后台启动目录；旧任务补 `data/artifacts`。文件工具、`bash`、`load_skill`、注入块与回滚快照都从运行上下文（`backend/core/runtime_context.py`）取这个目录；子代理继承父任务的目录（ADR 0010 决策 1）。
-任务与产物：`artifact`（产物，ADR-0004：本任务**写出**的文件，仅 `registers_artifact` 工具为源）/ `thread_id`（= task_id，resume 与续说寻址恒等）。
+工作区：`Task.workspace`（绝对路径，存储前用 `normalize_workspace` 解析 `~`、相对路径、`..` 与符号链接；比较用 `workspace_key`，Windows 上再折叠盘符大小写与斜杠方向，所以同一目录的不同写法过滤结果一致）。新建任务取页面 `?dir=`，缺省为后台启动目录；旧任务补 `data/artifacts`。文件工具、`bash`、`load_skill` 与注入块都从运行上下文（`backend/core/runtime_context.py`）取这个目录；子代理继承父任务的目录（ADR 0010 决策 1）。
+任务：`thread_id`（= task_id，resume 与续说寻址恒等）；工作区文件列表 = 任务目录里按 `.gitignore` 可见的文件（C5，无产物账本）。
 工具调用状态：`pending | success | failed | skipped`——只有后三是终态（`nodes.py` 的 `TERMINAL_TOOL_CALL_STATUSES`，#100）；`pending` 未收口即 `dangling tool call`（消息面也没有配对的 `role: tool` 回答）。
 危险动作：`policy_rules` 规则表 + `agent` 里那一个钩子；命中 → `skipped` 记录 + `{block, reason}` 回模型（ADR 0008 决策 6）。**默认空表 = 不拦**，它不是安全边界（见 README「这不是安全边界」）。
 注入：`两层注入`（home 层 `AGENTS.md` → 任务目录 `AGENTS.md`；实现 `inject.py`）。

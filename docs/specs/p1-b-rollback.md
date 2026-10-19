@@ -1,5 +1,7 @@
 # P1-B 回滚：写前文件级 before-image + 独立端点整任务回滚
 
+> **已退役（2026-10-20，[C5 #160](https://github.com/renjianguojinqianfan/langgraph-agent/issues/160)）**：回滚快照、`/rollback` 与 `snapshot_*` 配置已删除；撤销靠 git。本文保留为历史 spec。
+>
 > Issue [#33](https://github.com/renjianguojinqianfan/langgraph-agent/issues/33)（数据面）+ [#34](https://github.com/renjianguojinqianfan/langgraph-agent/issues/34)（行为面）· 2026-09-16 grilling 拍板 · 执行序：P1-A′ → T1.4 → **P1-B** → P1-A → 评测台
 
 ## 一、背景与目标

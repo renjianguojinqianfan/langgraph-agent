@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from langgraph.types import Durability
 
 from ..api.schemas import (
-    Artifact,
     ChatTurn,
     PlanStep,
     StepRecord,
@@ -48,7 +47,6 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from .event_bus import EventBus
 from .persistence import Persistence
-from .snapshots import cleanup_expired, restore_task
 from .trace import TraceRecorder
 
 if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
@@ -242,7 +240,6 @@ class TaskManager:
         self._reconcile_orphans()
         # P1-B (拍板 11): the start-up sweep — no scheduler host yet, so expired
         # task snapshot dirs are dropped by the process that starts next.
-        cleanup_expired(settings=settings)
 
     def _mount_checkpointer(self, settings: Settings) -> None:
         """Mount the sqlite saver, or refuse a store this build cannot vouch for.
@@ -522,9 +519,6 @@ class TaskManager:
     def list_all_tasks(self, limit: int = 50) -> List[Task]:
         return self.persistence.list_tasks(limit)
 
-    def get_artifact(self, task_id: str, artifact_id: str) -> Optional[bytes]:
-        return self.persistence.read_artifact(artifact_id)
-
     # ── run loop ──
     def _start_run(self, task_id: str) -> None:
         t = threading.Thread(target=self.run, args=(task_id,), daemon=True)
@@ -550,7 +544,6 @@ class TaskManager:
             "messages": [{"role": "user", "content": task.user_input}],
             "plan": [p.model_dump() for p in task.plan],
             "steps": [],
-            "artifacts": [],
             "status": "RUNNING",
             "stop_requested": False,
             "step_index": 0,
@@ -729,7 +722,6 @@ class TaskManager:
         task.status = TaskStatus(status)
         task.plan = [PlanStep(**p) for p in final.get("plan", [])]
         task.steps = [StepRecord(**s) for s in final.get("steps", [])]
-        task.artifacts = [Artifact(**a) for a in final.get("artifacts", [])]
         task.conversation = self._conversation_from(final.get("messages"))
         task.final_answer = final.get("final_answer", "")
         task.error = final.get("error")
@@ -1143,96 +1135,3 @@ class TaskManager:
             if self._trace is not None:
                 self._trace.close(task_id)
 
-    # ── P1-B: workspace rollback (docs/specs/p1-b-rollback.md) ──
-    def rollback(self, task_id: str) -> Dict[str, Any]:
-        """Restore the sandbox to its pre-task state from the before-image ledger.
-
-        File-only by design (拍板 9): the task record and the graph checkpoints
-        are never touched, so rollback stays fully decoupled from resume.
-        Refuses active tasks (拍板 12③) — RUNNING/PENDING by status, plus the
-        stop() window where the record already settled but the worker is still
-        unwinding its final writes. Raises RuntimeError; the route maps it to
-        409, the same synchronous style as resume.
-        """
-        task = self.persistence.load_task(task_id)
-        if task is None:
-            raise RuntimeError(f"task {task_id} not found")
-        live = self._threads.get(task_id)
-        if task.status in (TaskStatus.RUNNING, TaskStatus.PENDING) or (
-            live is not None and live.is_alive()
-        ):
-            raise RuntimeError(
-                f"task {task_id} is {task.status.value}; "
-                "rollback requires a settled task (stop it first)"
-            )
-        # Reopen the audit trail for the rollback era (same pattern as resume):
-        # the trace recorder detached when the run finished, so the event would
-        # otherwise reach SSE subscribers but never the JSONL.
-        if self._trace is not None:
-            self._trace.attach(self.event_bus, task_id)
-        try:
-            result = restore_task(
-                task_id, settings=self.settings, workspace=Path(task.workspace)
-            )
-            self.event_bus.publish(
-                task_id, "task_rollback", {"task_id": task_id, **result}
-            )
-        finally:
-            if self._trace is not None:
-                self._trace.close(task_id)
-        return result
-
-    # ── artifacts ──
-    def has_active_state(self, task_id: str) -> bool:
-        """Whether the task's live run state (and with it, its artifact ledger)
-        still exists.
-
-        ``run()``'s finally pops ``_active_states[task_id]``, so once a task has
-        finished there is no ledger left to register into. A subtask hand-back
-        that arrives that late (parent stopped, or the subtask overran the
-        timeout window) has to be refused loudly instead of minting a record
-        that lands nowhere (issue #76); this predicate is how the hand-back asks
-        without reaching into the private dict.
-        """
-        return task_id in self._active_states
-
-    def add_artifact(self, task_id: str, path: Path) -> Artifact:
-        """Register a file the task produced; one record per task and file.
-
-        Dedupe lives here rather than at the two call sites (the kernel's tool
-        node and the sub-agent's hand-back) because both funnel through this
-        method (#72). Skipping the second registration skips a record and its
-        ``artifact_created`` event.
-
-        Two settled semantics callers rely on: the key is per **task** — two
-        tasks touching the same file each own a record — and a hit returns the
-        record as first registered, i.e. its ``size`` / ``created_at`` are the
-        ones from the initial write. A subtask write's single registration is the
-        hand-back under the parent id (#76 — the tool node no longer registers
-        under the subtask's own id). A task with no active state has no
-        registry to dedupe against and registers as before (mint + event, no
-        ledger); the subtask hand-back refuses that case loudly instead of
-        calling in (see :meth:`has_active_state`), and landing the record on a
-        finished task is ticket #106's call.
-
-        The lookup and the append are one atomic step under ``self._lock`` (the
-        same manager lock the resume claim uses), because subtasks run on a pool:
-        two of them handing the same path back to one parent can arrive at the
-        same microsecond, and an unlocked check-then-act would let both miss.
-        """
-        resolved = str(Path(path).resolve())
-        # Only the check-mint-append is guarded. The event stays outside the
-        # lock so no SSE subscriber ever runs while it is held (and no caller of
-        # this method holds it, so the non-reentrant lock cannot be taken twice
-        # on one path).
-        with self._lock:
-            st = self._active_states.get(task_id)
-            if st is not None:
-                for existing in st.get("artifacts", []):
-                    if existing.get("path") and str(Path(existing["path"]).resolve()) == resolved:
-                        return Artifact(**existing)
-            art = self.persistence.register_artifact(path)
-            if st is not None:
-                st.setdefault("artifacts", []).append(art.model_dump())
-        self.event_bus.publish(task_id, "artifact_created", art.model_dump())
-        return art

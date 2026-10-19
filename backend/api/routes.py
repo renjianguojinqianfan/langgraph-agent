@@ -15,11 +15,14 @@ P1 additions:
 from __future__ import annotations
 
 import json
+import mimetypes
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
+from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
 from ..services.task_manager import TaskManager
@@ -198,26 +201,101 @@ def send_message(
     return _envelope(data=result)
 
 
-@router.post("/tasks/{task_id}/rollback")
-def rollback_task(
+FILES_MAX = 2000
+PREVIEW_MAX_BYTES = 200_000
+
+
+def _task_workspace(request: Request, task_id: str) -> Path:
+    task = _tm(request).get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    root = Path(task.workspace)
+    if not root.is_dir():
+        raise HTTPException(
+            status_code=409,
+            detail=f"task workspace no longer exists: {task.workspace}",
+        )
+    return root.resolve()
+
+
+def _file_target(request: Request, task_id: str, path: str) -> Path:
+    root = _task_workspace(request, task_id)
+    target = resolve_in_workspace(root, path)
+    if target is None:
+        raise HTTPException(status_code=400, detail="path escapes the task workspace")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return target
+
+
+@router.get("/tasks/{task_id}/files")
+def list_workspace_files(
     task_id: str,
     request: Request,
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
-    """Restore the sandbox to its pre-task state from the before-image ledger.
+    """Files in the task's workspace, using the glob/grep ignore rules (W3)."""
+    root = _task_workspace(request, task_id)
+    files = workspace_files(root)
+    entries = []
+    for path in files[:FILES_MAX]:
+        try:
+            stat = path.stat()
+            entries.append(
+                {
+                    "path": path.relative_to(root).as_posix(),
+                    "size": stat.st_size,
+                    "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                }
+            )
+        except OSError:
+            continue
+    return _envelope(
+        data={"files": entries, "truncated": len(files) > FILES_MAX}
+    )
 
-    P1-B (docs/specs/p1-b-rollback.md): file-only — checkpoints and the task
-    record are untouched, so this is decoupled from resume. A task still active
-    (RUNNING/PENDING/unwinding worker) is refused synchronously with 409, the
-    same style as resume; an unknown task is 404.
-    """
-    if _tm(request).get_task(task_id) is None:
-        raise HTTPException(status_code=404, detail="task not found")
-    try:
-        result = _tm(request).rollback(task_id)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return _envelope(data=result)
+
+@router.get("/tasks/{task_id}/files/preview")
+def preview_workspace_file(
+    task_id: str,
+    request: Request,
+    path: str,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Text preview; binaries are refused and large files are truncated."""
+    target = _file_target(request, task_id, path)
+    size = target.stat().st_size
+    with target.open("rb") as handle:
+        chunk = handle.read(PREVIEW_MAX_BYTES + 1)
+    truncated = len(chunk) > PREVIEW_MAX_BYTES
+    chunk = chunk[:PREVIEW_MAX_BYTES]
+    if b"\x00" in chunk:
+        raise HTTPException(status_code=415, detail="binary file cannot be previewed")
+    return _envelope(
+        data={
+            "path": path,
+            "content": chunk.decode("utf-8", errors="replace"),
+            "size": size,
+            "truncated": truncated,
+        }
+    )
+
+
+@router.get("/tasks/{task_id}/files/download")
+def download_workspace_file(
+    task_id: str,
+    request: Request,
+    path: str,
+    _auth: str = Depends(verify_token),
+) -> FileResponse:
+    """Stream a workspace file (never loaded whole into memory)."""
+    target = _file_target(request, task_id, path)
+    media_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(
+        target,
+        media_type=media_type or "application/octet-stream",
+        filename=target.name,
+    )
 
 
 @router.get("/tasks/{task_id}/events")
@@ -269,47 +347,6 @@ def task_trace(
                 continue
         return _envelope(data=events)
     return Response(content=raw, media_type="application/x-ndjson")
-
-
-@router.get("/tasks/{task_id}/artifacts/{artifact_id}")
-def download_artifact(
-    task_id: str,
-    artifact_id: str,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> Response:
-    task = _tm(request).get_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="task not found")
-    art = request.app.state.persistence.find_artifact(task_id, artifact_id)
-    if art is None:
-        raise HTTPException(status_code=404, detail="artifact not found")
-    data = _tm(request).get_artifact(task_id, artifact_id)
-    if data is None:
-        raise HTTPException(status_code=404, detail="artifact file missing")
-    return Response(content=data, media_type=art.mime, headers={"Content-Disposition": f'attachment; filename="{art.filename}"'})
-
-
-@router.get("/tasks/{task_id}/artifacts/{artifact_id}/preview")
-def preview_artifact(
-    task_id: str,
-    artifact_id: str,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> Response:
-    task = _tm(request).get_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="task not found")
-    art = request.app.state.persistence.find_artifact(task_id, artifact_id)
-    if art is None:
-        raise HTTPException(status_code=404, detail="artifact not found")
-    data = _tm(request).get_artifact(task_id, artifact_id)
-    if data is None:
-        raise HTTPException(status_code=404, detail="artifact file missing")
-    if art.mime.startswith("text/") or art.mime in ("application/json",):
-        return Response(content=data, media_type=art.mime)
-    # Images / binaries: return raw bytes for <img>/preview.
-    return Response(content=data, media_type=art.mime)
 
 
 # ── P1 item 5: auth (public) ──

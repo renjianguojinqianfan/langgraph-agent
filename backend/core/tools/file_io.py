@@ -27,10 +27,9 @@ import re
 from pathlib import Path, PurePath
 from typing import Any
 
-from ...services.snapshots import capture_before_image
 from ...utils.logging import get_logger
 from ..runtime_context import get_current_workspace, workspace_root
-from ..workspace_files import workspace_files
+from ..workspace_files import resolve_in_workspace, workspace_files
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -114,15 +113,8 @@ class _SandboxedTool(BaseTool):
         return root
 
     def _safe_path(self, path: str) -> Path | None:
-        """Resolve ``path`` against the sandbox root; return None if it escapes."""
-        try:
-            root = self._root_resolved()
-            candidate = (root / path).resolve()
-            if candidate != root and root not in candidate.parents:
-                return None
-            return candidate
-        except Exception:
-            return None
+        """Resolve ``path`` against the workspace root; None if it escapes."""
+        return resolve_in_workspace(self._root_resolved(), path)
 
     def _base_dir(self, sub: str) -> Path | None:
         """Resolve an optional sub-directory scope (empty -> sandbox root)."""
@@ -263,9 +255,6 @@ class WriteTool(_SandboxedTool):
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            # P1-B: photograph the previous version before it is overwritten
-            # (fail-open — a broken snapshot store never blocks the write).
-            capture_before_image(target, settings=self.settings)
             target.write_text(content, encoding="utf-8")
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("write failed")
@@ -372,9 +361,6 @@ class EditTool(_SandboxedTool):
             new_text = text.replace(old_string, new_string, 1)
             replacements = 1
 
-        # P1-B: photograph the previous version before it is overwritten
-        # (fail-open — a broken snapshot store never blocks the edit).
-        capture_before_image(target, settings=self.settings)
         try:
             # Newline handling: platform-native on write, while read uses
             # universal newlines so a model-supplied "\n" old_string still

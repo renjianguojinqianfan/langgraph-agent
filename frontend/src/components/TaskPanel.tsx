@@ -1,4 +1,4 @@
-import { ArtifactList } from "./ArtifactList";
+import { WorkspaceFiles } from "./WorkspaceFiles";
 import { InputBar } from "./InputBar";
 import { MessageStream } from "./MessageStream";
 import { PlanPanel } from "./PlanPanel";
@@ -77,7 +77,7 @@ export function TaskPanel({ task, tab, onTabChange }: TaskPanelProps) {
                 <div className="text-xs text-slate-400 mb-1">步骤时间线</div>
                 <StepTimeline task={task} />
               </div>
-              <ArtifactList task={task} />
+              <WorkspaceFiles taskId={task?.id ?? null} status={task?.status} />
             </>
           )
         ) : (
