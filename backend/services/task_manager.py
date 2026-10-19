@@ -33,12 +33,10 @@ from ..core.agent.graph import build_graph
 from ..core.agent.nodes import AgentRuntime
 from ..core.agent.state import AgentState
 from ..core.agent.subagent import SubAgentExecutor
-from ..core.kb.knowledge_base import KnowledgeBase, set_kb_instance
 from ..core.llm.client import LLMClient
-from ..core.llm.openai_compat import create_aux_llm_client, create_llm_client
+from ..core.llm.openai_compat import create_llm_client
 from ..core.tools.base import BaseTool
-from ..core.tools.kb_tools import KbQueryTool, MemorySearchTool
-from ..core.tools.registry import build_tools, discover_plugins
+from ..core.tools.registry import build_tools
 from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from .event_bus import EventBus
@@ -181,26 +179,13 @@ class TaskManager:
         self.settings = settings
         self.event_bus = event_bus
         self.persistence = persistence
-        # P0 item 3: auto-discover plugin tools before building the tool list.
-        if settings.plugins_autoload:
-            discover_plugins(settings.plugins_path)
         self._llm = llm_client or create_llm_client(settings)
         self._tools = tools if tools is not None else build_tools(settings)
-        # P1 item 4: auxiliary model client (None when disabled -> degradation).
-        self._aux_llm = create_aux_llm_client(settings)
         # P1 item 2: sub-agent executor (None when disabled).
         self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None
-        # P1 item 3: knowledge base singleton (empty instance when disabled).
-        self._kb = KnowledgeBase(settings)
-        set_kb_instance(self._kb)
-        # P1 item 6: append OpenAPI-generated tools after the built-ins/plugins
-        # (first-registered-wins conflict semantics, invalid spec -> warning only).
-        self._load_openapi_tools(settings)
         # P2 item 1: connect MCP servers and append their tools (startup once).
         self._mcp: Optional[McpClientManager] = None
         self._load_mcp_tools(settings)
-        # P2 item 2: append Git tools (git_enabled switch, no @register).
-        self._load_git_tools(settings)
         # Issue #56: ``subagent_enabled`` now gates exactly one thing — the
         # ``spawn_subagent`` tool. It used to also mount the keyword-triggered
         # ``subagent_split`` node, which could dispatch a subtask (and its side
@@ -365,57 +350,20 @@ class TaskManager:
 
     # ── P1 wiring of runtime-injected tools ──
     def _wire_injected_tools(self) -> None:
-        """Give stateful tools their service references (subagent / KB)."""
+        """Give stateful tools their service references (subagent)."""
         for t in self._tools:
             if isinstance(t, SpawnSubagentTool):
                 t.executor = self._subagent
-            elif isinstance(t, (MemorySearchTool, KbQueryTool)):
-                t.kb = self._kb
             # McpTool holds its McpClientManager reference at construction time,
             # so it needs no wiring here.
-
-    # ── P1 item 6: OpenAPI tool registration ──
-    def _load_openapi_tools(self, settings: Settings) -> None:
-        if not settings.openapi_enabled:
-            return
-        from ..core.tools.openapi_tool import OpenAPISpecError, build_tools_from_spec, load_openapi_spec
-
-        source = (settings.openapi_spec_path or "").strip() or (settings.openapi_spec_url or "").strip()
-        if not source:
-            logger.info("openapi_enabled but no spec_path/spec_url configured; skipping.")
-            return
-        try:
-            spec = load_openapi_spec(source)
-            generated = build_tools_from_spec(spec, settings=settings)
-        except OpenAPISpecError as exc:
-            logger.warning("OpenAPI tools disabled: %s", exc)
-            return
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("OpenAPI tools disabled (unexpected error): %s", exc)
-            return
-        existing = {t.name for t in self._tools}
-        added = 0
-        for t in generated:
-            if t.name in existing:
-                logger.warning(
-                    "OpenAPI tool %r conflicts with an existing tool; keeping the existing one.",
-                    t.name,
-                )
-                continue
-            self._tools.append(t)
-            existing.add(t.name)
-            added += 1
-        if added:
-            logger.info("Registered %d OpenAPI-generated tool(s).", added)
 
     # ── P2 item 1: MCP client tool registration ──
     def _load_mcp_tools(self, settings: Settings) -> None:
         """Connect configured MCP servers and append their tools.
 
-        Uses the same first-registered-wins conflict semantics as OpenAPI:
-        ``_tools`` already contains built-ins/plugins/OpenAPI tools, so a name
-        clash keeps the existing tool and logs a warning. A missing SDK or a
-        failing server only logs a warning — startup always continues.
+        ``_tools`` already contains the built-ins, so a name clash keeps the
+        existing tool and logs a warning. A missing SDK or a failing server only
+        logs a warning — startup always continues.
         """
         if not settings.mcp_enabled:
             logger.info("mcp_enabled=false; skipping MCP tools.")
@@ -460,32 +408,6 @@ class TaskManager:
             added += 1
         if added:
             logger.info("Registered %d MCP tool(s).", added)
-
-    # ── P2 item 2: Git tool registration ──
-    def _load_git_tools(self, settings: Settings) -> None:
-        """Append the Git tool set when ``git_enabled`` (never via @register)."""
-        if not settings.git_enabled:
-            logger.info("git_enabled=false; skipping Git tools.")
-            return
-        from ..core.tools.git_tools import build_git_tools
-
-        generated = build_git_tools(settings)
-        if not generated:
-            return
-        existing = {t.name for t in self._tools}
-        added = 0
-        for t in generated:
-            if t.name in existing:
-                logger.warning(
-                    "Git tool %r conflicts with an existing tool; keeping the existing one.",
-                    t.name,
-                )
-                continue
-            self._tools.append(t)
-            existing.add(t.name)
-            added += 1
-        if added:
-            logger.info("Registered %d Git tool(s).", added)
 
     # ── P2 item 1: graceful shutdown ──
     def shutdown(self) -> None:
@@ -608,7 +530,6 @@ class TaskManager:
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=self._aux_llm,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -911,7 +832,6 @@ class TaskManager:
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=self._aux_llm,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -981,28 +901,6 @@ class TaskManager:
             raise RuntimeError("message is empty")
         return self._continue(task_id, user_text=text)
 
-    def replan(self, task_id: str) -> Dict[str, Any]:
-        """Run one planning round **without** flipping the sticky switch.
-
-        The「重新规划」button is an action, not a mode change: ADR 0008 decision 3
-        says a finished plan does not silently re-plan, and the next typed
-        message should execute. The plan round therefore borrows plan mode for
-        one invoke and restores the task's own mode afterwards.
-
-        Nothing synthetic is persisted: the plan-mode system prompt already
-        asks for a plan, and the conversation on disk is the context to revise.
-        For this one-off round only, ``AgentRuntime.replan`` appends a
-        request-only user anchor to the LLM request (never written to the task),
-        so the model does not read the previous "execute" turn as the current
-        instruction. The round is retried once when the model answers with text
-        instead of a JSON plan (real-model review: the unanchored round drifted
-        into an injected skill, and provider markup could otherwise land in the
-        conversation).
-        """
-        return self._continue(
-            task_id, user_text=None, one_off_mode=TaskMode.PLAN
-        )
-
     def set_mode(self, task_id: str, mode: str) -> Dict[str, Any]:
         """Flip the sticky task switch; it takes effect on the next round."""
         try:
@@ -1059,22 +957,13 @@ class TaskManager:
         self.event_bus.publish(task_id, "plan_update", {"plan": payload})
         return {"ok": True, "plan": payload}
 
-    def _continue(
-        self,
-        task_id: str,
-        *,
-        user_text: Optional[str],
-        one_off_mode: Optional[TaskMode] = None,
-    ) -> Dict[str, Any]:
+    def _continue(self, task_id: str, *, user_text: Optional[str]) -> Dict[str, Any]:
         """Validate, claim and start one continuation round.
 
         Same compare-and-set discipline as resume(): the status flip happens
         under the manager lock so two concurrent senders can never both spawn a
         worker on one thread_id. A continuation always needs a durable
         checkpoint — that is what "接着跑，含进程重启后" is built on.
-
-        ``one_off_mode`` borrows the other mode for **this round only** (the
-        replan button); the sticky ``Task.mode`` is untouched.
         """
         thread = self._threads.get(task_id)
         if thread is not None and thread.is_alive():
@@ -1118,19 +1007,14 @@ class TaskManager:
 
         t = threading.Thread(
             target=self._continue_run,
-            args=(task_id, user_text, one_off_mode),
+            args=(task_id, user_text),
             daemon=True,
         )
         self._threads[task_id] = t
         t.start()
         return {"ok": True, "status": TaskStatus.RUNNING.value, "task": snapshot}
 
-    def _continue_run(
-        self,
-        task_id: str,
-        user_text: Optional[str],
-        one_off_mode: Optional[TaskMode] = None,
-    ) -> None:
+    def _continue_run(self, task_id: str, user_text: Optional[str]) -> None:
         """Run one more round on an existing conversation."""
         set_current_task_id(task_id)
         try:
@@ -1146,11 +1030,6 @@ class TaskManager:
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
-                aux_llm=self._aux_llm,
-                # The「重新规划」button borrows a plan round; anchor that round
-                # to the current task so a long injected AGENTS / skills
-                # context cannot make the model plan an unrelated task.
-                replan=(one_off_mode is TaskMode.PLAN),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -1166,9 +1045,7 @@ class TaskManager:
             # The persisted plan is the user-editable copy (set_plan): seed it
             # over the checkpoint so an edit takes effect this round.
             restored["plan"] = [p.model_dump() for p in current.plan]
-            # A one-off round (replan) borrows the other mode without touching
-            # the sticky task switch.
-            restored["mode"] = (one_off_mode or current.mode).value
+            restored["mode"] = current.mode.value
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False
             restored["_current_tool_calls"] = []
@@ -1262,10 +1139,8 @@ class TaskManager:
 
         Dedupe lives here rather than at the two call sites (the kernel's tool
         node and the sub-agent's hand-back) because both funnel through this
-        method (#72). Skipping the second registration skips a record, its
-        ``artifact_created`` event and a redundant ``add_document`` call — the
-        knowledge base is already idempotent per resolved path, so what a
-        duplicate used to cost is a spurious product row, not a double index.
+        method (#72). Skipping the second registration skips a record and its
+        ``artifact_created`` event.
 
         Two settled semantics callers rely on: the key is per **task** — two
         tasks touching the same file each own a record — and a hit returns the
@@ -1284,10 +1159,10 @@ class TaskManager:
         same microsecond, and an unlocked check-then-act would let both miss.
         """
         resolved = str(Path(path).resolve())
-        # Only the check-mint-append is guarded. The event and the knowledge-base
-        # ingest stay outside the lock so no SSE subscriber or file-index callback
-        # ever runs while it is held (and no caller of this method holds it, so
-        # the non-reentrant lock cannot be taken twice on one path).
+        # Only the check-mint-append is guarded. The event stays outside the
+        # lock so no SSE subscriber ever runs while it is held (and no caller of
+        # this method holds it, so the non-reentrant lock cannot be taken twice
+        # on one path).
         with self._lock:
             st = self._active_states.get(task_id)
             if st is not None:
@@ -1298,11 +1173,4 @@ class TaskManager:
             if st is not None:
                 st.setdefault("artifacts", []).append(art.model_dump())
         self.event_bus.publish(task_id, "artifact_created", art.model_dump())
-        # P1 item 3: auto-index text artifacts into the knowledge base.
-        # Failure is only a warning — it must never break the task.
-        if self._kb is not None and self.settings.kb_auto_index_artifacts:
-            try:
-                self._kb.add_document(path)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("kb.add_document failed for %s: %s", path, exc)
         return art

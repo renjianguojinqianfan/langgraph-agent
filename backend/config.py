@@ -82,10 +82,6 @@ class Settings(BaseSettings):
     tool_backoff_factor: int = 2  # exponential backoff factor
     tool_max_retries: int = 2  # global default max retries (tools may override)
 
-    # ── Plugins (P0 item 3) ──
-    plugins_dir: str = "backend/plugins"
-    plugins_autoload: bool = True
-
     # ── Trace (P0 item 4) ──
     trace_enabled: bool = True
     trace_dir: str = "data/traces"
@@ -100,44 +96,16 @@ class Settings(BaseSettings):
     subagent_max_concurrency: int = 2  # thread-pool parallelism (1 = serial)
     subagent_timeout_sec: int = 120  # single subtask timeout
 
-    # ── Knowledge base (P1 item 3) ──
-    kb_enabled: bool = True  # master switch (false -> empty instance)
-    kb_dir: str = "data/kb"
-    kb_auto_index_artifacts: bool = True  # register artifacts into the KB
-    kb_chunk_size: int = 2000  # chunk character cap
-    kb_embedding_enabled: bool = False  # vector retrieval placeholder (false = keyword)
-    kb_top_k: int = 5  # default retrieval hit count
-
-    # ── Aux LLM (P1 item 4) ──
-    aux_llm_enabled: bool = False  # master switch (false -> zero extra LLM calls)
-    aux_llm_provider: str = "openai"  # openai | deepseek | ollama | mock
-    aux_llm_base_url: str = ""  # empty -> provider preset
-    aux_llm_api_key: str = ""
-    aux_llm_model: str = ""  # empty -> no aux client (degradation)
-    aux_llm_use_mock: bool = False  # offline mock aux (with use_mock_llm for the main)
-
     # ── Auth (P1 item 5, disabled for local demo) ──
     auth_enabled: bool = False
     auth_token: str = "changeme"
     auth_token_ttl_sec: int = 86400  # issued token lifetime
-
-    # ── OpenAPI tools (P1 item 6) ──
-    openapi_enabled: bool = False  # master switch
-    openapi_spec_path: str = ""  # local YAML/JSON spec file
-    openapi_spec_url: str = ""  # remote spec URL (used when path is empty)
-    openapi_api_key: str = ""  # injected into apiKey security schemes
-    openapi_global_headers: str = "{}"  # JSON string of headers applied to every call
 
     # ── MCP client (P2 item 1) ──
     mcp_enabled: bool = True  # master switch (false -> zero MCP tools / subprocesses)
     mcp_servers: str = "[]"  # JSON array: [{name, command, args[], env{}, enabled, cwd?, transport?, url?}]
     mcp_timeout_sec: float = 30.0  # single call_tool timeout
     mcp_connect_timeout_sec: float = 15.0  # initialize + list_tools timeout per server
-
-    # ── Git tools (P2 item 2) ──
-    git_enabled: bool = True  # master switch (false -> zero Git tools)
-    git_repo_dir: str = "data/repos"  # Git operations root (relative to PROJECT_ROOT)
-    git_timeout_sec: float = 30.0  # single git call timeout
 
     # ── Checkpoints (spec Issue #4: durable state for stop/resume) ──
     checkpoint_enabled: bool = True  # master switch (false -> no saver mounted)
@@ -169,22 +137,8 @@ class Settings(BaseSettings):
         return p
 
     @property
-    def plugins_path(self) -> Path:
-        p = Path(self.plugins_dir)
-        if not p.is_absolute():
-            p = PROJECT_ROOT / p
-        return p
-
-    @property
     def trace_path(self) -> Path:
         p = Path(self.trace_dir)
-        if not p.is_absolute():
-            p = PROJECT_ROOT / p
-        return p
-
-    @property
-    def kb_path(self) -> Path:
-        p = Path(self.kb_dir)
         if not p.is_absolute():
             p = PROJECT_ROOT / p
         return p
@@ -198,18 +152,11 @@ class Settings(BaseSettings):
         return p
 
     @property
-    def git_repo_path(self) -> Path:
-        p = Path(self.git_repo_dir)
-        if not p.is_absolute():
-            p = PROJECT_ROOT / p
-        return p
-
-    @property
     def snapshots_path(self) -> Path:
         """P1-B snapshot store root (defaults under ``data_path``).
 
         Outside the sandbox on purpose: snapshots must not be visible to
-        ``glob`` / ``grep`` / ``read`` nor auto-indexed into the KB.
+        ``glob`` / ``grep`` / ``read``.
         """
         p = Path(self.snapshot_dir)
         if not self.snapshot_dir or not p.is_absolute():

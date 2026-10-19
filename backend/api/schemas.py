@@ -87,23 +87,6 @@ class SubTask(BaseModel):
     error: Optional[str] = None
 
 
-# ── P1 item 3: knowledge base ──
-class KbDoc(BaseModel):
-    doc_id: str
-    path: str
-    size: int = 0
-    chunks: int = 0
-    indexed_at: str = ""
-
-
-class KbHit(BaseModel):
-    doc_id: str
-    path: str
-    chunk_index: int = 0
-    content: str = ""
-    score: float = 0.0
-
-
 # ── P2 item 1: MCP server diagnostics ──
 class McpServerInfo(BaseModel):
     name: str

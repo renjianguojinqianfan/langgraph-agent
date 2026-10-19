@@ -9,20 +9,11 @@ function pretty(v: any): string {
   }
 }
 
-// P2: render text-heavy tool outputs (git diff/log, MCP text) raw in a <pre>
-// instead of JSON-wrapping them, so diffs and logs stay readable.
+// P2: render text-heavy tool outputs (MCP text) raw in a <pre> instead of
+// JSON-wrapping them, so logs stay readable.
 function renderOutput(tc: ToolCallRecord): React.ReactNode {
   const out = tc.output;
   if (out && typeof out === "object") {
-    if (tc.tool_name === "git_diff" && typeof out.diff === "string") {
-      return <pre className="bg-slate-900 rounded p-1 overflow-auto max-h-40 whitespace-pre-wrap break-all">{out.diff || "(no diff)"}</pre>;
-    }
-    if (tc.tool_name === "git_log" && Array.isArray(out.commits)) {
-      const text = (out.commits as Array<{ hash?: string; message?: string }>)
-        .map((c) => `${c.hash ?? ""} ${c.message ?? ""}`)
-        .join("\n");
-      return <pre className="bg-slate-900 rounded p-1 overflow-auto max-h-40 whitespace-pre-wrap break-all">{text || "(no commits)"}</pre>;
-    }
     if (tc.tool_name.startsWith("mcp__") && typeof out.text === "string" && out.text.length > 0) {
       return <pre className="bg-slate-900 rounded p-1 overflow-auto max-h-40 whitespace-pre-wrap break-all">{out.text}</pre>;
     }

@@ -30,14 +30,7 @@ from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
 from .policy import DangerPolicy
-from .prompts import (
-    EXECUTOR_SYSTEM,
-    PLANNER_SYSTEM,
-    REPLAN_ANCHOR,
-    REPLAN_RETRY,
-    REPLAN_USER_ANCHOR,
-    render_plan_section,
-)
+from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, render_plan_section
 from .state import AgentState
 
 logger = get_logger("agent.runtime")
@@ -64,7 +57,7 @@ DANGLING_SWEEP_TEXT = "interrupted before execution; swept at loop entry"
 
 #: Provider leakage seen on a real model: a plan round can come back as bare
 #: tool-protocol closing tags with no call and no text. It is not something a
-#: human should read, so the re-plan path retries it and never persists it.
+#: human should read, so the round never persists it as an answer.
 _TOOL_MARKUP_ONLY = re.compile(
     r"^\s*(?:</?(?:parameter|invoke|function_call|tool_call)\b[^>]*>\s*)+$",
     re.IGNORECASE,
@@ -87,16 +80,10 @@ class AgentRuntime:
         tools: List[BaseTool],
         tool_schemas: List[Dict[str, Any]],
         max_steps: int = 15,
-        aux_llm: Any = None,
         parent_task_id: str = "",
-        replan: bool = False,
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
-        #: One-off「重新规划」round (the input bar's button): anchor the plan
-        #: prompt to the current task and retry once if the model answers with
-        #: text instead of a JSON plan. False for ordinary plan rounds.
-        self.replan = replan
         # Issue #60: ``TaskManager.stop()`` only flips the id it was handed, so a
         # subtask has to watch its own id *and* the parent's. Watching the parent
         # alone would break ``stop(subtask_id)``.
@@ -114,8 +101,6 @@ class AgentRuntime:
         self._explore_names = frozenset(tier_face_names(self.tools.keys(), EXPLORE_TIER))
         self.max_steps = max_steps
         self._te: Any = None  # lazily built ToolExecutor (see tool_executor)
-        self._aux = aux_llm  # injected aux client (may be None)
-        self._aux_computed = aux_llm is not None
         # P1-A′: discover + merge once per task (task-level cache); mid-task edits
         # to AGENTS.md intentionally do not take effect. Subtask graphs share this
         # __init__, so they receive the same block with no extra code.
@@ -167,25 +152,6 @@ class AgentRuntime:
             self._te = ToolExecutor(settings, publish_fn=self._publish)
         return self._te
 
-    @property
-    def aux_llm(self) -> Any:
-        """Lazily constructed auxiliary LLM client (robust to ``tm=None``).
-
-        When ``aux_llm_enabled=False`` (or the config is incomplete) this
-        returns ``None`` — the degradation path — so no extra LLM call is ever
-        made for context summaries. Built at most once per runtime.
-        """
-        if not self._aux_computed:
-            self._aux_computed = True
-            settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-            if settings.aux_llm_enabled:
-                from ..llm.openai_compat import get_aux_llm
-
-                self._aux = get_aux_llm(settings, main_llm=self.llm)
-            else:
-                self._aux = None
-        return self._aux
-
     def _build_messages(
         self, state: AgentState, system: str, *, include_plan: bool = False
     ) -> List[Dict[str, Any]]:
@@ -232,16 +198,15 @@ class AgentRuntime:
                         )
             except Exception:  # pragma: no cover - defensive
                 logger.warning("tool-result eviction failed; continuing without it", exc_info=True)
-        # P1 item 4: summarisation prefers the aux model; without aux it falls
-        # back to the main model (the pre-P1 behaviour) — never an extra call.
-        llm_for_summary = self.aux_llm or self.llm
+        # Compression summaries use the main model (ADR 0009: no separate
+        # summarisation model).
         compressed, meta = compress_messages(
             messages,
             budget=settings.context_token_budget,
             keep_recent=settings.context_keep_recent,
             max_messages=settings.context_max_messages,
             strategy=settings.context_compress_strategy,
-            llm=llm_for_summary if settings.context_compress_strategy == "summarize" else None,
+            llm=self.llm if settings.context_compress_strategy == "summarize" else None,
             summary_max_tokens=settings.context_summary_max_tokens,
             trace_ref=trace_ref,
             head_chars=settings.context_evict_head_chars,
@@ -356,42 +321,20 @@ class AgentRuntime:
         ``plan_update``). Any other text is the model talking to the user — most
         often the clarifying question ADR 0008 decision 1 explicitly allows —
         and leaves the existing plan untouched.
-
-        The one-off re-plan round (:attr:`replan`) is stricter: its prompt is
-        anchored to the current task and a non-plan reply is retried once, so
-        the「重新规划」button cannot silently drift into another task or write
-        provider protocol leakage into the conversation.
         """
         face = self._tool_face(PLAN_MODE)
         schemas = [t.to_openai_schema() for t in face.values()]
-        system = PLANNER_SYSTEM + (REPLAN_ANCHOR if self.replan else "")
-        resp = self._complete_plan(state, system, schemas)
+        resp = self._complete_plan(state, PLANNER_SYSTEM, schemas)
         if resp is None:
             return state
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
         plan = self._parse_plan(resp.content)
-        if plan is None and self.replan:
-            # The button promises a plan. One stricter retry keeps a malformed
-            # or off-plan reply from becoming the round's answer.
-            logger.info("re-plan round returned no JSON plan; retrying once")
-            retry = self._complete_plan(state, system + REPLAN_RETRY, schemas)
-            if retry is None:
-                return state
-            if retry.tool_calls:
-                return self._handle_tool_calls(state, step, retry)
-            resp = retry
-            plan = self._parse_plan(resp.content)
-
         if plan:
             state["plan"] = plan
             self._publish("plan_update", {"plan": plan})
             answer = f"计划已更新（{len(plan)} 步）。"
-        elif self.replan:
-            # The button promises a plan. After the retry, never surface raw
-            # model text (reasoning dumps / provider markup) as a turn.
-            answer = "未能生成新计划，请再试一次。"
         elif _is_tool_markup_only(resp.content):
             # Never persist provider protocol leakage as a conversation turn.
             answer = "(no content)"
@@ -419,10 +362,6 @@ class AgentRuntime:
     ) -> Optional[Any]:
         """One plan-mode LLM call; ``None`` means the error path already settled."""
         messages = self._build_messages(state, system, include_plan=True)
-        if self.replan:
-            # Request-only anchor: the last real user turn said "execute"; this
-            # round is the「重新规划」action. Never persisted into the task.
-            messages.append({"role": "user", "content": REPLAN_USER_ANCHOR})
         try:
             return self.llm.complete(messages, tools=schemas)
         except Exception as exc:
@@ -653,8 +592,7 @@ class AgentRuntime:
             # ``subagent._exec_one`` under the PARENT id only (#76). Registering
             # here as well would mint a record no ledger can hold — a subtask
             # never has an ``_active_states`` entry — so its whole cost used to
-            # be a phantom ``artifact_created`` on the subtask channel plus a
-            # redundant KB ingest.
+            # be a phantom ``artifact_created`` on the subtask channel.
             if (
                 tool.registers_artifact
                 and result.success

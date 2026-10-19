@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { HistoryPanel } from "../components/HistoryPanel";
-import { KbPanel } from "../components/KbPanel";
 import { StepDetail } from "../components/StepDetail";
 import { TaskPanel } from "../components/TaskPanel";
 import { getTask, listTasks } from "../api/client";
@@ -17,7 +16,6 @@ export function TaskView() {
   const upsertTask = useTaskStore((s) => s.upsertTask);
   const setTasks = useTaskStore((s) => s.setTasks);
   const [tab, setTab] = useState<TaskViewTab>("run");
-  const [showKb, setShowKb] = useState(false);
 
   // Initial history load.
   useEffect(() => {
@@ -65,15 +63,8 @@ export function TaskView() {
   return (
     <div className="h-full flex">
       <HistoryPanel />
-      <TaskPanel
-        task={task}
-        tab={tab}
-        onTabChange={setTab}
-        onToggleKb={() => setShowKb((v) => !v)}
-        kbOpen={showKb}
-      />
+      <TaskPanel task={task} tab={tab} onTabChange={setTab} />
       <StepDetail task={task} />
-      {showKb && <KbPanel />}
     </div>
   );
 }

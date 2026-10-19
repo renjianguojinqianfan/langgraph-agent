@@ -7,7 +7,7 @@ payload (:meth:`AgentRuntime._build_messages`), driven through the real nodes so
 the call site is covered too:
 
 * **AC1** — the executor's system message carries the current plan rendering
-  (first round, and again after a re-plan);
+  (first round, and again after a later plan round);
 * **AC2** — replacement, not stacking: the section appears exactly once however
   many planner rounds ran, always rendering the *latest* plan, and nothing of it
   is pushed into the transcript;
@@ -201,7 +201,7 @@ def test_executor_sees_plan_first_round(tmp_path: Path) -> None:
 
 
 def test_executor_sees_updated_plan(tmp_path: Path) -> None:
-    """AC1（更新后）+ 替换的一半：重新规划后渲染换成新计划，旧计划整段消失。"""
+    """AC1（更新后）+ 替换的一半：新一轮计划后渲染换成新计划，旧计划整段消失。"""
     llm = _FakeLLM(plans=[["Old step"], ["New first", "New second"]])
     rt = _runtime(_settings(tmp_path), llm)
     state = _state()
@@ -234,10 +234,9 @@ def test_executor_status_follows_the_plan(tmp_path: Path) -> None:
 
 
 def test_planner_sees_the_current_plan(tmp_path: Path) -> None:
-    """#139：计划模式也读现有计划——重新规划是「改写」，不是从零再猜一遍。
+    """#139：计划模式也读现有计划——新一轮计划是「改写」，不是从零再猜一遍。
 
-    「重新规划」按钮走的就是这条路：同一段对话、同一份 plan，换 plan 模式的
-    system prompt 再跑一轮。"""
+    同一段对话、同一份 plan，用 plan 模式的 system prompt 再跑一轮。"""
     llm = _FakeLLM(plans=[["Next round plan"]])
     rt = _runtime(_settings(tmp_path), llm)
 

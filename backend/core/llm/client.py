@@ -157,7 +157,7 @@ def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
     """Build a :class:`MockLLMClient` from a JSON script file (issue #108).
 
     The file lets an offline script exercise a real tool round (``code_exec``,
-    a git write tool, ``spawn_subagent``) — in the browser — without any LLM key.
+    ``http_request``, ``spawn_subagent``) — in the browser — without any LLM key.
     Shape (every key optional; an absent one keeps :class:`MockLLMClient`'s own
     default)::
 
@@ -213,76 +213,3 @@ def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
     return MockLLMClient(**script)
 
 
-# Auxiliary-model role markers. The aux client is scripted *per role* so the
-# offline test suite can assert which auxiliary task (summary / tool choice)
-# actually consumed the aux model — and prove that when aux is disabled
-# no auxiliary call is ever made (``call_count == 0``).
-#
-# ``_detect_role`` scans the *whole* message text — including any history
-# transcript embedded in the prompt (the summary prompt carries the history it
-# is compressing) — and returns the first marker it hits, so two markers can
-# collide. The order below is an explicit tie-break for that case, not a
-# guarantee that a collision cannot happen.
-_ROLE_MARKERS: Dict[str, List[str]] = {
-    "summary": ["摘要", "压缩", "summary"],
-    "tool_choice": ["工具选择", "候选工具", "filter_tool"],
-}
-
-
-class MockAuxLLMClient(LLMClient):
-    """Offline, scripted auxiliary-model client.
-
-    Auxiliary tasks (context summarisation, tool pre-selection) are routed to
-    this client when ``aux_llm_enabled`` and ``aux_llm_use_mock`` are both set.
-    Responses are selected by detecting the task role in the prompt (see
-    :data:`_ROLE_MARKERS`), falling back to ``default``. :attr:`call_count` /
-    :attr:`roles_called` let QA assert that the aux model was (or was not)
-    actually consumed. :attr:`requests` keeps the messages themselves so a test
-    can read what the aux model was *told*.
-    """
-
-    def __init__(
-        self,
-        role_responses: Dict[str, str] | None = None,
-        default: str = "",
-    ) -> None:
-        self.role_responses: Dict[str, str] = role_responses or {}
-        self.default: str = default
-        self.call_count: int = 0
-        self.roles_called: List[str] = []
-        self.requests: List[List[Dict[str, Any]]] = []
-
-    def _detect_role(self, messages: List[Dict[str, Any]]) -> str:
-        text = " ".join(str(m.get("content") or "") for m in messages)
-        for role, markers in _ROLE_MARKERS.items():
-            if any(marker in text for marker in markers):
-                return role
-        return "default"
-
-    def complete(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        self.call_count += 1
-        role = self._detect_role(messages)
-        self.roles_called.append(role)
-        self.requests.append(list(messages))
-        content = self.role_responses.get(role, self.default)
-        logger.info("MockAuxLLM complete -> role=%s", role)
-        return LLMResponse(content=content)
-
-    def stream(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Iterator[LLMResponse]:
-        yield self.complete(messages, tools, **kwargs)
-
-    def reset(self) -> None:
-        """Reset counters (useful between tasks in tests)."""
-        self.call_count = 0
-        self.roles_called = []
-        self.requests = []

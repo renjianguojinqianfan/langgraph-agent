@@ -48,7 +48,7 @@ Single-context repo (this repo's layout):
 │   ├── agent-comparison-report.md     ←横向对标（Codex/Qoder/Hermes/dsh）
 │   ├── architecture-audit-2026-09-22.md ← 历史只读架构审计（已归档；发现 → issue 映射）
 │   └── roadmap-pawbench.md            ← archived evaluation roadmap (PawBench retired)
-├── backend/                           ← Python: api / core(agent,llm,tools,kb,mcp) / services / utils
+├── backend/                           ← Python: api / core(agent,llm,tools,mcp) / services / utils
 └── frontend/                          ← React + Vite + TS: components / pages / store / hooks
 ```
 

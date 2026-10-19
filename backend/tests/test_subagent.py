@@ -53,15 +53,11 @@ from backend.tests.test_graph import (
 )
 
 #: Everything #56 puts out of a subtask's reach by construction: external
-#: writes, generated tools, and the spawn tool itself (anti-recursion).
+#: writes, MCP tools, and the spawn tool itself (anti-recursion).
 OUT_OF_TIER_NAMES = (
     "code_exec",
     "http_request",
-    "git_commit",
-    "git_init",
-    "git_checkout",
     "spawn_subagent",
-    "createPet",
     "mcp__demo__fetch",
     "mcp__demo__create_issue",
 )
@@ -71,14 +67,8 @@ EXPLORE_MEMBERS = [
     "ls",
     "glob",
     "grep",
-    "kb_query",
-    "memory_search",
     "load_skill",
     "web_search",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_branch",
 ]
 
 
@@ -125,43 +115,28 @@ def _spec(subtask_id: str = "probe:sub:1", **overrides: Any) -> SubTaskSpec:
     return SubTaskSpec(**base)
 
 
+@pytest.fixture
+def ghost_tier(monkeypatch):
+    """Plant a declared-but-unmounted tier member.
+
+    The shipped tiers only name mounted tools, so the #74 refusal path needs a
+    synthetic name to stay covered.
+    """
+    monkeypatch.setitem(
+        TOOL_TIERS, EXPLORE_TIER, [*TOOL_TIERS[EXPLORE_TIER], "ghost_tool"]
+    )
+
+
 def _mounted_managers(tmp_path) -> List[Tuple[str, TaskManager, SubAgentExecutor]]:
-    """One manager per face-growing configuration (plain / Git / OpenAPI).
+    """One manager per face-growing configuration (plain / MCP).
 
     The tier assertions are only worth anything if they run against tools that
     actually exist, so every configuration that appends tools to the parent face
     gets its own manager here.
     """
-    spec = {
-        "openapi": "3.0.0",
-        "info": {"title": "pets", "version": "1"},
-        "paths": {
-            "/pets": {
-                "get": {
-                    "operationId": "listPets",
-                    "responses": {"200": {"description": "ok"}},
-                },
-                "post": {
-                    "operationId": "createPet",
-                    "responses": {"200": {"description": "ok"}},
-                },
-            },
-        },
-    }
-    spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(spec), encoding="utf-8")
-    configs: Dict[str, Dict[str, Any]] = {
-        "plain": {},
-        "git": {"git_enabled": True},
-        "openapi": {
-            "openapi_enabled": True,
-            "openapi_spec_path": str(spec_path),
-        },
-        "mcp": {},
-    }
     out: List[Tuple[str, TaskManager, SubAgentExecutor]] = []
-    for label, overrides in configs.items():
-        settings = make_settings(tmp_path / label, **overrides)
+    for label in ("plain", "mcp"):
+        settings = make_settings(tmp_path / label)
         tm = make_manager(settings, _CountingMock(plan=["p"], final_answer="d"))
         if label == "mcp":
             # A real server would spawn a subprocess; TaskManager appends
@@ -279,26 +254,6 @@ def test_tier_face_names_intersect_with_the_loaded_face():
         tier_face_names(loaded, "oracle")
 
 
-def test_git_tools_appear_in_the_tiers_only_when_mounted(tmp_path):
-    """档位是名字集合，实装面才是真相：git_enabled=false 时 git 四件自然消失。"""
-    plain = make_settings(tmp_path / "plain")
-    with_git = make_settings(tmp_path / "git", git_enabled=True)
-    plain_tm = make_manager(plain, _CountingMock())
-    git_tm = make_manager(with_git, _CountingMock())
-
-    plain_face = [t.name for t in plain_tm._tools]
-    git_face = [t.name for t in git_tm._tools]
-    assert any(n.startswith("git_") for n in git_face)
-    assert not any(n.startswith("git_") for n in plain_face)
-    assert not [n for n in tier_face_names(plain_face, EXPLORE_TIER) if n.startswith("git_")]
-    assert {"git_status", "git_diff", "git_log", "git_branch"} <= set(
-        tier_face_names(git_face, EXPLORE_TIER)
-    )
-    assert tier_face_names(git_face, EXECUTE_TIER) == sorted(
-        set(tier_face_names(git_face, EXPLORE_TIER)) | {"write", "edit"}
-    )
-
-
 def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
     tm = make_manager(make_settings(tmp_path), _CountingMock())
     tools = tm._tools
@@ -321,49 +276,45 @@ def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
         resolve_tool_face(tools, "oracle")
 
 
-def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(tmp_path):
+def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(
+    tmp_path, ghost_tier
+):
     """#74: 档内但未装载的名字与档外名字同等即拒，不再静默交集成空面。
 
     ``Loaded:`` 钉的是「档∩实装面」：既不含被拒的那个名字（列了等于让模型照着
     清单再递一次、第二次撞档外拒绝），也不含 ``write`` / ``code_exec`` 这些永远
     收窄不进去的档外名。清单是字面量，不用 ``tier_face_names`` 自算。
     """
-    tm = make_manager(make_settings(tmp_path), _CountingMock())  # git_enabled=False
+    tm = make_manager(make_settings(tmp_path), _CountingMock())
     names = [t.name for t in tm._tools]
-    assert "git_log" in TOOL_TIERS[EXPLORE_TIER] and "git_log" not in names
+    assert "ghost_tool" in TOOL_TIERS[EXPLORE_TIER] and "ghost_tool" not in names
 
     with pytest.raises(TierError) as excinfo:
-        resolve_tool_face(tm._tools, EXPLORE_TIER, ["git_log"])
+        resolve_tool_face(tm._tools, EXPLORE_TIER, ["ghost_tool"])
     message = str(excinfo.value)
-    assert "git_log" in message
+    assert "ghost_tool" in message
     assert "not mounted" in message
-    assert message.endswith(
-        "Loaded: glob, grep, kb_query, load_skill, ls, memory_search, read, web_search"
-    )
+    assert message.endswith("Loaded: glob, grep, load_skill, ls, read, web_search")
 
 
-def test_out_of_tier_refusal_lists_the_loaded_face_too(tmp_path):
+def test_out_of_tier_refusal_lists_the_loaded_face_too(tmp_path, ghost_tier):
     """#94: 档外拒绝的理由清单与上面 ``Loaded:`` 同源同口径——档位 ∩ 实装面。
 
-    这份清单的承诺是「供你改投」，所以档位全貌里那些声明了却没装载的名字（git 四件）
-    不能进消息：模型照单改投 `git_log`，会再吃一次未装载拒绝、白跳一轮。被拒的名字
+    这份清单的承诺是「供你改投」，所以档位全貌里那些声明了却没装载的名字
+    不能进消息：模型照单改投，会再吃一次未装载拒绝、白跳一轮。被拒的名字
     照旧点名，清单也照旧是字面量，不用 ``tier_face_names`` 自算。
     """
-    tm = make_manager(make_settings(tmp_path), _CountingMock())  # git_enabled=False
+    tm = make_manager(make_settings(tmp_path), _CountingMock())
     names = [t.name for t in tm._tools]
-    assert {"git_status", "git_diff", "git_log", "git_branch"} <= set(TOOL_TIERS[EXPLORE_TIER])
-    assert not [n for n in names if n.startswith("git_")]
+    assert "ghost_tool" in TOOL_TIERS[EXPLORE_TIER] and "ghost_tool" not in names
 
     with pytest.raises(TierError) as excinfo:
         resolve_tool_face(tm._tools, EXPLORE_TIER, ["read", "code_exec"])
     message = str(excinfo.value)
 
     assert "code_exec" in message  # 拒的还是拒，被拒的名照旧在
-    for unmounted in ("git_status", "git_diff", "git_log", "git_branch"):
-        assert unmounted not in message  # 但清单里没有改投不进去的名字
-    assert message.endswith(
-        "Loaded: glob, grep, kb_query, load_skill, ls, memory_search, read, web_search"
-    )
+    assert "ghost_tool" not in message  # 但清单里没有改投不进去的名字
+    assert message.endswith("Loaded: glob, grep, load_skill, ls, read, web_search")
 
 
 def test_check_face_resolves_without_running_anything(tmp_path):
@@ -397,7 +348,7 @@ def test_no_tier_mounts_a_danger_marked_tool(tmp_path):
             leaked = set(face) & marked
             assert not leaked, f"{label}/{tier} 档漏进了危险标记的工具 {sorted(leaked)}"
     # The dangerous families the issue names are all really present somewhere above.
-    assert {"code_exec", "spawn_subagent", "git_commit"} <= seen_marked
+    assert {"code_exec", "spawn_subagent"} <= seen_marked
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):
@@ -413,41 +364,6 @@ def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):
     # Every named tool must have been mounted by at least one configuration,
     # otherwise "absent from the tier" would be an artefact of an empty face.
     assert set(OUT_OF_TIER_NAMES) <= seen_mounted
-
-
-def test_generated_openapi_tools_stay_on_the_parent_only(tmp_path):
-    """Audit finding ①: a spec-generated POST is gated for the parent and must
-    not reach a subtask, where the gate is structurally absent. Read-only
-    generated tools are out of reach too — the tiers are a fixed name set."""
-    settings = make_settings(
-        tmp_path,
-        openapi_enabled=True,
-        openapi_spec_path=_write_pet_spec(tmp_path),
-    )
-    tm = make_manager(settings, _CountingMock())
-    names = {t.name for t in tm._tools}
-    assert {"listPets", "createPet"} <= names  # both generated onto the parent face
-    ex = SubAgentExecutor(tm, settings)
-    for tier in (EXPLORE_TIER, EXECUTE_TIER):
-        face = set(ex.check_face(_spec(tier=tier)))
-        assert "createPet" not in face
-        assert "listPets" not in face
-
-
-def _write_pet_spec(tmp_path) -> str:
-    spec = {
-        "openapi": "3.0.0",
-        "info": {"title": "pets", "version": "1"},
-        "paths": {
-            "/pets": {
-                "get": {"operationId": "listPets", "responses": {"200": {"description": "ok"}}},
-                "post": {"operationId": "createPet", "responses": {"200": {"description": "ok"}}},
-            },
-        },
-    }
-    path = tmp_path / "pets.json"
-    path.write_text(json.dumps(spec), encoding="utf-8")
-    return str(path)
 
 
 def test_spawned_subtask_face_carries_the_sandbox_writes_only(tmp_path):
@@ -568,12 +484,12 @@ def test_spawn_subagent_refuses_a_widening_request_before_running(
 
 
 def test_spawn_subagent_refuses_an_unmounted_tier_member_before_running(
-    tmp_path, monkeypatch
+    tmp_path, ghost_tier, monkeypatch
 ):
     """#74: 档内但本次没装载的名字与档外同等处理——预检即拒，探子都不派。
 
-    与上一条同形，只是被拒的名字这次**在档内**：`git_enabled=false` 下 `git_log`
-    是档位声明的成员、却不在实装面上。改前这里静默交集出空面、子任务照跑照
+    与上一条同形，只是被拒的名字这次**在档内**（planted ``ghost_tool``，本仓
+    shipped tiers 只点名已挂载的工具）。改前这里静默交集出空面、子任务照跑照
     `completed`，父模型收到的是假成功。
     """
     settings = make_settings(tmp_path)
@@ -584,16 +500,16 @@ def test_spawn_subagent_refuses_an_unmounted_tier_member_before_running(
     assert tm._subagent is not None
     monkeypatch.setattr(tm._subagent, "run_subtask", _recording_run(started))
 
-    res = tool.run(name="probe", instruction="try it", tier=EXPLORE_TIER, tools=["git_log"])
+    res = tool.run(name="probe", instruction="try it", tier=EXPLORE_TIER, tools=["ghost_tool"])
 
     assert res.success is False
-    assert "git_log" in (res.error or "") and "not mounted" in (res.error or "")
+    assert "ghost_tool" in (res.error or "") and "not mounted" in (res.error or "")
     assert started == []
     assert mock.turns == 0
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
 
 
-def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path):
+def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path, ghost_tier):
     """双路径一致（#74 AC3）：不经工具层直调 ``run_subtask``，理由逐字相同。"""
     settings = make_settings(tmp_path)
     mock = _CountingMock(plan=["p"], final_answer="never")
@@ -602,24 +518,24 @@ def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path):
     tool = next(t for t in tm._tools if t.name == "spawn_subagent")
 
     direct = ex.run_subtask(
-        _spec(subtask_id="um:sub:1", tier=EXPLORE_TIER, tools=["git_log"])
+        _spec(subtask_id="um:sub:1", tier=EXPLORE_TIER, tools=["ghost_tool"])
     )
     via_tool = tool.run(
-        name="um", instruction="i", tier=EXPLORE_TIER, tools=["git_log"]
+        name="um", instruction="i", tier=EXPLORE_TIER, tools=["ghost_tool"]
     )
 
     assert direct.status == "failed" and direct.tool_face == []
     assert via_tool.success is False
     assert direct.error == (via_tool.error or "")
-    assert "git_log" in direct.error and "not mounted" in direct.error
+    assert "ghost_tool" in direct.error and "not mounted" in direct.error
     assert mock.turns == 0
 
 
 class _UnmountedAskMock(MockLLMClient):
-    """父模型递一个「档位声明了、本次却没装载」的名字（git 关时的 ``git_log``）。
+    """父模型递一个「档位声明了、本次却没装载」的名字（planted ``ghost_tool``）。
 
     只在第一轮递 spawn，之后一律直接答——所以「探子有没有被派出去」由事件频道
-    分辨，不由轮次分辨（父任务被完成验证弹回几轮是验证器的事，与本票无关）。
+    分辨，不由轮次分辨。
     """
 
     def __init__(self) -> None:
@@ -639,9 +555,9 @@ class _UnmountedAskMock(MockLLMClient):
                         "name": "spawn_subagent",
                         "arguments": {
                             "name": "probe",
-                            "instruction": "查一下提交历史",
+                            "instruction": "查一下不存在的工具",
                             "tier": EXPLORE_TIER,
-                            "tools": ["git_log"],
+                            "tools": ["ghost_tool"],
                         },
                     }
                 ],
@@ -650,7 +566,7 @@ class _UnmountedAskMock(MockLLMClient):
 
 
 def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
-    tmp_path, event_bus
+    tmp_path, event_bus, ghost_tier
 ):
     """票面「观测」条：被拒的 spawn 不派出探子，失败走 ``tool_result`` 事件——这里钉住事件。
 
@@ -660,7 +576,7 @@ def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
     settings = make_settings(tmp_path)
     mock = _UnmountedAskMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
-    task_id = tm.create_task(title="t", user_input="派个子任务查提交历史")
+    task_id = tm.create_task(title="t", user_input="派个子任务查不存在的工具")
     _run_until_done(tm, task_id)
 
     events = event_bus.replay(task_id)
@@ -671,7 +587,7 @@ def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
     ]
     assert len(spawn) == 1  # 父模型没有被同一个拒绝反复放行
     assert spawn[0]["status"] == "failed"
-    assert "git_log" in spawn[0]["error"] and "not mounted" in spawn[0]["error"]
+    assert "ghost_tool" in spawn[0]["error"] and "not mounted" in spawn[0]["error"]
     assert not [e for e in events if "subtask" in e["type"]]
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
 

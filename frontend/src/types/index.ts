@@ -87,24 +87,6 @@ export interface SubTask {
   error?: string | null;
 }
 
-// --- P1 item 3: knowledge base ---
-
-export interface KbDoc {
-  doc_id: string;
-  path: string;
-  size: number;
-  chunks: number;
-  indexed_at: string;
-}
-
-export interface KbHit {
-  doc_id: string;
-  path: string;
-  chunk_index: number;
-  content: string;
-  score: number;
-}
-
 // --- P2 item 1: MCP server diagnostics (GET /api/mcp/servers) ---
 
 export interface McpServerInfo {
