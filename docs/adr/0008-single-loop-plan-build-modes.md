@@ -76,8 +76,9 @@ pi 的 loop 里**没有暂停态**：一轮结束就是「没有工具调用」�
   **「持久化恢复」与「循环控制韧性」两项能力仍在**，由本文第 1 / 3 / 4 条承接，不随附退出。
 
 继续有效：[ADR 0001](0001-in-place-migration-and-resume-positioning.md)（迁移定位与续跑）、
-[ADR 0003](0003-subagent-circuit-breaker-per-runtime.md)（熔断按运行各记一本账）、
-[ADR 0004](0004-artifact-is-what-the-task-wrote.md)（产物定义）。
+[ADR 0004](0004-artifact-is-what-the-task-wrote.md)（产物定义）；
+[ADR 0003](0003-subagent-circuit-breaker-per-runtime.md)（熔断按运行各记一本账）已随
+[ADR 0009](0009-minimal-agent-chapter.md) 的 C2 切片退役。
 
 ## 重开条件
 
