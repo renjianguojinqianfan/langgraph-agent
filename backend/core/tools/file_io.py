@@ -24,12 +24,13 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from ...services.snapshots import capture_before_image
 from ...utils.logging import get_logger
 from ..runtime_context import get_current_workspace, workspace_root
+from ..workspace_files import workspace_files
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -56,6 +57,21 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _matches_glob(rel: Path, pattern: str) -> bool:
+    """``Path.glob``-like matching over an already-enumerated file list.
+
+    A pattern without a slash is anchored at the base directory (unlike
+    ``PurePath.match``, which matches suffixes); ``**/`` also matches the
+    zero-directory form, as ``glob`` does.
+    """
+    if "/" not in pattern:
+        return rel.parent == Path(".") and fnmatch.fnmatch(rel.name, pattern)
+    pure = PurePath(rel.as_posix())
+    if "**" not in pattern:
+        return len(pure.parts) == len(PurePath(pattern).parts) and pure.match(pattern)
+    return pure.match(pattern) or (pattern.startswith("**/") and pure.match(pattern[3:]))
 
 
 class _SandboxedTool(BaseTool):
@@ -366,10 +382,11 @@ class EditTool(_SandboxedTool):
 class GlobTool(_SandboxedTool):
     name = "glob"
     description = (
-        "Find files inside the sandbox whose path matches a glob `pattern` "
+        "Find files inside the workspace whose path matches a glob `pattern` "
         "('**/*.py' recursive, '*.txt' top-level). Optionally scope to a "
-        "sub-directory via `path`. Returns root-relative paths, sorted. This is "
-        "the recursive-listing tool."
+        "sub-directory via `path`. Skips `.git` and files ignored by "
+        "`.gitignore` (git repositories). Returns root-relative paths, sorted. "
+        "This is the recursive-listing tool."
     )
     args_schema = {
         "type": "object",
@@ -401,8 +418,8 @@ class GlobTool(_SandboxedTool):
         found: set[str] = set()
         try:
             if base.exists():
-                for p in base.glob(pattern):
-                    if not p.is_file():
+                for p in workspace_files(base):
+                    if not _matches_glob(p.relative_to(base), pattern):
                         continue
                     rp = p.resolve()
                     if rp != root and root not in rp.parents:
@@ -430,9 +447,10 @@ class GlobTool(_SandboxedTool):
 class GrepTool(_SandboxedTool):
     name = "grep"
     description = (
-        "Search file contents inside the sandbox with a regular expression. "
+        "Search file contents inside the workspace with a regular expression. "
         "Recursively scans files (optionally filtered by a filename `glob` and "
-        "scoped to a sub-directory `path`), returning matching lines as "
+        "scoped to a sub-directory `path`), skipping `.git` and files ignored "
+        "by `.gitignore` (git repositories), and returns matching lines as "
         "{file, line, text}. Set `ignore_case` for case-insensitive matching."
     )
     args_schema = {
@@ -490,9 +508,7 @@ class GrepTool(_SandboxedTool):
         truncated = False
         try:
             if base.exists():
-                for p in sorted(base.rglob("*")):
-                    if not p.is_file():
-                        continue
+                for p in workspace_files(base):
                     rp = p.resolve()
                     if rp != root and root not in rp.parents:
                         continue  # symlink-escape guard
