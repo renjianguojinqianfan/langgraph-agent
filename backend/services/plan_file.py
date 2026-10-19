@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,7 +27,8 @@ PLAN_MESSAGE_MAX_CHARS = 20_000
 
 def plan_path(workspace: Path, task_id: str) -> Path:
     root = Path(workspace).resolve()
-    candidate = (root / PLAN_DIR / f"{task_id}.md").resolve()
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id) or "task"
+    candidate = (root / PLAN_DIR / f"{safe}.md").resolve()
     if root not in candidate.parents:
         raise ValueError(f"plan path escapes the workspace: {task_id!r}")
     return candidate
