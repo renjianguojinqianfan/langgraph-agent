@@ -49,7 +49,6 @@ export interface StepRecord {
 export interface WorkspaceFile {
   path: string;
   size: number;
-  mtime: string;
 }
 
 export interface Task {
@@ -110,9 +109,6 @@ export interface CreateTaskRequest {
   workspace?: string;
 }
 
-// --- P1-B: workspace rollback (POST /api/tasks/{id}/rollback) ---
-
-/** Result of a whole-task rollback (docs/specs/p1-b-rollback.md). */
 export interface ApiResponse<T = any> {
   code: number;
   data: T;

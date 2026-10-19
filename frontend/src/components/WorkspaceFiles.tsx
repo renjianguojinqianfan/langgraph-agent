@@ -23,19 +23,36 @@ export function WorkspaceFiles({
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setSelected(null);
     setPreview(null);
     setNote(null);
-    if (!taskId) {
-      setFiles([]);
-      return;
-    }
-    listFiles(taskId)
-      .then((r) => {
-        setFiles(r.data?.files ?? []);
-        setTruncated(!!r.data?.truncated);
-      })
-      .catch(() => setNote("无法读取工作区文件"));
+    setFiles([]);
+    setTruncated(false);
+    if (!taskId) return;
+
+    const load = () =>
+      listFiles(taskId)
+        .then((r) => {
+          if (cancelled) return;
+          if (!r.data) {
+            setNote("无法读取工作区文件");
+            return;
+          }
+          setFiles(r.data.files ?? []);
+          setTruncated(!!r.data.truncated);
+        })
+        .catch(() => {
+          if (!cancelled) setNote("无法读取工作区文件");
+        });
+
+    load();
+    // Files appear while the task is still running; refresh until it parks.
+    const timer = status === "RUNNING" ? window.setInterval(load, 2000) : null;
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
+    };
   }, [taskId, status]);
 
   const open = async (path: string) => {

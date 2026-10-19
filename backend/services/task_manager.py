@@ -2,7 +2,7 @@
 
 Owns task creation, runs the LangGraph graph on a background thread, and
 exposes stop / query APIs. The graph nodes publish events through the
-:class:`EventBus` and register artifacts through :class:`Persistence`. A
+:class:`EventBus`; task records persist through :class:`Persistence`. A
 ``stop_requested`` flag (checked at each node entry) guarantees the ≤2s
 interrupt requirement (P0-9).
 """
@@ -238,8 +238,6 @@ class TaskManager:
         # Spec Issue #4 (D5): crash recovery reconciliation — a fresh process
         # owns no execution threads, so persisted RUNNING tasks are orphans.
         self._reconcile_orphans()
-        # P1-B (拍板 11): the start-up sweep — no scheduler host yet, so expired
-        # task snapshot dirs are dropped by the process that starts next.
 
     def _mount_checkpointer(self, settings: Settings) -> None:
         """Mount the sqlite saver, or refuse a store this build cannot vouch for.
@@ -890,7 +888,7 @@ class TaskManager:
             # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
             # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
             restored = cast(AgentState, values)
-            # Reset *control* flags only; plan / steps / artifacts survive.
+            # Reset *control* flags only; plan / steps survive.
             # Since #139 one invoke is one round: the per-round budget restarts
             # and the stale answer/error must not leak into this round's finish.
             # The persisted plan is the user-editable copy (set_plan), so it
@@ -971,7 +969,7 @@ class TaskManager:
         next continuation seeds ``state["plan"]`` from it, so "改完随后续消息
         生效" is structural rather than a rule the caller has to remember.
         """
-        # Same window as resume/rollback: stop() settles the record before the
+        # Same window as resume: stop() settles the record before the
         # worker commits its last state, and finalize would overwrite this edit
         # with the checkpoint's plan. Wait the worker out rather than racing it.
         thread = self._threads.get(task_id)

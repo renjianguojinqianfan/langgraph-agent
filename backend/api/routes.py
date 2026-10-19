@@ -234,7 +234,11 @@ def list_workspace_files(
     request: Request,
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
-    """Files in the task's workspace, using the glob/grep ignore rules (W3)."""
+    """Files in the task's workspace, using the glob/grep ignore rules (W3).
+
+    The list is a visibility filter, not a boundary: a named preview/download
+    still reaches any file inside the workspace (``read`` behaves the same).
+    """
     root = _task_workspace(request, task_id)
     files = workspace_files(root)
     entries = []
@@ -245,7 +249,6 @@ def list_workspace_files(
                 {
                     "path": path.relative_to(root).as_posix(),
                     "size": stat.st_size,
-                    "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
                 }
             )
         except OSError:

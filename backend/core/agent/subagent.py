@@ -202,7 +202,7 @@ class SubAgentExecutor:
         wedge the parent's worker thread) and what makes
         ``subagent_max_concurrency`` mean anything; ``_exec_one`` re-seats the
         parent task id on the pool thread so its writes still land on the
-        parent's rollback ledger (Issue #33 拍板 5). Over the bound the fold
+        parent's task context. Over the bound the fold
         also asks the worker to stop, so the slot comes back at the next node
         entry instead of at ``max_steps``: the LLM call already in flight still
         finishes, and a tool batch runs only if ``tool_node`` had already passed
@@ -319,8 +319,7 @@ class SubAgentExecutor:
         (``spec.subtask_id``) — they never reach the parent channel.
         """
         # P1-B / W1: the pool thread starts with a *fresh* context, so both the
-        # parent task id (rollback ledger) and the parent workspace must be
-        # re-seated. Since #56 every path crosses the pool, spawn_subagent
+        # parent task id and the parent workspace must be re-seated. Since #56 every path crosses the pool, spawn_subagent
         # included — which is why that tool hands the spec an explicit parent id
         # instead of relying on inheritance.
         tokens = set_runtime_context(

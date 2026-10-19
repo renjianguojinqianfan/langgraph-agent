@@ -3,9 +3,6 @@
 Verifies that one tool call is executed exactly once (#157: no retry, no
 circuit breaker) and that the failure reason lands in the tool message the
 model reads, not only in the events a human reads (#95).
-
-Also covers the node's artifact-extraction guard: a tool result whose ``path``
-is a directory registers no artifact (#17).
 """
 
 from __future__ import annotations

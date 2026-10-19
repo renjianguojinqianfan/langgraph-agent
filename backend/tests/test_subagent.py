@@ -815,7 +815,6 @@ def test_subtask_writes_and_events_do_not_pollute_the_parent(tmp_path, event_bus
 
     parent_types = {e["type"] for e in event_bus.replay(task_id)}
     assert "tool_call" not in parent_types  # internal rounds stayed away
-    assert "artifact_created" not in parent_types
 
     sub_types = {e["type"] for e in event_bus.replay("iso:sub:1")}
     assert {"step_start", "tool_call", "tool_result"} <= sub_types
@@ -850,8 +849,6 @@ def test_subtask_that_only_reads_hands_no_product_to_the_parent(tmp_path, event_
     )
 
     assert res.status == "completed"
-    parent_types = {e["type"] for e in event_bus.replay(task_id)}
-    assert "artifact_created" not in parent_types
 
     sub_reads = [
         e["data"]

@@ -85,7 +85,7 @@ GitHub Issues（`renjianguojinqianfan/langgraph-agent`），走 `gh` CLI；Power
 
 ### Domain docs
 
-Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004 / 0005 / 0006 / 0007 / 0008 / 0009 / 0010；0005–0007 已随 0008 退役、0002 部分退役、0003 已随 C2 退役；0009 = 最简 agent 一章，0004 将随其切片退役；0010 = 日常形态补充）。See `docs/agents/domain.md`.
+Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004 / 0005 / 0006 / 0007 / 0008 / 0009 / 0010；0005–0007 已随 0008 退役、0002 部分退役、0003 已随 C2 退役；0004 已随 C5 退役；0009 = 最简 agent 一章；0010 = 日常形态补充）。See `docs/agents/domain.md`.
 
 ### Implementation workflow
 

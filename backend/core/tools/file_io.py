@@ -3,8 +3,7 @@
 All paths are confined to the task's workspace (runtime context, falling back
 to ``Settings.artifacts_path`` outside a run). Reads outside the root, writes
 that escape the root, and non-existent files are rejected. Successful writes
-return the absolute path so the kernel can register an
-:class:`~backend.services.persistence.Artifact`.
+return the absolute path (the workspace file list picks it up).
 
 Each capability is its own ``BaseTool`` so the function schema and the
 per-tool confirm policy stay focused:
