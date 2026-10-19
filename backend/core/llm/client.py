@@ -156,14 +156,14 @@ def make_default_mock_client() -> MockLLMClient:
 def make_mock_client_from_script(script_path: str | Path) -> MockLLMClient:
     """Build a :class:`MockLLMClient` from a JSON script file (issue #108).
 
-    The file lets an offline script exercise a real tool round (``code_exec``,
-    ``http_request``, ``spawn_subagent``) — in the browser — without any LLM key.
+    The file lets an offline script exercise a real tool round (``bash``,
+    ``web_search``, ``spawn_subagent``) — in the browser — without any LLM key.
     Shape (every key optional; an absent one keeps :class:`MockLLMClient`'s own
     default)::
 
         {
           "plan": ["..."],
-          "tool_calls": [{"id": "call_1", "name": "code_exec", "arguments": {...}}],
+          "tool_calls": [{"id": "call_1", "name": "bash", "arguments": {...}}],
           "final_answer": "..."
         }
 

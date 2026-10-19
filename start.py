@@ -60,15 +60,22 @@ def main() -> int:
 
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    # Keep the backend's settings in step with --port: CORS derives the app's
+    # own origin from `settings.port`.
+    env["PORT"] = str(args.port)
     if args.mock:
         env["USE_MOCK_LLM"] = "true"
 
     procs: list[subprocess.Popen] = []
     try:
         if not args.frontend_only:
+            # Import only after --install: the launcher itself stays stdlib-only
+            # until the dependencies are in place.
+            from backend.config import get_settings
+
             backend_cmd = [
                 sys.executable, "-m", "uvicorn", "backend.main:app",
-                "--host", "0.0.0.0", "--port", str(args.port), "--reload",
+                "--host", get_settings().host, "--port", str(args.port), "--reload",
             ]
             procs.append(_run(backend_cmd, cwd=ROOT, env=env))
         if not args.backend_only:

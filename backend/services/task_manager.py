@@ -36,12 +36,18 @@ from ..core.agent.subagent import SubAgentExecutor
 from ..core.llm.client import LLMClient
 from ..core.llm.openai_compat import create_llm_client
 from ..core.tools.base import BaseTool
+from ..core.tools.bash import BashTool
 from ..core.tools.registry import build_tools
 from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from .event_bus import EventBus
 from .persistence import Persistence
-from .snapshots import cleanup_expired, restore_task, set_current_task_id
+from .snapshots import (
+    cleanup_expired,
+    get_current_task_id,
+    restore_task,
+    set_current_task_id,
+)
 from .trace import TraceRecorder
 
 if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
@@ -350,12 +356,25 @@ class TaskManager:
 
     # ── P1 wiring of runtime-injected tools ──
     def _wire_injected_tools(self) -> None:
-        """Give stateful tools their service references (subagent)."""
+        """Give stateful tools their service references (subagent, bash stop)."""
         for t in self._tools:
             if isinstance(t, SpawnSubagentTool):
                 t.executor = self._subagent
+            elif isinstance(t, BashTool):
+                # Nodes are synchronous: a stop clicked while a command is
+                # running is only observable from inside the tool. The flag
+                # stays authoritative (is_stop_flagged), and the run loop polls
+                # this on the worker thread.
+                t.stop_checker = self._current_task_stopped
             # McpTool holds its McpClientManager reference at construction time,
             # so it needs no wiring here.
+
+    def _current_task_stopped(self) -> bool:
+        """Whether the task bound to this worker thread has a stop request."""
+        task_id = get_current_task_id()
+        if not task_id:
+            return False
+        return self.is_stop_flagged(task_id)
 
     # ── P2 item 1: MCP client tool registration ──
     def _load_mcp_tools(self, settings: Settings) -> None:

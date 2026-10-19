@@ -297,15 +297,15 @@ def test_exact_name_and_glob_and_pattern():
     policy = _policy(
         {"tool": "probe", "reason": "exact"},
         {"tool": "mcp__*__write", "reason": "mcp writer"},
-        {"tool": "code_exec", "pattern": "DROP TABLE", "reason": "ddl"},
+        {"tool": "bash", "pattern": "DROP TABLE", "reason": "ddl"},
     )
 
     assert policy.check("probe", {}) == "exact"
     assert policy.check("mcp__fs__write", {}) == "mcp writer"
     assert policy.check("mcp__fs__read", {}) is None
     # 命令模式不区分大小写
-    assert policy.check("code_exec", {"cmd": "drop table users"}) == "ddl"
-    assert policy.check("code_exec", {"cmd": "select 1"}) is None
+    assert policy.check("bash", {"command": "drop table users"}) == "ddl"
+    assert policy.check("bash", {"command": "select 1"}) is None
     assert policy.check("untouched", {"cmd": "drop table users"}) is None
 
 

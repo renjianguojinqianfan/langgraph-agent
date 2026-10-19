@@ -527,7 +527,7 @@ def client(tmp_path):
     mock = _writer_mock("api.txt", "via api")
     tm = make_manager(settings, mock, event_bus=eb, persistence=persistence)
 
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://localhost") as test_client:
         test_client.app.state.settings = settings
         test_client.app.state.event_bus = eb
         test_client.app.state.persistence = persistence

@@ -132,7 +132,7 @@ def test_trace_ndjson_valid_and_matches_json_format(tmp_path):
         final_answer="wrote it",
     )
     tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost") as client:
         client.app.state.settings = settings
         client.app.state.event_bus = eb
         client.app.state.persistence = persistence

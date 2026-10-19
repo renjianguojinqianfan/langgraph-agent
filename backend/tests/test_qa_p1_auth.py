@@ -38,7 +38,7 @@ def _make_client(tmp_path, auth_enabled, ttl_sec=86400):
     persistence = Persistence(settings)
     mock = MockLLMClient(plan=["p"], final_answer="done")
     tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
     client.__enter__()
     client.app.state.settings = settings
     client.app.state.event_bus = eb
@@ -93,7 +93,7 @@ def test_api_rejects_forged_token_from_other_secret(tmp_path):
 
 
 def test_health_reports_auth_enabled_both_ways(tmp_path):
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         c.app.state.settings = make_settings(tmp_path, auth_enabled=True)
         assert c.get("/health").json()["auth_enabled"] is True
         c.app.state.settings = make_settings(tmp_path, auth_enabled=False)

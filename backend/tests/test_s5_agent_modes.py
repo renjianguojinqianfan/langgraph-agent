@@ -132,6 +132,7 @@ def test_plan_mode_advertises_only_the_explore_tier(tmp_path: Path) -> None:
     expected = tier_face_names([t.name for t in tools], EXPLORE_TIER)
     assert mock.offered[-1] == sorted(expected)
     assert "write" not in mock.offered[-1]
+    assert "bash" not in mock.offered[-1]  # C3: shell access stays out of plan mode
     assert "spawn_subagent" not in mock.offered[-1]
 
     rt.agent(_state(mode="build"))
@@ -384,7 +385,7 @@ def _api_client(tmp_path: Path):
     app.state.event_bus = eb
     app.state.persistence = persistence
     app.state.task_manager = tm
-    return TestClient(app), tm
+    return TestClient(app, base_url="http://localhost"), tm
 
 
 def test_rest_mode_plan_messages(tmp_path: Path) -> None:

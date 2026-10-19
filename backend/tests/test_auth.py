@@ -73,7 +73,7 @@ def _make_client(tmp_path, auth_enabled):
     persistence = Persistence(settings)
     mock = MockLLMClient(plan=["p"], final_answer="done")
     tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
     client.__enter__()
     client.app.state.settings = settings
     client.app.state.event_bus = eb
@@ -164,7 +164,7 @@ def _login(client) -> str:
 
 
 def test_health_reports_auth_enabled(tmp_path):
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         c.app.state.settings = make_settings(tmp_path, auth_enabled=True)
         r = c.get("/health")
         assert r.status_code == 200

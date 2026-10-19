@@ -32,7 +32,7 @@
 | 流式可观测 | 后端每一步需实时推给前端，延迟 < 1s | 进程内 **EventBus（pub/sub）** + **SSE** 长连接推送结构化事件 |
 | 可控中断 | 用户点"停止"要 2s 内生效 | 任务执行在独立线程/任务中运行，通过 `threading.Event` 信号量中断循环 |
 | 多供应商 LLM | 用户可能用 OpenAI / DeepSeek / Ollama | 抽象 **`LLMClient`** 统一接口，底层走 OpenAI 兼容 HTTP |
-| 工具安全与可扩展 | 代码执行需隔离；新增工具要低成本 | `BaseTool` 统一契约 + 注册表自动发现；代码执行用受限 subprocess 沙箱 |
+| 工具安全与可扩展 | bash 等于运行账号的权限；新增工具要低成本 | `BaseTool` 统一契约 + 注册表自动发现；bash 不提供沙箱，隔离靠容器（见 README「这不是安全边界」） |
 | 持久化（P1） | 重启后历史可见 | v1 用 **内存 + JSON 文件落盘**，预留 SQLite 仓储接口 |
 
 ### 1.2 框架与库选型
@@ -98,14 +98,13 @@ langgraph-agent/
 │   │       ├── registry.py          # 工具注册表/自动发现
 │   │       ├── web_search.py        # 联网检索（DuckDuckGo 默认，可插 SerpAPI）
 │   │       ├── file_io.py           # 六个沙箱文件工具：read/write/edit/glob/grep/ls
-│   │       ├── code_exec.py         # 受限 subprocess 代码执行
-│   │       └── http_api.py          # P1：通用 HTTP 请求
+│   │       └── bash.py              # C3：bash 命令（工作区根、超时、进程树），取代 code_exec/http_api
 │   ├── services/
 │   │   ├── event_bus.py             # 进程内 pub/sub（步骤事件）
 │   │   ├── persistence.py           # 内存 + JSON 落盘（预留 SQLite 仓储）
 │   │   └── task_manager.py          # 任务生命周期：run/stop/resume/续说/模式/计划
 │   └── utils/
-│       ├── sandbox.py               # subprocess 超时/资源/临时目录封装
+│       ├── sandbox.py               # 子进程环境白名单（bash 用）
 │       └── logging.py               # 统一日志
 │
 └── frontend/                         # ── 前端 ──
@@ -161,10 +160,14 @@ classDiagram
         +str llm_model
         +int max_steps
         +int sandbox_timeout
+        +str bash_path
         +str search_provider
         +str serpapi_key
         +str artifacts_dir
         +str data_dir
+        +str host
+        +int port
+        +str cors_origins
         +bool auth_enabled
         +get_settings() Settings
     }
@@ -197,8 +200,7 @@ classDiagram
         +run(**kwargs) ToolResult
     }
     class WebSearchTool
-    class CodeExecTool
-    class HttpTool
+    class BashTool
     class _SandboxedTool
     class ReadTool
     class WriteTool
@@ -207,8 +209,7 @@ classDiagram
     class GrepTool
     class LsTool
     BaseTool <|-- WebSearchTool
-    BaseTool <|-- CodeExecTool
-    BaseTool <|-- HttpTool
+    BaseTool <|-- BashTool
     BaseTool <|-- _SandboxedTool
     _SandboxedTool <|-- ReadTool
     _SandboxedTool <|-- WriteTool
@@ -466,7 +467,7 @@ sequenceDiagram
 5. **错误口径**：工具失败返回 `ToolResult(success=False, error=...)`；每次调用只执行一次，失败原因原样回给模型，**不自动重试**。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。被 `policy_rules` 当场拒掉的调用（S2）走**第三条**形状：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开，ADR 0008 决策 6）。
 6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在下一入口检测，为真则走 `finish` 并发布 `task_interrupted`（P0-9：2s 内生效）。
 7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里那一个钩子；命中即当场拒，不执行、不弹框、不进图重入。详见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md) 决策 6 与 `backend/core/agent/policy.py`。
-8. **产物与路径安全**：所有文件读写限定在 `Settings.artifacts_dir` / 沙箱白名单目录；越界路径一律拒绝（P0-4）。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
+8. **产物与路径安全**：`read` / `write` / `edit` / `ls` / `glob` / `grep` 的路径限定在 `Settings.artifacts_dir`，越界路径一律拒绝（P0-4）；`bash` **不受此围栏约束**——工作目录只是起点，见 README「这不是安全边界」。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
 9. **停下判定（Q8）**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 把任务停成 `INTERRUPTED`；错误 → `FAILED`。没有 `COMPLETED` 终态。
 10. **日志**：统一经 `utils/logging.py`，结构化输出到控制台 + `data_dir/logs/`；不打印明文 API Key。
 
@@ -489,7 +490,7 @@ pydantic-settings>=2.3.0,<3.0.0
 openai>=1.30.0,<2.0.0
 duckduckgo-search>=4.0.0,<5.0.0
 python-dotenv>=1.0.0
-httpx>=0.27.0          # 供 http_api 工具使用
+httpx>=0.27.0          # 供 web_search 的 SerpAPI 路径使用
 ```
 
 ### 6.2 前端（`frontend/package.json`）
@@ -528,7 +529,7 @@ httpx>=0.27.0          # 供 http_api 工具使用
 |----|--------|----------------|------|--------|
 | T01 | 项目基础设施与配置 | `backend/config.py`、`backend/__init__.py`、`requirements.txt`、`frontend/package.json`、`frontend/vite.config.ts`、`frontend/tsconfig.json`、`frontend/tailwind.config.js`、`frontend/index.html`、`start.py`、`.env.example`、`README.md` | — | P0 |
 | T02 | LLM 接入抽象层 | `backend/core/llm/client.py`、`backend/core/llm/openai_compat.py`、`backend/utils/logging.py` | T01 | P0 |
-| T03 | 工具层（BaseTool + 四件套） | `backend/core/tools/base.py`、`backend/core/tools/registry.py`、`backend/core/tools/web_search.py`、`backend/core/tools/file_io.py`、`backend/core/tools/code_exec.py`、`backend/utils/sandbox.py`、`backend/core/tools/http_api.py` | T01 | P0/P1 |
+| T03 | 工具层（BaseTool + 四件套） | `backend/core/tools/base.py`、`backend/core/tools/registry.py`、`backend/core/tools/web_search.py`、`backend/core/tools/file_io.py`、`backend/core/tools/bash.py`（C3 取代 `code_exec` / `http_api`）、`backend/utils/sandbox.py` | T01 | P0/P1 |
 | T04 | LangGraph 编排内核 | `backend/core/agent/state.py`、`backend/core/agent/graph.py`、`backend/core/agent/nodes.py`、`backend/core/agent/prompts.py` | T02, T03 | P0 |
 | T05 | 后端服务与 API | `backend/services/event_bus.py`、`backend/services/persistence.py`、`backend/services/task_manager.py`、`backend/api/schemas.py`、`backend/api/routes.py`、`backend/api/sse.py`、`backend/main.py` | T04 | P0 |
 | T06 | 前端骨架与状态管理 | `frontend/src/main.tsx`、`frontend/src/App.tsx`、`frontend/src/index.css`、`frontend/src/types/index.ts`、`frontend/src/store/taskStore.ts`、`frontend/src/api/client.ts` | T01 | P0 |
@@ -563,7 +564,7 @@ T01(基建) → T02(LLM) ┐
 | **Q2 LLM** | **OpenAI 兼容接口**，抽象 `LLMClient`；`base_url`+`api_key`+`model` 经 `.env`；支持 OpenAI / DeepSeek / 本地 Ollama | 见 T02 |
 | **Q3 持久化** | v1 **内存 + JSON 文件落盘**（任务记录 + 产物），**预留 SQLite 仓储**（`Persistence` 抽象隔离） | 见 `persistence.py` |
 | **Q4 鉴权** | v1 **本地 demo 不做登录鉴权**；`Settings.auth_enabled=False`；接口预留 `POST /api/auth/token`（P1-6 仅在公网时开启） | 文档注明 |
-| **Q5 沙箱** | **受限 subprocess**（独立临时目录 + 超时 + 基础资源限制）；Docker 作为可选增强，**首版不强制** | 见 `sandbox.py`/`code_exec.py` |
+| **Q5 沙箱** | **没有沙箱**（C3）：bash 拿运行账号的权限，工作目录只是起点；危险规则默认空表，要隔离就放容器 / 虚拟机 | 见 README「这不是安全边界」/ `core/tools/bash.py` |
 | **Q6 web search** | **内置可插拔搜索工具**，默认轻量免费方案 **DuckDuckGo**（`ddgs`），预留 SerpAPI 接口（需 Key 时配置） | 见 `web_search.py` |
 | **Q7 人工介入** | **已随 ADR 0008 退役**：没有确认闸门 / 人工确认节点；危险动作由 `policy_rules` + 钩子当场拒 | 见 §5.7 |
 | **Q8 停下度量** | 一轮的最后一次 `agent` 调用没有工具调用 → `INTERRUPTED`（停下）；错误 → `FAILED`；没有 `COMPLETED` | 见 §5.9 |

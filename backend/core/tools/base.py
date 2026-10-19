@@ -38,7 +38,7 @@ class BaseTool(ABC):
     # *and* the result advertises the written file under ``data["path"]`` as a
     # real file. Read-only tools keep this False even when their result carries
     # a ``path`` (``read`` does). A tool that writes files without advertising
-    # one under ``path`` (``code_exec``) stays False too — it has no single
+    # one under ``path`` (``bash``) stays False too — it has no single
     # deliverable to register. A wrapper around an external tool (MCP) opts in
     # by setting this True on its class.
     registers_artifact: bool = False
