@@ -2,7 +2,7 @@
 
 > 本文件是**词汇表入口**，不是第二份词汇表。定义型权威在 `backend/core/agent/state.py`
 > （状态字段与节点名，图拓扑见 `backend/core/agent/graph.py`）与 `AGENTS.md`「跨任务安全边界」表；
-> 已定居决策在 `docs/adr/`（现役 0001–0004 + 0008 + 0009；0005–0007 已随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
+> 已定居决策在 `docs/adr/`（现役 0001 / 0002（部分退役）/ 0004 / 0008 / 0009；0003 随 C2 退役，0005–0007 随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
 > diagnosing-bugs / wait-what / domain-modeling / triage …）读完本文件，按指针去读权威源。
 > 单上下文仓库：无 `GLOSSARY-MAP.md`。
 
@@ -12,7 +12,7 @@
 |---|---|
 | 节点 / 状态字段术语的定义 | `backend/core/agent/state.py`（节点名见 `graph.py`） |
 | 硬规则与边界不变量 | `AGENTS.md`「跨任务安全边界」表 |
-| 已定居的决策与理由 | `docs/adr/0001`–`0009`（0005–0007 已退役，保留历史） |
+| 已定居的决策与理由 | `docs/adr/0001`–`0009`（0003 随 C2 退役；0005–0007 随 0008 退役，均保留历史） |
 | 计划 / 执行两模式、停下、交付 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（决策 1–8） |
 | 产物（谁算写出、怎么去重） | [ADR 0004](docs/adr/0004-artifact-is-what-the-task-wrote.md) |
 | 技能组配置（tracker / 标签 / 本文档的消费规则） | `docs/agents/` 三件套 |
@@ -29,7 +29,7 @@
 运行时概念：`checkpoint` / `resume` / 沙箱根 / 两层注入。
 任务与产物：`artifact`（产物，ADR-0004：本任务**写出**的文件，仅 `registers_artifact` 工具为源）/ `thread_id`（= task_id，resume 与续说寻址恒等）。
 工具调用状态：`pending | success | failed | skipped`——只有后三是终态（`nodes.py` 的 `TERMINAL_TOOL_CALL_STATUSES`，#100）；`pending` 未收口即 `dangling tool call`（消息面也没有配对的 `role: tool` 回答）。
-危险动作：`policy_rules` 规则表 + `agent` 里那一个钩子；命中 → `skipped` 记录 + `{block, reason}` 回模型（ADR 0008 决策 6）。**默认空表 = 不拦**，它不是安全边界（见 S4 交接与 README 说明）。
+危险动作：`policy_rules` 规则表 + `agent` 里那一个钩子；命中 → `skipped` 记录 + `{block, reason}` 回模型（ADR 0008 决策 6）。**默认空表 = 不拦**，它不是安全边界（见 README「这不是安全边界」）。
 注入：`两层注入`（home 层 `AGENTS.md` → 工作区根 `AGENTS.md`；实现 `inject.py`）。
 记录：`trace`（系统侧事件/轨迹 JSONL，可回放；**不进** LLM 上下文——压缩留痕里只放指针）——与 `transcript` 是两回事，勿混。
 
