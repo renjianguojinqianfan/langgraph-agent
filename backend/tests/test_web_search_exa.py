@@ -7,6 +7,7 @@ acceptance run (EXA_API_KEY in the environment).
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import patch
 
 import httpx
@@ -113,13 +114,25 @@ def test_exa_timeout_is_returned_as_a_readable_result():
     assert "timed out" in res.data["results"][0]["snippet"].lower()
 
 
-def test_exa_key_never_appears_in_results_or_logs(caplog):
-    with patch("httpx.post", return_value=_FakeResponse({}, status_code=500)):
-        with caplog.at_level("WARNING"):
-            res = WebSearchTool(_settings()).run(query="q")
+def test_exa_key_is_redacted_from_protocol_errors(caplog):
+    """A header-value error embeds the key; both the result and log redact it."""
+    log = logging.getLogger("agent.tool.web_search")
+    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    try:
+
+        def fake_post(*args, **kwargs):
+            raise RuntimeError(f"illegal header value {SENTINEL}")
+
+        with patch("httpx.post", fake_post):
+            with caplog.at_level("WARNING"):
+                res = WebSearchTool(_settings()).run(query="q")
+    finally:
+        log.removeHandler(caplog.handler)
 
     assert SENTINEL not in json.dumps(res.data, ensure_ascii=False)
     assert SENTINEL not in caplog.text
+    assert "[redacted]" in res.data["results"][0]["snippet"]
+    assert "[redacted]" in caplog.text
 
 
 def test_default_provider_stays_duckduckgo(monkeypatch):

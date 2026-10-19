@@ -134,15 +134,20 @@ class WebSearchTool(BaseTool):
             data = resp.json()
             return [
                 {
-                    "title": r.get("title", ""),
+                    "title": r.get("title") or "",
                     "snippet": self._exa_snippet(r),
-                    "url": r.get("url", ""),
+                    "url": r.get("url") or "",
                 }
                 for r in data.get("results", [])
             ]
         except Exception as exc:  # pragma: no cover - network dependent
-            logger.warning("Exa search failed: %s", exc)
-            return [{"title": "Exa error", "snippet": str(exc), "url": ""}]
+            # Header-validation errors can embed the header value; keep the key
+            # out of the tool result and the log even then.
+            message = str(exc)
+            if self._exa_key:
+                message = message.replace(self._exa_key, "[redacted]")
+            logger.warning("Exa search failed: %s", message)
+            return [{"title": "Exa error", "snippet": message, "url": ""}]
 
     def run(self, **kwargs: Any) -> ToolResult:
         query = str(kwargs.get("query", "")).strip()
