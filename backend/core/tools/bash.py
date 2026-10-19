@@ -211,7 +211,8 @@ def _pump_windows(fd: int, sink: _TailBuffer, stop: threading.Event) -> None:
     import msvcrt
 
     peek = _peek_named_pipe()
-    handle = msvcrt.get_osfhandle(fd)
+    get_osfhandle: Any = getattr(msvcrt, "get_osfhandle")
+    handle = get_osfhandle(fd)
     while not stop.is_set():
         available = ctypes.c_uint32()
         if not peek(handle, None, 0, None, ctypes.byref(available), None):
