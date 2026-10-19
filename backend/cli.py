@@ -29,6 +29,19 @@ def _port_available(port: int) -> bool:
     return True
 
 
+def _stale_build(dist: Path) -> bool:
+    """True when frontend/src is newer than the built index (R13)."""
+    index = dist / "index.html"
+    src = dist.parent / "src"
+    if not src.is_dir():
+        return False
+    try:
+        newest = max(p.stat().st_mtime for p in src.rglob("*") if p.is_file())
+        return newest > index.stat().st_mtime
+    except OSError:
+        return False
+
+
 def _schedule_browser(url: str) -> None:
     timer = threading.Timer(1.0, webbrowser.open, args=(url,))
     timer.daemon = True
@@ -55,10 +68,17 @@ def main(
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser window")
     args = parser.parse_args(argv)
 
+    if not 1 <= args.port <= 65535:
+        print(f"[qianfan] 端口必须在 1–65535 之间：{args.port}")
+        return 1
+
     if not (dist / "index.html").is_file():
         print(f"[qianfan] 找不到前端构建产物：{dist}")
         print("[qianfan] 先在 frontend/ 下执行 `npm install && npm run build`；改前端时用 `python start.py`。")
         return 1
+
+    if _stale_build(dist):
+        print("[qianfan] 前端产物比 frontend/src 旧，界面可能不是最新的；重新执行 `npm run build`。")
 
     if not _port_available(args.port):
         print(f"[qianfan] 端口 {args.port} 已被占用，可能已有一个 qianfan 在运行。")

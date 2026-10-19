@@ -4,4 +4,5 @@
 # (AGENTS.md「依赖面」). The same combination already runs in .venv311, where
 # mcp is installed with --no-deps. The override lets a clean tool environment
 # reproduce the pinned versions instead of raising uvicorn.
+# Keep the line below identical to requirements.txt's uvicorn requirement.
 uvicorn[standard]>=0.30.0,<0.31.0

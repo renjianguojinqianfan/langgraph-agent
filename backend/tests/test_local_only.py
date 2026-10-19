@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 from backend.config import Settings
@@ -49,6 +51,30 @@ def test_empty_cors_means_own_origins_only():
 
 def test_explicit_wildcard_stays_a_wildcard():
     assert Settings(_env_file=None, cors_origins="*").cors_origin_list == ["*"]
+
+
+def test_empty_cors_sends_no_header_to_a_foreign_origin():
+    """The Settings-level assertion above is backed by an HTTP-level one."""
+    settings = Settings(_env_file=None, cors_origins="", port=8123)
+    probe = FastAPI()
+    probe.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @probe.get("/ping")
+    def ping():
+        return {"ok": True}
+
+    client = TestClient(probe)
+    foreign = client.get("/ping", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in foreign.headers
+
+    own = client.get("/ping", headers={"Origin": "http://127.0.0.1:8123"})
+    assert own.headers["access-control-allow-origin"] == "http://127.0.0.1:8123"
 
 
 def test_trusted_host_accepts_local_names_and_refuses_a_foreign_host():

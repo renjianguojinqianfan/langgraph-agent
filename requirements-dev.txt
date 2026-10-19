@@ -1,7 +1,7 @@
 # 质量门禁工具链（ruff/mypy 与 CI backend-test job 同版本；pre-commit 仅本地 git 钩子框架，CI 从不跑钩子，钉版只为本地可复现）
 #
-# 为什么不并进 requirements.txt：backend/Dockerfile 只 COPY requirements.txt，
-# 运行期不需要 linter；并进去等于让每个镜像都多装两把工具。
+# 为什么不并进 requirements.txt：运行期只装 requirements.txt，不需要 linter；
+# 并进去等于让 `qianfan` 的工具环境多装两把工具。
 #
 # 为什么钉死而不是给区间：ruff/mypy 的规则集与默认值本身会随版本漂移——抬一个小
 # 版本就能在**零代码改动**的前提下把 CI 变红（新规则、新默认 select、新类型推断）。

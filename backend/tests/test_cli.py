@@ -7,7 +7,9 @@ started.
 
 from __future__ import annotations
 
+import os
 import socket
+import time
 
 from backend import cli
 from backend.config import Settings
@@ -86,6 +88,33 @@ def test_default_port_comes_from_settings(tmp_path, monkeypatch):
 
     assert code == 0
     assert served == [("127.0.0.1", 8765)]
+
+
+def test_invalid_ports_are_rejected_before_serving(tmp_path, monkeypatch, capsys):
+    _settings(monkeypatch, _write_dist(tmp_path))
+    served = []
+    for port in ("0", "70000"):
+        code = cli.main(["--port", port], serve=lambda host, port: served.append((host, port)))
+        assert code == 1
+        assert port in capsys.readouterr().out
+    assert served == []
+
+
+def test_stale_build_warns_but_still_serves(tmp_path, monkeypatch, capsys):
+    dist = _write_dist(tmp_path)
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.tsx").write_text("export {}", encoding="utf-8")
+    old = time.time() - 100
+    os.utime(dist / "index.html", (old, old))
+
+    _settings(monkeypatch, dist)
+    served = []
+    code = cli.main([], serve=lambda host, port: served.append((host, port)), open_browser=lambda url: None)
+
+    assert code == 0
+    assert "npm run build" in capsys.readouterr().out
+    assert served == [("127.0.0.1", 8000)]
 
 
 def test_port_env_is_exported_before_the_server_imports_settings(tmp_path, monkeypatch):

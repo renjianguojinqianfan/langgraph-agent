@@ -8,22 +8,26 @@
 
 ## 快速开始
 
-日常使用（仓库外任意目录都能敲 `qianfan`；后端与网页同源起在 `127.0.0.1`）：
+日常使用（需要 [uv](https://docs.astral.sh/uv/) 与 Node 22；仓库外任意目录都能敲
+`qianfan`，后端与网页同源起在 `127.0.0.1`）：
 
 ```bash
+cp .env.example .env                             # LLM_API_KEY 走环境变量；或 use_mock_llm=true 离线
 uv tool install -e . --overrides overrides.txt   # 每台机器一次
-cd frontend && npm ci && npm run build           # 前端产物；改前端后重跑
-cp .env.example .env        # LLM_API_KEY 走环境变量；或 use_mock_llm=true 离线
+cd frontend && npm ci && npm run build && cd ..  # 前端产物；改前端后重跑
 qianfan                                          # 自动开浏览器；--port / --no-browser 可选
 ```
 
 `overrides.txt` 只做一件事：mcp 声明 `uvicorn>=0.31.1`，而本仓钉 `uvicorn<0.31`；
 override 让干净环境装出与 `requirements.txt` 一致的版本。缺 `frontend/dist` 时
-`qianfan` 会提示先打包。
+`qianfan` 会提示先打包；产物比 `frontend/src` 旧时会提示重跑 `npm run build`。
 
 改前端时用开发启动（Vite 热重载，后端 `--reload`）：
 
 ```bash
+python -m venv .venv311
+.venv311\Scripts\activate                        # Git Bash: source .venv311/Scripts/activate
+pip install -r requirements.txt
 python start.py            # 虚拟环境请叫 .venv311；start.py 会拦住根目录的 .venv
 ```
 
