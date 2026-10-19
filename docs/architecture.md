@@ -62,7 +62,7 @@
 ## 2. 文件列表及相对路径
 
 > ⚠️ **v0.1 计划态**，保留作原始设计意图记录。现役目录结构（含 `core/agent/` 的
-> context/risk/subagent/prompts、`core/kb/`、`core/mcp/`、`docs/adr|specs|agents/`）
+> context/risk/subagent/prompts、`core/mcp/`、`docs/adr|specs|agents/`）
 > 见仓库实际结构（`backend/` / `frontend/` / `docs/`）。
 
 项目根：`E:\code\demo\langgraph-agent\`
@@ -139,8 +139,7 @@ langgraph-agent/
         │   ├── PlanPanel.tsx        # 计划区（停下时可改）
         │   ├── ModeSwitch.tsx       # 计划 / 执行模式开关
         │   ├── TraceTab.tsx         # Trace 回放
-        │   ├── SubtaskList.tsx      # 子任务面板
-        │   └── KbPanel.tsx          # 知识库面板
+        │   └── SubtaskList.tsx      # 子任务面板
         └── pages/
             └── TaskView.tsx         # 单个任务页（组合上述组件）
 ```
@@ -329,10 +328,9 @@ classDiagram
 ### 3.3 REST + SSE 接口定义
 
 > 现役端点以 `backend/api/routes.py` + Swagger 为准（本文不写计数）。
-> 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、`GET /kb` +
-> `POST /kb/rebuild` + `DELETE /kb/{doc_id}`（P1）、`GET /mcp/servers`（P2）、
-> `POST /tasks/{id}/rollback`（P1-B）；S5（#139）新增 `PUT /tasks/{id}/mode`、
-> `PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`、`POST /tasks/{id}/replan`。
+> 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、
+> `GET /mcp/servers`（P2）、`POST /tasks/{id}/rollback`（P1-B）；S5（#139）新增
+> `PUT /tasks/{id}/mode`、`PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`。
 > `/health` 另在 `backend/main.py`。下表其余契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`
@@ -398,7 +396,7 @@ classDiagram
 ## 4. 程序调用流程（mermaid `sequenceDiagram`）
 
 > 现役拓扑与 `backend/core/agent/graph.py` 逐边一致；下图是一次 plan → build → 停下 → 续说
-> 的典型调用。`POST /replan` 只是借一轮 plan 模式，不改任务上的模式开关。
+> 的典型调用。
 
 > 详见 `docs/sequence-diagram.mermaid`。
 
