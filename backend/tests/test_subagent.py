@@ -115,6 +115,18 @@ def _spec(subtask_id: str = "probe:sub:1", **overrides: Any) -> SubTaskSpec:
     return SubTaskSpec(**base)
 
 
+@pytest.fixture
+def ghost_tier(monkeypatch):
+    """Plant a declared-but-unmounted tier member.
+
+    The shipped tiers only name mounted tools, so the #74 refusal path needs a
+    synthetic name to stay covered.
+    """
+    monkeypatch.setitem(
+        TOOL_TIERS, EXPLORE_TIER, [*TOOL_TIERS[EXPLORE_TIER], "ghost_tool"]
+    )
+
+
 def _mounted_managers(tmp_path) -> List[Tuple[str, TaskManager, SubAgentExecutor]]:
     """One manager per face-growing configuration (plain / MCP).
 
@@ -122,13 +134,9 @@ def _mounted_managers(tmp_path) -> List[Tuple[str, TaskManager, SubAgentExecutor
     actually exist, so every configuration that appends tools to the parent face
     gets its own manager here.
     """
-    configs: Dict[str, Dict[str, Any]] = {
-        "plain": {},
-        "mcp": {},
-    }
     out: List[Tuple[str, TaskManager, SubAgentExecutor]] = []
-    for label, overrides in configs.items():
-        settings = make_settings(tmp_path / label, **overrides)
+    for label in ("plain", "mcp"):
+        settings = make_settings(tmp_path / label)
         tm = make_manager(settings, _CountingMock(plan=["p"], final_answer="d"))
         if label == "mcp":
             # A real server would spawn a subprocess; TaskManager appends
@@ -269,20 +277,14 @@ def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
 
 
 def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(
-    tmp_path, monkeypatch
+    tmp_path, ghost_tier
 ):
     """#74: 档内但未装载的名字与档外名字同等即拒，不再静默交集成空面。
-
-    The shipped tiers only name mounted tools, so the declared-but-unmounted
-    case is planted here (``ghost_tool``) to keep the refusal path locked.
 
     ``Loaded:`` 钉的是「档∩实装面」：既不含被拒的那个名字（列了等于让模型照着
     清单再递一次、第二次撞档外拒绝），也不含 ``write`` / ``code_exec`` 这些永远
     收窄不进去的档外名。清单是字面量，不用 ``tier_face_names`` 自算。
     """
-    monkeypatch.setitem(
-        TOOL_TIERS, EXPLORE_TIER, [*TOOL_TIERS[EXPLORE_TIER], "ghost_tool"]
-    )
     tm = make_manager(make_settings(tmp_path), _CountingMock())
     names = [t.name for t in tm._tools]
     assert "ghost_tool" in TOOL_TIERS[EXPLORE_TIER] and "ghost_tool" not in names
@@ -295,16 +297,13 @@ def test_resolve_tool_face_refuses_a_tier_member_that_is_not_mounted(
     assert message.endswith("Loaded: glob, grep, load_skill, ls, read, web_search")
 
 
-def test_out_of_tier_refusal_lists_the_loaded_face_too(tmp_path, monkeypatch):
+def test_out_of_tier_refusal_lists_the_loaded_face_too(tmp_path, ghost_tier):
     """#94: 档外拒绝的理由清单与上面 ``Loaded:`` 同源同口径——档位 ∩ 实装面。
 
     这份清单的承诺是「供你改投」，所以档位全貌里那些声明了却没装载的名字
     不能进消息：模型照单改投，会再吃一次未装载拒绝、白跳一轮。被拒的名字
     照旧点名，清单也照旧是字面量，不用 ``tier_face_names`` 自算。
     """
-    monkeypatch.setitem(
-        TOOL_TIERS, EXPLORE_TIER, [*TOOL_TIERS[EXPLORE_TIER], "ghost_tool"]
-    )
     tm = make_manager(make_settings(tmp_path), _CountingMock())
     names = [t.name for t in tm._tools]
     assert "ghost_tool" in TOOL_TIERS[EXPLORE_TIER] and "ghost_tool" not in names
@@ -485,7 +484,7 @@ def test_spawn_subagent_refuses_a_widening_request_before_running(
 
 
 def test_spawn_subagent_refuses_an_unmounted_tier_member_before_running(
-    tmp_path, monkeypatch
+    tmp_path, ghost_tier, monkeypatch
 ):
     """#74: 档内但本次没装载的名字与档外同等处理——预检即拒，探子都不派。
 
@@ -493,9 +492,6 @@ def test_spawn_subagent_refuses_an_unmounted_tier_member_before_running(
     shipped tiers 只点名已挂载的工具）。改前这里静默交集出空面、子任务照跑照
     `completed`，父模型收到的是假成功。
     """
-    monkeypatch.setitem(
-        TOOL_TIERS, EXPLORE_TIER, [*TOOL_TIERS[EXPLORE_TIER], "ghost_tool"]
-    )
     settings = make_settings(tmp_path)
     mock = _CountingMock(plan=["p"], final_answer="never")
     tm = make_manager(settings, mock)
@@ -513,11 +509,8 @@ def test_spawn_subagent_refuses_an_unmounted_tier_member_before_running(
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
 
 
-def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path, monkeypatch):
+def test_unmounted_name_folds_the_same_reason_on_both_paths(tmp_path, ghost_tier):
     """双路径一致（#74 AC3）：不经工具层直调 ``run_subtask``，理由逐字相同。"""
-    monkeypatch.setitem(
-        TOOL_TIERS, EXPLORE_TIER, [*TOOL_TIERS[EXPLORE_TIER], "ghost_tool"]
-    )
     settings = make_settings(tmp_path)
     mock = _CountingMock(plan=["p"], final_answer="never")
     tm = make_manager(settings, mock)
@@ -573,16 +566,13 @@ class _UnmountedAskMock(MockLLMClient):
 
 
 def test_refused_spawn_lands_the_reason_on_the_event_stream_and_starts_nothing(
-    tmp_path, event_bus, monkeypatch
+    tmp_path, event_bus, ghost_tier
 ):
     """票面「观测」条：被拒的 spawn 不派出探子，失败走 ``tool_result`` 事件——这里钉住事件。
 
     被拒的 spawn 在事件里带 error 文本；它没有派出探子，所以父频道上连一条
     subtask 事件都没有。
     """
-    monkeypatch.setitem(
-        TOOL_TIERS, EXPLORE_TIER, [*TOOL_TIERS[EXPLORE_TIER], "ghost_tool"]
-    )
     settings = make_settings(tmp_path)
     mock = _UnmountedAskMock()
     tm = make_manager(settings, mock, event_bus=event_bus)

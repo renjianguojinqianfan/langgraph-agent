@@ -20,15 +20,18 @@ from backend.api.routes import router
 from backend.config import Settings
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.subagent import EXECUTE_TIER, EXPLORE_TIER, TOOL_TIERS
+from backend.core.llm.client import MockLLMClient
 from backend.core.tools import registry
-from backend.core.tools.registry import build_tools
-from backend.tests.conftest import make_settings
+from backend.tests.conftest import make_manager, make_settings
 
 REMOVED_TOOL_NAMES = {"kb_query", "memory_search", "example_echo"}
 
 
 def test_builtin_tool_face_has_no_removed_features(tmp_path):
-    names = {t.name for t in build_tools(make_settings(tmp_path))}
+    # The manager, not ``build_tools``: Git / plugin / OpenAPI tools used to be
+    # appended there, so only this face can prove they no longer appear.
+    tm = make_manager(make_settings(tmp_path), MockLLMClient(final_answer="ok"))
+    names = {t.name for t in tm._tools}
 
     assert not names & REMOVED_TOOL_NAMES
     assert not [n for n in names if n.startswith("git_")]
@@ -61,6 +64,8 @@ def test_settings_have_no_removed_prefixes():
         name for name in Settings.model_fields if name.startswith(removed_prefixes)
     ]
     assert leftovers == []
+    for derived in ("plugins_path", "kb_path", "git_repo_path"):
+        assert not hasattr(Settings, derived)
 
 
 def test_routes_have_no_kb_or_replan_endpoints():
@@ -76,15 +81,12 @@ def test_task_manager_has_no_removed_wiring(tmp_path):
     assert not hasattr(TaskManager, "_load_openapi_tools")
     assert not hasattr(TaskManager, "replan")
 
-    from backend.core.llm.client import MockLLMClient
-    from backend.tests.conftest import make_manager
-
     tm = make_manager(make_settings(tmp_path), MockLLMClient(final_answer="ok"))
     assert not hasattr(tm, "_kb")
     assert not hasattr(tm, "_aux_llm")
 
 
-def test_read_only_and_subagent_tiers_are_the_six_name_sets():
+def test_tiers_are_the_narrowed_name_sets():
     explore = set(TOOL_TIERS[EXPLORE_TIER])
     assert explore == {"read", "ls", "glob", "grep", "load_skill", "web_search"}
     assert set(TOOL_TIERS[EXECUTE_TIER]) == explore | {"write", "edit"}
@@ -94,3 +96,10 @@ def test_runtime_has_no_aux_or_replan_knobs():
     params = inspect.signature(AgentRuntime.__init__).parameters
     assert "aux_llm" not in params
     assert "replan" not in params
+
+
+def test_replan_prompt_anchors_are_gone():
+    from backend.core.agent import prompts
+
+    for name in ("REPLAN_ANCHOR", "REPLAN_RETRY", "REPLAN_USER_ANCHOR"):
+        assert not hasattr(prompts, name)

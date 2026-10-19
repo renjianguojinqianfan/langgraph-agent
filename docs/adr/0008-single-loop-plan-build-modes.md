@@ -34,7 +34,7 @@ status: accepted
    结果回给模型；**不弹框、不进图重入**（模型看到拒绝自己换路）。
 7. **工具面**：计划模式 = `explore` 档（6 个只读工具：read / ls / glob / grep / load_skill / web_search，
    复用 `subagent.py` 现有常量）；执行模式 = 全部已挂载工具，危险的那些交给第 6 条。
-   `TOOL_TIERS` 不新增、不修改——**子 agent 保留**，仍在用它，计划模式天然拿不到 `spawn_subagent`。
+   `TOOL_TIERS` 不新增档位、两档结构不变——**子 agent 保留**，仍在用它，计划模式天然拿不到 `spawn_subagent`。
    〔2026-10-19 C1（#156）修订：原 12 个只读工具，随知识库与 Git 工具删除去掉 git ×4、知识库 ×2。〕
 8. **交付不是新状态**：就是停下时人去看产物。产物账本（[ADR 0004](0004-artifact-is-what-the-task-wrote.md)）
    的定义一字不改，只是它现在服务「交付视图」。
