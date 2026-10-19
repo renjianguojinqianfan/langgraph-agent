@@ -10,13 +10,20 @@ from __future__ import annotations
 import os
 import socket
 import time
+from pathlib import Path
+from urllib.parse import quote
 
 from backend import cli
 from backend.config import Settings
 
 
 def _settings(monkeypatch, dist, port=8000):
-    settings = Settings(_env_file=None, frontend_dist=str(dist), port=port)
+    settings = Settings(
+        _env_file=None,
+        frontend_dist=str(dist),
+        port=port,
+        data_dir=str(Path(dist).parent / "server-data"),
+    )
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     return settings
 
@@ -65,7 +72,7 @@ def test_serves_loopback_on_the_requested_port_and_opens_the_browser(tmp_path, m
 
     assert code == 0
     assert served == [("127.0.0.1", 9123)]
-    assert opened == ["http://127.0.0.1:9123/"]
+    assert opened == [f"http://127.0.0.1:9123/?dir={quote(os.getcwd())}"]
 
 
 def test_no_browser_skips_the_browser(tmp_path, monkeypatch):

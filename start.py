@@ -43,6 +43,25 @@ def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> su
     return subprocess.Popen(cmd, cwd=str(cwd or ROOT), env=env, shell=False)
 
 
+def _running_server(settings):
+    """The live qianfan/dev backend, if one is registered (W2)."""
+    from backend import server_lock
+
+    return server_lock.find_running(server_lock.lock_path(settings))
+
+
+def _refuse_if_running(settings) -> bool:
+    running = _running_server(settings)
+    if running is None:
+        return False
+    print(
+        f"[start] 已有后台在 http://127.0.0.1:{running.port}/ 运行；"
+        "要换目录请再敲 qianfan，开发后台不能和它同时写 data/。",
+        flush=True,
+    )
+    return True
+
+
 def main() -> int:
     _check_interpreter()
     parser = argparse.ArgumentParser(description="Launch the autonomous agent stack")
@@ -67,22 +86,46 @@ def main() -> int:
     if args.mock:
         env["USE_MOCK_LLM"] = "true"
 
+    # Import only after --install: the launcher itself stays stdlib-only until
+    # the dependencies are in place (backend.server_lock is stdlib-only).
+    from backend import server_lock
+    from backend.config import get_settings
+
+    settings = get_settings()
+    if not args.frontend_only and _refuse_if_running(settings):
+        return 2
+    lock_file = server_lock.lock_path(settings)
+    instance = server_lock.new_instance()
+    env["QIANFAN_INSTANCE"] = instance
+    claimed = False
+
     procs: list[subprocess.Popen] = []
     try:
         if not args.frontend_only:
-            # Import only after --install: the launcher itself stays stdlib-only
-            # until the dependencies are in place.
-            from backend.config import get_settings
-
             backend_cmd = [
                 sys.executable, "-m", "uvicorn", "backend.main:app",
-                "--host", get_settings().host, "--port", str(args.port), "--reload",
+                "--host", settings.host, "--port", str(args.port), "--reload",
             ]
-            procs.append(_run(backend_cmd, cwd=ROOT, env=env))
+            backend = _run(backend_cmd, cwd=ROOT, env=env)
+            procs.append(backend)
+            lock = server_lock.ServerLock(
+                pid=backend.pid,
+                port=args.port,
+                started_at=server_lock.now_iso(),
+                instance=instance,
+            )
+            if not server_lock.claim_lock(lock_file, lock):
+                print(
+                    "[start] 另一个后台刚刚启动了；要换目录请再敲 qianfan。",
+                    flush=True,
+                )
+                backend.terminate()
+                return 2
+            claimed = True
         if not args.backend_only:
             if not (ROOT / "frontend" / "node_modules").exists():
                 print("[start] frontend/node_modules missing — run with --install first.")
-            procs.append(_run(["npm", "run", "dev"], cwd=str(ROOT / "frontend"), env=env))
+            procs.append(_run(["npm", "run", "dev"], cwd=ROOT / "frontend", env=env))
         print("[start] stack is running. Press Ctrl+C to stop.", flush=True)
         for p in procs:
             p.wait()
@@ -95,6 +138,8 @@ def main() -> int:
                 p.wait(timeout=5)
             except Exception:
                 p.kill()
+        if claimed:
+            server_lock.release_lock(lock_file, instance)
     return 0
 
 
