@@ -1,8 +1,16 @@
 import { useState } from "react";
-import { createTask, getTask, putMode, sendMessage } from "../api/client";
+import {
+  createTask,
+  getTask,
+  putMode,
+  putTaskModel,
+  sendMessage,
+} from "../api/client";
+import { useModelStore } from "../store/modelStore";
 import { useTaskStore } from "../store/taskStore";
 import { TaskMode } from "../types";
 import { ModeSwitch } from "./ModeSwitch";
+import { ModelSelect } from "./ModelSelect";
 import { currentDir } from "../workspace";
 
 /** FastAPI error bodies carry `{detail}`; the normal envelope carries `message`. */
@@ -16,6 +24,7 @@ export function InputBar() {
   const [busy, setBusy] = useState(false);
   // Mode for a task that does not exist yet; an existing task carries its own.
   const [draftMode, setDraftMode] = useState<TaskMode>("build");
+  const [draftModel, setDraftModel] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
@@ -24,6 +33,8 @@ export function InputBar() {
   );
   const setCurrent = useTaskStore((s) => s.setCurrentTask);
   const upsert = useTaskStore((s) => s.upsertTask);
+  const models = useModelStore((s) => s.models);
+  const defaultModelId = useModelStore((s) => s.defaultId);
 
   const running = task?.status === "RUNNING" || task?.status === "PENDING";
   const parked = task?.status === "INTERRUPTED";
@@ -33,6 +44,7 @@ export function InputBar() {
   const loading = !!currentTaskId && !task;
   const canSend = !busy && !loading && !!text.trim() && (!task || parked);
   const mode: TaskMode = task?.mode ?? draftMode;
+  const selectedModel = task?.model || draftModel || defaultModelId;
 
   const onMode = async (next: TaskMode) => {
     setNote(null);
@@ -43,6 +55,27 @@ export function InputBar() {
     try {
       const r = await putMode(task.id, next);
       if (r?.data?.ok) {
+        const fresh = await getTask(task.id);
+        if (fresh.data) upsert(fresh.data);
+        if (running) setNote("下一轮生效");
+      } else {
+        setNote(detailText(r) ?? "切换失败");
+      }
+    } catch {
+      setNote("切换失败");
+    }
+  };
+
+  const onModel = async (next: string) => {
+    setNote(null);
+    if (!task) {
+      setDraftModel(next);
+      return;
+    }
+    if (next === (task.model || defaultModelId)) return;
+    try {
+      const r = await putTaskModel(task.id, next);
+      if (r.data?.ok) {
         const fresh = await getTask(task.id);
         if (fresh.data) upsert(fresh.data);
         if (running) setNote("下一轮生效");
@@ -65,6 +98,7 @@ export function InputBar() {
           input,
           mode: draftMode,
           workspace: currentDir() ?? undefined,
+          model: draftModel || defaultModelId || undefined,
         });
         const id = res.data?.task_id;
         if (id) {
@@ -111,6 +145,12 @@ export function InputBar() {
     <div className="border-t border-slate-800 p-3">
       <div className="flex items-center gap-2 mb-2">
         <ModeSwitch mode={mode} onChange={onMode} />
+        <ModelSelect
+          value={selectedModel}
+          models={models}
+          disabled={loading || busy}
+          onChange={onModel}
+        />
         {note && <span className="text-[11px] text-slate-400">{note}</span>}
       </div>
       <div className="flex gap-2">

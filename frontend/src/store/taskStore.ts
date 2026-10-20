@@ -17,8 +17,11 @@ interface TaskState {
   selectedStep: number | null;
   /** History filter (ADR 0010 decision 2): this directory, or every task. */
   historyFilter: "current" | "all";
+  /** M2: the model settings overlay. */
+  settingsOpen: boolean;
 
   setTasks: (tasks: Task[]) => void;
+  setSettingsOpen: (open: boolean) => void;
   setCurrentTask: (id: string | null) => void;
   upsertTask: (task: Task) => void;
   applyEvent: (ev: SSEvent) => void;
@@ -36,6 +39,7 @@ function emptyTask(id: string): Task {
     title: "",
     user_input: "",
     workspace: "",
+    model: "",
     status: "PENDING",
     mode: "build",
     steps: [],
@@ -131,9 +135,11 @@ export const useTaskStore = create<TaskState>((set) => ({
   markers: {},
   selectedStep: null,
   historyFilter: "current",
+  settingsOpen: false,
 
   setTasks: (tasks) => set({ tasks }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 
   setCurrentTask: (id) =>
     set({

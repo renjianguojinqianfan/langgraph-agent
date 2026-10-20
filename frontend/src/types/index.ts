@@ -51,6 +51,8 @@ export interface Task {
   user_input: string;
   /** Absolute directory this task reads/writes (ADR 0010). */
   workspace: string;
+  /** Model profile id (M1); empty means the global default. */
+  model: string;
   status: TaskStatus;
   mode: TaskMode;
   steps: StepRecord[];
@@ -103,6 +105,29 @@ export interface CreateTaskRequest {
   mode?: TaskMode;
   /** Page-supplied directory (`?dir=`); absent -> backend launch directory. */
   workspace?: string;
+  /** Model profile id; absent -> the global default. */
+  model?: string;
+}
+
+// --- M1/M2: model profiles ---
+
+export type ModelKeySource = "pasted" | "env" | "none";
+
+/** Public model profile: the key itself never leaves the backend. */
+export interface ModelProfile {
+  id: string;
+  name: string;
+  base_url: string;
+  model: string;
+  api_key_env: string;
+  preset: boolean;
+  key_set: boolean;
+  key_source: ModelKeySource;
+}
+
+export interface ModelsData {
+  default: string;
+  models: ModelProfile[];
 }
 
 export interface ApiResponse<T = any> {
