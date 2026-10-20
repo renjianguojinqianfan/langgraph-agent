@@ -73,6 +73,7 @@ from backend.config import Settings  # noqa: E402
 from backend.core.llm.client import MockLLMClient  # noqa: E402
 from backend.core.tools.registry import build_tools  # noqa: E402
 from backend.services.event_bus import EventBus  # noqa: E402
+from backend.services.model_store import ModelStore  # noqa: E402
 from backend.services.persistence import Persistence  # noqa: E402
 from backend.services.task_manager import TaskManager  # noqa: E402
 
@@ -105,7 +106,9 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         trace_dir=str(tmp_path / "traces"),
+        llm_provider="deepseek",
         llm_base_url="",
+        llm_model="deepseek-chat",
         max_steps=50,
         sandbox_timeout=5,
         use_mock_llm=True,
@@ -135,6 +138,9 @@ def make_manager(
     eb = event_bus or EventBus()
     persistence = persistence or Persistence(settings)
     tools = build_tools(settings)
+    # Credentials stay under the test's tmp dir: a test must never write the
+    # developer's real ~/.qianfan/credentials.json.
+    store = model_store or ModelStore(settings, home_dir=settings.data_path / "home")
     tm = TaskManager(
         settings,
         eb,
@@ -143,7 +149,7 @@ def make_manager(
         tools=tools,
         default_workspace=settings.artifacts_path,
         llm_factory=llm_factory,
-        model_store=model_store,
+        model_store=store,
     )
 
     _request = _current_request.get()

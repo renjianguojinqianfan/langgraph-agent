@@ -358,6 +358,7 @@ class SubAgentExecutor:
             # is imported first (the uvicorn entry point).
             from .nodes import AgentRuntime
 
+            parent_task = self.tm.get_task(spec.parent_task_id or spec.subtask_id)
             runtime = AgentRuntime(
                 task_id=spec.subtask_id,
                 task_manager=self.tm,
@@ -366,6 +367,7 @@ class SubAgentExecutor:
                 tool_schemas=schemas,
                 max_steps=self.settings.max_steps,
                 parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
+                model_profile=self.tm.model_id_for(parent_task),
             )
             from .graph import build_graph
 

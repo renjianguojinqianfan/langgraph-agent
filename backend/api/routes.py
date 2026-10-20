@@ -182,7 +182,7 @@ def create_model(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _envelope(data=profile.public(False))
+    return _envelope(data=_tm(request).models.public_profile(profile.id))
 
 
 @router.put("/models/{model_id}")
@@ -193,12 +193,12 @@ def update_model(
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
     try:
-        profile = _tm(request).models.update(model_id, **payload.model_dump(exclude_none=True))
+        _tm(request).update_model_profile(model_id, **payload.model_dump(exclude_none=True))
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _envelope(data=profile.public(_tm(request).models.key_set(model_id)))
+    return _envelope(data=_tm(request).models.public_profile(model_id))
 
 
 @router.delete("/models/{model_id}")
@@ -208,7 +208,7 @@ def delete_model(
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
     try:
-        _tm(request).models.delete(model_id)
+        _tm(request).delete_model_profile(model_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
     except ValueError as exc:
@@ -238,10 +238,17 @@ def set_model_key(
 ) -> ApiResponse:
     """Write-only: a key goes in, only ``key_set`` comes back."""
     try:
-        _tm(request).models.set_key(model_id, payload.key)
+        _tm(request).set_model_key(model_id, payload.key)
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
-    return _envelope(data={"ok": True, "key_set": _tm(request).models.key_set(model_id)})
+    store = _tm(request).models
+    return _envelope(
+        data={
+            "ok": True,
+            "key_set": store.key_set(model_id),
+            "key_source": store.key_source(model_id),
+        }
+    )
 
 
 @router.post("/models/{model_id}/test")

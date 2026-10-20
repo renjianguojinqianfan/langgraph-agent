@@ -40,6 +40,9 @@ class LLMResponse:
 class LLMClient(ABC):
     """Provider-agnostic chat/function-calling interface."""
 
+    #: Model name for trace / UI; clients that know their model override it.
+    model: str = ""
+
     @abstractmethod
     def complete(
         self,

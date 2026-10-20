@@ -473,31 +473,48 @@ class TaskManager:
         if not Path(task.workspace).is_dir():
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
+    def _build_llm(self, profile: Any, key: str) -> LLMClient:
+        if self._llm_factory is not None:
+            return self._llm_factory(profile, key)
+        from ..core.llm.openai_compat import OpenAICompatibleClient
+
+        return OpenAICompatibleClient(
+            profile.base_url, key, profile.model, self.settings.llm_request_timeout_sec
+        )
+
     def _llm_for(self, task: Optional[Task]) -> LLMClient:
         """The task's model client, cached per profile (ADR 0010 decision 7)."""
         if self._injected_llm is not None:
             return self._injected_llm
         if self.settings.use_mock_llm:
             return self._llm
-        profile = self.models.resolve(task.model if task else None)
+        requested = task.model if task is not None else ""
+        profile = self.models.resolve(requested)
         if profile is None:
-            return self._llm
+            # A pinned profile that no longer exists must not silently reroute
+            # the conversation to another provider.
+            raise RuntimeError(
+                f"model profile {requested!r} no longer exists; switch the task's model"
+            )
         client = self._llm_clients.get(profile.id)
         if client is None:
-            key = self.models.key_for(profile.id)
-            if self._llm_factory is not None:
-                client = self._llm_factory(profile, key)
-            else:
-                from ..core.llm.openai_compat import OpenAICompatibleClient
-
-                client = OpenAICompatibleClient(
-                    profile.base_url, key, profile.model, self.settings.llm_request_timeout_sec
-                )
+            client = self._build_llm(profile, self.models.key_for(profile.id))
             self._llm_clients[profile.id] = client
         return client
 
     def llm_for_task_id(self, task_id: str) -> LLMClient:
         return self._llm_for(self.persistence.load_task(task_id))
+
+    def model_id_for(self, task: Optional[Task]) -> str:
+        """The profile id a task runs with; empty task -> the global default."""
+        return (task.model if task is not None else "") or self.models.default_id
+
+    def redact(self, text: str) -> str:
+        """Strip every known key from text before it is logged, stored or sent."""
+        for secret in self.models.secret_values():
+            if secret:
+                text = text.replace(secret, "[redacted]")
+        return text
 
     def set_model(self, task_id: str, model_id: str) -> Dict[str, Any]:
         """Switch a task's model; the next message uses it."""
@@ -512,6 +529,24 @@ class TaskManager:
             self.persistence.save_task(task)
         return {"ok": True, "model": model_id}
 
+    # Profile mutations go through the manager so the per-profile client cache
+    # cannot keep serving the old address / key after an edit.
+    def update_model_profile(self, model_id: str, **fields: Any) -> Any:
+        with self._lock:
+            profile = self.models.update(model_id, **fields)
+            self._llm_clients.pop(model_id, None)
+        return profile
+
+    def delete_model_profile(self, model_id: str) -> None:
+        with self._lock:
+            self.models.delete(model_id)
+            self._llm_clients.pop(model_id, None)
+
+    def set_model_key(self, model_id: str, key: str) -> None:
+        with self._lock:
+            self.models.set_key(model_id, key)
+            self._llm_clients.pop(model_id, None)
+
     def test_model(self, model_id: str) -> Dict[str, Any]:
         """Send one minimal request; the key never appears in the answer."""
         profile = self.models.get(model_id)
@@ -523,19 +558,12 @@ class TaskManager:
         if not key:
             return {"ok": False, "error": "key not set"}
         try:
-            if self._llm_factory is not None:
-                client = self._llm_factory(profile, key)
-            else:
-                from ..core.llm.openai_compat import OpenAICompatibleClient
-
-                client = OpenAICompatibleClient(
-                    profile.base_url, key, profile.model, self.settings.llm_request_timeout_sec
-                )
-            client.complete([{"role": "user", "content": "ping"}], max_tokens=1)
+            self._build_llm(profile, key).complete(
+                [{"role": "user", "content": "ping"}], max_tokens=1
+            )
             return {"ok": True}
         except Exception as exc:
-            message = str(exc).replace(key, "[redacted]")
-            return {"ok": False, "error": message}
+            return {"ok": False, "error": self.redact(str(exc))}
 
     @staticmethod
     def _seed_plan(task: Task) -> Dict[str, Any]:
@@ -657,6 +685,7 @@ class TaskManager:
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
+                model_profile=self.model_id_for(task),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -666,13 +695,12 @@ class TaskManager:
             task = self.persistence.load_task(task_id) or task
             self._finalize_terminal(task, final)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("run() crashed for task %s", task_id)
-            task.status = TaskStatus.FAILED
-            task.error = str(exc)
+            task.error = self.redact(str(exc))
+            logger.error("run() crashed for task %s: %s", task_id, task.error)
             task.updated_at = _now()
             self.persistence.save_task(task)
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+                task_id, "task_failed", {"task_id": task_id, "error": task.error}
             )
         finally:
             self._active_states.pop(task_id, None)
@@ -817,7 +845,7 @@ class TaskManager:
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
         task.conversation = self._conversation_from(final.get("messages"))
         task.final_answer = final.get("final_answer", "")
-        task.error = final.get("error")
+        task.error = self.redact(final["error"]) if final.get("error") else None
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()
         if status == "FAILED":
@@ -973,6 +1001,7 @@ class TaskManager:
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
+                model_profile=self.model_id_for(current),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -1014,15 +1043,16 @@ class TaskManager:
                 raise RuntimeError(f"task {task_id} vanished during resume")
             self._finalize_terminal(task, final)
         except Exception as exc:
-            logger.exception("resume() crashed for task %s", task_id)
+            message = self.redact(str(exc))
+            logger.error("resume() crashed for task %s: %s", task_id, message)
             task = self.persistence.load_task(task_id)
             if task is not None:
                 task.status = TaskStatus.FAILED
-                task.error = str(exc)
+                task.error = message
                 task.updated_at = _now()
                 self.persistence.save_task(task)
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+                task_id, "task_failed", {"task_id": task_id, "error": self.redact(str(exc))}
             )
         finally:
             self._active_states.pop(task_id, None)
@@ -1178,6 +1208,7 @@ class TaskManager:
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
+                model_profile=self.model_id_for(current),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -1217,15 +1248,16 @@ class TaskManager:
                 raise RuntimeError(f"task {task_id} vanished during continuation")
             self._finalize_terminal(task, final)
         except Exception as exc:
-            logger.exception("continuation crashed for task %s", task_id)
+            message = self.redact(str(exc))
+            logger.error("continuation crashed for task %s: %s", task_id, message)
             task = self.persistence.load_task(task_id)
             if task is not None:
                 task.status = TaskStatus.FAILED
-                task.error = str(exc)
+                task.error = message
                 task.updated_at = _now()
                 self.persistence.save_task(task)
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+                task_id, "task_failed", {"task_id": task_id, "error": message}
             )
         finally:
             self._active_states.pop(task_id, None)

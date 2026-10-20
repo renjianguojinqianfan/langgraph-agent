@@ -35,10 +35,10 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ──
-    llm_provider: str = "openai"  # openai | deepseek | ollama | mock
-    llm_base_url: str = ""  # 空 -> factory 回退到 provider preset
+    llm_provider: str = "deepseek"  # deepseek (only built-in preset) | custom host via base_url
+    llm_base_url: str = ""  # 空 -> factory 回退到 DeepSeek preset
     llm_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "deepseek-chat"
     llm_request_timeout_sec: int = 90  # per-request wall clock (SDK default 600s ate live budgets, #13)
     use_mock_llm: bool = False  # when True, an offline MockLLMClient is used
     mock_llm_script_path: str = ""  # #108: JSON script for the offline mock (empty / unreadable -> built-in demo script)

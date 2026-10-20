@@ -83,9 +83,11 @@ class AgentRuntime:
         tool_schemas: List[Dict[str, Any]],
         max_steps: int = 15,
         parent_task_id: str = "",
+        model_profile: str = "",
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
+        self.model_profile = model_profile
         # Issue #60: ``TaskManager.stop()`` only flips the id it was handed, so a
         # subtask has to watch its own id *and* the parent's. Watching the parent
         # alone would break ``stop(subtask_id)``.
@@ -210,6 +212,8 @@ class AgentRuntime:
                         "converged": meta["converged"],
                         "context_tokens": meta["context_tokens"],
                         "strategy": meta["strategy"],
+                        "model": getattr(self.llm, "model", ""),
+                        "model_profile": self.model_profile,
                     },
                 )
             except Exception:  # pragma: no cover - event is optional
@@ -225,6 +229,11 @@ class AgentRuntime:
         plan_file.sync_plan_message(compressed, plan_text)
         state["messages"] = compressed
         return [{"role": "system", "content": system + self._inject_block}, *compressed]
+
+    def _redact(self, text: str) -> str:
+        """Strip known keys before an error reaches state / SSE / trace."""
+        redact = getattr(getattr(self, "tm", None), "redact", None)
+        return redact(text) if callable(redact) else text
 
     # ── nodes ──
     def agent(self, state: AgentState) -> AgentState:
@@ -261,7 +270,12 @@ class AgentRuntime:
         step["thought"] = thought
         self._publish(
             "step_start",
-            {"index": idx, "thought": thought, "model": getattr(self.llm, "model", "")},
+            {
+                "index": idx,
+                "thought": thought,
+                "model": getattr(self.llm, "model", ""),
+                "model_profile": self.model_profile,
+            },
         )
 
         if mode == PLAN_MODE:
@@ -337,9 +351,10 @@ class AgentRuntime:
         try:
             return self.llm.complete(messages, tools=schemas)
         except Exception as exc:
-            logger.exception("agent LLM error (plan mode)")
-            state["error"] = f"Plan-mode LLM error: {exc}"
-            state["final_answer"] = f"[error] {exc}"
+            message = self._redact(str(exc))
+            logger.error("agent LLM error (plan mode): %s", message)
+            state["error"] = f"Plan-mode LLM error: {message}"
+            state["final_answer"] = f"[error] {message}"
             state["_last_action"] = "final_answer"
             return None
 
@@ -351,9 +366,10 @@ class AgentRuntime:
                 tools=self.tool_schemas,
             )
         except Exception as exc:
-            logger.exception("agent LLM error (build mode)")
-            state["error"] = f"Build-mode LLM error: {exc}"
-            state["final_answer"] = f"[error] {exc}"
+            message = self._redact(str(exc))
+            logger.error("agent LLM error (build mode): %s", message)
+            state["error"] = f"Build-mode LLM error: {message}"
+            state["final_answer"] = f"[error] {message}"
             state["_last_action"] = "final_answer"
             return state
 

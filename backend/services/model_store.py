@@ -10,18 +10,18 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..config import PROJECT_ROOT, Settings
+from ..config import Settings
 from ..utils.logging import get_logger
 
 logger = get_logger("models")
 
 DEFAULT_MODEL_ID = "default"
-_OPENAI_FALLBACK = "https://api.openai.com/v1"
 _DEEPSEEK_FALLBACK = "https://api.deepseek.com/v1"
 
 
@@ -34,9 +34,10 @@ class ModelProfile:
     api_key_env: str = "LLM_API_KEY"
     preset: bool = False
 
-    def public(self, key_set: bool) -> Dict[str, Any]:
+    def public(self, key_set: bool, key_source: str = "none") -> Dict[str, Any]:
         data = asdict(self)
         data["key_set"] = key_set
+        data["key_source"] = key_source
         return data
 
 
@@ -51,26 +52,42 @@ class ModelStore:
 
     # ── seeding / persistence ──
     def _seed(self) -> None:
-        preset_base = (
-            _DEEPSEEK_FALLBACK
-            if (self.settings.llm_provider or "").lower() == "deepseek"
-            else _OPENAI_FALLBACK
-        )
+        # DeepSeek is the only built-in preset (M1): an explicit base_url is a
+        # custom host, anything else falls back to the DeepSeek endpoint.
+        base_url = self.settings.llm_base_url or _DEEPSEEK_FALLBACK
         profile = ModelProfile(
             id=DEFAULT_MODEL_ID,
             name="默认配置",
-            base_url=self.settings.llm_base_url or preset_base,
+            base_url=base_url,
             model=self.settings.llm_model,
             api_key_env="LLM_API_KEY",
+            preset=not self.settings.llm_base_url
+            and (self.settings.llm_provider or "deepseek").lower() == "deepseek",
         )
         self.models = {profile.id: profile}
         self.default_id = profile.id
         self._save()
 
+    @staticmethod
+    def _quarantine(path: Path) -> None:
+        """Move an unreadable state file aside instead of overwriting it."""
+        backup = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+        try:
+            os.replace(path, backup)
+            logger.warning("unreadable %s moved to %s", path.name, backup.name)
+        except OSError:  # pragma: no cover - defensive
+            pass
+
     def _load(self) -> None:
         try:
-            raw = json.loads(self.data_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            text = self.data_file.read_text(encoding="utf-8")
+        except OSError:
+            self._seed()
+            return
+        try:
+            raw = json.loads(text)
+        except ValueError:
+            self._quarantine(self.data_file)
             self._seed()
             return
         profiles: Dict[str, ModelProfile] = {}
@@ -110,13 +127,30 @@ class ModelStore:
         return self.models.get(model_id)
 
     def resolve(self, model_id: Optional[str]) -> Optional[ModelProfile]:
-        return self.models.get(model_id or "") or self.models.get(self.default_id)
+        """An explicit id must exist; only an empty id means "the default".
+
+        Falling back to the default for a deleted id would silently send the
+        task's content to another provider, so that case stays ``None`` and the
+        caller fails loudly.
+        """
+        if model_id:
+            return self.models.get(model_id)
+        return self.models.get(self.default_id)
+
+    def public_profile(self, model_id: str) -> Dict[str, Any]:
+        profile = self.models.get(model_id)
+        if profile is None:
+            raise KeyError(model_id)
+        key, source = self._key_state(model_id)
+        return profile.public(bool(key), source)
 
     def list_public(self) -> Dict[str, Any]:
-        return {
-            "default": self.default_id,
-            "models": [p.public(self.key_set(p.id)) for p in self.models.values()],
-        }
+        pasted = self._credentials()
+        entries = []
+        for profile in self.models.values():
+            key, source = self._key_state(profile.id, pasted=pasted)
+            entries.append(profile.public(bool(key), source))
+        return {"default": self.default_id, "models": entries}
 
     def add(
         self, *, name: str, base_url: str, model: str, api_key_env: str = "LLM_API_KEY"
@@ -138,13 +172,24 @@ class ModelStore:
         profile = self.models.get(model_id)
         if profile is None:
             raise KeyError(model_id)
-        for key in ("name", "base_url", "model", "api_key_env"):
-            if key in fields and fields[key] is not None:
-                setattr(profile, key, str(fields[key]).strip())
-        if not profile.base_url or not profile.model:
+        cleaned = {
+            key: str(fields[key]).strip()
+            for key in ("name", "base_url", "model", "api_key_env")
+            if fields.get(key) is not None
+        }
+        candidate = ModelProfile(
+            id=profile.id,
+            name=cleaned.get("name", profile.name),
+            base_url=cleaned.get("base_url", profile.base_url),
+            model=cleaned.get("model", profile.model),
+            api_key_env=cleaned.get("api_key_env", profile.api_key_env),
+            preset=profile.preset,
+        )
+        if not candidate.base_url or not candidate.model:
             raise ValueError("base_url and model are required")
+        self.models[model_id] = candidate
         self._save()
-        return profile
+        return candidate
 
     def delete(self, model_id: str) -> None:
         if model_id not in self.models:
@@ -165,19 +210,24 @@ class ModelStore:
     # ── credentials ──
     def _credentials(self) -> Dict[str, str]:
         try:
-            raw = json.loads(self.credentials_file.read_text(encoding="utf-8"))
-            return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
-        except (OSError, ValueError):
+            text = self.credentials_file.read_text(encoding="utf-8")
+        except OSError:
             return {}
+        try:
+            raw = json.loads(text)
+        except ValueError:
+            self._quarantine(self.credentials_file)
+            return {}
+        return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
 
     def _save_credentials(self, data: Dict[str, str]) -> None:
         self.credentials_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.credentials_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:  # pragma: no cover - Windows ignores chmod
-            pass
+        # Create the file with 0600 from the start on POSIX; Windows ignores the
+        # mode, where the file lives under the user profile ACL instead.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
         os.replace(tmp, self.credentials_file)
 
     def set_key(self, model_id: str, key: str) -> None:
@@ -190,18 +240,33 @@ class ModelStore:
             data.pop(model_id, None)
         self._save_credentials(data)
 
-    def key_for(self, model_id: str) -> str:
+    def _key_state(
+        self, model_id: str, *, pasted: Optional[Dict[str, str]] = None
+    ) -> tuple[str, str]:
+        """(key, source) where source is ``pasted`` / ``env`` / ``none``."""
         profile = self.models.get(model_id)
         if profile is None:
-            return ""
-        pasted = self._credentials().get(model_id, "")
-        if pasted:
-            return pasted
-        return os.environ.get(profile.api_key_env, "")
+            return "", "none"
+        pasted = self._credentials() if pasted is None else pasted
+        if pasted.get(model_id):
+            return pasted[model_id], "pasted"
+        env_key = os.environ.get(profile.api_key_env, "")
+        return env_key, ("env" if env_key else "none")
+
+    def key_for(self, model_id: str) -> str:
+        return self._key_state(model_id)[0]
+
+    def key_source(self, model_id: str) -> str:
+        return self._key_state(model_id)[1]
 
     def key_set(self, model_id: str) -> bool:
         return bool(self.key_for(model_id))
 
-    @staticmethod
-    def repo_root() -> Path:
-        return PROJECT_ROOT
+    def secret_values(self) -> set[str]:
+        """Every live key, for redacting text before it is logged or stored."""
+        values = {v for v in self._credentials().values() if v}
+        for profile in self.models.values():
+            env_key = os.environ.get(profile.api_key_env, "")
+            if env_key:
+                values.add(env_key)
+        return values
