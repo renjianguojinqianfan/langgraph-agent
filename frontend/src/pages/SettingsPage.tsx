@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
 import {
+  apiErrorText,
   createModel,
   deleteModel,
   setDefaultModel,
@@ -10,14 +11,6 @@ import {
 import { useModelStore } from "../store/modelStore";
 import { useTaskStore } from "../store/taskStore";
 import { ModelKeySource, ModelProfile } from "../types";
-
-function errorText(r: unknown): string {
-  const d = (r as { detail?: unknown })?.detail;
-  if (typeof d === "string") return d;
-  const m = (r as { message?: unknown })?.message;
-  if (typeof m === "string" && m !== "ok") return m;
-  return "操作失败";
-}
 
 const SOURCE_LABEL: Record<ModelKeySource, string> = {
   pasted: "粘贴",
@@ -43,11 +36,14 @@ const EMPTY_FORM: FormState = {
 export function SettingsPage() {
   const models = useModelStore((s) => s.models);
   const defaultId = useModelStore((s) => s.defaultId);
+  const loading = useModelStore((s) => s.loading);
+  const loadError = useModelStore((s) => s.error);
   const refresh = useModelStore((s) => s.refresh);
   const setOpen = useTaskStore((s) => s.setSettingsOpen);
 
   const [form, setForm] = useState<FormState | null>(null);
   const [formNote, setFormNote] = useState("");
+  const [saving, setSaving] = useState(false);
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
   const [rowNotes, setRowNotes] = useState<Record<string, string>>({});
   const [armed, setArmed] = useState<string | null>(null);
@@ -69,12 +65,19 @@ export function SettingsPage() {
       model: form.model.trim(),
       api_key_env: form.api_key_env.trim() || "LLM_API_KEY",
     };
-    const r = form.id ? await updateModel(form.id, body) : await createModel(body);
-    if (r.data) {
-      setForm(null);
-      await refresh();
-    } else {
-      setFormNote(errorText(r));
+    setSaving(true);
+    try {
+      const r = form.id ? await updateModel(form.id, body) : await createModel(body);
+      if (r.data) {
+        setForm(null);
+        await refresh();
+      } else {
+        setFormNote(apiErrorText(r));
+      }
+    } catch {
+      setFormNote("保存失败");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -84,10 +87,10 @@ export function SettingsPage() {
     const r = await setModelKey(id, key);
     if (r.data) {
       setKeyDrafts((prev) => ({ ...prev, [id]: "" }));
-      note(id, `Key 已保存（${SOURCE_LABEL[r.data.key_source as ModelKeySource] ?? r.data.key_source}）`);
+      note(id, `Key 已保存（${SOURCE_LABEL[r.data.key_source] ?? r.data.key_source}）`);
       await refresh();
     } else {
-      note(id, errorText(r));
+      note(id, apiErrorText(r));
     }
   };
 
@@ -97,7 +100,7 @@ export function SettingsPage() {
       note(id, r.data.key_set ? "已清除粘贴的 Key，回退到环境变量" : "已清除 Key");
       await refresh();
     } else {
-      note(id, errorText(r));
+      note(id, apiErrorText(r));
     }
   };
 
@@ -114,7 +117,7 @@ export function SettingsPage() {
       note(id, "已设为默认");
       await refresh();
     } else {
-      note(id, errorText(r));
+      note(id, apiErrorText(r));
     }
   };
 
@@ -122,10 +125,9 @@ export function SettingsPage() {
     setArmed(null);
     const r = await deleteModel(id);
     if (r.data) {
-      note(id, "已删除");
       await refresh();
     } else {
-      note(id, errorText(r));
+      note(id, apiErrorText(r));
     }
   };
 
@@ -159,8 +161,11 @@ export function SettingsPage() {
             </button>
           </div>
 
+          {loadError && <div className="text-[11px] text-red-400">{loadError}</div>}
           {models.length === 0 && (
-            <div className="text-sm text-slate-500">暂无配置，先新增一套。</div>
+            <div className="text-sm text-slate-500">
+              {loading ? "加载中…" : "暂无配置，先新增一套。"}
+            </div>
           )}
 
           {models.map((m) => (
@@ -227,9 +232,10 @@ export function SettingsPage() {
               <div className="flex items-center gap-2">
                 <button
                   type="submit"
-                  className="text-xs px-3 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white"
+                  disabled={saving}
+                  className="text-xs px-3 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-40"
                 >
-                  保存
+                  {saving ? "保存中…" : "保存"}
                 </button>
                 <button
                   type="button"

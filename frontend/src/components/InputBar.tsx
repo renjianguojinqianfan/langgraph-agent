@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  apiErrorText,
   createTask,
   getTask,
   putMode,
@@ -12,12 +13,6 @@ import { TaskMode } from "../types";
 import { ModeSwitch } from "./ModeSwitch";
 import { ModelSelect } from "./ModelSelect";
 import { currentDir } from "../workspace";
-
-/** FastAPI error bodies carry `{detail}`; the normal envelope carries `message`. */
-function detailText(r: unknown): string | undefined {
-  const d = (r as { detail?: unknown })?.detail;
-  return typeof d === "string" ? d : undefined;
-}
 
 export function InputBar() {
   const [text, setText] = useState("");
@@ -59,7 +54,7 @@ export function InputBar() {
         if (fresh.data) upsert(fresh.data);
         if (running) setNote("下一轮生效");
       } else {
-        setNote(detailText(r) ?? "切换失败");
+        setNote(apiErrorText(r));
       }
     } catch {
       setNote("切换失败");
@@ -80,7 +75,7 @@ export function InputBar() {
         if (fresh.data) upsert(fresh.data);
         if (running) setNote("下一轮生效");
       } else {
-        setNote(detailText(r) ?? "切换失败");
+        setNote(apiErrorText(r));
       }
     } catch {
       setNote("切换失败");
@@ -107,7 +102,7 @@ export function InputBar() {
           // flight must survive.
           setText((prev) => (prev.trim() === input ? "" : prev));
         } else {
-          setNote(detailText(res) ?? "创建失败");
+          setNote(apiErrorText(res));
         }
       } else if (parked) {
         // #139: one task = one conversation — speaking to a parked task
@@ -119,7 +114,7 @@ export function InputBar() {
           upsert(res.data.task);
           setText((prev) => (prev.trim() === input ? "" : prev));
         } else {
-          setNote(detailText(res) ?? "发送被拒绝");
+          setNote(apiErrorText(res));
         }
       }
     } catch {

@@ -3,6 +3,7 @@ import {
   AuthTokenResponse,
   ChatTurn,
   CreateTaskRequest,
+  ModelKeySource,
   ModelProfile,
   ModelsData,
   SSEvent,
@@ -12,6 +13,15 @@ import {
 } from "../types";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
+
+/** Failure text from either a FastAPI ``{detail}`` body or a non-ok envelope. */
+export function apiErrorText(r: unknown): string {
+  const detail = (r as { detail?: unknown })?.detail;
+  if (typeof detail === "string") return detail;
+  const message = (r as { message?: unknown })?.message;
+  if (typeof message === "string" && message !== "ok") return message;
+  return "操作失败";
+}
 
 // localStorage key must match backend/services/auth.py:TOKEN_STORAGE_KEY.
 const TOKEN_KEY = "lga_auth_token";
@@ -127,7 +137,7 @@ export const setDefaultModel = (id: string) =>
 
 /** Write-only: the response reports set/source, never the key. */
 export const setModelKey = (id: string, key: string) =>
-  req<{ ok: boolean; key_set: boolean; key_source: string }>(
+  req<{ ok: boolean; key_set: boolean; key_source: ModelKeySource }>(
     `/models/${encodeURIComponent(id)}/key`,
     { method: "PUT", body: JSON.stringify({ key }) }
   );
