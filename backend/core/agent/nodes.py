@@ -259,7 +259,10 @@ class AgentRuntime:
         mode = state.get("mode") or BUILD_MODE
         thought = f"Step {idx}: planning." if mode == PLAN_MODE else f"Step {idx}: acting."
         step["thought"] = thought
-        self._publish("step_start", {"index": idx, "thought": thought})
+        self._publish(
+            "step_start",
+            {"index": idx, "thought": thought, "model": getattr(self.llm, "model", "")},
+        )
 
         if mode == PLAN_MODE:
             return self._plan_round(state, step)

@@ -65,6 +65,13 @@ agent ──有 tool call──> tool ──> agent
 - **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（bash 写的也在），文本预览、流式下载；撤销靠 git。
 - **观测**：SSE 事件流 + JSONL trace，前端可回放 / 导出。
 
+## 模型
+
+- 设置页管理多套「地址 + 模型 + Key」；预设只有 **DeepSeek**，其余用「自定义」；只支持 OpenAI 兼容接口。
+- Key 两种来源：界面粘贴（存 `~/.qianfan/credentials.json`，仓库外）优先；其次配置里写的环境变量名（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）。界面只显示「已设 / 未设」。
+- 新建任务用全局默认；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。
+- 粘贴的 Key 是明文落盘，同账号的 bash 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
+
 ## 这不是安全边界
 
 `qianfan` 只监听 `127.0.0.1`，Host 检查只认 `127.0.0.1` / `localhost`（挡 DNS 重绑定），

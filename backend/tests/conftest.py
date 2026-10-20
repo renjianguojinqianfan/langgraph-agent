@@ -119,9 +119,12 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
 
 def make_manager(
     settings: Settings,
-    mock: MockLLMClient,
+    mock: MockLLMClient | None = None,
     event_bus: EventBus | None = None,
     persistence: Persistence | None = None,
+    *,
+    llm_factory: Any = None,
+    model_store: Any = None,
 ) -> TaskManager:
     """Construct a :class:`TaskManager` wired with a scripted mock LLM.
 
@@ -139,6 +142,8 @@ def make_manager(
         llm_client=mock,
         tools=tools,
         default_workspace=settings.artifacts_path,
+        llm_factory=llm_factory,
+        model_store=model_store,
     )
 
     _request = _current_request.get()

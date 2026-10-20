@@ -361,7 +361,7 @@ class SubAgentExecutor:
             runtime = AgentRuntime(
                 task_id=spec.subtask_id,
                 task_manager=self.tm,
-                llm=self.tm._llm,
+                llm=self.tm.llm_for_task_id(spec.parent_task_id or spec.subtask_id),
                 tools=tools,
                 tool_schemas=schemas,
                 max_steps=self.settings.max_steps,

@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 
 from langgraph.types import Durability
 
@@ -46,6 +46,7 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from . import plan_file
 from .event_bus import EventBus
+from .model_store import ModelStore
 from .persistence import Persistence
 from .trace import TraceRecorder
 
@@ -181,6 +182,8 @@ class TaskManager:
         llm_client: Optional[LLMClient] = None,
         tools: Optional[List[BaseTool]] = None,
         default_workspace: Optional[Path] = None,
+        model_store: Optional[ModelStore] = None,
+        llm_factory: Optional[Callable[[Any, str], LLMClient]] = None,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
@@ -191,7 +194,11 @@ class TaskManager:
         self._default_workspace = normalize_workspace(
             default_workspace or settings.artifacts_path
         )
+        self.models = model_store or ModelStore(settings)
+        self._injected_llm = llm_client
         self._llm = llm_client or create_llm_client(settings)
+        self._llm_factory = llm_factory
+        self._llm_clients: Dict[str, LLMClient] = {}
         self._tools = tools if tools is not None else build_tools(settings)
         # P1 item 2: sub-agent executor (None when disabled).
         self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None
@@ -466,6 +473,70 @@ class TaskManager:
         if not Path(task.workspace).is_dir():
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
+    def _llm_for(self, task: Optional[Task]) -> LLMClient:
+        """The task's model client, cached per profile (ADR 0010 decision 7)."""
+        if self._injected_llm is not None:
+            return self._injected_llm
+        if self.settings.use_mock_llm:
+            return self._llm
+        profile = self.models.resolve(task.model if task else None)
+        if profile is None:
+            return self._llm
+        client = self._llm_clients.get(profile.id)
+        if client is None:
+            key = self.models.key_for(profile.id)
+            if self._llm_factory is not None:
+                client = self._llm_factory(profile, key)
+            else:
+                from ..core.llm.openai_compat import OpenAICompatibleClient
+
+                client = OpenAICompatibleClient(
+                    profile.base_url, key, profile.model, self.settings.llm_request_timeout_sec
+                )
+            self._llm_clients[profile.id] = client
+        return client
+
+    def llm_for_task_id(self, task_id: str) -> LLMClient:
+        return self._llm_for(self.persistence.load_task(task_id))
+
+    def set_model(self, task_id: str, model_id: str) -> Dict[str, Any]:
+        """Switch a task's model; the next message uses it."""
+        if self.models.get(model_id) is None:
+            raise RuntimeError(f"unknown model {model_id!r}")
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            task.model = model_id
+            task.updated_at = _now()
+            self.persistence.save_task(task)
+        return {"ok": True, "model": model_id}
+
+    def test_model(self, model_id: str) -> Dict[str, Any]:
+        """Send one minimal request; the key never appears in the answer."""
+        profile = self.models.get(model_id)
+        if profile is None:
+            raise KeyError(model_id)
+        if self.settings.use_mock_llm:
+            return {"ok": True, "note": "mock mode"}
+        key = self.models.key_for(model_id)
+        if not key:
+            return {"ok": False, "error": "key not set"}
+        try:
+            if self._llm_factory is not None:
+                client = self._llm_factory(profile, key)
+            else:
+                from ..core.llm.openai_compat import OpenAICompatibleClient
+
+                client = OpenAICompatibleClient(
+                    profile.base_url, key, profile.model, self.settings.llm_request_timeout_sec
+                )
+            client.complete([{"role": "user", "content": "ping"}], max_tokens=1)
+            return {"ok": True}
+        except Exception as exc:
+            message = str(exc).replace(key, "[redacted]")
+            return {"ok": False, "error": message}
+
     @staticmethod
     def _seed_plan(task: Task) -> Dict[str, Any]:
         """Plan state from the file, bumping the version when it changed."""
@@ -486,15 +557,20 @@ class TaskManager:
         user_input: str,
         mode: str = TaskMode.BUILD.value,
         workspace: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
         """Start one task (ADR 0008 decision 1: one task = one conversation).
 
         ``mode`` is the sticky task switch; default is build (decision 3).
         ``workspace`` is the page-supplied directory; absent -> the launch dir.
+        ``model`` is a profile id; absent -> the global default.
         """
         chosen = normalize_workspace(workspace or self._default_workspace)
         if not Path(chosen).is_dir():
             raise ValueError(f"workspace does not exist: {chosen}")
+        model_id = model or self.models.default_id
+        if self.models.get(model_id) is None:
+            raise ValueError(f"unknown model: {model_id}")
         task_id = uuid.uuid4().hex
         now = _now()
         task = Task(
@@ -502,6 +578,7 @@ class TaskManager:
             title=(title or user_input[:40]).strip(),
             user_input=user_input,
             workspace=chosen,
+            model=model_id,
             status=TaskStatus.PENDING,
             mode=TaskMode(mode),
             conversation=[ChatTurn(role="user", content=user_input)],
@@ -576,7 +653,7 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._llm_for(task),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
@@ -892,7 +969,7 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._llm_for(current),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
@@ -1097,7 +1174,7 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._llm_for(current),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
