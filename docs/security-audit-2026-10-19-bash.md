@@ -288,7 +288,7 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 - `tool_node` 的 `except Exception` 直接测试（现有 `_FailTool` 是返回失败，不是抛异常）；
 - `pyproject.toml` 的 `resilience.py` 注释；
 - Docker 文案/产物：不用 Docker 就删 `docker-compose.yml` 或标“不支持”，README:19 与 CI docker-build 同步决定；
-- `docs/archive/OVERVIEW.md`、`docs/incremental-*`、`docs/agent-*`、`docs/capability-registry-rescope.md` §0.5 的残影按 C7 处理；`NOTES.md` 由用户决定。
+- `docs/archive/OVERVIEW.md`、`docs/archive/incremental-*`、`docs/archive/agent-*`、`docs/capability-registry-rescope.md` §0.5 的残影按 C7 处理；`NOTES.md` 由用户决定。
 
 **D. 不做 / 触发条件**
 

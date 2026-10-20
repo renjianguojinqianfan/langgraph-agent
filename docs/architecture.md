@@ -13,7 +13,7 @@
 > **现役事实请查这里**：
 > - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
 > - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「核心模型」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
-> - 各轮增量设计 → `docs/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `-p3-resume.md`
+> - 各轮增量设计 → `docs/archive/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `docs/incremental-arch-p3-resume.md`
 > - 接口契约 → 运行时 Swagger `http://localhost:8000/docs`（权威）+ [`backend/api/routes.py`](../backend/api/routes.py)
 > - 能力边界的第一性原理推导 → [`capability-first-principles.md`](archive/capability-first-principles.md)
 >
@@ -502,7 +502,7 @@ httpx>=0.27.0          # 供 web_search 的 SerpAPI 路径使用
 ## 7. 有序任务列表（工程师编码依据）
 
 > ⚠️ **历史**：T01–T09 是 v0.1 首轮实施顺序，均已交付。后续七轮的任务拆分见
-> `docs/incremental-prd-p{0,1,2}.md`；当前待做清单见
+> `docs/archive/incremental-prd-p{0,1,2}.md`；当前待做清单见
 > [`roadmap-pawbench.md`](archive/roadmap-pawbench.md) §三 与 GitHub Issues。
 
 > 说明：任务按**实现依赖顺序**排列，每个任务含 ≥3 个文件。`T01` 为项目基础设施（必为首个任务）。优先级：`P0`=MVP，`P1`=重要。任务粒度到"可独立编码"。
