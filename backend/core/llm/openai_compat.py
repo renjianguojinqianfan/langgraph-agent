@@ -1,8 +1,9 @@
 """OpenAI-compatible LLM client and provider factory.
 
-Works with OpenAI, DeepSeek and local Ollama simply by changing
-``base_url`` / ``api_key`` / ``model`` (see ``.env.example``). The OpenAI
-Python SDK is used in compatibility mode.
+Works with any OpenAI-compatible host; DeepSeek is the only built-in preset.
+Configure the endpoint, model and key as a model profile (``data/models.json``,
+ADR 0010); ``LLM_*`` only seeds the first profile. The OpenAI Python SDK is
+used in compatibility mode.
 """
 
 from __future__ import annotations

@@ -2,6 +2,7 @@
 
 > 发布前 / 换供应商时**在网页端逐条手动跑**；CI 不跑真模型（ADR 0008「三笔账」2）。
 > 每条记录日期与所用配置名即可，不把模型名与时间写进 README（数字与型号必腐）。
+> 结果表的「证据」列只写文件名；本机证据根是 `%TEMP%\qianfan-evidence\`（Windows），按场景目录查看（如 `C7/`）。
 > 前置：`frontend` 已构建、`qianfan` 能启动、`~/.qianfan/credentials.json` 或环境变量里有可用 Key。
 
 ## 场景与判据
@@ -44,7 +45,7 @@
 
 ## 结果记录
 
-| # | 日期 | 配置 | 结果 | 证据 |
+| # | 日期 | 配置 / 模型 | 结果 | 证据 |
 |---|---|---|---|---|
 | 1 | 2026-10-20 | 默认（deepseek-v4.1-flash） | 通过：`write:success` + `bash(git init && git status):success` | `C7/scenario1.png`，任务 `538d5387` |
 | 2 | 2026-10-20 | 默认 | 通过：计划 v2；手工追加的 `EDITED-BY-HUMAN` 被执行，文件落盘 | `C7/scenario2-*.png`，任务 `75056984` |
@@ -58,3 +59,4 @@
 
 > 场景 6 的 A/B 路径按后端记录的绝对路径核对（Windows 反斜杠），写入位置以文件系统实际落点为准。
 > 场景 9 的搜索使用 `SEARCH_PROVIDER=exa`（本机 DuckDuckGo 不可达，见 S2 #175）。
+> 场景 9 的子代理第一次因工作区没有 README 返回「无法完成」（status 仍是 completed），改用 `notes.txt` 重跑成功；表中记录的是成功那次。
