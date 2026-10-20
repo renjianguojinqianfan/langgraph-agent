@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from ..config import Settings
 from ..utils.logging import get_logger
@@ -55,6 +57,14 @@ class ModelStore:
         # DeepSeek is the only built-in preset (M1): an explicit base_url is a
         # custom host, anything else falls back to the DeepSeek endpoint.
         base_url = self.settings.llm_base_url or _DEEPSEEK_FALLBACK
+        if not self.settings.llm_base_url and (self.settings.llm_provider or "").lower() not in (
+            "",
+            "deepseek",
+        ):
+            logger.warning(
+                "llm_provider %r has no preset; seeding the DeepSeek endpoint",
+                self.settings.llm_provider,
+            )
         profile = ModelProfile(
             id=DEFAULT_MODEL_ID,
             name="默认配置",
@@ -106,6 +116,7 @@ class ModelStore:
             if profile.id and profile.base_url and profile.model:
                 profiles[profile.id] = profile
         if not profiles:
+            self._quarantine(self.data_file)
             self._seed()
             return
         self.models = profiles
@@ -152,6 +163,15 @@ class ModelStore:
             entries.append(profile.public(bool(key), source))
         return {"default": self.default_id, "models": entries}
 
+    @staticmethod
+    def _validate(base_url: str, model: str, api_key_env: str) -> None:
+        if not base_url or not model:
+            raise ValueError("base_url and model are required")
+        if urlparse(base_url).scheme not in ("http", "https"):
+            raise ValueError("base_url must be an http(s) URL")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", api_key_env):
+            raise ValueError("api_key_env must be an environment variable name")
+
     def add(
         self, *, name: str, base_url: str, model: str, api_key_env: str = "LLM_API_KEY"
     ) -> ModelProfile:
@@ -162,8 +182,7 @@ class ModelStore:
             model=model.strip(),
             api_key_env=(api_key_env or "LLM_API_KEY").strip(),
         )
-        if not profile.base_url or not profile.model:
-            raise ValueError("base_url and model are required")
+        self._validate(profile.base_url, profile.model, profile.api_key_env)
         self.models[profile.id] = profile
         self._save()
         return profile
@@ -177,16 +196,17 @@ class ModelStore:
             for key in ("name", "base_url", "model", "api_key_env")
             if fields.get(key) is not None
         }
+        base_url = cleaned.get("base_url", profile.base_url)
         candidate = ModelProfile(
             id=profile.id,
             name=cleaned.get("name", profile.name),
-            base_url=cleaned.get("base_url", profile.base_url),
+            base_url=base_url,
             model=cleaned.get("model", profile.model),
             api_key_env=cleaned.get("api_key_env", profile.api_key_env),
-            preset=profile.preset,
+            # Editing the address turns a built-in preset into a custom profile.
+            preset=profile.preset if base_url == profile.base_url else False,
         )
-        if not candidate.base_url or not candidate.model:
-            raise ValueError("base_url and model are required")
+        self._validate(candidate.base_url, candidate.model, candidate.api_key_env)
         self.models[model_id] = candidate
         self._save()
         return candidate
@@ -200,6 +220,10 @@ class ModelStore:
         if self.default_id == model_id:
             self.default_id = next(iter(self.models))
         self._save()
+        # A deleted profile must not leave its pasted key behind.
+        credentials = self._credentials()
+        if credentials.pop(model_id, None) is not None:
+            self._save_credentials(credentials)
 
     def set_default(self, model_id: str) -> None:
         if model_id not in self.models:

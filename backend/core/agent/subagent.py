@@ -237,12 +237,13 @@ class SubAgentExecutor:
             result = future.result(timeout=self.settings.subagent_timeout_sec)
         except Exception as exc:  # timeout / worker crash
             self._request_worker_stop(future, spec)
-            logger.warning("subtask %s aborted: %s", spec.subtask_id, exc)
+            message = self.tm.redact(f"subtask timeout or worker error: {exc}")
+            logger.warning("subtask %s aborted: %s", spec.subtask_id, message)
             result = SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="failed",
-                error=f"subtask timeout or worker error: {exc}",
+                error=message,
             )
         if parent:
             if result.status == "completed":
@@ -253,7 +254,7 @@ class SubAgentExecutor:
                         "subtask_id": result.subtask_id,
                         "name": result.name,
                         "status": result.status,
-                        "summary": result.summary,
+                        "summary": self.tm.redact(result.summary),
                         "artifacts": list(result.artifacts),
                     },
                 )
@@ -264,7 +265,7 @@ class SubAgentExecutor:
                     {
                         "subtask_id": result.subtask_id,
                         "name": result.name,
-                        "error": result.error or "unknown error",
+                        "error": self.tm.redact(result.error or "unknown error"),
                     },
                 )
         return result
@@ -439,20 +440,22 @@ class SubAgentExecutor:
             # A refusal the face can never honor (bad tier, out-of-tier name,
             # unmounted tier member) never started a run: no LLM call, no tool,
             # no side effect.
-            logger.warning("subtask %s refused: %s", spec.subtask_id, exc)
+            message = self.tm.redact(str(exc))
+            logger.warning("subtask %s refused: %s", spec.subtask_id, message)
             return SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="failed",
-                error=str(exc),
+                error=message,
             )
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("subtask %s crashed", spec.subtask_id)
+            message = self.tm.redact(str(exc))
+            logger.error("subtask %s crashed: %s", spec.subtask_id, message)
             return SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="failed",
-                error=str(exc),
+                error=message,
             )
         finally:
             reset_runtime_context(tokens)

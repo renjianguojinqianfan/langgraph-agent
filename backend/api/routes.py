@@ -174,7 +174,7 @@ def create_model(
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
     try:
-        profile = _tm(request).models.add(
+        profile = _tm(request).add_model_profile(
             name=payload.name,
             base_url=payload.base_url,
             model=payload.model,
@@ -223,7 +223,7 @@ def set_default_model(
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
     try:
-        _tm(request).models.set_default(model_id)
+        _tm(request).set_default_model_profile(model_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
     return _envelope(data={"ok": True, "default": model_id})

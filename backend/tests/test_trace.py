@@ -19,6 +19,7 @@ from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.main import app
 from backend.services.event_bus import EventBus
+from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.services.trace import TraceRecorder
@@ -131,7 +132,14 @@ def trace_client(tmp_path):
         ],
         final_answer="done.",
     )
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     with TestClient(app, base_url="http://localhost") as test_client:
         test_client.app.state.settings = settings
         test_client.app.state.event_bus = eb

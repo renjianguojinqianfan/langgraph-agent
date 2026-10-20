@@ -239,6 +239,65 @@ def test_provider_error_key_never_reaches_task_trace_logs_or_sse(tmp_path, caplo
     assert SENTINEL not in caplog.text
 
 
+def test_update_clears_preset_when_the_address_changes(tmp_path):
+    store, _ = _store(tmp_path)
+    assert store.get("default").preset is True
+    updated = store.update("default", base_url="https://custom.test/v1")
+    assert updated.preset is False
+
+
+def test_profile_validation_rejects_bad_urls_and_env_names(tmp_path):
+    store, _ = _store(tmp_path)
+    with pytest.raises(ValueError):
+        store.add(name="x", base_url="ftp://example.test", model="m")
+    with pytest.raises(ValueError):
+        store.add(name="x", base_url="https://example.test", model="m", api_key_env="not a name")
+    with pytest.raises(ValueError):
+        store.update("default", api_key_env="1INVALID")
+
+
+def test_delete_revokes_the_pasted_key(tmp_path):
+    store, _ = _store(tmp_path)
+    second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
+    store.set_key(second.id, SENTINEL)
+    store.delete(second.id)
+    assert SENTINEL not in store.credentials_file.read_text(encoding="utf-8")
+
+
+def test_test_model_sends_one_request_through_the_factory(tmp_path):
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    calls = []
+
+    def factory(profile, key):
+        calls.append((profile.id, key))
+        return _FakeClient(profile, key)
+
+    tm = make_manager(settings, None, llm_factory=factory)
+    tm.set_model_key("default", "sk-test")
+    assert tm.test_model("default") == {"ok": True}
+    assert calls[-1] == ("default", "sk-test")
+
+
+def test_tool_output_echoing_a_key_is_redacted(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", SENTINEL)
+    settings = make_settings(tmp_path, use_mock_llm=False, trace_enabled=True)
+    script = MockLLMClient(
+        plan=["p"],
+        tool_calls=[{"id": "c1", "name": "bash", "arguments": {"command": "echo $LLM_API_KEY"}}],
+        final_answer="done",
+    )
+    tm = make_manager(settings, script)
+    task_id = tm.create_task("t", "run echo")
+    task = _wait(tm, task_id)
+
+    trace = (settings.trace_path / f"{task_id}.jsonl").read_text(encoding="utf-8")
+    events = json.dumps(tm.event_bus.replay(task_id), ensure_ascii=False)
+    assert SENTINEL not in json.dumps(task.model_dump(), ensure_ascii=False)
+    assert SENTINEL not in trace
+    assert SENTINEL not in events
+    assert tm.redact(SENTINEL) == "[redacted]"
+
+
 def _client(tmp_path, monkeypatch):
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))

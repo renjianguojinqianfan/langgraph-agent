@@ -235,6 +235,16 @@ class AgentRuntime:
         redact = getattr(getattr(self, "tm", None), "redact", None)
         return redact(text) if callable(redact) else text
 
+    def _redact_value(self, value: Any) -> Any:
+        """Recursively redact strings inside a tool result payload."""
+        if isinstance(value, str):
+            return self._redact(value)
+        if isinstance(value, list):
+            return [self._redact_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._redact_value(item) for key, item in value.items()}
+        return value
+
     # ── nodes ──
     def agent(self, state: AgentState) -> AgentState:
         """The one LLM node (ADR 0008 decision 2).
@@ -546,12 +556,13 @@ class AgentRuntime:
             try:
                 result: ToolResult = tool.run(**rec["input"])
             except Exception as exc:  # final safety net
-                logger.exception("tool %s crashed", rec["tool_name"])
-                result = ToolResult(success=False, error=str(exc))
+                message = self._redact(str(exc))
+                logger.error("tool %s crashed: %s", rec["tool_name"], message)
+                result = ToolResult(success=False, error=message)
 
             rec["status"] = "success" if result.success else "failed"
-            rec["output"] = result.data
-            rec["error"] = result.error or ""
+            rec["output"] = self._redact_value(result.data)
+            rec["error"] = self._redact(result.error or "")
             self._publish("tool_result", rec)
 
             # Feed the tool result back into the conversation: the payload
@@ -560,7 +571,7 @@ class AgentRuntime:
             # wrong).
             if result.success:
                 state.setdefault("messages", []).append(
-                    {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(result.data, ensure_ascii=False, default=str)}
+                    {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(rec["output"], ensure_ascii=False, default=str)}
                 )
             else:
                 self._feed_tool_failure(state, rec)
@@ -574,10 +585,10 @@ class AgentRuntime:
             # 在面板上是「失败的一条」，不是「暂无子任务」。
             if (
                 rec["tool_name"] == "spawn_subagent"
-                and isinstance(result.data, dict)
-                and "subtask_id" in result.data
+                and isinstance(rec["output"], dict)
+                and "subtask_id" in rec["output"]
             ):
-                state.setdefault("subtasks", []).append(dict(result.data))
+                state.setdefault("subtasks", []).append(dict(rec["output"]))
 
         state["_last_action"] = "tool_done"
         if step is not None:

@@ -496,10 +496,11 @@ class TaskManager:
             raise RuntimeError(
                 f"model profile {requested!r} no longer exists; switch the task's model"
             )
-        client = self._llm_clients.get(profile.id)
-        if client is None:
-            client = self._build_llm(profile, self.models.key_for(profile.id))
-            self._llm_clients[profile.id] = client
+        with self._lock:
+            client = self._llm_clients.get(profile.id)
+            if client is None:
+                client = self._build_llm(profile, self.models.key_for(profile.id))
+                self._llm_clients[profile.id] = client
         return client
 
     def llm_for_task_id(self, task_id: str) -> LLMClient:
@@ -531,6 +532,14 @@ class TaskManager:
 
     # Profile mutations go through the manager so the per-profile client cache
     # cannot keep serving the old address / key after an edit.
+    def add_model_profile(self, **fields: Any) -> Any:
+        with self._lock:
+            return self.models.add(**fields)
+
+    def set_default_model_profile(self, model_id: str) -> None:
+        with self._lock:
+            self.models.set_default(model_id)
+
     def update_model_profile(self, model_id: str, **fields: Any) -> Any:
         with self._lock:
             profile = self.models.update(model_id, **fields)
@@ -1052,7 +1061,7 @@ class TaskManager:
                 task.updated_at = _now()
                 self.persistence.save_task(task)
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": self.redact(str(exc))}
+                task_id, "task_failed", {"task_id": task_id, "error": message}
             )
         finally:
             self._active_states.pop(task_id, None)
