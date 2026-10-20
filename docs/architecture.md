@@ -1,7 +1,7 @@
 # 系统架构设计文档：基于 LangGraph 的自主任务 Agent 平台
 
 > 架构师：高见远（Gao）　|　版本：v0.1　|　日期：2025-08-24
-> 关联文档：PRD（[`docs/prd.md`](prd.md)）
+> 关联文档：PRD（[`docs/archive/prd.md`](archive/prd.md)）
 > 项目根目录：仓库根（下文相对路径以仓库根为准）
 
 > ⚠️ **状态：v0.1 原始设计档（历史记录），不是现役架构的权威来源。**
@@ -15,7 +15,7 @@
 > - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「核心模型」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
 > - 各轮增量设计 → `docs/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `-p3-resume.md`
 > - 接口契约 → 运行时 Swagger `http://localhost:8000/docs`（权威）+ [`backend/api/routes.py`](../backend/api/routes.py)
-> - 能力边界的第一性原理推导 → [`capability-first-principles.md`](capability-first-principles.md)
+> - 能力边界的第一性原理推导 → [`capability-first-principles.md`](archive/capability-first-principles.md)
 >
 > **本文的保留价值**（这些不随实现漂移）：§1 初始技术难点与选型理由、§5 跨文件共享约定
 > （其中多数已升格为 `AGENTS.md`「跨任务安全边界」硬规则）、§7 T01–T09 的原始实施顺序、§8 Q1–Q8 的初始决策。
@@ -503,7 +503,7 @@ httpx>=0.27.0          # 供 web_search 的 SerpAPI 路径使用
 
 > ⚠️ **历史**：T01–T09 是 v0.1 首轮实施顺序，均已交付。后续七轮的任务拆分见
 > `docs/incremental-prd-p{0,1,2}.md`；当前待做清单见
-> [`roadmap-pawbench.md`](roadmap-pawbench.md) §三 与 GitHub Issues。
+> [`roadmap-pawbench.md`](archive/roadmap-pawbench.md) §三 与 GitHub Issues。
 
 > 说明：任务按**实现依赖顺序**排列，每个任务含 ≥3 个文件。`T01` 为项目基础设施（必为首个任务）。优先级：`P0`=MVP，`P1`=重要。任务粒度到"可独立编码"。
 

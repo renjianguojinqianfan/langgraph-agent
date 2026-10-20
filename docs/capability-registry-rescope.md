@@ -16,7 +16,7 @@
 | G-2 | 2026-10-18 | 唯一真实场景：**从最小机身起步，一支支加镜头，看每加一支行为怎么变**（看得清 / 比得了），人在网页上手动对比 | 用户选 (b) | (a) 为变轻而关掉不用的；(c) 加新能力（点不出名字 →「加功能不改核」不是当前需求）；(d) 第三方插件（进程内全权限代码，没有信任模型）；(e) 拿去展示 |
 | G-3 | 2026-10-18 | 结论先记在本节，**暂不写 ADR**；界面与功能理清后再落 | 用户：「还没理清楚最终的界面和功能」 | 现在开 ADR 0009；另建 `docs/global-plan-decisions.md`（落点日后可挪） |
 | G-4 | 2026-10-18 | 10 张方向无关的票按 §0.1 处置；GitHub 上的关票 / 改票面**暂不执行**（#54 / #113 / #20 的重写取决于界面与功能） | 用户「按表执行」，理解为按表定处置 | — |
-| G-5 | 2026-10-18 | 文档小修只做 3 条，攒到访谈结束一次提交（推送 / PR 届时再问）：`docs/pivot-plan-build.md:3` 改 S0–S6；README 33 / 34 / 44 行与 GLOSSARY 27 / 41 行补 `/api` 前缀（README:33 的 `POST /resume` 实为 `/api/tasks/{id}/resume`）；`docs/specs/p0-b-completion-verification.md` 加退役抬头。另 3 条作废：`second-tier` spec 头部已写明 A、B 全退役；「约 50 行」在仓库文件里无落点；`domain.md:36-39` 已写明冻结只覆盖已交付增量。两处过时代码注释（`config.py:38` 的 `mock` provider、`openai_compat.py:125-126` 的确认闸门）另开小票，不混进 #153 | 用户「按你说的做」 | 交接文档原列 6 条全做 |
+| G-5 | 2026-10-18 | 文档小修只做 3 条，攒到访谈结束一次提交（推送 / PR 届时再问）：`docs/archive/pivot-plan-build.md:3` 改 S0–S6；README 33 / 34 / 44 行与 GLOSSARY 27 / 41 行补 `/api` 前缀（README:33 的 `POST /resume` 实为 `/api/tasks/{id}/resume`）；`docs/specs/p0-b-completion-verification.md` 加退役抬头。另 3 条作废：`second-tier` spec 头部已写明 A、B 全退役；「约 50 行」在仓库文件里无落点；`domain.md:36-39` 已写明冻结只覆盖已交付增量。两处过时代码注释（`config.py:38` 的 `mock` provider、`openai_compat.py:125-126` 的确认闸门）另开小票，不混进 #153 | 用户「按你说的做」 | 交接文档原列 6 条全做 |
 | G-6 | 2026-10-18 | 开关形态**参照 dsh**：插件可以启用 / 停用，内置几套固定的**预设**组合（用户原话「模式」，记作「预设」，避免和计划 / 执行两模式撞名）。拨在哪一层（整台服务 / 每个任务）、在哪改（配置文件 / 设置页）未定 | 用户：「大概就是像 dsh 一样，可以启用不同的插件，一开始也可以预设几种默认固定的模式」 | 第二轮 Q6 推荐的「每个任务开局选」未被采纳，层级留给第三轮 |
 | G-7 | 2026-10-18 | 看行为变化靠**步骤视图**就够（今天的界面：每步调了什么工具、拿回什么）；不做「每次调用发给模型的完整请求」视图，trace 不加请求事件。**原则：研究用也要把自己当用户，界面不能杂乱** | 用户：「iii 有点太重了，ii 就够了……在界面上不能太过杂乱」 | 旅程视图（太重）；两任务并排比；只看结果 |
 | G-8 | 2026-10-19 | **本章目标：先做出一个相对稳定、最简、像 pi 一样能启动的 agent**；插件 / 预设机制（G-6）推后到之后的章节，本章不做 | 用户：「Q9 先不做……最紧急的是先做出一个相对稳定最简的 agent，就像 pi 一样可以启动」 | 本章就做插件层级（第三轮 Q9 的 A / B / C） |
@@ -59,9 +59,9 @@
 
 > **连带（G-8 – G-10，落 ADR 时要写）**：ADR 0008 第 7 条需**修订**（不是重开）——计划模式的只读档要去掉 4 个 git 工具和 2 个知识库工具。本章方向接近交接文档的 B（只做最小 agent），但插件叙事不退役，只是推后；旅程视图已否。
 > **连带（G-13 – G-15）**：子代理保留，ADR 0008 第 7 条「子 agent 保留」不动，ADR 0003 不因子代理而退役。ADR 0004 退役，ADR 0008 第 8 条改写为「交付 = 停下时去看工作区里的文件」，AGENTS.md「产物登记语义」一行删除，P1-B spec 加退役抬头。
-> **连带（G-21）**：工具重试与熔断删除后 ADR 0003 失去对象，加退役标记；AGENTS.md「熔断与工具挂载」一行改写；`tool_*` 5 项与 `aux_llm_*` 6 项配置删除；工具调用记录去掉 `retries` / `circuit_open`。D1 定案 (b)（危险规则默认空表、不拦，`docs/research-danger-policy-across-agents.md` §6.4）**继续有效**，bash 不附默认黑名单。
+> **连带（G-21）**：工具重试与熔断删除后 ADR 0003 失去对象，加退役标记；AGENTS.md「熔断与工具挂载」一行改写；`tool_*` 5 项与 `aux_llm_*` 6 项配置删除；工具调用记录去掉 `retries` / `circuit_open`。D1 定案 (b)（危险规则默认空表、不拦，`docs/archive/research-danger-policy-across-agents.md` §6.4）**继续有效**，bash 不附默认黑名单。
 
-> **更正（2026-10-18）**：第二轮把「产物账本」「回滚快照」划进机身是错的——pi 与 dsh 的核里都没有这两样（pi 只在示例里用 `git stash` 做存档点；dsh 的 `deliverables` 是可选插件，只进 web-app 组合，也没有回滚）。归属改由第三轮决定。dsh 事实取自本机克隆 `687f282e86`（`dsh-v0.2.1-rc.2`），**比 `docs/research-dsh-plugin-core.md` 记的 `d743267388` 新**，引用旧文行号前要复核。
+> **更正（2026-10-18）**：第二轮把「产物账本」「回滚快照」划进机身是错的——pi 与 dsh 的核里都没有这两样（pi 只在示例里用 `git stash` 做存档点；dsh 的 `deliverables` 是可选插件，只进 web-app 组合，也没有回滚）。归属改由第三轮决定。dsh 事实取自本机克隆 `687f282e86`（`dsh-v0.2.1-rc.2`），**比 `docs/archive/research-dsh-plugin-core.md` 记的 `d743267388` 新**，引用旧文行号前要复核。
 
 ### 0.1 票面处置（G-4）
 
@@ -107,7 +107,7 @@
 
 > **2026-10-20 起 C4 及以后的排序与内容以 [`docs/specs/qianfan-daily-form-plan.md`](specs/qianfan-daily-form-plan.md) §4 为准**（[ADR 0010](adr/0010-launch-dir-workspace-and-model-profiles.md)，spec #166）；本节正文冻结为 C1–C3 的过程记录，不再改。
 
-串行，一片一个 PR；每片按 `docs/pivot-plan-build.md` §纪律走（删测试逐条写明删的是哪个已删功能的测试；`AGENTS.md` 局部改动随片；C3 / C5 / C6 合前手跑一次真模型）。动到 SSE 事件的片同步 `docs/architecture.md` §3.4 并跑 `npm run check:sse`（改 architecture 会触发全套 CI）。
+串行，一片一个 PR；每片按 `docs/archive/pivot-plan-build.md` §纪律走（删测试逐条写明删的是哪个已删功能的测试；`AGENTS.md` 局部改动随片；C3 / C5 / C6 合前手跑一次真模型）。动到 SSE 事件的片同步 `docs/architecture.md` §3.4 并跑 `npm run check:sse`（改 architecture 会触发全套 CI）。
 
 | 片 | 内容 | 随片落的文档 |
 |---|---|---|
@@ -117,7 +117,7 @@
 | C4 `qianfan` 命令 | pyproject 包信息与 `[project.scripts]`；后端同源托管 `frontend/dist`；自动开浏览器；`uv tool install -e .`（依赖安装方式见 §0.4） | README 启动段；`pyproject.toml` 头注「不放 `[build-system]`、本仓不是可安装包」同步改 |
 | C5 工作区文件 | 「产物」栏换「工作区文件」列表（预览 / 下载；文件端点的路径锁与二进制 / 大小限制可沿用 #54 §6 的设计）；删产物账本与回滚快照（按钮、接口、`artifact_created` / `task_rollback` 事件、`snapshot_*` 配置、启动清理） | ADR 0004 退役；ADR 0008 第 8 条改写；`AGENTS.md`「产物登记语义」行删除；P1-B spec 加退役抬头；`GLOSSARY.md` 的 ADR 0004 指针、「交付」与 `artifact` 条；README 身份段的「停下时人看产物」与「回滚」行；`docs/agents/domain.md` 的 0004 live 行；architecture §3.4 删两事件 |
 | C6 计划文件 | 计划模式回复里的标记 → 存工作区 `plans/<task_id>.md`；计划区换整份 Markdown（显示 + 编辑）；执行阶段按 G-29 / G-34（计划以一条消息进对话，每轮开始前与每次压缩后核对，删旧补新，留一行灰字「计划已更新到第 N 版」）；优先级说明（#153）；删 `Task.plan` 列表、`PlanStep`、`PUT /api/tasks/{id}/plan`、`plan_update`、状态下拉、system 尾部计划块；§0.4 两问已定 | ADR 0008「与 pi 的有意分歧」表「计划进度」行修订；`AGENTS.md` 两模式行与任务路由行；`GLOSSARY.md` 的 `plan` 词条与模式条；README「计划可改」行；architecture §3.4 删 `plan_update` |
-| C7 收尾 | 文档一致性（非归档文档无残影，归档例外按 S6 口径：`docs/pivot-plan-build.md` S6 行）；ADR 0008 三处修订与 ADR 0003 / 0004 退役标记已落；5 个固定场景真模型网页验收（G-28） | 关本章父票（#153 由 C6 关） |
+| C7 收尾 | 文档一致性（非归档文档无残影，归档例外按 S6 口径：`docs/archive/pivot-plan-build.md` S6 行）；ADR 0008 三处修订与 ADR 0003 / 0004 退役标记已落；5 个固定场景真模型网页验收（G-28） | 关本章父票（#153 由 C6 关） |
 
 #148（bash 安全审计）在 C3 合并后做。
 
@@ -262,7 +262,7 @@ pi = `E:\code\pi` @ `4dd2b149d`；dsh = `E:\code\deepseek-harness` @ `687f282e86
 
 | 位置 | 现状 | 修法 |
 |---|---|---|
-| `docs/pivot-plan-build.md:3` | 「S0–S5 已合入」 | 改为 S0–S6 |
+| `docs/archive/pivot-plan-build.md:3` | 「S0–S5 已合入」 | 改为 S0–S6 |
 | `README.md` | 非空行 52，PR #152 写「约 50 行」 | 不再精确引用 50 |
 | `README.md` / `GLOSSARY.md` | `POST /tasks/{id}/messages` 省略 `/api` | 统一按实际前缀（`backend/main.py:63`） |
 | #78 正文 | 把 `roadmap-pawbench §一` 与 ADR 0002「护城河纪律」当固定边界 | 随地图关闭或改引用 |

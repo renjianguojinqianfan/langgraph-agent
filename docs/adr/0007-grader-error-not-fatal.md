@@ -48,7 +48,7 @@ status: superseded by ADR-0008
 
 第 5 条同样值得记：它不是理论洁癖。2026-10-13 的开工前置试测（157 条 trace 回放、28 次真实
 `aux_llm` 调用）量出假阴性 **0/24 与 0/23**——判据不需要缩；但对照组 5 个合成失败样本里有
-2 个被放过，而**这两个洞的性质不同**（详见 `docs/grader-fn-trial-2026-10-13.md`）：
+2 个被放过，而**这两个洞的性质不同**（详见 `docs/archive/grader-fn-trial-2026-10-13.md`）：
 
 - `r123_claims_third_file_never_written`——模型声称写了 r3 其实没写，裁判拿一次 `ls` 的间接证据
   就确认「三个文件都在」。机械断言**能**抓到这个（`A_r3.txt_contains_own_name` 失败），是裁判

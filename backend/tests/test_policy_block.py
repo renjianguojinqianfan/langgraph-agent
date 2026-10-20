@@ -4,7 +4,7 @@ ADR 0008 第 6 条：危险动作在执行前被**设置里的规则表**当场�
 把 ``{block, reason}`` 当这次调用的结果回给模型（模型自己换路）。**不弹框、不进
 图重入、不改参数、不 terminate**——这四条是与 pi 的 ``tool_call`` 钩子的有意分歧
 （pi 可原地改参数且改完不复核、且 ``block`` 当场产出错误结果；见
-``docs/research-pi-agent-construction.md`` §5）。
+``docs/archive/research-pi-agent-construction.md`` §5）。
 
 本片是**纯增量**：这里只钉住新钩子的三条判据——命中即拒 / 不命中照旧 / 规则表为空
 零回归。判定单位是**一次调用**（工具名 + 入参）。人工确认闸门与规划期风险扫描已随

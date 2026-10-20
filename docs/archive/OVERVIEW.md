@@ -264,7 +264,7 @@ LLM_API_KEY="$DASHSCOPE_API_KEY" .venv311/Scripts/python.exe scripts/live_e2e.py
 显式采用 `durability="sync"`、`checkpoint-sqlite` 升到 3.1.1 闭环两条 CVE、旧 checkpoint 快照声明作废
 并有启动检测；随后把 **ruff + mypy 质量门禁入库并进 CI**、README 重写为叙事型。离线基线
 **351 → 365 全绿**，真实模型双场景 PASS。迁移的每一步都有实测依据，全部记在
-[`docs/migration-langgraph-1x.md`](docs/migration-langgraph-1x.md)。
+[`docs/migration-langgraph-1x.md`](../migration-langgraph-1x.md)。
 
 ## 交付状态
 - **Phase 0 + Phase 1**：2026-09-11 合入 master（PR #8，merge commit `849f81e`，11 个分阶段 commit

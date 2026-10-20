@@ -1,7 +1,7 @@
 # PawBench 驱动的能力补足路线图
 
 > 🗄️ **已归档（2026-10-17，S6 / #140）**：PawBench / 无人值守评测入口已随 ADR 0008 / S1 退役；
-> 本文保留为历史路线图，不再维护。现役形态见 [README](../README.md) / [ADR 0008](adr/0008-single-loop-plan-build-modes.md)。
+> 本文保留为历史路线图，不再维护。现役形态见 [README](../../README.md) / [ADR 0008](../adr/0008-single-loop-plan-build-modes.md)。
 
 > 生成于 2026-09-13。本文是本仓库后续能力补足的执行路线：
 > 以第一性原理（[`capability-first-principles.md`](capability-first-principles.md)）定需求，
@@ -27,7 +27,7 @@
 反面教训（Goodhart 定律）：为 26 道多模态题补一套视觉管线是应试；
 护城河能力（checkpoint/resume 语义、确认闸门、熔断）PawBench 一分不测，
 它们的验收走 444 测试 + live 双场景，不走评测分。
-（护城河纪律的决策级冻结见 [ADR-0002](adr/0002-moat-discipline-no-attention-reallocation.md)）
+（护城河纪律的决策级冻结见 [ADR-0002](../adr/0002-moat-discipline-no-attention-reallocation.md)）
 瀑布式「先做好再评测」同样不成立——没有外部锚点的「好」会无限漂移。
 
 ---

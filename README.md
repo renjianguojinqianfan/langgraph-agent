@@ -103,10 +103,10 @@ CI 跑后端 lint / 类型 / 测试、前端类型 / 构建。发布前 / 换供
 
 - 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）；[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)（当前一章：最简 agent）
 - 架构（v0.1 历史档；§5 共享约定仍现役）：[docs/architecture.md](docs/architecture.md)；拓扑以 [graph.py](backend/core/agent/graph.py) 为准
-- 切片历史：[docs/pivot-plan-build.md](docs/pivot-plan-build.md)
+- 切片历史：[docs/archive/pivot-plan-build.md](docs/archive/pivot-plan-build.md)
 - 迁移：[docs/migration-langgraph-1x.md](docs/migration-langgraph-1x.md)
 - 配置：[.env.example](.env.example)；工程约定：[AGENTS.md](AGENTS.md)；术语：[GLOSSARY.md](GLOSSARY.md)
-- 历史：[OVERVIEW.md](OVERVIEW.md)（交付日志）
+- 历史：[docs/archive/OVERVIEW.md](docs/archive/OVERVIEW.md)（交付日志）
 
 ## License
 
