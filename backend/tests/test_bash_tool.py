@@ -158,16 +158,68 @@ def test_background_mechanism_is_platform_specific():
         assert _make_job() is None
 
 
-def test_pump_threads_exit_after_return(settings):
+def test_background_child_survives_writing_to_inherited_pipes(settings):
+    """The returned call must not close pipes a background child still owns."""
+    out_marker = settings.artifacts_path / "late_stdout.txt"
+    err_marker = settings.artifacts_path / "late_stderr.txt"
+    tool = BashTool(settings)
+
+    res = tool.run(
+        command=(
+            "(sleep 1; echo late-out; echo out-ok > '{out}'; "
+            "echo late-err >&2; echo err-ok > '{err}') & echo started"
+        ).format(out=out_marker.as_posix(), err=err_marker.as_posix()),
+        timeout=30,
+    )
+    assert res.success is True, res.error
+    assert res.data["stdout"].strip() == "started"
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not (out_marker.exists() and err_marker.exists()):
+        time.sleep(0.05)
+    assert out_marker.exists(), "background child died writing to the returned call's stdout"
+    assert err_marker.exists(), "background child died writing to the returned call's stderr"
+
+
+def test_background_child_with_redirected_output_survives(settings):
+    """Control: a child that never writes to the inherited pipes was fine before."""
+    marker = settings.artifacts_path / "redirected_survived.txt"
+    tool = BashTool(settings)
+
+    res = tool.run(
+        command=(
+            f"(sleep 1; echo late > bg.log; echo survived > '{marker.as_posix()}') & echo started"
+        ),
+        timeout=30,
+    )
+    assert res.success is True, res.error
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.05)
+    assert marker.exists(), "a redirected background child did not survive the return"
+
+
+def test_background_pumps_exit_after_the_tree_is_reaped(settings):
+    """While the child lives its pumps drain; a stop closes them and they exit."""
     tool = BashTool(settings)
     flag = threading.Event()
     tool.stop_checker = flag.is_set
-    res = tool.run(command="sleep 5 & echo started", timeout=30)
-    assert res.success is True, res.error
+    try:
+        res = tool.run(command="sleep 5 & echo started", timeout=30)
+        assert res.success is True, res.error
 
-    pumps = [t for t in threading.enumerate() if t.name.startswith("bash-pump")]
-    assert pumps == []
-    flag.set()
+        pumps = [t for t in threading.enumerate() if t.name.startswith("bash-pump")]
+        assert pumps, "the returned call dropped the background pumps (its pipes would break)"
+    finally:
+        flag.set()
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if not any(t.name.startswith("bash-pump") for t in threading.enumerate()):
+            break
+        time.sleep(0.05)
+    assert not [t for t in threading.enumerate() if t.name.startswith("bash-pump")]
 
 
 def test_stop_after_return_kills_the_background_process(settings):

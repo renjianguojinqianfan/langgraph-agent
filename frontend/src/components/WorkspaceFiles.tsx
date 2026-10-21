@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fileDownloadUrl, listFiles, previewFile } from "../api/client";
 import { TaskStatus, WorkspaceFile } from "../types";
 
@@ -21,6 +21,13 @@ export function WorkspaceFiles({
   const [selected, setSelected] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ content: string; truncated: boolean } | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const requestSeq = useRef(0);
+  const taskIdRef = useRef(taskId);
+
+  useEffect(() => {
+    taskIdRef.current = taskId;
+    requestSeq.current += 1;
+  }, [taskId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,9 +64,12 @@ export function WorkspaceFiles({
 
   const open = async (path: string) => {
     if (!taskId) return;
+    const seq = ++requestSeq.current;
+    const requestedTask = taskId;
     setNote(null);
     try {
-      const r = await previewFile(taskId, path);
+      const r = await previewFile(requestedTask, path);
+      if (requestedTask !== taskIdRef.current || seq !== requestSeq.current) return;
       if (r.data) {
         setSelected(path);
         setPreview({ content: r.data.content, truncated: r.data.truncated });
@@ -67,6 +77,7 @@ export function WorkspaceFiles({
         setNote("无法预览这个文件（二进制或不可读），可以直接下载。");
       }
     } catch {
+      if (requestedTask !== taskIdRef.current || seq !== requestSeq.current) return;
       setNote("无法预览这个文件（二进制或不可读），可以直接下载。");
     }
   };

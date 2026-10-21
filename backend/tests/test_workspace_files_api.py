@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -73,6 +74,54 @@ def test_list_skips_gitignored_files(tmp_path):
         assert "node_modules/x.js" not in paths
     finally:
         client.__exit__(None, None, None)
+
+
+def _dir_link(link, target) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                "cannot create a junction: "
+                + result.stderr.decode("mbcs", errors="replace").strip()
+            )
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def test_list_does_not_escape_through_a_directory_link(workspace, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    _dir_link(workspace / "escape", outside)
+    client, task_id = _client(tmp_path, workspace)
+    try:
+        paths = {
+            entry["path"]
+            for entry in client.get(f"/api/tasks/{task_id}/files").json()["data"]["files"]
+        }
+    finally:
+        client.__exit__(None, None, None)
+
+    assert not any(path.startswith("escape/") for path in paths)
+    assert {"a.txt", "sub/b.txt"} <= paths
+
+
+def test_list_does_not_loop_on_a_directory_link_cycle(workspace, tmp_path):
+    _dir_link(workspace / "sub" / "loop", workspace)
+    client, task_id = _client(tmp_path, workspace)
+    try:
+        paths = {
+            entry["path"]
+            for entry in client.get(f"/api/tasks/{task_id}/files").json()["data"]["files"]
+        }
+    finally:
+        client.__exit__(None, None, None)
+
+    assert "a.txt" in paths
+    assert not any(path.startswith("sub/loop/") for path in paths)
 
 
 def test_preview_text_and_truncation(workspace, tmp_path):

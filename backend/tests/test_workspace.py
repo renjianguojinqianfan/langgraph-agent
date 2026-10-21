@@ -236,6 +236,30 @@ def test_send_message_to_a_deleted_workspace_returns_409(tmp_path):
         client.__exit__(None, None, None)
 
 
+def test_first_run_does_not_recreate_a_deleted_workspace(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    workspace = tmp_path / "first-run-gone"
+    workspace.mkdir()
+    mock = MockLLMClient(
+        tool_calls=[
+            {"id": "w", "name": "write", "arguments": {"path": "probe.txt", "content": "x"}}
+        ],
+        final_answer="done",
+    )
+    tm = make_manager(settings, mock)
+    monkeypatch.setattr(tm, "_start_run", lambda task_id: None)
+    task_id = tm.create_task("gone", "write a file", workspace=str(workspace))
+    shutil.rmtree(workspace)
+
+    tm.run(task_id)
+
+    task = tm.get_task(task_id)
+    assert task is not None
+    assert task.status.value == "FAILED"
+    assert "workspace" in (task.error or "")
+    assert not workspace.exists(), "the first run recreated the deleted task workspace"
+
+
 def test_injection_is_built_from_the_runtime_workspace(tmp_path):
     """The runtime seats the workspace before AgentRuntime builds the block."""
     settings = make_settings(tmp_path, context_inject_enabled=True)

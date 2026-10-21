@@ -551,6 +551,9 @@ class TaskManager:
         self.persistence.save_task(task)
 
         try:
+            # The directory may have disappeared while the task was queued.
+            # Fail before any file tool can recreate its root.
+            self._require_workspace(task)
             seeded = self._seed_plan(task)
             state: AgentState = {
                 "task_id": task_id,
