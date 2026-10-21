@@ -556,6 +556,9 @@ class TaskManager:
         self._active_states[task_id] = state
 
         try:
+            # The directory may have disappeared while the task was queued.
+            # Fail before any file tool can recreate its root.
+            self._require_workspace(task)
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,

@@ -78,18 +78,31 @@ def read_lock(path: Path) -> Optional[ServerLock]:
 
 
 def claim_lock(path: Path, lock: ServerLock) -> bool:
-    """Create the record atomically; False when another launcher owns it."""
+    """Publish a complete record atomically; False when another launcher owns it.
+
+    The record is written and fsynced under a sibling temp name, then hard
+    linked into place. Readers therefore never see an empty/partial lock, and
+    only one of two concurrent claimers can win the link.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        return False
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(lock.to_dict(), handle)
-        handle.flush()
-        os.fsync(handle.fileno())
-    return True
+        fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(lock.to_dict(), handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temp, path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def release_lock(path: Path, instance: str) -> None:
