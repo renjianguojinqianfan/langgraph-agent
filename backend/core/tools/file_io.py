@@ -217,7 +217,7 @@ class ReadTool(_SandboxedTool):
 @register
 class WriteTool(_SandboxedTool):
     name = "write"
-    registers_artifact = True  # the file it writes is a product of the task (#72)
+    registers_artifact = True  # a write counts as a subtask product (#72)
     description = (
         "Write a text file inside the sandbox, creating parent directories and "
         "overwriting an existing file. Prefer this for new files; use `edit` "
@@ -269,7 +269,7 @@ class WriteTool(_SandboxedTool):
 @register
 class EditTool(_SandboxedTool):
     name = "edit"
-    registers_artifact = True  # the file it rewrites is a product of the task (#72)
+    registers_artifact = True  # an edit counts as a subtask product (#72)
     description = (
         "Replace an exact string in a sandbox file. `old_string` must match the "
         "file verbatim (including whitespace/indentation) and be unique unless "
