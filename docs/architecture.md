@@ -317,7 +317,9 @@ classDiagram
 > 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、
 > `GET /mcp/servers`（P2）；S5（#139）新增 `PUT /tasks/{id}/mode`、
 > `PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`；C5 新增
-> `GET /tasks/{id}/files{,/preview,/download}`。
+> `GET /tasks/{id}/files{,/preview,/download}`；M1 新增 `PUT /tasks/{id}/model` 与
+> `/models*` 七条（`GET/POST /models`、`PUT/DELETE /models/{id}`、
+> `POST /models/{id}/default`、`PUT /models/{id}/key`、`POST /models/{id}/test`）。
 > `/health` 另在 `backend/main.py`。下表其余契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`

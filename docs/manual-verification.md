@@ -50,16 +50,18 @@
 | # | 日期 | 配置 / 模型 | 结果 | 证据 |
 |---|---|---|---|---|
 | 1 | 2026-10-21 | 默认（deepseek-v4.1-flash） | 通过：`write:success` + `bash(git init && git status):success` | `scenario1.png` / `scenario1.json`，任务 `b9b3f2ee` |
-| 2 | 2026-10-21 | 默认 | 通过：计划 v1 → 人工改成 v3；`EDITED-BY-HUMAN` 被执行，`.qianfan/` 不进 `git status` | `scenario2.png` / `scenario2.json`，任务 `d771829c` |
+| 2 | 2026-10-21 | 默认 | 通过：计划 v1 → 人工改成 v3；`edited-by-human` 被执行，`.qianfan/` 不进 `git status` | `scenario2.png` / `scenario2.json`，任务 `d771829c` |
 | 3 | 2026-10-21 | 默认 | 通过：`sleep 30` 中途停止（`bash:failed`），同一任务续说后创建 `stop-continued.txt` | `scenario3-stopped.png` / `scenario3.png` / `scenario3.json`，任务 `3353c791` |
 | 4 | 2026-10-21 | 默认 | 通过：`policy_rules` 命中 `rm -rf` → `skipped` + 理由；canary 目录未删；模型改写成 `policy-blocked-ok.txt` | `scenario4.png` / `scenario4.json`，任务 `63481ed3` |
 | 5 | 2026-10-21 | 默认 | 通过：`bash-made.txt` 出现在工作区文件列表（20 字节） | `scenario5.png` / `scenario5.json`，任务 `2cf1218d` |
-| 6 | 2026-10-21 | 默认 | 通过：A/B 各自列表；B 第二次启动交接同一后台；从「全部」续 A 任务，`a-continued.txt` 落在 A 而非 B | `scenario6.png` / `scenario6.json` / `scenario6-handoff.txt`，任务 `2cf1218d` / `d7c3a8d0` |
-| 7 | 2026-10-21 | 默认 | 通过：重启后 10 条历史仍在；停下任务可续说（`after-restart.txt`）；RUNNING 孤儿重启后转 INTERRUPTED，悬空调用被清扫后从断点续跑（`kill-resume.txt`） | `scenario7.png` / `scenario7.json`，任务 `8ca45bc4` / `2cf1218d` |
-| 8 | 2026-10-21 | 默认 | 通过：后台命令立即返回（`C7BG2-1982`），心跳文件在停止后不再增长；前景 `sleep 600` 被 `task stop requested` 终止 | `scenario8.png` / `scenario8.json`，任务 `b55af32a` |
+| 6 | 2026-10-21 | 默认 | 通过：A/B 各自列表；B 第二次启动交接同一后台；从「全部」续 A 任务，`a-continued.txt` 落在 A 而非 B。交接步骤 2026-10-22 在 #180 F1 修复后复跑 | `scenario6.png` / `scenario6.json` / `scenario6-handoff.txt`，任务 `2cf1218d` / `d7c3a8d0`；复跑 `docs/assets/verification/2026-10-22/scenario6-handoff.json` |
+| 7 | 2026-10-21 | 默认 | 通过：重启后 12 条历史仍在；停下任务可续说（`after-restart.txt`）；RUNNING 孤儿重启后转 INTERRUPTED，悬空调用被清扫后从断点续跑（`kill-resume.txt`） | `scenario7.png` / `scenario7.json`，任务 `8ca45bc4` / `2cf1218d` |
+| 8 | 2026-10-21 | 默认 | 部分：后台命令立即返回（`C7BG2-1982`），心跳文件在停止后不再增长；前景 `sleep 600` 被 `task stop requested` 终止。未记录 PID，进程树停止以心跳停止为证 | `scenario8.png` / `scenario8.json`，任务 `b55af32a` |
 | 9 | 2026-10-21 | 默认 + qwen3.8-flash | 通过：MCP `echo:hello-c7-mcp`；Exa 搜索返回 `langgraph==1.2.0`；子代理 `read-notes` completed；中途切换 trace 记录 `default → 2556f5d79830`，第 4 步起用 qwen3.8-flash | `scenario9.png` / `scenario9.json`，任务 `7f8204d1` |
 
 > 证据根：`docs/assets/verification/2026-10-21/`；JSON 只留任务/步骤/工具状态与脱敏摘录，不含 Key 与完整对话。
 > 场景 6 的 A/B 路径按后端记录的绝对路径核对（Windows 反斜杠），写入位置以文件系统实际落点为准。
 > 场景 9 的搜索使用 `SEARCH_PROVIDER=exa`（本机 DuckDuckGo 不可达，见 S2 #175）。
 > 场景 3 / 8 的「停止」在续说轮点击网页端按钮：首次运行期间 SSE 回放会把头部状态显示成「等待中」，停止按钮不可见（已记录为待修项，不在本轮 diff）。
+> 场景 6 的交接步骤在 2026-10-22（#180 F1 修复后）用真实 CLI 复跑：第二进程在退出前同步调用浏览器，URL 落在 `docs/assets/verification/2026-10-22/scenario6-handoff.json`。
+> 场景 8 原命令只回显随机标记而非 PID；时间戳与心跳数据在 JSON 里，表格如实记为「部分」。

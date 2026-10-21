@@ -3,8 +3,8 @@
 ``<workspace>/.qianfan/plans/<task_id>.md`` is the only source of truth. A
 ``.qianfan/.gitignore`` containing ``*`` keeps the directory out of the user's
 ``git status``. The model writes the plan in plan mode; the system stores it.
-Execution gets it as exactly one message in the conversation, refreshed from
-the file whenever it changes (including external edits and model writes).
+Execution gets it as exactly one message in the conversation, checked at round
+start and after compression (G-34); a mid-round edit takes effect next round.
 """
 
 from __future__ import annotations

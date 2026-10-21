@@ -64,5 +64,19 @@
     "canary_keep.txt content": "keep",
     "policy-blocked-ok.txt content": "ok"
   },
-  "notes": "policy_rules（bash / rm[ ]+-rf）在启动时经环境变量注入；命中后调用 skipped，模型改用写文件完成。"
+  "notes": "policy_rules（bash / rm[ ]+-rf）在启动时经环境变量注入；命中后调用 skipped，模型改用写文件完成。",
+  "blocked_call": {
+    "tool": "bash",
+    "status": "skipped",
+    "error": "destructive shell command",
+    "input": {
+      "command": "rm -rf canary; echo \"exit=$?\""
+    },
+    "trace_ts": "2026-10-21T04:53:42.041000+00:00"
+  },
+  "model_facing_reply": {
+    "block": true,
+    "reason": "destructive shell command"
+  },
+  "model_facing_reply_source": "backend/core/agent/nodes.py::_feed_blocked（与 trace 里 skipped 调用的 error 同源）"
 }

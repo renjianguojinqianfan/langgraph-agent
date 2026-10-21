@@ -157,6 +157,46 @@ def test_task_model_switch_applies_to_the_next_round(tmp_path):
     assert events[-1]["data"].get("model_profile") == default_id
 
 
+def test_compression_event_and_trace_record_the_round_model(tmp_path):
+    settings = make_settings(
+        tmp_path,
+        use_mock_llm=False,
+        trace_enabled=True,
+        checkpoint_enabled=True,
+        context_token_budget=1,
+        context_keep_recent=1,
+    )
+    tm = make_manager(
+        settings, None, llm_factory=lambda profile, key: _FakeClient(profile, key)
+    )
+    default_id = tm.models.default_id
+    task_id = tm.create_task("m", "a" * 2000)
+    _wait(tm, task_id)
+    tm.send_message(task_id, "x" * 2000)
+    _wait(tm, task_id)
+
+    compressed = [
+        e for e in tm.event_bus.replay(task_id) if e["type"] == "context_compressed"
+    ]
+    assert compressed
+    assert compressed[-1]["data"]["model_profile"] == default_id
+    assert compressed[-1]["data"]["model"]
+
+    lines = [
+        json.loads(line)
+        for line in (settings.trace_path / f"{task_id}.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    step_starts = [e for e in lines if e["type"] == "step_start"]
+    assert step_starts
+    assert step_starts[-1]["data"]["model_profile"] == default_id
+    assert step_starts[-1]["data"]["model"]
+    traced = [e for e in lines if e["type"] == "context_compressed"]
+    assert traced
+    assert traced[-1]["data"]["model_profile"] == default_id
+
+
 def test_subagent_uses_the_parent_round_model(tmp_path):
     settings = make_settings(tmp_path, use_mock_llm=False)
     made = []
@@ -427,6 +467,35 @@ def test_tool_output_echoing_a_key_is_redacted(tmp_path, monkeypatch):
     assert tm.redact(SENTINEL) == "[redacted]"
 
 
+def test_tool_args_and_final_answer_are_redacted(tmp_path, monkeypatch):
+    """The model can print a key into its args or its answer; neither ships."""
+    monkeypatch.setenv("LLM_API_KEY", SENTINEL)
+    settings = make_settings(tmp_path, use_mock_llm=False, trace_enabled=True)
+    script = MockLLMClient(
+        tool_calls=[{"id": "c1", "name": "bash", "arguments": {"command": f"echo {SENTINEL}"}}],
+        final_answer=f"the key is {SENTINEL}",
+    )
+    tm = make_manager(settings, script)
+    task_id = tm.create_task("t", "run echo")
+    task = _wait(tm, task_id)
+
+    trace = (settings.trace_path / f"{task_id}.jsonl").read_text(encoding="utf-8")
+    events = json.dumps(tm.event_bus.replay(task_id), ensure_ascii=False)
+    dump = json.dumps(task.model_dump(), ensure_ascii=False)
+    assert SENTINEL not in dump
+    assert SENTINEL not in trace
+    assert SENTINEL not in events
+    # Dispatch still used the raw argument: the command ran and its echo was
+    # redacted on the way back into the record.
+    outputs = [
+        tc.output
+        for step in task.steps
+        for tc in step.tool_calls
+        if tc.tool_name == "bash"
+    ]
+    assert outputs and "[redacted]" in json.dumps(outputs, ensure_ascii=False)
+
+
 def _client(tmp_path, monkeypatch):
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))
@@ -465,6 +534,38 @@ def test_models_api_never_returns_the_key(tmp_path):
         tested = client.post(f"/api/models/{model_id}/test")
         assert tested.status_code == 200
         assert SENTINEL not in tested.text
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_model_profile_update_and_delete_endpoints(tmp_path):
+    client, tm = _client(tmp_path, None)
+    try:
+        created = client.post(
+            "/api/models",
+            json={"name": "Temp", "base_url": "https://example.test/v1", "model": "m1"},
+        )
+        assert created.status_code == 200
+        model_id = created.json()["data"]["id"]
+
+        updated = client.put(
+            f"/api/models/{model_id}", json={"name": "Renamed", "model": "m2"}
+        )
+        assert updated.status_code == 200
+        entry = next(
+            m
+            for m in client.get("/api/models").json()["data"]["models"]
+            if m["id"] == model_id
+        )
+        assert entry["name"] == "Renamed"
+        assert entry["model"] == "m2"
+
+        removed = client.delete(f"/api/models/{model_id}")
+        assert removed.status_code == 200
+        assert all(
+            m["id"] != model_id
+            for m in client.get("/api/models").json()["data"]["models"]
+        )
     finally:
         client.__exit__(None, None, None)
 

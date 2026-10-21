@@ -56,5 +56,12 @@
       2220
     ]
   },
-  "notes": "后台循环每秒追加 bg-heartbeat.txt；停止前后 4 秒内文件大小不再增长，前景 sleep 600 也被停止。"
+  "notes": "后台循环每秒追加 bg-heartbeat.txt；停止前后 4 秒内文件大小不再增长，前景 sleep 600 也被停止。",
+  "timestamps": {
+    "background_call_returned": "2026-10-21T05:00:00.886000+00:00",
+    "foreground_stop_requested": "2026-10-21T05:02:00.084000+00:00",
+    "foreground_call_failed": "2026-10-21T05:02:00.221000+00:00"
+  },
+  "pid": null,
+  "pid_note": "命令只回显随机标记 C7BG2-1982，未记录 PID；后台进程树停止以 bg-heartbeat.txt 停止增长为证。"
 }

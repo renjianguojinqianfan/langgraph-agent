@@ -71,6 +71,34 @@ def _is_tool_markup_only(text: str) -> bool:
     return bool(_TOOL_MARKUP_ONLY.fullmatch(text or ""))
 
 
+#: The one gray line G-34 allows when the plan version moves.
+_PLAN_NOTE_PREFIX = "计划已更新到"
+
+
+def _plan_note_text(version: int) -> str:
+    return f"{_PLAN_NOTE_PREFIX}第 {version} 版。"
+
+
+def _is_plan_note(message: Dict[str, Any]) -> bool:
+    return message.get("role") == "assistant" and str(
+        message.get("content") or ""
+    ).startswith(_PLAN_NOTE_PREFIX)
+
+
+def _drop_plan_notes(messages: List[Dict[str, Any]]) -> None:
+    messages[:] = [m for m in messages if not _is_plan_note(m)]
+
+
+def _ensure_plan_note(messages: List[Dict[str, Any]], version: int) -> None:
+    """Keep exactly one gray note, carrying the current version."""
+    expected = _plan_note_text(version)
+    notes = [m for m in messages if _is_plan_note(m)]
+    if len(notes) == 1 and str(notes[0].get("content") or "") == expected:
+        return
+    _drop_plan_notes(messages)
+    messages.append({"role": "assistant", "content": expected})
+
+
 class AgentRuntime:
     """Per-task runtime that backs the LangGraph nodes."""
 
@@ -144,16 +172,17 @@ class AgentRuntime:
     def _build_messages(self, state: AgentState, system: str) -> List[Dict[str, Any]]:
         """Build the message list sent to the LLM, compressing history first.
 
-        Compression happens exactly here (both modes) so every LLM call sees an
-        up-to-date, bounded context. Under the budget the messages are returned
-        untouched. The P1-A′ injection block rides on the *system* message and
-        is deliberately outside the compression budget.
+        Compression happens exactly here (both modes) so every LLM call sees a
+        bounded context; eviction and compression may rewrite the history even
+        when nothing is over budget. The P1-A′ injection block rides on the
+        *system* message and is deliberately outside the compression budget.
 
-        The plan file is read after compression and enters the conversation as
-        one message at the end (C6): a changed file (external edit, model write,
-        or deletion) is reflected on the very next call, and there is never more
-        than one plan message. The message is outside the compression input, so
-        eviction cannot drop it.
+        The plan file is checked only at the two moments G-34 allows: the first
+        call of a round (``round_steps == 1``) and immediately after compression.
+        A mid-round edit therefore takes effect on the next round, never on the
+        next call. The plan enters the conversation as one message at the end
+        (C6) and is outside the compression input, so compression cannot drop
+        it; when the version changes, exactly one gray note records it.
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
         # The previous call's injected plan is stale input for eviction,
@@ -221,14 +250,25 @@ class AgentRuntime:
                 )
             except Exception:  # pragma: no cover - event is optional
                 logger.warning("failed to publish context_compressed event", exc_info=True)
-        workspace = workspace_root(settings)
-        plan_text = plan_file.read_plan(workspace, self.task_id)
-        digest = plan_file.plan_hash(plan_text)
-        if digest != state.get("plan_hash", ""):
-            state["plan_hash"] = digest
+        # G-34: the file is checked only when a round starts (the manager has
+        # already seeded state from it) and after compression. Every other call
+        # sends the version the round started with.
+        refresh_plan = state.get("round_steps", 0) <= 1 or meta["compressed"]
+        if refresh_plan:
+            workspace = workspace_root(settings)
+            plan_text = plan_file.read_plan(workspace, self.task_id)
+            digest = plan_file.plan_hash(plan_text)
+            if digest != state.get("plan_hash", ""):
+                state["plan_hash"] = digest
+                if plan_text.strip():
+                    state["plan_version"] = int(state.get("plan_version", 0)) + 1
+            state["plan_text"] = plan_text
             if plan_text.strip():
-                state["plan_version"] = int(state.get("plan_version", 0)) + 1
-        state["plan_text"] = plan_text
+                _ensure_plan_note(compressed, int(state.get("plan_version", 0)))
+            else:
+                _drop_plan_notes(compressed)
+        else:
+            plan_text = str(state.get("plan_text", ""))
         plan_file.sync_plan_message(compressed, plan_text)
         state["messages"] = compressed
         return [{"role": "system", "content": system + self._inject_block}, *compressed]
@@ -237,6 +277,10 @@ class AgentRuntime:
         """Strip known keys before an error reaches state / SSE / trace."""
         redact = getattr(getattr(self, "tm", None), "redact", None)
         return redact(text) if callable(redact) else text
+
+    def _public_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+        """A copy safe for SSE / trace: the args are redacted, dispatch is not."""
+        return {**rec, "input": self._redact_value(rec.get("input"))}
 
     def _redact_value(self, value: Any) -> Any:
         """Recursively redact strings inside a tool result payload."""
@@ -317,6 +361,7 @@ class AgentRuntime:
             return self._handle_tool_calls(state, step, resp)
 
         plan_text = extract_plan(resp.content)
+        updated = False
         if plan_text:
             workspace = workspace_root(self.tm.settings)
             try:
@@ -328,7 +373,8 @@ class AgentRuntime:
                 state["plan_text"] = plan_text
                 state["plan_hash"] = plan_hash(plan_text)
                 state["plan_version"] = int(state.get("plan_version", 0)) + 1
-                answer = f"计划已更新到第 {state['plan_version']} 版。"
+                answer = _plan_note_text(state["plan_version"])
+                updated = True
         elif _is_tool_markup_only(resp.content):
             # Never persist provider protocol leakage as a conversation turn.
             answer = "(no content)"
@@ -336,6 +382,7 @@ class AgentRuntime:
             # Not a plan: keep the previous plan and surface what the model
             # actually said (e.g. a question) instead of inventing a step.
             answer = (resp.content or "").strip() or "(no content)"
+        answer = self._redact(answer)
         state["final_answer"] = answer
         assistant_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         # Issue #45: thinking-mode providers require the trace back on the next
@@ -343,15 +390,10 @@ class AgentRuntime:
         if resp.reasoning_content:
             assistant_turn["reasoning_content"] = resp.reasoning_content
         messages = state.setdefault("messages", [])
-        # One gray "plan updated" line: replace the previous one.
-        messages[:] = [
-            m
-            for m in messages
-            if not (
-                m.get("role") == "assistant"
-                and str(m.get("content") or "").startswith("计划已更新到")
-            )
-        ]
+        if updated:
+            # One gray "plan updated" line: replace the previous one. A
+            # non-plan reply (e.g. a clarifying question) leaves it alone.
+            _drop_plan_notes(messages)
         messages.append(assistant_turn)
         step["thought"] = answer
         self._publish("final_answer", {"answer": answer})
@@ -394,7 +436,7 @@ class AgentRuntime:
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
-        answer = resp.content or "(no content)"
+        answer = self._redact(resp.content or "(no content)")
         state["final_answer"] = answer
         final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn
@@ -435,6 +477,9 @@ class AgentRuntime:
                 "status": "skipped" if block_reason is not None else "pending",
                 "error": block_reason or "",
             }
+            if block_reason is not None:
+                # Never dispatched: the args can be redacted here and persist.
+                rec["input"] = self._redact_value(args)
             tcs.append(rec)
 
         state["_current_tool_calls"] = tcs
@@ -461,7 +506,7 @@ class AgentRuntime:
         state.setdefault("messages", []).append(assistant_turn)
         for rec in tcs:
             step["tool_calls"].append(rec)
-            self._publish("tool_call", rec)
+            self._publish("tool_call", self._public_record(rec))
             if rec["status"] == "skipped":
                 # S2 (#136): a policy refusal is delivered here, at the point of
                 # decision, and never handed to the tool node.
@@ -557,6 +602,7 @@ class AgentRuntime:
                     )
                 else:
                     rec["error"] = f"unknown tool: {rec['tool_name']}"
+                rec["input"] = self._redact_value(rec.get("input"))
                 self._publish("tool_result", rec)
                 self._feed_tool_failure(state, rec)
                 continue
@@ -568,6 +614,9 @@ class AgentRuntime:
                 logger.error("tool %s crashed: %s", rec["tool_name"], message)
                 result = ToolResult(success=False, error=message)
 
+            # Dispatch used the raw args; the record (SSE / trace / steps) keeps
+            # only the redacted copy.
+            rec["input"] = self._redact_value(rec.get("input"))
             rec["status"] = "success" if result.success else "failed"
             rec["output"] = self._redact_value(result.data)
             rec["error"] = self._redact(result.error or "")
