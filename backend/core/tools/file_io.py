@@ -23,6 +23,7 @@ module is still named after it.
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from functools import lru_cache
 from pathlib import Path, PurePath
@@ -68,6 +69,8 @@ def _matches_glob(rel: Path, pattern: str) -> bool:
     compared with ``fnmatch`` and ``**`` spans zero or more segments, so
     ``sub/**/*.py`` and ``src*/**/*.py`` behave like ``Path.glob``.
     """
+    if os.name == "nt":
+        pattern = pattern.replace("\\", "/")
     if pattern == "**":
         return True
     if "/" not in pattern:
