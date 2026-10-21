@@ -1,0 +1,66 @@
+{
+  "scenario": 1,
+  "date": "2026-10-21",
+  "result": "通过",
+  "task_id": "b9b3f2ee94354eeea5eae8e799a9e72d",
+  "status": "INTERRUPTED",
+  "mode": "build",
+  "model": "default",
+  "plan_version": 0,
+  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "steps": [
+    {
+      "index": 1,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "pwd && ls -la"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"/e/qianfan-c7-20261021/A\\ntotal 0\\ndrwxr-xr-x 1 DELL 197121 0 Oct 21 12:43 .\\ndrwxr-xr-x 1 DELL 197121 0 Oct 21 12:43 ..\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "tools": [
+        {
+          "name": "write",
+          "status": "success",
+          "input": {
+            "path": "hello.txt",
+            "content": "qianfan-scenario-1"
+          },
+          "error": null,
+          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\hello.txt\", \"size\": 18}"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "git init && git status"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"Initialized empty Git repository in E:/qianfan-c7-20261021/A/.git/\\nOn branch master\\n\\nNo commits yet\\n\\nUntracked files:\\n  (use \\\"git add <file>...\\\" to include in what will be committed)\\n\\thello.txt\\n\\nnothing added to commit but untracked files present (use \\\"git add\\\" to track)\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "tools": []
+    }
+  ],
+  "checks": {
+    "hello.txt exists": true,
+    "hello.txt content": "qianfan-scenario-1",
+    "write tool success": true,
+    "bash git status success": true
+  }
+}

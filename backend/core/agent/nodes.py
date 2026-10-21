@@ -156,7 +156,9 @@ class AgentRuntime:
         eviction cannot drop it.
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        messages = state.get("messages", []) or []
+        # The previous call's injected plan is stale input for eviction,
+        # compression and the summarizer; the current file is appended below.
+        messages = plan_file.strip_plan_messages(state.get("messages", []) or [])
         # Trace pointer shared by eviction and the in-band squeeze (#49), so both
         # write the same 留痕 contract.
         trace_ref = (
@@ -197,6 +199,7 @@ class AgentRuntime:
             trace_ref=trace_ref,
             head_chars=settings.context_evict_head_chars,
             tail_chars=settings.context_evict_tail_chars,
+            redact=self._redact,
         )
         state["context_tokens"] = meta["context_tokens"]
         if meta["compressed"]:
@@ -242,7 +245,12 @@ class AgentRuntime:
         if isinstance(value, list):
             return [self._redact_value(item) for item in value]
         if isinstance(value, dict):
-            return {key: self._redact_value(item) for key, item in value.items()}
+            # Keys can carry a key too; a collision overwrites one entry,
+            # which is safer than shipping the secret.
+            return {
+                self._redact(key if isinstance(key, str) else str(key)): self._redact_value(item)
+                for key, item in value.items()
+            }
         return value
 
     # ── nodes ──

@@ -30,7 +30,7 @@ never broken.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ...utils.logging import get_logger
 
@@ -365,6 +365,8 @@ def summarize_messages(
     llm: Any,
     messages: List[Dict[str, Any]],
     max_tokens: int = 300,
+    *,
+    redact: Optional[Callable[[str], str]] = None,
 ) -> str:
     """Ask ``llm`` to compress ``messages`` into a single summary string.
 
@@ -384,8 +386,9 @@ def summarize_messages(
         summary = (resp.content or "").strip()
         return summary or "[上下文摘要生成失败，已省略早期消息]"
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("summarize_messages failed: %s", exc)
-        return f"[上下文摘要失败({exc})，已省略早期消息]"
+        detail = redact(str(exc)) if redact is not None else str(exc)
+        logger.warning("summarize_messages failed: %s", detail)
+        return f"[上下文摘要失败({detail})，已省略早期消息]"
 
 
 def _droppable_count(messages: List[Dict[str, Any]], keep_recent: int) -> int:
@@ -427,6 +430,7 @@ def _summarize_candidate(
     keep_recent: int,
     llm: Any,
     summary_max_tokens: int,
+    redact: Optional[Callable[[str], str]] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """The ``summarize`` layout: one LLM summary block in place of the early history.
 
@@ -437,7 +441,9 @@ def _summarize_candidate(
     dropped = _droppable_count(messages, keep_recent)
     if not dropped:
         return messages, 0
-    summary = summarize_messages(llm, messages[:dropped], summary_max_tokens)
+    summary = summarize_messages(
+        llm, messages[:dropped], summary_max_tokens, redact=redact
+    )
     return [{"role": "system", "content": summary}, *messages[dropped:]], dropped
 
 
@@ -453,6 +459,7 @@ def compress_messages(
     trace_ref: str = "",
     head_chars: int = 800,
     tail_chars: int = 400,
+    redact: Optional[Callable[[str], str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Meta]:
     """Compress ``messages`` when they exceed the configured thresholds.
 
@@ -501,7 +508,9 @@ def compress_messages(
 
     if strategy == "summarize" and llm is not None:
         meta_base["strategy"] = "summarize"
-        candidate, dropped = _summarize_candidate(messages, keep_recent, llm, summary_max_tokens)
+        candidate, dropped = _summarize_candidate(
+            messages, keep_recent, llm, summary_max_tokens, redact=redact
+        )
     else:
         candidate, dropped = _truncate_candidate(messages, keep_recent)
 

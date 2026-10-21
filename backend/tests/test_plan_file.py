@@ -288,6 +288,127 @@ def test_model_write_to_the_plan_file_is_used_next_call(tmp_path):
     assert (workspace / ".qianfan" / ".gitignore").read_text(encoding="utf-8") == "*\n"
 
 
+def test_put_plan_requires_text(tmp_path):
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    task = _wait(tm, task_id)
+    workspace = Path(task.workspace)
+
+    client = TestClient(app, base_url="http://localhost")
+    client.__enter__()
+    getattr(client.app, "state").task_manager = tm
+    try:
+        r = client.put(f"/api/tasks/{task_id}/plan", json={})
+        assert r.status_code == 422
+        assert not plan_file.plan_path(workspace, task_id).exists()
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_build_mode_does_not_create_a_plan_file(tmp_path):
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="done"))
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    task = _wait(tm, task_id)
+
+    assert task.status.value == "INTERRUPTED"
+    assert task.plan_version == 0
+    assert not plan_file.plan_path(Path(task.workspace), task_id).exists()
+
+
+def test_non_utf8_plan_is_a_readable_conflict(tmp_path):
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    task = _wait(tm, task_id)
+    path = plan_file.plan_path(Path(task.workspace), task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes("# 计划\n".encode("gbk"))
+
+    client = TestClient(app, base_url="http://localhost")
+    client.__enter__()
+    getattr(client.app, "state").task_manager = tm
+    try:
+        got = client.get(f"/api/tasks/{task_id}/plan")
+        assert got.status_code == 409
+        assert "UTF-8" in got.json()["detail"]
+
+        sent = client.post(f"/api/tasks/{task_id}/messages", json={"input": "go"})
+        assert sent.status_code == 409
+        assert "UTF-8" in sent.json()["detail"]
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_non_utf8_plan_fails_the_run(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    monkeypatch.setattr(tm, "_start_run", lambda task_id: None)
+    task_id = tm.create_task("p", "hi", workspace=str(workspace))
+    path = plan_file.plan_path(workspace, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes("# 计划\n".encode("gbk"))
+
+    tm.run(task_id)
+
+    task = tm.get_task(task_id)
+    assert task is not None
+    assert task.status.value == "FAILED"
+    assert "UTF-8" in (task.error or "")
+
+
+def test_old_plan_never_reaches_the_summarizer(tmp_path):
+    settings = make_settings(
+        tmp_path,
+        context_token_budget=1,
+        context_keep_recent=1,
+        context_compress_strategy="summarize",
+    )
+    llm = _RecordingLLM(final_answer="summary")
+    tm = make_manager(settings, llm)
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    _wait(tm, task_id)
+    plan_file.write_plan(Path(settings.artifacts_path), task_id, "# Plan\n\n1. latest")
+
+    from backend.core.agent.nodes import AgentRuntime
+
+    runtime = AgentRuntime(task_id, tm, llm=llm, tools=[], tool_schemas=[])
+    state = {
+        "task_id": task_id,
+        "mode": "build",
+        "messages": [
+            {"role": "user", "content": plan_file.render_plan_message("# Plan\n\n1. stale")},
+            *[{"role": "user", "content": "x" * 2000} for _ in range(3)],
+            {"role": "assistant", "content": "y" * 2000},
+        ],
+        "plan_text": "",
+        "plan_version": 1,
+        "plan_hash": plan_file.plan_hash("# Plan\n\n1. stale"),
+        "steps": [],
+        "status": "RUNNING",
+        "stop_requested": False,
+        "step_index": 0,
+        "round_steps": 0,
+        "final_answer": "",
+        "error": "",
+        "_last_action": "",
+        "_current_tool_calls": [],
+        "subtasks": [],
+        "_is_subtask": False,
+    }
+    built = runtime._build_messages(state, "system")
+
+    assert llm.transcripts, "the summarizer never ran"
+    assert all("stale" not in str(m.get("content")) for m in llm.transcripts[0])
+    assert "stale" not in str(built)
+    plans = [m for m in built if plan_file.is_plan_message(m.get("content"))]
+    assert len(plans) == 1
+    assert "latest" in plans[0]["content"]
+
+
 def test_rest_plan_get_and_put(tmp_path):
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))

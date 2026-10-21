@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from functools import lru_cache
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -61,32 +62,30 @@ def _matches_glob(rel: Path, pattern: str) -> bool:
     """``Path.glob``-like matching over an already-enumerated file list.
 
     A pattern without a slash is anchored at the base directory (unlike
-    ``PurePath.match``, which matches suffixes); ``**/`` also matches the
-    zero-directory form, as ``glob`` does.
+    ``PurePath.match``, which matches suffixes). With a slash, each segment is
+    compared with ``fnmatch`` and ``**`` spans zero or more segments, so
+    ``sub/**/*.py`` and ``src*/**/*.py`` behave like ``Path.glob``.
     """
     if pattern == "**":
         return True
     if "/" not in pattern:
         return rel.parent == Path(".") and fnmatch.fnmatch(rel.name, pattern)
-    pure = PurePath(rel.as_posix())
-    if "**" not in pattern:
-        return len(pure.parts) == len(PurePath(pattern).parts) and pure.match(pattern)
-    static = pattern.split("**", 1)[0]
-    if static and not pure.as_posix().startswith(static):
-        return False
-    # Expand every `**/` into zero directories too (glob semantics), e.g.
-    # `sub/**/*.py` must match `sub/x.py`.
-    variants = {pattern}
-    changed = True
-    while changed:
-        changed = False
-        for candidate in list(variants):
-            if "**/" in candidate:
-                shorter = candidate.replace("**/", "", 1)
-                if shorter not in variants:
-                    variants.add(shorter)
-                    changed = True
-    return any(pure.match(candidate) for candidate in variants)
+    parts = PurePath(rel.as_posix()).parts
+    segments = PurePath(pattern).parts
+
+    @lru_cache(maxsize=None)
+    def _match(i: int, j: int) -> bool:
+        if j == len(segments):
+            return i == len(parts)
+        if segments[j] == "**":
+            if _match(i, j + 1):
+                return True
+            return i < len(parts) and _match(i + 1, j)
+        if i == len(parts):
+            return False
+        return fnmatch.fnmatch(parts[i], segments[j]) and _match(i + 1, j + 1)
+
+    return _match(0, 0)
 
 
 class _SandboxedTool(BaseTool):

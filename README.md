@@ -64,7 +64,7 @@ agent ──有 tool call──> tool ──> agent
 - **子 agent**：`spawn_subagent` 单入口，`explore` / `execute` 两档，工具面只能收窄。
 - **失败回传**：工具调用只执行一次（不自动重试、不熔断）；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩。
-- **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（bash 写的也在），文本预览、流式下载；撤销靠 git。
+- **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（bash 写的也在），文本预览、流式下载；**列表只是可见性过滤，preview / download 仍可点名被忽略的文件**；撤销靠 git。
 - **观测**：SSE 事件流 + JSONL trace，前端可回放 / 导出。
 
 ## 模型

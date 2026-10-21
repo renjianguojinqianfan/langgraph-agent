@@ -39,7 +39,9 @@ export function InputBar() {
   const loading = !!currentTaskId && !task;
   const canSend = !busy && !loading && !!text.trim() && (!task || parked);
   const mode: TaskMode = task?.mode ?? draftMode;
-  const selectedModel = task?.model || draftModel || defaultModelId;
+  const selectedModel = task
+    ? task.model || defaultModelId
+    : draftModel || defaultModelId;
 
   const onMode = async (next: TaskMode) => {
     setNote(null);

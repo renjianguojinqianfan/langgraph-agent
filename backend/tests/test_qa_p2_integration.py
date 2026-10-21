@@ -25,6 +25,7 @@ from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.services.event_bus import EventBus
+from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
@@ -56,7 +57,14 @@ def _run_task_once(tmp_path, index: int) -> tuple[str, set[str]]:
         ],
         final_answer="done",
     )
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     task_id = tm.create_task(title=f"smoke {index}", user_input=f"write out_{index}.txt")
     deadline = time.time() + 15
     status = "RUNNING"
@@ -102,7 +110,14 @@ def test_mcp_tools_are_mounted(tmp_path):
     eb = EventBus()
     persistence = Persistence(settings)
     mock = MockLLMClient(final_answer="ok")
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     names = {t.name for t in tm._tools}
     assert "mcp__echo__echo" in names
     assert "mcp__echo__write_file" in names
@@ -115,6 +130,13 @@ def test_task_manager_shutdown_without_mcp_safe(tmp_path):
     eb = EventBus()
     persistence = Persistence(settings)
     mock = MockLLMClient(final_answer="ok")
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     tm.shutdown()  # must not raise
     tm.shutdown()

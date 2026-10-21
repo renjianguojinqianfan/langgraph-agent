@@ -33,6 +33,7 @@ from backend.core.agent.state import AgentState
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.services.event_bus import EventBus
+from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import CHECKPOINT_FORMAT_VERSION, TaskManager
 from backend.tests.conftest import make_manager, make_settings
@@ -623,6 +624,7 @@ class TestDurabilitySync:
             Persistence(settings),
             llm_client=mock,
             tools=[probe],
+            model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
         )
         try:
             task_id = tm.create_task(title="probe", user_input="hello")

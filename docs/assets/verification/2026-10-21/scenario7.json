@@ -1,0 +1,98 @@
+{
+  "scenario": 7,
+  "date": "2026-10-21",
+  "result": "通过",
+  "task_id": "8ca45bc45423422d9540ee0f11d1387f",
+  "status": "INTERRUPTED",
+  "mode": "build",
+  "model": "default",
+  "plan_version": 0,
+  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "steps": [
+    {
+      "index": 1,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "skipped",
+          "input": {
+            "command": "sleep 60",
+            "timeout": 90
+          },
+          "error": "interrupted before execution; swept at loop entry",
+          "output_excerpt": "null"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "ls -la; echo \"---\"; cat kill-resume.txt 2>/dev/null && echo \"FILE EXISTS\" || echo \"FILE MISSING\""
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"total 16\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:55 .\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:43 ..\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:57 .git\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:46 .qianfan\\n-rw-r--r-- 1 DELL 197121 11 Oct 21 12:55 a-continued.txt\\n-rw-r--r-- 1 DELL 197121 20 Oct 21 12:54 bash-made.txt\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:53 canary\\n-rw-r--r-- 1 DELL 197121 18 Oct 21 12:44 hello.txt\\n-rw-r--r-- 1 DELL 197121  9 Oct 21 12:52 long-stop.txt\\n-rw-r--r-- 1 DELL 197121 16 Oct 21 12:47 plan-demo.txt\\n-rw-r--r-- 1 DELL 197121  2 Oct 21 12:53 policy-blocked-ok.txt\\n"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "sleep 60; echo \"sleep done\"",
+            "timeout": 90
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"sleep done\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "tools": [
+        {
+          "name": "write",
+          "status": "success",
+          "input": {
+            "path": "kill-resume.txt",
+            "content": "done-scenario-7"
+          },
+          "error": null,
+          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\kill-resume.txt\", \"size\": 15}"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "cat kill-resume.txt"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"done-scenario-7\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "tools": []
+    }
+  ],
+  "checks": {
+    "history_count_after_restart": 12,
+    "orphan_status_after_restart": "INTERRUPTED",
+    "resumed_pending_call": "bash skipped: interrupted before execution; swept at loop entry",
+    "kill-resume.txt content": "done-scenario-7",
+    "after-restart.txt content": "done-scenario-7"
+  },
+  "notes": "服务器在 sleep 执行期间被强停；重启后该 RUNNING 任务转 INTERRUPTED，续说时清掉悬空调用并从断点继续；停下任务也可续说。"
+}
