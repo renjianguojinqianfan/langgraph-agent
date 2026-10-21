@@ -205,7 +205,7 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 - **F3 的脱离进程**：本章只修“管道拖尾与线程泄漏”，不承诺按任务追踪所有脱离进程。
 - **C2 遗留**：`tool_node` 的 `except Exception` 转换点缺直接测试；非 bash 面，留待后续。
 - **C3 遗留非安全项**：`start.py --port` 与 `frontend/vite.config.ts` 硬编码 `localhost:8000` 的代理不一致；属功能问题，归 C7 或单独小票。
-- **文档残影**：`subagent_tool.py:62`、`docs/class-diagram.mermaid` 的 `CodeExecTool` / `HttpTool`、`pyproject.toml` 的 `resilience.py` 注释——归 C7。
+- **文档残影**：`subagent_tool.py:62`、`docs/archive/class-diagram.mermaid` 的 `CodeExecTool` / `HttpTool`、`pyproject.toml` 的 `resilience.py` 注释——归 C7。
 
 ## 建议票
 
@@ -284,7 +284,7 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 
 - F7/F8/F4 文档：README:40,47-54、`.env.example:57-64`、`architecture.md:566`、ADR 0009 注记；补 `.env` / 家目录 / `data/` 可达、“停止只杀活树”、无 CPU/内存/磁盘上限；
 - `start.py --port` 与 `frontend/vite.config.ts` 的 8000 代理不一致；
-- `subagent_tool.py:62` 的过期描述、`docs/class-diagram.mermaid` 与 `architecture.md:152` 的 `CodeExecTool`/`HttpTool` 残影；
+- `subagent_tool.py:62` 的过期描述、`docs/archive/class-diagram.mermaid` 与 `architecture.md:152` 的 `CodeExecTool`/`HttpTool` 残影；
 - `tool_node` 的 `except Exception` 直接测试（现有 `_FailTool` 是返回失败，不是抛异常）；
 - `pyproject.toml` 的 `resilience.py` 注释；
 - Docker 文案/产物：不用 Docker 就删 `docker-compose.yml` 或标“不支持”，README:19 与 CI docker-build 同步决定；

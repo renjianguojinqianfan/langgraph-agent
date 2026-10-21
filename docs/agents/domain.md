@@ -12,9 +12,10 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 > **Current state (2026-10-20):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
 > authority stays in `backend/core/agent/state.py`; follows upstream's `GLOSSARY.md` convention
-> since #876); `docs/adr/` holds `0001`–`0010` — `0001`, `0002`, `0008`, `0009` and `0010` are live,
-> `0005`–`0007` retired with `0008` (single loop + plan/build two modes), `0003` retired with
-> slice C2, and `0004` retired with C5 (the workspace file list replaced the artifact ledger); `0010` supplements the
+> since #876); `docs/adr/` holds `0001`–`0010` — `0001`, `0008`, `0009` and `0010` are live,
+> `0002` partially retired (`0008`「三笔账」3), `0005`–`0007` retired with `0008` (single loop +
+> plan/build two modes), `0003` retired with slice C2, and `0004` retired with C5 (the workspace
+> file list replaced the artifact ledger); `0010` supplements the
 > daily form (launch dir = workspace owned by the task, one shared server, model profiles). This repo is **single-context** —
 > one `GLOSSARY.md` + one `docs/adr/` at the root. No `GLOSSARY-MAP.md`, no per-package context dirs.
 >
@@ -47,7 +48,7 @@ Single-context repo (this repo's layout):
 │   ├── manual-verification.md         ← 9 个真模型网页验收场景（发布前跑）
 │   ├── capability-registry-rescope.md ← 本章能力包线与切片决策日志（G-1…）
 │   ├── migration-langgraph-1x.md      ← 0.2 → 1.2.x migration, measured
-│   ├── incremental-arch-p3-resume.md  ← stop / resume / durability 的现行说明
+│   ├── incremental-arch-p3-resume.md  ← stop / resume / durability 的说明（§4 确认闸门已随 0008 退役，其余现役）
 │   └── security-audit-2026-10-19-bash.md ← bash 工具点-时审计与当前形态附记
 ├── backend/                           ← Python: api / core(agent,llm,tools,mcp) / services / utils
 └── frontend/                          ← React + Vite + TS: components / pages / store / hooks

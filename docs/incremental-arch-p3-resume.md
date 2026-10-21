@@ -71,6 +71,11 @@ TaskManager 构造器尾部单次执行：持久化里 status ∈ {RUNNING, PEND
 
 ## 4. 安全默认（确认闸门 × 续跑）
 
+> **已退役（2026-10-14，[ADR 0008](adr/0008-single-loop-plan-build-modes.md)）**：确认闸门、
+> `COMPLETED` 终态与「停在确认闸口」409 已删除。现役 stop / resume 只剩两类 409（非
+> INTERRUPTED、无 checkpoint），见 ADR 0008 决策 5 与 `backend/services/task_manager.py`。
+> 本节保留为 P3 当时的形态，不再作为现行契约。
+
 **三类硬拒绝（不可放松的契约）**：**非 INTERRUPTED**（含 COMPLETED / FAILED 终态）、**无 checkpoint**（双探测不到）、**停在确认闸口**（`pending_confirm` 标记 / 未决 require_confirm 调用）——一律 409 同步拒绝，闸门永不被静默绕过。
 
 | 场景 | 行为 |
