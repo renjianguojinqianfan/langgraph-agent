@@ -1,0 +1,18 @@
+{
+  "scenario": 6,
+  "step": "handoff",
+  "date": "2026-10-22",
+  "purpose": "rerun after #180 F1: the handoff path must open the browser synchronously, before the process exits",
+  "code_head": "538d0da",
+  "first_instance": {
+    "port": 8123,
+    "mode": "serve",
+    "health": 200
+  },
+  "second_launch_dir": "C:\\Users\\DELL\\AppData\\Local\\Temp\\tmp.tdzwYOerlp\\B",
+  "handoff_output": "[qianfan] 已有后台在 http://127.0.0.1:8123/，本目录：C:\\Users\\DELL\\AppData\\Local\\Temp\\tmp.tdzwYOerlp\\B",
+  "browser_open_url": "http://127.0.0.1:8123/?dir=C%3A%5CUsers%5CDELL%5CAppData%5CLocal%5CTemp%5Ctmp.tdzwYOerlp%5CB",
+  "browser_open_logged_before_exit": true,
+  "second_exit_code": 0,
+  "notes": "两次启动都用真实 CLI main()；第二进程把 webbrowser.open 包一层先写 URL 再调用真实浏览器。旧实现的 1 秒 daemon Timer 会在 main() 返回时被进程退出杀掉，日志不会出现；复跑日志存在即证明交接路径同步调用了浏览器。"
+}
