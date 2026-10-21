@@ -49,16 +49,17 @@
 
 | # | 日期 | 配置 / 模型 | 结果 | 证据 |
 |---|---|---|---|---|
-| 1 | 2026-10-20 | 默认（deepseek-v4.1-flash） | 通过：`write:success` + `bash(git init && git status):success` | `C7/scenario1.png`，任务 `538d5387` |
-| 2 | 2026-10-20 | 默认 | 通过：计划 v2；手工追加的 `EDITED-BY-HUMAN` 被执行，文件落盘 | `C7/scenario2-*.png`，任务 `75056984` |
-| 3 | 2026-10-20 | 默认 | 通过：`sleep 25` 中途停止（`bash:failed`），同一任务续说后创建 `stop-continued.txt` | `C7/scenario3-*.png`，任务 `e968733e` |
-| 4 | 2026-10-20 | 默认 | 通过：`policy_rules` 命中 `rm -rf` → `skipped` + 理由；canary 目录未删；模型改用 `echo policy-blocked-ok` 成功 | `C7/scenario4-rmrf-blocked.png` |
-| 5 | 2026-10-20 | 默认 | 通过：`bash-made.txt` 出现在工作区文件列表（9 字节） | `C7/scenario5.png`，任务 `4d484ac1` |
-| 6 | 2026-10-20 | 默认 | 通过：A/B 各自列表；B 第二次启动交接同一后台；从「全部」续 A 任务，`a-continued.txt` 落在 A 而非 B | `C7/scenario6-*.png` |
-| 7 | 2026-10-20 | 默认 | 通过：重启后 7 条历史仍在；停下任务可续说（`after-restart.txt`）；RUNNING 孤儿重启后转 INTERRUPTED 并续跑（`kill-resume.txt`） | `C7/scenario7-*.png`，任务 `177b4b25` |
-| 8 | 2026-10-20 | 默认 | 通过：后台命令立即返回（`C7BG2-1532`），停止前 PID 存活、停止后消失 | `C7/scenario8*.png`，任务 `d4fec841` |
-| 9 | 2026-10-20 | 默认 + qwen3.8-flash | 通过：MCP `echo:hello-c7-mcp`；Exa 搜索返回结果；子代理 `summarize-notes` completed；中途切换 trace 记录 `default → 0792b93b260c`，下一条用 qwen3.8-flash | `C7/scenario9-*.png`，任务 `11a0773b` / `e08a43c5` / `d2ce274c` / `30f0d915` |
+| 1 | 2026-10-21 | 默认（deepseek-v4.1-flash） | 通过：`write:success` + `bash(git init && git status):success` | `scenario1.png` / `scenario1.json`，任务 `b9b3f2ee` |
+| 2 | 2026-10-21 | 默认 | 通过：计划 v1 → 人工改成 v3；`EDITED-BY-HUMAN` 被执行，`.qianfan/` 不进 `git status` | `scenario2.png` / `scenario2.json`，任务 `d771829c` |
+| 3 | 2026-10-21 | 默认 | 通过：`sleep 30` 中途停止（`bash:failed`），同一任务续说后创建 `stop-continued.txt` | `scenario3-stopped.png` / `scenario3.png` / `scenario3.json`，任务 `3353c791` |
+| 4 | 2026-10-21 | 默认 | 通过：`policy_rules` 命中 `rm -rf` → `skipped` + 理由；canary 目录未删；模型改写成 `policy-blocked-ok.txt` | `scenario4.png` / `scenario4.json`，任务 `63481ed3` |
+| 5 | 2026-10-21 | 默认 | 通过：`bash-made.txt` 出现在工作区文件列表（20 字节） | `scenario5.png` / `scenario5.json`，任务 `2cf1218d` |
+| 6 | 2026-10-21 | 默认 | 通过：A/B 各自列表；B 第二次启动交接同一后台；从「全部」续 A 任务，`a-continued.txt` 落在 A 而非 B | `scenario6.png` / `scenario6.json` / `scenario6-handoff.txt`，任务 `2cf1218d` / `d7c3a8d0` |
+| 7 | 2026-10-21 | 默认 | 通过：重启后 10 条历史仍在；停下任务可续说（`after-restart.txt`）；RUNNING 孤儿重启后转 INTERRUPTED，悬空调用被清扫后从断点续跑（`kill-resume.txt`） | `scenario7.png` / `scenario7.json`，任务 `8ca45bc4` / `2cf1218d` |
+| 8 | 2026-10-21 | 默认 | 通过：后台命令立即返回（`C7BG2-1982`），心跳文件在停止后不再增长；前景 `sleep 600` 被 `task stop requested` 终止 | `scenario8.png` / `scenario8.json`，任务 `b55af32a` |
+| 9 | 2026-10-21 | 默认 + qwen3.8-flash | 通过：MCP `echo:hello-c7-mcp`；Exa 搜索返回 `langgraph==1.2.0`；子代理 `read-notes` completed；中途切换 trace 记录 `default → 2556f5d79830`，第 4 步起用 qwen3.8-flash | `scenario9.png` / `scenario9.json`，任务 `7f8204d1` |
 
+> 证据根：`docs/assets/verification/2026-10-21/`；JSON 只留任务/步骤/工具状态与脱敏摘录，不含 Key 与完整对话。
 > 场景 6 的 A/B 路径按后端记录的绝对路径核对（Windows 反斜杠），写入位置以文件系统实际落点为准。
 > 场景 9 的搜索使用 `SEARCH_PROVIDER=exa`（本机 DuckDuckGo 不可达，见 S2 #175）。
-> 场景 9 的子代理第一次因工作区没有 README 返回「无法完成」（status 仍是 completed），改用 `notes.txt` 重跑成功；表中记录的是成功那次。
+> 场景 3 / 8 的「停止」在续说轮点击网页端按钮：首次运行期间 SSE 回放会把头部状态显示成「等待中」，停止按钮不可见（已记录为待修项，不在本轮 diff）。

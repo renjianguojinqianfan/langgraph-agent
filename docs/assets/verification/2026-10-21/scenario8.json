@@ -1,0 +1,60 @@
+{
+  "scenario": 8,
+  "date": "2026-10-21",
+  "result": "通过",
+  "task_id": "b55af32a3d7345c2ac44aae18ed51883",
+  "status": "INTERRUPTED",
+  "mode": "build",
+  "model": "default",
+  "plan_version": 0,
+  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "steps": [
+    {
+      "index": 1,
+      "tools": []
+    },
+    {
+      "index": 2,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "(while true; do date +%s%N >> bg-heartbeat.txt; sleep 1; done) & echo C7BG2-$RANDOM"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"C7BG2-1982\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "failed",
+          "input": {
+            "command": "sleep 600",
+            "timeout": 650
+          },
+          "error": "command stopped: task stop requested",
+          "output_excerpt": "{\"stdout\": \"\", \"stderr\": \"\", \"exit_code\": 1, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": true, \"truncated\": false}"
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "background_marker": "C7BG2-1982",
+    "background_command_returned_immediately": true,
+    "foreground_sleep_stopped": "bash failed: command stopped: task stop requested",
+    "heartbeat_bytes_running": [
+      2180,
+      2220
+    ],
+    "heartbeat_bytes_after_stop": [
+      2220,
+      2220
+    ]
+  },
+  "notes": "后台循环每秒追加 bg-heartbeat.txt；停止前后 4 秒内文件大小不再增长，前景 sleep 600 也被停止。"
+}

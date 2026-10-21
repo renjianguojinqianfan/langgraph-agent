@@ -1,0 +1,72 @@
+{
+  "scenario": 5,
+  "date": "2026-10-21",
+  "result": "通过",
+  "task_id": "2cf1218d1c934d019a6d8d6cd0f7cc28",
+  "status": "INTERRUPTED",
+  "mode": "build",
+  "model": "default",
+  "plan_version": 0,
+  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "steps": [
+    {
+      "index": 1,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "printf 'scenario5-nine-bytes' > bash-made.txt && cat bash-made.txt && echo && wc -c < bash-made.txt"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"scenario5-nine-bytes\\n20\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "tools": []
+    },
+    {
+      "index": 3,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "printf 'a-continued' > a-continued.txt && cat a-continued.txt && echo"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"a-continued\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "tools": []
+    },
+    {
+      "index": 5,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "pwd && ls -1 && printf 'done-scenario-7' > after-restart.txt && cat after-restart.txt && echo"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"/e/qianfan-c7-20261021/A\\na-continued.txt\\nbash-made.txt\\ncanary\\nhello.txt\\nlong-stop.txt\\nplan-demo.txt\\npolicy-blocked-ok.txt\\nstop-continued-3.txt\\nstop-continued.txt\\ndone-scenario-7\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "tools": []
+    }
+  ],
+  "checks": {
+    "bash-made.txt in workspace list": true,
+    "bash-made.txt bytes": 20,
+    "bash tool used (not write)": false
+  }
+}
