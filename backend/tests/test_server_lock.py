@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
+import sys
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi.testclient import TestClient
@@ -269,3 +272,129 @@ def test_qianfan_refuses_to_hand_off_to_the_dev_backend(tmp_path, monkeypatch):
     assert code == 2
     assert served == []
     assert opened == []
+
+
+def test_handoff_opens_the_browser_before_the_process_exits(tmp_path):
+    """The default browser seam must fire inside the handoff process.
+
+    A daemon ``threading.Timer`` is killed the moment ``main()`` returns, so a
+    child process is the only honest witness: it runs the real default seam and
+    leaves a marker before exiting.
+    """
+    marker = tmp_path / "opened.txt"
+    root = Path(__file__).resolve().parents[2]
+    child = """
+import sys
+from pathlib import Path
+
+import backend.cli as cli
+from backend.server_lock import ServerLock
+
+marker = Path(sys.argv[1])
+
+
+def fake_open(url):
+    marker.write_text(url, encoding="utf-8")
+    return True
+
+
+cli.webbrowser.open = fake_open
+cli.server_lock.find_running = lambda lock_file, probe=None: ServerLock(
+    pid=1,
+    port=9123,
+    started_at="2026-01-01T00:00:00+00:00",
+    instance="tok",
+    mode="serve",
+)
+raise SystemExit(cli.main([]))
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root)
+    subprocess.run(
+        [sys.executable, "-c", child, str(marker)],
+        cwd=root,
+        env=env,
+        check=True,
+        timeout=60,
+    )
+
+    assert marker.read_text(encoding="utf-8").startswith("http://127.0.0.1:9123/?dir=")
+
+
+def _no_spawn(*args, **kwargs):
+    raise AssertionError("start must not spawn a backend")
+
+
+def test_start_main_refuses_when_a_backend_is_registered(monkeypatch):
+    import start
+
+    monkeypatch.setattr(start, "_running_server", lambda settings: _lock(port=9000))
+    monkeypatch.setattr(sys, "argv", ["start.py", "--backend-only"])
+    monkeypatch.setattr(start, "_run", _no_spawn)
+
+    assert start.main() == 2
+
+
+def test_start_registers_and_releases_the_dev_backend(tmp_path, monkeypatch):
+    import start
+
+    lock_file = tmp_path / "server.json"
+    monkeypatch.setattr(server_lock, "lock_path", lambda settings: lock_file)
+    monkeypatch.setattr(start, "_running_server", lambda settings: None)
+    monkeypatch.setattr(sys, "argv", ["start.py", "--backend-only"])
+
+    seen: list = []
+
+    class FakeProc:
+        pid = os.getpid()
+
+        def wait(self, timeout=None):
+            if timeout is None:
+                seen.append(server_lock.read_lock(lock_file))
+            return 0
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+    proc = FakeProc()
+    monkeypatch.setattr(start, "_run", lambda *args, **kwargs: proc)
+
+    assert start.main() == 0
+    assert seen and seen[0] is not None
+    assert seen[0].mode == "dev"
+    assert seen[0].pid == proc.pid
+    assert server_lock.read_lock(lock_file) is None
+
+
+def test_start_terminates_the_backend_when_it_loses_the_lock_race(tmp_path, monkeypatch):
+    import start
+
+    lock_file = tmp_path / "server.json"
+    monkeypatch.setattr(server_lock, "lock_path", lambda settings: lock_file)
+    monkeypatch.setattr(start, "_running_server", lambda settings: None)
+    monkeypatch.setattr(server_lock, "claim_lock", lambda *args, **kwargs: False)
+    monkeypatch.setattr(sys, "argv", ["start.py", "--backend-only"])
+
+    class FakeProc:
+        pid = os.getpid()
+
+        def __init__(self):
+            self.terminated = False
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            pass
+
+    proc = FakeProc()
+    monkeypatch.setattr(start, "_run", lambda *args, **kwargs: proc)
+
+    assert start.main() == 2
+    assert proc.terminated is True
