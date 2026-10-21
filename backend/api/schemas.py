@@ -127,7 +127,7 @@ class UpdateModeRequest(BaseModel):
 class UpdatePlanRequest(BaseModel):
     """The whole plan as Markdown; the server writes the plan file."""
 
-    text: str = ""
+    text: str
 
 
 class TaskModelRequest(BaseModel):

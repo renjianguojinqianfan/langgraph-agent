@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import asdict
 
@@ -156,7 +157,7 @@ def test_task_model_switch_applies_to_the_next_round(tmp_path):
     assert events[-1]["data"].get("model_profile") == default_id
 
 
-def test_subagent_uses_the_parent_task_model(tmp_path):
+def test_subagent_uses_the_parent_round_model(tmp_path):
     settings = make_settings(tmp_path, use_mock_llm=False)
     made = []
 
@@ -167,7 +168,19 @@ def test_subagent_uses_the_parent_task_model(tmp_path):
     tm = make_manager(settings, None, llm_factory=factory)
     second = tm.models.add(name="Second", base_url="https://example.test/v1", model="m2")
     task_id = tm.create_task("m", "hi", model=second.id)
-    assert tm.llm_for_task_id(task_id).model == "m2"
+    _wait(tm, task_id)
+    parent = tm.get_task(task_id)
+    tm._pin_round_model(parent)  # the parent round is running with "m2"
+    tm.set_model(task_id, tm.models.default_id)  # a mid-round switch
+
+    from backend.core.agent.subagent import SubAgentExecutor, SubTaskSpec
+
+    result = SubAgentExecutor(tm, settings).run_subtask(
+        SubTaskSpec(subtask_id="sub-1", name="s", instruction="say hi", parent_task_id=task_id)
+    )
+
+    assert result.status == "completed", result.error
+    assert made[-1] == second.id  # parent A -> child A, not the switched default
 
 
 def test_profile_edit_and_key_change_replace_the_cached_client(tmp_path):
@@ -236,6 +249,122 @@ def test_provider_error_key_never_reaches_task_trace_logs_or_sse(tmp_path, caplo
     assert SENTINEL not in json.dumps(task.model_dump(), ensure_ascii=False)
     assert SENTINEL not in trace
     assert SENTINEL not in events
+    assert SENTINEL not in caplog.text
+
+
+def test_a_rotated_key_stays_redacted(tmp_path):
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    tm = make_manager(settings, None, llm_factory=lambda profile, key: _FakeClient(profile, key))
+    old = "old-key-sentinel"
+    tm.set_model_key("default", old)
+    tm.llm_for_task_id("no-task")  # a live client now holds the old key
+    assert tm.redact(f"bearer {old}") == "bearer [redacted]"
+
+    tm.set_model_key("default", "new-key-sentinel")
+
+    assert tm.redact(f"bearer {old}") == "bearer [redacted]"
+    assert tm.redact("bearer new-key-sentinel") == "bearer [redacted]"
+
+
+def test_redaction_covers_tool_result_dict_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", SENTINEL)
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    tm = make_manager(settings, None, llm_factory=lambda profile, key: _FakeClient(profile, key))
+    from backend.core.agent.nodes import AgentRuntime
+
+    runtime = AgentRuntime("t", tm, llm=MockLLMClient(final_answer="ok"), tools=[], tool_schemas=[])
+    redacted = runtime._redact_value(
+        {f"x-{SENTINEL}": [SENTINEL, {"nested": SENTINEL}], "ok": "value"}
+    )
+
+    assert SENTINEL not in json.dumps(redacted)
+    assert redacted["ok"] == "value"
+
+
+def test_deleting_the_rounds_profile_marks_the_task_failed(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    tm = make_manager(settings, None, llm_factory=lambda profile, key: _FakeClient(profile, key))
+    second = tm.models.add(name="Second", base_url="https://example.test/v1", model="m2")
+    monkeypatch.setattr(tm, "_start_run", lambda task_id: None)
+    task_id = tm.create_task("m", "hi", model=second.id)
+    tm.delete_model_profile(second.id)
+
+    tm.run(task_id)
+
+    task = tm.get_task(task_id)
+    assert task is not None
+    assert task.status.value == "FAILED"
+    assert "no longer exists" in (task.error or "")
+
+
+def test_profile_edit_cannot_reinsert_the_old_cached_client(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    made = []
+
+    def factory(profile, key):
+        made.append(profile.base_url)
+        return _FakeClient(profile, key)
+
+    tm = make_manager(settings, None, llm_factory=factory)
+    second = tm.models.add(name="Second", base_url="https://old.test/v1", model="m2")
+    task_id = tm.create_task("m", "hi", model=second.id)
+    _wait(tm, task_id)
+    tm.llm_for_task_id(task_id)  # cache the old address
+
+    original = tm.models.resolve
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def slow_resolve(model_id):
+        calls["n"] += 1
+        profile = original(model_id)
+        if calls["n"] == 1:
+            entered.set()
+            assert release.wait(5)
+        return profile
+
+    monkeypatch.setattr(tm.models, "resolve", slow_resolve)
+    reader = threading.Thread(target=lambda: tm.llm_for_task_id(task_id))
+    reader.start()
+    assert entered.wait(5)
+    updater = threading.Thread(
+        target=lambda: tm.update_model_profile(second.id, base_url="https://new.test/v1")
+    )
+    updater.start()
+    time.sleep(0.2)
+    release.set()
+    reader.join(5)
+    updater.join(5)
+
+    tm.llm_for_task_id(task_id)
+
+    assert made[-1] == "https://new.test/v1"
+
+
+def test_summarizer_failure_is_redacted(tmp_path, caplog):
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    tm = make_manager(settings, None, llm_factory=lambda profile, key: _LeakyClient(key))
+    tm.set_model_key("default", SENTINEL)
+
+    from backend.core.agent.context import compress_messages
+
+    messages = [
+        {"role": "user", "content": "x" * 5000},
+        {"role": "assistant", "content": "y" * 100},
+        {"role": "user", "content": "z" * 100},
+    ]
+    with caplog.at_level("DEBUG"):
+        compressed, _ = compress_messages(
+            messages,
+            budget=1,
+            keep_recent=1,
+            strategy="summarize",
+            llm=_LeakyClient(SENTINEL),
+            redact=tm.redact,
+        )
+
+    assert SENTINEL not in json.dumps(compressed)
     assert SENTINEL not in caplog.text
 
 

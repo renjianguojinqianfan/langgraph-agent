@@ -22,7 +22,10 @@ export default function App() {
   return (
     <div className="h-full">
       <AuthGuard>
-        {settingsOpen ? <SettingsPage /> : <TaskView />}
+        {/* TaskView stays mounted: opening settings must not discard an
+            unsent message or drop the live task stream. */}
+        <TaskView />
+        {settingsOpen && <SettingsPage />}
       </AuthGuard>
     </div>
   );
