@@ -2,7 +2,7 @@
 
 > 发布前 / 换供应商时**在网页端逐条手动跑**；CI 不跑真模型（ADR 0008「三笔账」2）。
 > 每条记录日期与所用配置名即可，不把模型名与时间写进 README（数字与型号必腐）。
-> 结果表的「证据」列只写文件名；本机证据根是 `%TEMP%\qianfan-evidence\`（Windows），按场景目录查看（如 `C7/`）。
+> 结果表的「证据」列只写仓库内路径；证据根是 `docs/assets/verification/<日期>/`（截图 + 脱敏结果 JSON）。
 > 前置：`frontend` 已构建、`qianfan` 能启动、`~/.qianfan/credentials.json` 或环境变量里有可用 Key。
 
 ## 场景与判据
@@ -20,7 +20,9 @@
    判据：停止后状态为「停下」；续说沿同一任务/对话继续，不新建任务；最终产物完整。
 
 4. **危险规则 → 调用被拒、模型换路**
-   在设置里配一条命中 `bash` 的危险动作规则（如命令包含 `rm -rf`），让 agent 执行该命令。
+   在 `.env` 的 `policy_rules` 里配一条命中 `bash` 的规则（如
+   `[{"tool":"bash","pattern":"rm\\s+-rf","reason":"destructive shell command"}]`），重启后台，
+   让 agent 执行该命令。
    判据：该次调用 `skipped`，结果里带 `{block, reason}`；模型改用其他方式完成任务；命令没有实际执行。
 
 5. **工作区文件列表看得到 bash 写的文件**
