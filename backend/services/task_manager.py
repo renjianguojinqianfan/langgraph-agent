@@ -199,6 +199,11 @@ class TaskManager:
         self._llm = llm_client or create_llm_client(settings)
         self._llm_factory = llm_factory
         self._llm_clients: Dict[str, LLMClient] = {}
+        #: Keys a live/cached client may still hold after a rotation. Memory
+        #: only: the point is redaction, not a second credentials store.
+        self._known_secrets: set[str] = set()
+        #: The (profile, client) a round is pinned to; subagents inherit it.
+        self._round_models: Dict[str, tuple[str, LLMClient]] = {}
         self._tools = tools if tools is not None else build_tools(settings)
         # P1 item 2: sub-agent executor (None when disabled).
         self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None
@@ -466,6 +471,9 @@ class TaskManager:
                 logger.warning("checkpoint connection close failed: %s", exc)
             self._checkpointer = None
             self._checkpoint_conn = None
+        with self._lock:
+            self._known_secrets.clear()
+            self._round_models.clear()
 
     # ── creation / query ──
     @staticmethod
@@ -474,6 +482,8 @@ class TaskManager:
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
     def _build_llm(self, profile: Any, key: str) -> LLMClient:
+        if key:
+            self._known_secrets.add(key)
         if self._llm_factory is not None:
             return self._llm_factory(profile, key)
         from ..core.llm.openai_compat import OpenAICompatibleClient
@@ -489,19 +499,34 @@ class TaskManager:
         if self.settings.use_mock_llm:
             return self._llm
         requested = task.model if task is not None else ""
-        profile = self.models.resolve(requested)
-        if profile is None:
-            # A pinned profile that no longer exists must not silently reroute
-            # the conversation to another provider.
-            raise RuntimeError(
-                f"model profile {requested!r} no longer exists; switch the task's model"
-            )
+        # Resolve, read the key, check the cache and build under one lock: a
+        # concurrent profile edit invalidates the cache before this method can
+        # insert a client built from the pre-edit profile.
         with self._lock:
+            profile = self.models.resolve(requested)
+            if profile is None:
+                # A pinned profile that no longer exists must not silently
+                # reroute the conversation to another provider.
+                raise RuntimeError(
+                    f"model profile {requested!r} no longer exists; switch the task's model"
+                )
             client = self._llm_clients.get(profile.id)
             if client is None:
                 client = self._build_llm(profile, self.models.key_for(profile.id))
                 self._llm_clients[profile.id] = client
         return client
+
+    def _pin_round_model(self, task: Task) -> LLMClient:
+        """Fix this round's client; a subagent must not re-read the task record."""
+        llm = self._llm_for(task)
+        profile_id = self.model_id_for(task)
+        with self._lock:
+            self._round_models[task.id] = (profile_id, llm)
+        return llm
+
+    def round_llm_for(self, task_id: str) -> Optional[tuple[str, LLMClient]]:
+        with self._lock:
+            return self._round_models.get(task_id)
 
     def llm_for_task_id(self, task_id: str) -> LLMClient:
         return self._llm_for(self.persistence.load_task(task_id))
@@ -512,7 +537,8 @@ class TaskManager:
 
     def redact(self, text: str) -> str:
         """Strip every known key from text before it is logged, stored or sent."""
-        for secret in self.models.secret_values():
+        secrets = set(self._known_secrets) | self.models.secret_values()
+        for secret in secrets:
             if secret:
                 text = text.replace(secret, "[redacted]")
         return text
@@ -542,19 +568,28 @@ class TaskManager:
 
     def update_model_profile(self, model_id: str, **fields: Any) -> Any:
         with self._lock:
+            old_key = self.models.key_for(model_id)
             profile = self.models.update(model_id, **fields)
             self._llm_clients.pop(model_id, None)
+            if old_key:
+                self._known_secrets.add(old_key)
         return profile
 
     def delete_model_profile(self, model_id: str) -> None:
         with self._lock:
+            old_key = self.models.key_for(model_id)
             self.models.delete(model_id)
             self._llm_clients.pop(model_id, None)
+            if old_key:
+                self._known_secrets.add(old_key)
 
     def set_model_key(self, model_id: str, key: str) -> None:
         with self._lock:
+            old_key = self.models.key_for(model_id)
             self.models.set_key(model_id, key)
             self._llm_clients.pop(model_id, None)
+            if old_key:
+                self._known_secrets.add(old_key)
 
     def test_model(self, model_id: str) -> Dict[str, Any]:
         """Send one minimal request; the key never appears in the answer."""
@@ -690,7 +725,7 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm_for(task),
+                llm=self._pin_round_model(task),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
@@ -704,6 +739,7 @@ class TaskManager:
             task = self.persistence.load_task(task_id) or task
             self._finalize_terminal(task, final)
         except Exception as exc:  # pragma: no cover - defensive
+            task.status = TaskStatus.FAILED
             task.error = self.redact(str(exc))
             logger.error("run() crashed for task %s: %s", task_id, task.error)
             task.updated_at = _now()
@@ -715,6 +751,7 @@ class TaskManager:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
             reset_runtime_context(tokens)
             # P0 item 4: always close the trace (success / failure / interrupt)
@@ -1006,7 +1043,7 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm_for(current),
+                llm=self._pin_round_model(current),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
@@ -1067,6 +1104,7 @@ class TaskManager:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
             if tokens is not None:
                 reset_runtime_context(tokens)
@@ -1213,7 +1251,7 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm_for(current),
+                llm=self._pin_round_model(current),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
@@ -1272,9 +1310,9 @@ class TaskManager:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
             if tokens is not None:
                 reset_runtime_context(tokens)
             if self._trace is not None:
                 self._trace.close(task_id)
-

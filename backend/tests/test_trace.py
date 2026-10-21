@@ -201,7 +201,14 @@ def test_trace_api_disabled_returns_404(tmp_path):
     eb = EventBus()
     persistence = Persistence(settings)
     mock = MockLLMClient()
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     with TestClient(app, base_url="http://localhost") as test_client:
         test_client.app.state.settings = settings
         test_client.app.state.event_bus = eb

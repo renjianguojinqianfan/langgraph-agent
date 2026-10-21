@@ -197,6 +197,7 @@ class AgentRuntime:
             trace_ref=trace_ref,
             head_chars=settings.context_evict_head_chars,
             tail_chars=settings.context_evict_tail_chars,
+            redact=self._redact,
         )
         state["context_tokens"] = meta["context_tokens"]
         if meta["compressed"]:
@@ -242,7 +243,12 @@ class AgentRuntime:
         if isinstance(value, list):
             return [self._redact_value(item) for item in value]
         if isinstance(value, dict):
-            return {key: self._redact_value(item) for key, item in value.items()}
+            # Keys can carry a key too; a collision overwrites one entry,
+            # which is safer than shipping the secret.
+            return {
+                self._redact(key if isinstance(key, str) else str(key)): self._redact_value(item)
+                for key, item in value.items()
+            }
         return value
 
     # ── nodes ──
