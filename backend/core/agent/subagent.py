@@ -3,7 +3,7 @@
 The main agent can delegate work to **isolated** sub-agents. Isolation means:
 
 * every subtask runs with its **own** :class:`AgentState` (independent
-  ``messages`` / ``plan`` / ``steps`` / ``artifacts``);
+  ``messages`` / ``plan`` / ``steps``);
 * every subtask runs over a **declared capability tier** (:data:`TOOL_TIERS`),
   not over "whatever the parent had" — a potentially dangerous tool is
   structurally absent from the subtask's face rather than present-and-gated;
@@ -301,7 +301,6 @@ class SubAgentExecutor:
         if future.cancel():
             return  # never started: nothing is running, nothing to unwind
         self.tm._stop_flags[spec.subtask_id] = True
-        self.tm.kill_background(spec.subtask_id)
         future.add_done_callback(
             lambda _f: self.tm._stop_flags.pop(spec.subtask_id, None)
         )

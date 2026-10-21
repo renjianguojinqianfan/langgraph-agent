@@ -94,7 +94,10 @@ def list_tasks(
         tasks = manager.list_all_tasks(limit=limit)
     else:
         workspace = None if dir in ("", "current") else dir
-        tasks = manager.list_tasks(limit=limit, workspace=workspace)
+        try:
+            tasks = manager.list_tasks(limit=limit, workspace=workspace)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
     return _envelope(data={"tasks": [t.model_dump(mode="json") for t in tasks]})
 
 

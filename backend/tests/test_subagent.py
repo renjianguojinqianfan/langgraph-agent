@@ -849,6 +849,7 @@ def test_subtask_that_only_reads_hands_no_product_to_the_parent(tmp_path, event_
     )
 
     assert res.status == "completed"
+    assert res.artifacts == []
 
     sub_reads = [
         e["data"]
