@@ -84,50 +84,74 @@ export function SettingsPage() {
   const saveKey = async (id: string) => {
     const key = keyDrafts[id] ?? "";
     if (!key.trim()) return;
-    const r = await setModelKey(id, key);
-    if (r.data) {
-      setKeyDrafts((prev) => ({ ...prev, [id]: "" }));
-      note(id, `Key 已保存（${SOURCE_LABEL[r.data.key_source] ?? r.data.key_source}）`);
-      await refresh();
-    } else {
-      note(id, apiErrorText(r));
+    try {
+      const r = await setModelKey(id, key);
+      if (r.data) {
+        // Only clear what was sent: a newer draft typed while the request was
+        // in flight must survive the stale reply.
+        setKeyDrafts((prev) =>
+          prev[id] === key ? { ...prev, [id]: "" } : prev
+        );
+        note(id, `Key 已保存（${SOURCE_LABEL[r.data.key_source] ?? r.data.key_source}）`);
+        await refresh();
+      } else {
+        note(id, apiErrorText(r));
+      }
+    } catch {
+      note(id, "保存 Key 失败");
     }
   };
 
   const clearKey = async (id: string) => {
-    const r = await setModelKey(id, "");
-    if (r.data) {
-      note(id, r.data.key_set ? "已清除粘贴的 Key，回退到环境变量" : "已清除 Key");
-      await refresh();
-    } else {
-      note(id, apiErrorText(r));
+    try {
+      const r = await setModelKey(id, "");
+      if (r.data) {
+        note(id, r.data.key_set ? "已清除粘贴的 Key，回退到环境变量" : "已清除 Key");
+        await refresh();
+      } else {
+        note(id, apiErrorText(r));
+      }
+    } catch {
+      note(id, "清除 Key 失败");
     }
   };
 
   const test = async (id: string) => {
     note(id, "测试中…");
-    const r = await testModel(id);
-    if (r.data?.ok) note(id, r.data.note ?? "连接正常");
-    else note(id, r.data?.error ?? "测试失败");
+    try {
+      const r = await testModel(id);
+      if (r.data?.ok) note(id, r.data.note ?? "连接正常");
+      else note(id, r.data?.error ?? apiErrorText(r) ?? "测试失败");
+    } catch {
+      note(id, "测试失败");
+    }
   };
 
   const makeDefault = async (id: string) => {
-    const r = await setDefaultModel(id);
-    if (r.data) {
-      note(id, "已设为默认");
-      await refresh();
-    } else {
-      note(id, apiErrorText(r));
+    try {
+      const r = await setDefaultModel(id);
+      if (r.data) {
+        note(id, "已设为默认");
+        await refresh();
+      } else {
+        note(id, apiErrorText(r));
+      }
+    } catch {
+      note(id, "设置默认失败");
     }
   };
 
   const remove = async (id: string) => {
     setArmed(null);
-    const r = await deleteModel(id);
-    if (r.data) {
-      await refresh();
-    } else {
-      note(id, apiErrorText(r));
+    try {
+      const r = await deleteModel(id);
+      if (r.data) {
+        await refresh();
+      } else {
+        note(id, apiErrorText(r));
+      }
+    } catch {
+      note(id, "删除失败");
     }
   };
 
