@@ -149,7 +149,7 @@ langgraph-agent/
 
 ### 3.1 类图 / 数据模型（mermaid `classDiagram`）
 
-> 详见 `docs/class-diagram.mermaid`。
+> 详见 `docs/archive/class-diagram.mermaid`（v0.1 历史档）。
 
 ```mermaid
 classDiagram
@@ -384,7 +384,7 @@ classDiagram
 > 现役拓扑与 `backend/core/agent/graph.py` 逐边一致；下图是一次 plan → build → 停下 → 续说
 > 的典型调用。
 
-> 详见 `docs/sequence-diagram.mermaid`。
+> 详见 `docs/archive/sequence-diagram.mermaid`（v0.1 历史档）。
 
 ```mermaid
 sequenceDiagram
@@ -502,8 +502,7 @@ httpx>=0.27.0          # 供 web_search 的 SerpAPI 路径使用
 ## 7. 有序任务列表（工程师编码依据）
 
 > ⚠️ **历史**：T01–T09 是 v0.1 首轮实施顺序，均已交付。后续七轮的任务拆分见
-> `docs/archive/incremental-prd-p{0,1,2}.md`；当前待做清单见
-> [`roadmap-pawbench.md`](archive/roadmap-pawbench.md) §三 与 GitHub Issues。
+> `docs/archive/incremental-prd-p{0,1,2}.md`；当前待做清单见 GitHub Issues。
 
 > 说明：任务按**实现依赖顺序**排列，每个任务含 ≥3 个文件。`T01` 为项目基础设施（必为首个任务）。优先级：`P0`=MVP，`P1`=重要。任务粒度到"可独立编码"。
 

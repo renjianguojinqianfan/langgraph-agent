@@ -560,8 +560,8 @@ roadmap §三 把 P0-C 列为"评测前置依赖"，本次调研可以把它从�
 6. **每题无状态**：容器是一次性的，但**镜像里不能预置脏状态**。Hermes 每题显式
    `_reset_hermes_state()` 删 `state.db` / `sessions/*.jsonl`，backend 也会清空整个 workspace
    （来源：S11、S5）。
-   → 本项目 [`data/checkpoints/checkpoints.sqlite`](../../data/checkpoints) 与
-   [`data/traces/`](../../data/traces) 在 headless 模式下必须用**每题唯一的 thread_id**
+   → 本项目 `data/checkpoints/checkpoints.sqlite` 与 `data/traces/`（运行态目录，不入库）
+   在 headless 模式下必须用**每题唯一的 thread_id**
    （建议直接用 task_id），或跑完清理，否则跨题串味。
 7. **必须产出 ≥5 条 OpenClaw 格式 transcript 事件**，否则触发 `SHORT_TRANSCRIPT` /
    `EMPTY_TRANSCRIPT`（均 ERROR 级）→ 每题白重试 3 次，且 hybrid 题拿不到惩罚豁免

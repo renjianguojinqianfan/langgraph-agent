@@ -43,7 +43,7 @@ Single-context repo (this repo's layout):
 │   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain)
 │   ├── archive/                       ← 过时 / 点-时文档（git mv 保留历史；不作现役权威）
 │   ├── assets/                        ← README 截图等文档资产
-│   ├── architecture.md                ← 现役架构与 SSE §3.4 协议
+│   ├── architecture.md                ← v0.1 历史档；§3.3 REST / §3.4 SSE / §5 共享约定现役
 │   ├── manual-verification.md         ← 9 个真模型网页验收场景（发布前跑）
 │   ├── capability-registry-rescope.md ← 本章能力包线与切片决策日志（G-1…）
 │   ├── migration-langgraph-1x.md      ← 0.2 → 1.2.x migration, measured
