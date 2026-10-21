@@ -278,6 +278,10 @@ class AgentRuntime:
         redact = getattr(getattr(self, "tm", None), "redact", None)
         return redact(text) if callable(redact) else text
 
+    def _public_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+        """A copy safe for SSE / trace: the args are redacted, dispatch is not."""
+        return {**rec, "input": self._redact_value(rec.get("input"))}
+
     def _redact_value(self, value: Any) -> Any:
         """Recursively redact strings inside a tool result payload."""
         if isinstance(value, str):
@@ -378,6 +382,7 @@ class AgentRuntime:
             # Not a plan: keep the previous plan and surface what the model
             # actually said (e.g. a question) instead of inventing a step.
             answer = (resp.content or "").strip() or "(no content)"
+        answer = self._redact(answer)
         state["final_answer"] = answer
         assistant_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         # Issue #45: thinking-mode providers require the trace back on the next
@@ -431,7 +436,7 @@ class AgentRuntime:
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
-        answer = resp.content or "(no content)"
+        answer = self._redact(resp.content or "(no content)")
         state["final_answer"] = answer
         final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn
@@ -472,6 +477,9 @@ class AgentRuntime:
                 "status": "skipped" if block_reason is not None else "pending",
                 "error": block_reason or "",
             }
+            if block_reason is not None:
+                # Never dispatched: the args can be redacted here and persist.
+                rec["input"] = self._redact_value(args)
             tcs.append(rec)
 
         state["_current_tool_calls"] = tcs
@@ -498,7 +506,7 @@ class AgentRuntime:
         state.setdefault("messages", []).append(assistant_turn)
         for rec in tcs:
             step["tool_calls"].append(rec)
-            self._publish("tool_call", rec)
+            self._publish("tool_call", self._public_record(rec))
             if rec["status"] == "skipped":
                 # S2 (#136): a policy refusal is delivered here, at the point of
                 # decision, and never handed to the tool node.
@@ -594,6 +602,7 @@ class AgentRuntime:
                     )
                 else:
                     rec["error"] = f"unknown tool: {rec['tool_name']}"
+                rec["input"] = self._redact_value(rec.get("input"))
                 self._publish("tool_result", rec)
                 self._feed_tool_failure(state, rec)
                 continue
@@ -605,6 +614,9 @@ class AgentRuntime:
                 logger.error("tool %s crashed: %s", rec["tool_name"], message)
                 result = ToolResult(success=False, error=message)
 
+            # Dispatch used the raw args; the record (SSE / trace / steps) keeps
+            # only the redacted copy.
+            rec["input"] = self._redact_value(rec.get("input"))
             rec["status"] = "success" if result.success else "failed"
             rec["output"] = self._redact_value(result.data)
             rec["error"] = self._redact(result.error or "")
