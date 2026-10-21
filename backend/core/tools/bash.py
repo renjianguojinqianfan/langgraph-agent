@@ -14,7 +14,9 @@ memory, and the tail is what the next model turn needs.
 Background processes (S1 / #148 F3): the shell's descendants are tracked as a
 POSIX process group or a Windows Job Object, so a stop can reap them even after
 the shell itself exited. A command that returns leaves its background children
-running; if the task is stopped later, the tool's reaper kills that tree. A
+running; its pumps keep draining the inherited pipes (bounded by the tail
+buffer) until the reaper sees the tree end, then join and close them. If the
+task is stopped later, the tool's reaper kills that tree. A
 child that leaves the group/session itself (``setsid``, a self-daemonizing
 service) is outside this control — it is a starting point, not a sandbox.
 """
@@ -243,11 +245,6 @@ def _pump(pipe: Any, sink: _TailBuffer, stop: threading.Event) -> None:
             _pump_posix(fd, sink, stop)
     except Exception:  # pragma: no cover - pipe closed under us at teardown
         pass
-    finally:
-        try:
-            pipe.close()
-        except Exception:  # pragma: no cover - defensive
-            pass
 
 
 def _taskkill(pid: int) -> None:
@@ -270,6 +267,14 @@ class _ProcessContainer:
     def __init__(self, proc: subprocess.Popen[bytes], job: Any = None) -> None:
         self.proc = proc
         self.job = job
+        self.stop_event = threading.Event()
+        self.pipes: list[Any] = []
+        self.pumps: list[threading.Thread] = []
+
+    def attach_pipes(self, pipes: list[Any], pumps: list[threading.Thread]) -> None:
+        """The container owns the read ends so a surviving child keeps its pumps."""
+        self.pipes = pipes
+        self.pumps = pumps
 
     def alive(self) -> bool:
         if self.job is not None:
@@ -312,7 +317,20 @@ class _ProcessContainer:
             except Exception:  # pragma: no cover - defensive
                 pass
 
+    def stop_pumps(self) -> None:
+        self.stop_event.set()
+        for pump in self.pumps:
+            pump.join(timeout=0.5)
+        for pipe in self.pipes:
+            try:
+                pipe.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        self.pipes = []
+        self.pumps = []
+
     def close(self) -> None:
+        self.stop_pumps()
         if self.job is not None:
             self.job.close()
             self.job = None
@@ -559,15 +577,21 @@ class BashTool(BaseTool):
 
         stdout = _TailBuffer(MAX_OUTPUT_BYTES)
         stderr = _TailBuffer(MAX_OUTPUT_BYTES)
-        stop_event = threading.Event()
         pumps = [
             threading.Thread(
-                target=_pump, args=(proc.stdout, stdout, stop_event), name="bash-pump-out", daemon=True
+                target=_pump,
+                args=(proc.stdout, stdout, container.stop_event),
+                name="bash-pump-out",
+                daemon=True,
             ),
             threading.Thread(
-                target=_pump, args=(proc.stderr, stderr, stop_event), name="bash-pump-err", daemon=True
+                target=_pump,
+                args=(proc.stderr, stderr, container.stop_event),
+                name="bash-pump-err",
+                daemon=True,
             ),
         ]
+        container.attach_pipes([proc.stdout, proc.stderr], pumps)
         for pump in pumps:
             pump.start()
 
@@ -597,10 +621,14 @@ class BashTool(BaseTool):
                 stopped = True
                 container.terminate()
                 break
-            stop_event.wait(0.05)
-        stop_event.set()
-        for pump in pumps:
-            pump.join(timeout=0.5)
+            container.stop_event.wait(0.05)
+
+        # A live tree still owns the write ends: leave the pumps running so a
+        # later write does not hit a closed pipe; the reaper closes them.
+        if container.alive():
+            self._register_background(container, stop_context, stop_checker, task_id)
+        else:
+            container.close()
 
         exit_code = proc.poll()
         if exit_code is None:  # pragma: no cover - terminate reaps, belt and braces
@@ -617,11 +645,6 @@ class BashTool(BaseTool):
             error = err.strip() or f"command exited with code {exit_code}"
         else:
             error = ""
-
-        if container.alive():
-            self._register_background(container, stop_context, stop_checker, task_id)
-        else:
-            container.close()
 
         return ToolResult(
             success=exit_code == 0 and not stopped and not timed_out,
