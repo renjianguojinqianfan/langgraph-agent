@@ -301,7 +301,6 @@ class SubAgentExecutor:
         if future.cancel():
             return  # never started: nothing is running, nothing to unwind
         self.tm._stop_flags[spec.subtask_id] = True
-        self.tm.kill_background(spec.subtask_id)
         future.add_done_callback(
             lambda _f: self.tm._stop_flags.pop(spec.subtask_id, None)
         )
