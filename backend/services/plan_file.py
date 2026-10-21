@@ -15,6 +15,11 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+
+class PlanError(RuntimeError):
+    """The plan file exists but cannot be read as the agreed UTF-8 Markdown."""
+
+
 PLAN_DIR = Path(".qianfan") / "plans"
 GITIGNORE = "*\n"
 PLAN_OPEN = "<qianfan-plan>"
@@ -49,6 +54,12 @@ def ensure_gitignore(workspace: Path) -> None:
 def read_plan(workspace: Path, task_id: str) -> str:
     try:
         text = plan_path(workspace, task_id).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except UnicodeDecodeError as exc:
+        raise PlanError(
+            f"plan file is not valid UTF-8: {plan_path(workspace, task_id)}"
+        ) from exc
     except OSError:
         return ""
     if text.strip():
@@ -97,6 +108,15 @@ def render_plan_message(text: str) -> str:
     if len(text) > PLAN_MESSAGE_MAX_CHARS:
         text = text[:PLAN_MESSAGE_MAX_CHARS] + "\n\n…（计划过长，已截断；完整内容见计划文件）"
     return f"{PLAN_MESSAGE_PREFIX}\n{PLAN_MESSAGE_RULE}\n\n{text}"
+
+
+def strip_plan_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop injected plan turns before eviction/compression sees them."""
+    return [
+        m
+        for m in messages
+        if not (m.get("role") == "user" and is_plan_message(m.get("content")))
+    ]
 
 
 def sync_plan_message(messages: List[Dict[str, Any]], text: str) -> bool:

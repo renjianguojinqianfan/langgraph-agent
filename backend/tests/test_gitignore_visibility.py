@@ -114,6 +114,41 @@ def test_workspace_files_is_the_shared_list(repo):
     assert ".qianfan/plan.md" not in names
 
 
+def test_glob_matches_pathlib_semantics(tmp_path):
+    """`**` spans zero or more segments; wildcard prefixes are not literals."""
+    workspace = tmp_path / "plain"
+    for rel in (
+        "top.py",
+        "src/a.py",
+        "src/deep/b.py",
+        "src2/c.py",
+        "srcx/deep/d.py",
+        "other/src/e.py",
+    ):
+        path = workspace / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    settings = _settings(tmp_path, workspace)
+
+    patterns = ("*.py", "**/*.py", "src/**/*.py", "src*/**/*.py", "src/**/b.py")
+    for pattern in patterns:
+        expected = {
+            path.relative_to(workspace).as_posix()
+            for path in workspace.glob(pattern)
+            if path.is_file()
+        }
+        result = GlobTool(settings).run(pattern=pattern)
+        assert set(result.data["matches"]) == expected, pattern
+
+    wildcard = set(GlobTool(settings).run(pattern="src*/**/*.py").data["matches"])
+    assert wildcard == {
+        "src/a.py",
+        "src/deep/b.py",
+        "src2/c.py",
+        "srcx/deep/d.py",
+    }
+
+
 def test_glob_mid_pattern_double_star_matches_zero_directories(repo):
     settings, workspace = repo
     (workspace / "sub").mkdir()

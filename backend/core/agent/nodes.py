@@ -156,7 +156,9 @@ class AgentRuntime:
         eviction cannot drop it.
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        messages = state.get("messages", []) or []
+        # The previous call's injected plan is stale input for eviction,
+        # compression and the summarizer; the current file is appended below.
+        messages = plan_file.strip_plan_messages(state.get("messages", []) or [])
         # Trace pointer shared by eviction and the in-band squeeze (#49), so both
         # write the same 留痕 contract.
         trace_ref = (
