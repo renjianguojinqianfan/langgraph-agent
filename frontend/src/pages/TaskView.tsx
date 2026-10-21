@@ -19,6 +19,7 @@ export function TaskView() {
   const setTasks = useTaskStore((s) => s.setTasks);
   const historyFilter = useTaskStore((s) => s.historyFilter);
   const refreshModels = useModelStore((s) => s.refresh);
+  const listRevision = useTaskStore((s) => s.listRevision);
   const [tab, setTab] = useState<TaskViewTab>("run");
 
   useEffect(() => {
@@ -26,14 +27,19 @@ export function TaskView() {
   }, [refreshModels]);
 
   // History load: this page's directory by default, or every task (ADR 0010).
+  // Membership is the server GET's answer; refetch on filter, create and select.
   useEffect(() => {
+    let cancelled = false;
     const dir = historyFilter === "all" ? "all" : currentDir() ?? "current";
     listTasks(50, dir)
       .then((r) => {
-        if (r.data?.tasks) setTasks(r.data.tasks);
+        if (!cancelled && r.data?.tasks) setTasks(r.data.tasks);
       })
       .catch(() => {});
-  }, [setTasks, historyFilter]);
+    return () => {
+      cancelled = true;
+    };
+  }, [setTasks, historyFilter, listRevision, currentTaskId]);
 
   // Live SSE for the current task.
   useSSE(currentTaskId, applyEvent);

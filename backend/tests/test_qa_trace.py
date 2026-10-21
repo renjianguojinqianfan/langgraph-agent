@@ -17,6 +17,7 @@ from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.main import app
 from backend.services.event_bus import EventBus
+from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.services.trace import TraceRecorder
@@ -80,6 +81,7 @@ def test_trace_records_failed_task(tmp_path):
         settings, eb, persistence,
         llm_client=_ExecutorBoomLLM(),
         tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
     )
     tid = tm.create_task(None, "do the thing")
     assert _wait_status(tm, tid) == "FAILED"
@@ -101,6 +103,7 @@ def test_trace_records_interrupted_task(tmp_path):
         settings, eb, persistence,
         llm_client=_SlowPlannerLLM(),
         tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
     )
     tid = tm.create_task(None, "long task")
     time.sleep(0.3)  # let the run thread reach the slow planner call
@@ -131,7 +134,14 @@ def test_trace_ndjson_valid_and_matches_json_format(tmp_path):
         ],
         final_answer="wrote it",
     )
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     with TestClient(app, base_url="http://localhost") as client:
         client.app.state.settings = settings
         client.app.state.event_bus = eb

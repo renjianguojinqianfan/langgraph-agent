@@ -144,6 +144,54 @@ def test_claim_lock_is_exclusive(tmp_path):
     assert server_lock.claim_lock(path, _lock(instance="other")) is False
 
 
+def test_concurrent_claims_only_one_wins(tmp_path):
+    import threading
+
+    path = tmp_path / "data" / "server.json"
+    barrier = threading.Barrier(8)
+    results: list[bool] = []
+    results_lock = threading.Lock()
+
+    def _claim(n: int) -> None:
+        barrier.wait()
+        won = server_lock.claim_lock(path, _lock(instance=f"tok-{n}"))
+        with results_lock:
+            results.append(won)
+
+    threads = [threading.Thread(target=_claim, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert results.count(True) == 1
+    assert server_lock.read_lock(path) is not None
+
+
+def test_a_second_launcher_cannot_drop_a_half_written_record(tmp_path, monkeypatch):
+    """The record appears only after it is complete; a scan in between is harmless."""
+    path = tmp_path / "data" / "server.json"
+    real_dump = server_lock.json.dump
+    scans: list = []
+
+    def racing_dump(value, handle, **kwargs):
+        scans.append(server_lock.find_running(path, probe=lambda port, timeout: None, wait=0))
+        return real_dump(value, handle, **kwargs)
+
+    monkeypatch.setattr(server_lock.json, "dump", racing_dump)
+    assert server_lock.claim_lock(path, _lock(instance="first")) is True
+    assert scans == [None]
+    record = server_lock.read_lock(path)
+    assert record is not None and record.instance == "first"
+
+
+def test_a_losing_claim_leaves_no_temp_files(tmp_path):
+    path = tmp_path / "data" / "server.json"
+    assert server_lock.claim_lock(path, _lock()) is True
+    assert server_lock.claim_lock(path, _lock(instance="other")) is False
+    assert sorted(p.name for p in path.parent.iterdir()) == ["server.json"]
+
+
 def test_pid_alive_self_and_a_missing_pid():
     assert server_lock.pid_alive(os.getpid()) is True
     assert server_lock.pid_alive(999_999) is False

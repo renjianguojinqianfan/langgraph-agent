@@ -36,6 +36,7 @@ from backend.core.tools.mcp_tool import McpTool, sanitize_name
 from backend.core.tools.registry import build_tools
 from backend.main import app
 from backend.services.event_bus import EventBus
+from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
@@ -298,7 +299,14 @@ def _make_client_with_mcp(tmp_path, settings, tools):
     eb = EventBus()
     persistence = Persistence(settings)
     mock = MockLLMClient(final_answer="ok")
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=tools)
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=tools,
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     with TestClient(app, base_url="http://localhost") as tc:
         tc.app.state.settings = settings
         tc.app.state.event_bus = eb
@@ -357,7 +365,14 @@ def test_task_manager_loads_mcp_tools_and_shutdown_idempotent(tmp_path):
     persistence = Persistence(settings)
     mock = MockLLMClient(final_answer="ok")
     tools = build_tools(settings)
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=tools)
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=tools,
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     names = {t.name for t in tm._tools}
     assert "mcp__echo__echo" in names
     assert "mcp__echo__write_file" in names
@@ -372,7 +387,14 @@ def test_task_manager_no_mcp_when_disabled(tmp_path):
     persistence = Persistence(settings)
     mock = MockLLMClient(final_answer="ok")
     tools = build_tools(settings)
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=tools)
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=tools,
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     names = {t.name for t in tm._tools}
     assert not any(n.startswith("mcp__") for n in names)
     tm.shutdown()

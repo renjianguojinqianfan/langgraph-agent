@@ -29,6 +29,7 @@ from backend.core.llm.client import MockLLMClient
 from backend.core.mcp.client import McpClientManager
 from backend.core.tools.mcp_tool import McpTool
 from backend.services.event_bus import EventBus
+from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 
@@ -113,7 +114,11 @@ def test_task_manager_hands_the_self_report_to_the_tool(tmp_path):
     settings = _echo_settings(tmp_path)
     bus = EventBus()
     tm = TaskManager(
-        settings, bus, Persistence(settings), llm_client=MockLLMClient(final_answer="ok")
+        settings,
+        bus,
+        Persistence(settings),
+        llm_client=MockLLMClient(final_answer="ok"),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
     )
     try:
         by_name = {t.name: t for t in tm._tools}

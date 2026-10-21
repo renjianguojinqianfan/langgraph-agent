@@ -19,6 +19,8 @@ interface TaskState {
   historyFilter: "current" | "all";
   /** M2: the model settings overlay. */
   settingsOpen: boolean;
+  /** Bumped by `task_created`; the history list refetches (membership is the server's). */
+  listRevision: number;
 
   setTasks: (tasks: Task[]) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -136,6 +138,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   selectedStep: null,
   historyFilter: "current",
   settingsOpen: false,
+  listRevision: 0,
 
   setTasks: (tasks) => set({ tasks }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
@@ -150,11 +153,13 @@ export const useTaskStore = create<TaskState>((set) => ({
   upsertTask: (task) =>
     set((state) => {
       const detail = { ...state.detail, [task.id]: task };
-      const exists = state.tasks.some((t) => t.id === task.id);
-      const tasks = exists
-        ? state.tasks.map((t) => (t.id === task.id ? task : t))
-        : [task, ...state.tasks];
-      return { detail, tasks };
+      // Membership belongs to the server's filtered GET: a task from another
+      // directory must not be inserted by a detail fetch or SSE event.
+      if (!state.tasks.some((t) => t.id === task.id)) return { detail };
+      return {
+        detail,
+        tasks: state.tasks.map((t) => (t.id === task.id ? task : t)),
+      };
     }),
 
   applyEvent: (ev) =>
@@ -171,7 +176,7 @@ export const useTaskStore = create<TaskState>((set) => ({
       };
       const tasks = existing
         ? state.tasks.map((t) => (t.id === id ? summary : t))
-        : [summary, ...state.tasks];
+        : state.tasks;
 
       // Track flow markers (context compressed) per task so the message stream
       // can render them without losing cross-task isolation.
@@ -187,6 +192,8 @@ export const useTaskStore = create<TaskState>((set) => ({
         tasks,
         markers,
         events: [...state.events, ev].slice(-500),
+        listRevision:
+          ev.type === "task_created" ? state.listRevision + 1 : state.listRevision,
       };
     }),
 

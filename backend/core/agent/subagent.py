@@ -359,16 +359,25 @@ class SubAgentExecutor:
             # is imported first (the uvicorn entry point).
             from .nodes import AgentRuntime
 
-            parent_task = self.tm.get_task(spec.parent_task_id or spec.subtask_id)
+            parent_id = spec.parent_task_id or spec.subtask_id
+            # The parent's round owns the model: a switch made while the parent
+            # is running must not leak into a child spawned by that round.
+            pinned = self.tm.round_llm_for(parent_id)
+            if pinned is not None:
+                model_profile, llm = pinned
+            else:
+                parent_task = self.tm.get_task(parent_id)
+                model_profile = self.tm.model_id_for(parent_task)
+                llm = self.tm.llm_for_task_id(parent_id)
             runtime = AgentRuntime(
                 task_id=spec.subtask_id,
                 task_manager=self.tm,
-                llm=self.tm.llm_for_task_id(spec.parent_task_id or spec.subtask_id),
+                llm=llm,
                 tools=tools,
                 tool_schemas=schemas,
                 max_steps=self.settings.max_steps,
                 parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
-                model_profile=self.tm.model_id_for(parent_task),
+                model_profile=model_profile,
             )
             from .graph import build_graph
 
