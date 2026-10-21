@@ -14,6 +14,7 @@ import shutil
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.agent.inject import build_inject_block
@@ -194,6 +195,26 @@ def test_list_filters_by_directory_and_all(tmp_path):
         client.__exit__(None, None, None)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(r"\\?\C:\tmp", id="device-namespace"),
+        pytest.param(r"\\.\pipe\qianfan", id="device-pipe"),
+        pytest.param("bad\x00path", id="nul-byte"),
+        pytest.param(r"\\server\share", id="unc-backslash"),
+        pytest.param("//server/share", id="unc-forward-slash"),
+    ],
+)
+def test_list_tasks_rejects_non_local_workspace_paths(tmp_path, bad):
+    """``?dir=`` must be rejected before ``resolve()`` can dial an SMB server."""
+    client, _tm, _settings = _api_client(tmp_path)
+    try:
+        r = client.get("/api/tasks", params={"dir": bad})
+        assert r.status_code == 400, r.text
+    finally:
+        client.__exit__(None, None, None)
+
+
 def test_legacy_task_gets_the_old_sandbox_workspace(tmp_path):
     settings = make_settings(tmp_path)
     settings.data_path.mkdir(parents=True, exist_ok=True)
@@ -232,6 +253,33 @@ def test_send_message_to_a_deleted_workspace_returns_409(tmp_path):
         r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "again"})
         assert r.status_code == 409
         assert "workspace" in r.json()["detail"]
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_continuation_writes_into_the_original_workspace(tmp_path):
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    workspace = tmp_path / "continued"
+    workspace.mkdir()
+    mock = MockLLMClient(final_answer="ok")
+    tm = make_manager(settings, mock)
+    client = TestClient(app, base_url="http://localhost")
+    client.__enter__()
+    getattr(client.app, "state").task_manager = tm
+    try:
+        task_id = tm.create_task("continued", "first round", workspace=str(workspace))
+        _wait_manager(tm, task_id)
+        assert not (workspace / "continued.txt").exists()
+
+        mock.tool_calls = [
+            {"id": "w", "name": "write", "arguments": {"path": "continued.txt", "content": "x"}}
+        ]
+        mock._turn = 0
+        r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "write it now"})
+        assert r.status_code == 200, r.text
+        _wait_manager(tm, task_id)
+
+        assert (workspace / "continued.txt").read_text(encoding="utf-8") == "x"
     finally:
         client.__exit__(None, None, None)
 
