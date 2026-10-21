@@ -875,6 +875,26 @@ class TaskManager:
                 time.sleep(0.3)
         return False
 
+    def _redact_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist tool arguments redacted; dispatch already saw the raw copy."""
+
+        def redact_value(value: Any) -> Any:
+            if isinstance(value, str):
+                return self.redact(value)
+            if isinstance(value, list):
+                return [redact_value(item) for item in value]
+            if isinstance(value, dict):
+                return {self.redact(str(k)): redact_value(v) for k, v in value.items()}
+            return value
+
+        calls = []
+        for call in step.get("tool_calls") or []:
+            call = dict(call)
+            if "input" in call:
+                call["input"] = redact_value(call["input"])
+            calls.append(call)
+        return {**step, "tool_calls": calls}
+
     def _finalize_terminal(self, task: Task, final: Dict[str, Any]) -> None:
         """Map a finished run onto the persisted task record.
 
@@ -889,11 +909,11 @@ class TaskManager:
         """
         status = final.get("status") or "FAILED"
         task.status = TaskStatus(status)
-        task.steps = [StepRecord(**s) for s in final.get("steps", [])]
+        task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
         task.plan_version = int(final.get("plan_version", task.plan_version))
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
         task.conversation = self._conversation_from(final.get("messages"))
-        task.final_answer = final.get("final_answer", "")
+        task.final_answer = self.redact(final.get("final_answer", "") or "")
         task.error = self.redact(final["error"]) if final.get("error") else None
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()

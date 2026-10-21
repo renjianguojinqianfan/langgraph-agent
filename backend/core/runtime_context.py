@@ -24,12 +24,33 @@ _workspace: ContextVar[Optional[Path]] = ContextVar("qianfan_workspace", default
 Tokens = Tuple[Token[Optional[str]], Token[Optional[Path]]]
 
 
+def _reject_non_local_path(value: "str | Path") -> None:
+    """Refuse UNC / device paths before ``resolve()`` can touch the network.
+
+    ``Path.resolve()`` on Windows dials an SMB server for ``\\\\host\\share``
+    (and its forward-slash spelling), which turns an unauthenticated GET into
+    an NTLM handshake with an attacker-chosen host. Device namespaces
+    (``\\\\?\\``, ``\\\\.\\``) and NUL bytes are rejected for the same reason:
+    they are never a task workspace.
+    """
+    raw = os.fspath(value)
+    if isinstance(raw, bytes):
+        raw = os.fsdecode(raw)
+    if "\x00" in raw:
+        raise ValueError("workspace path must not contain a NUL byte")
+    if raw.startswith(("\\\\", "//", "\\??\\")):
+        raise ValueError("workspace must be a local path; UNC and device paths are rejected")
+
+
 def normalize_workspace(value: "str | Path") -> str:
     """Absolute path used for storage and execution.
 
     Resolves ``~``, relative paths (against the process cwd), ``..`` and
-    symlinks, keeping the original letter case for display.
+    symlinks, keeping the original letter case for display. UNC, device and
+    NUL-bearing paths are refused before any filesystem call (see
+    :func:`_reject_non_local_path`).
     """
+    _reject_non_local_path(value)
     path = Path(value).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path

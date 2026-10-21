@@ -45,6 +45,11 @@ def _stale_build(dist: Path) -> bool:
         return False
 
 
+def _open_browser_now(url: str) -> None:
+    """Handoff path: the process exits right after ``main()`` returns."""
+    webbrowser.open(url)
+
+
 def _schedule_browser(url: str) -> None:
     timer = threading.Timer(1.0, webbrowser.open, args=(url,))
     timer.daemon = True
@@ -85,6 +90,7 @@ def main(
     settings = get_settings()
     dist: Path = settings.frontend_dist_path
     browser = open_browser or _schedule_browser
+    handoff_browser = open_browser or _open_browser_now
     probe_health = probe or server_lock.probe_health
     lock_file = server_lock.lock_path(settings)
 
@@ -101,7 +107,7 @@ def main(
     # live instance instead of starting a second writer of tasks.json.
     running = server_lock.find_running(lock_file, probe=probe_health)
     if running is not None:
-        return _handoff(running, args.no_browser, browser)
+        return _handoff(running, args.no_browser, handoff_browser)
 
     if not (dist / "index.html").is_file():
         print(f"[qianfan] 找不到前端构建产物：{dist}")
@@ -124,7 +130,7 @@ def main(
         # Lost a race with another launcher: hand off to the winner.
         running = server_lock.find_running(lock_file, probe=probe_health)
         if running is not None:
-            return _handoff(running, args.no_browser, browser)
+            return _handoff(running, args.no_browser, handoff_browser)
         print(f"[qianfan] 后台可能正在启动或登记记录损坏（{lock_file}），请稍后再试。")
         return 1
 

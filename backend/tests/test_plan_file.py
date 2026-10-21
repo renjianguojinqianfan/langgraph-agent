@@ -119,6 +119,65 @@ def test_a_non_plan_reply_does_not_create_the_file(tmp_path):
     assert not plan_file.plan_path(Path(tm.get_task(task_id).workspace), task_id).exists()
 
 
+def test_a_non_plan_reply_keeps_the_previous_plan_note(tmp_path):
+    class _QuestionLLM:
+        def complete(self, messages, tools=None, **kwargs):
+            from backend.core.llm.client import LLMResponse
+
+            return LLMResponse(content="Which folder should I use?")
+
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    _wait(tm, task_id)
+    workspace = Path(tm.get_task(task_id).workspace)
+    text = "# Plan\n\n1. existing"
+    plan_file.write_plan(workspace, task_id, text)
+
+    from backend.core.agent.nodes import AgentRuntime
+
+    runtime = AgentRuntime(
+        task_id,
+        tm,
+        llm=_QuestionLLM(),
+        tools=[],
+        tool_schemas=[],
+    )
+    state = {
+        "task_id": task_id,
+        "mode": "plan",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "计划已更新到第 1 版。"},
+        ],
+        "plan_text": text,
+        "plan_version": 1,
+        "plan_hash": plan_file.plan_hash(text),
+        "steps": [],
+        "status": "RUNNING",
+        "stop_requested": False,
+        "step_index": 0,
+        "round_steps": 0,
+        "final_answer": "",
+        "error": "",
+        "_last_action": "",
+        "_current_tool_calls": [],
+        "subtasks": [],
+        "_is_subtask": False,
+    }
+    runtime.agent(state)
+
+    notes = [
+        m
+        for m in state["messages"]
+        if m.get("role") == "assistant"
+        and str(m.get("content") or "").startswith("计划已更新到")
+    ]
+    assert len(notes) == 1
+    assert notes[0]["content"] == "计划已更新到第 1 版。"
+    assert state["messages"][-1]["content"] == "Which folder should I use?"
+
+
 def test_edited_file_is_what_the_next_round_sends(tmp_path):
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     llm = _RecordingLLM(final_answer="done")
@@ -136,6 +195,14 @@ def test_edited_file_is_what_the_next_round_sends(tmp_path):
     assert len(texts) == 1
     assert "edited externally" in texts[0]
     assert tm.get_task(task_id).plan_version == 1
+    conversation = tm.get_task(task_id).conversation
+    notes = [
+        t
+        for t in conversation
+        if t.role == "assistant" and t.content.startswith("计划已更新到")
+    ]
+    assert len(notes) == 1
+    assert "第 1 版" in notes[0].content
 
 
 def test_exactly_one_plan_message_even_after_compression(tmp_path):
@@ -205,6 +272,59 @@ def test_compression_replaces_an_old_plan_message_with_the_latest(tmp_path):
     assert "stale" not in plans[0]["content"]
 
 
+def test_compression_refreshes_a_mid_round_plan(tmp_path):
+    settings = make_settings(tmp_path, context_token_budget=1, context_keep_recent=1)
+    llm = _RecordingLLM(final_answer="done")
+    tm = make_manager(settings, llm)
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    task = _wait(tm, task_id)
+    workspace = Path(task.workspace)
+    first = "# Plan\n\n1. first"
+    plan_file.write_plan(workspace, task_id, first)
+    plan_file.write_plan(workspace, task_id, "# Plan\n\n1. second")
+
+    from backend.core.agent.nodes import AgentRuntime
+
+    runtime = AgentRuntime(task_id, tm, llm=llm, tools=[], tool_schemas=[])
+    state = {
+        "task_id": task_id,
+        "mode": "build",
+        "messages": [
+            {"role": "user", "content": plan_file.render_plan_message(first)},
+            *[{"role": "user", "content": "x" * 2000} for _ in range(3)],
+            {"role": "assistant", "content": "y" * 2000},
+        ],
+        "plan_text": first,
+        "plan_version": 1,
+        "plan_hash": plan_file.plan_hash(first),
+        "steps": [],
+        "status": "RUNNING",
+        "stop_requested": False,
+        "step_index": 0,
+        "round_steps": 5,  # mid-round: only compression may refresh the file
+        "final_answer": "",
+        "error": "",
+        "_last_action": "",
+        "_current_tool_calls": [],
+        "subtasks": [],
+        "_is_subtask": False,
+    }
+    built = runtime._build_messages(state, "system")
+
+    plans = [m for m in built if plan_file.is_plan_message(m.get("content"))]
+    assert len(plans) == 1
+    assert "second" in plans[0]["content"]
+    assert state["plan_version"] == 2
+    notes = [
+        m
+        for m in built
+        if m.get("role") == "assistant"
+        and str(m.get("content") or "").startswith("计划已更新到")
+    ]
+    assert len(notes) == 1
+    assert "第 2 版" in notes[0]["content"]
+
+
 def test_a_user_message_that_merely_starts_with_the_prefix_is_kept(tmp_path):
     messages = [{"role": "user", "content": "[qianfan-plan] I typed this"}]
     plan_file.sync_plan_message(messages, "# Plan\n\n1. real")
@@ -233,7 +353,7 @@ def test_deleted_file_means_no_plan(tmp_path):
         assert _plan_messages(transcript) == []
 
 
-def test_model_write_to_the_plan_file_is_used_next_call(tmp_path):
+def test_model_write_to_the_plan_file_is_used_next_round(tmp_path):
     settings = make_settings(tmp_path)
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))
     task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
@@ -281,10 +401,27 @@ def test_model_write_to_the_plan_file_is_used_next_call(tmp_path):
     }
     runtime.agent(state)  # tool round
     runtime.tool_node(state)  # execute the write
-    runtime.agent(state)  # next call reads the file
+    runtime.agent(state)  # same round: the edit must NOT be visible yet
 
-    assert llm.transcripts
+    assert _plan_messages(llm.transcripts[-1]) == []
+    assert not any(
+        m.get("role") == "assistant"
+        and str(m.get("content") or "").startswith("计划已更新到")
+        for m in state["messages"]
+    )
+
+    state["round_steps"] = 0  # a new round starts (manager resets the budget)
+    runtime.agent(state)  # next round: the file is read and wins
+
     assert "model edit" in _plan_messages(llm.transcripts[-1])[0]
+    notes = [
+        m
+        for m in state["messages"]
+        if m.get("role") == "assistant"
+        and str(m.get("content") or "").startswith("计划已更新到")
+    ]
+    assert len(notes) == 1
+    assert "第 1 版" in notes[0]["content"]
     assert (workspace / ".qianfan" / ".gitignore").read_text(encoding="utf-8") == "*\n"
 
 

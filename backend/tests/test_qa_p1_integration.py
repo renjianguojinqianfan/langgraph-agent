@@ -109,6 +109,7 @@ def test_journey_subagent_spawn_summary_artifact(tmp_path, event_bus):
     assert task.subtasks[0].status == "completed"
     # The subtask's file is in the shared workspace; its own tool call stayed
     # on the subtask channel.
+    assert (settings.artifacts_path / "qa_report_notes.md").is_file()
     sub_events = event_bus.replay(spawn[0]["output"]["subtask_id"])
     assert any(
         e["type"] == "tool_call" and e["data"]["tool_name"] == "write" for e in sub_events
