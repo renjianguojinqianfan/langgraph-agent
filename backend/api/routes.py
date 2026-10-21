@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, Response
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
+from ..services.plan_file import PlanError
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
 from .schemas import (
@@ -169,6 +170,8 @@ def get_plan(
         raise HTTPException(status_code=404, detail="task not found")
     try:
         result = _tm(request).get_plan(task_id)
+    except PlanError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return _envelope(data=result)

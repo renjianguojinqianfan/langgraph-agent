@@ -550,29 +550,29 @@ class TaskManager:
         task.updated_at = _now()
         self.persistence.save_task(task)
 
-        seeded = self._seed_plan(task)
-        state: AgentState = {
-            "task_id": task_id,
-            "mode": task.mode.value,
-            "messages": [{"role": "user", "content": task.user_input}],
-            "plan_text": seeded["plan_text"],
-            "plan_version": seeded["plan_version"],
-            "plan_hash": seeded["plan_hash"],
-            "steps": [],
-            "status": "RUNNING",
-            "stop_requested": False,
-            "step_index": 0,
-            "round_steps": 0,
-            "final_answer": "",
-            "error": "",
-            "_last_action": "",
-            "_current_tool_calls": [],
-            "subtasks": [],
-            "_is_subtask": False,
-        }
-        self._active_states[task_id] = state
-
         try:
+            seeded = self._seed_plan(task)
+            state: AgentState = {
+                "task_id": task_id,
+                "mode": task.mode.value,
+                "messages": [{"role": "user", "content": task.user_input}],
+                "plan_text": seeded["plan_text"],
+                "plan_version": seeded["plan_version"],
+                "plan_hash": seeded["plan_hash"],
+                "steps": [],
+                "status": "RUNNING",
+                "stop_requested": False,
+                "step_index": 0,
+                "round_steps": 0,
+                "final_answer": "",
+                "error": "",
+                "_last_action": "",
+                "_current_tool_calls": [],
+                "subtasks": [],
+                "_is_subtask": False,
+            }
+            self._active_states[task_id] = state
+
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
@@ -814,6 +814,9 @@ class TaskManager:
                     "only INTERRUPTED tasks can be resumed"
                 )
             self._require_workspace(task)
+            # Read the plan before accepting the round: a non-UTF-8 file is a
+            # readable 409 here, not a worker crash after the resume is taken.
+            self._seed_plan(task)
             live = self._threads.get(task_id)
             if live is not None and live.is_alive():
                 raise RuntimeError(f"task {task_id} is already running")
@@ -1051,6 +1054,9 @@ class TaskManager:
                     "only a parked (INTERRUPTED) task can continue"
                 )
             self._require_workspace(task)
+            # Precheck the plan file for the same reason as resume(): the API
+            # must reject a continuation before the user message is persisted.
+            self._seed_plan(task)
             live = self._threads.get(task_id)
             if live is not None and live.is_alive():
                 raise RuntimeError(f"task {task_id} is already running")
