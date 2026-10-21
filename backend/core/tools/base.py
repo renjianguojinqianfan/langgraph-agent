@@ -33,14 +33,14 @@ class BaseTool(ABC):
     description: str = ""
     args_schema: Dict[str, Any] = field(default_factory=dict)  # JSON Schema (parameters)
     requires_confirm: bool = False
-    # Whether this tool is a source of task products (issue #72: product = what
-    # the task wrote). Registration needs both halves: the class declares True
-    # *and* the result advertises the written file under ``data["path"]`` as a
-    # real file. Read-only tools keep this False even when their result carries
-    # a ``path`` (``read`` does). A tool that writes files without advertising
-    # one under ``path`` (``bash``) stays False too — it has no single
-    # deliverable to register. A wrapper around an external tool (MCP) opts in
-    # by setting this True on its class.
+    # Whether a write by this tool is collected into ``SubTaskResult.artifacts``
+    # (issue #72: product = what the task wrote). Collection needs both halves:
+    # the class declares True *and* the result advertises the written file under
+    # ``data["path"]`` as a real file. Read-only tools keep this False even when
+    # their result carries a ``path`` (``read`` does). A tool that writes files
+    # without advertising one under ``path`` (``bash``) stays False too — it has
+    # no single deliverable to collect. The parent task's artifact ledger is
+    # retired (C5 #160); only the sub-agent result consumes this flag now.
     registers_artifact: bool = False
 
     def __init__(self, settings: Settings | None = None) -> None:

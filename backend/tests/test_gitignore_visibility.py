@@ -149,6 +149,27 @@ def test_glob_matches_pathlib_semantics(tmp_path):
     }
 
 
+@pytest.mark.skipif(os.name != "nt", reason="backslash patterns are a Windows spelling")
+def test_glob_accepts_backslash_patterns_on_windows(tmp_path):
+    """Windows users and models write `sub\\*.py`; Path.glob used to accept it."""
+    workspace = tmp_path / "plain"
+    for rel in ("top.py", "sub/x.py", "sub/deep/y.py", "src/a.py", "src2/b.py"):
+        path = workspace / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    settings = _settings(tmp_path, workspace)
+
+    assert set(GlobTool(settings).run(pattern=r"sub\*.py").data["matches"]) == {"sub/x.py"}
+    assert set(GlobTool(settings).run(pattern=r"sub\**\*.py").data["matches"]) == {
+        "sub/x.py",
+        "sub/deep/y.py",
+    }
+    assert set(GlobTool(settings).run(pattern=r"src*\**\*.py").data["matches"]) == {
+        "src/a.py",
+        "src2/b.py",
+    }
+
+
 def test_glob_mid_pattern_double_star_matches_zero_directories(repo):
     settings, workspace = repo
     (workspace / "sub").mkdir()
