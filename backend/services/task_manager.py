@@ -908,7 +908,6 @@ class TaskManager:
         other park publishes it here — one event per stop, whichever caused it.
         """
         status = final.get("status") or "FAILED"
-        task.status = TaskStatus(status)
         task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
         task.plan_version = int(final.get("plan_version", task.plan_version))
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
@@ -917,6 +916,10 @@ class TaskManager:
         task.error = self.redact(final["error"]) if final.get("error") else None
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()
+        # Flip the status last: a poll between assignments must never see
+        # "parked" carrying the previous round's steps (the redaction walk
+        # above widened that window).
+        task.status = TaskStatus(status)
         if status == "FAILED":
             self.event_bus.publish(
                 task.id,
