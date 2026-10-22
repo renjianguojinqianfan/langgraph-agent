@@ -89,7 +89,7 @@ def _state() -> AgentState:
         "step_index": 1,
         "steps": [{"index": 1, "thought": "", "tool_calls": [], "status": "running"}],
         "messages": [{"role": "user", "content": "hi"}],
-        "plan": [], "artifacts": [], "status": "RUNNING", "stop_requested": False,
+        "plan": [], "status": "RUNNING", "stop_requested": False,
         "final_answer": "", "error": "",
         "_last_action": "", "_current_tool_calls": [],
         "subtasks": [], "_is_subtask": False,

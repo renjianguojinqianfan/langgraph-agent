@@ -93,8 +93,7 @@ def test_p1_events_in_main_channel(tmp_path, event_bus):
     assert spawn[0]["output"]["status"] == "completed"
     assert {"subtask_start", "subtask_result"} <= types
     assert "subtask_failed" not in types
-    # Parent artifacts include the subtask file via the hand-back.
-    assert any("p1_notes.txt" in a.filename for a in task.artifacts)
+    assert (settings.artifacts_path / "p1_notes.txt").is_file()
 
 
 def test_p1_all_enabled_completes(tmp_path, event_bus):

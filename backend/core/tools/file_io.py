@@ -3,8 +3,7 @@
 All paths are confined to the task's workspace (runtime context, falling back
 to ``Settings.artifacts_path`` outside a run). Reads outside the root, writes
 that escape the root, and non-existent files are rejected. Successful writes
-return the absolute path so the kernel can register an
-:class:`~backend.services.persistence.Artifact`.
+return the absolute path (the workspace file list picks it up).
 
 Each capability is its own ``BaseTool`` so the function schema and the
 per-tool confirm policy stay focused:
@@ -29,10 +28,9 @@ from functools import lru_cache
 from pathlib import Path, PurePath
 from typing import Any
 
-from ...services.snapshots import capture_before_image
 from ...utils.logging import get_logger
 from ..runtime_context import get_current_workspace, workspace_root
-from ..workspace_files import workspace_files
+from ..workspace_files import resolve_in_workspace, workspace_files
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -116,15 +114,8 @@ class _SandboxedTool(BaseTool):
         return root
 
     def _safe_path(self, path: str) -> Path | None:
-        """Resolve ``path`` against the sandbox root; return None if it escapes."""
-        try:
-            root = self._root_resolved()
-            candidate = (root / path).resolve()
-            if candidate != root and root not in candidate.parents:
-                return None
-            return candidate
-        except Exception:
-            return None
+        """Resolve ``path`` against the workspace root; None if it escapes."""
+        return resolve_in_workspace(self._root_resolved(), path)
 
     def _base_dir(self, sub: str) -> Path | None:
         """Resolve an optional sub-directory scope (empty -> sandbox root)."""
@@ -226,7 +217,7 @@ class ReadTool(_SandboxedTool):
 @register
 class WriteTool(_SandboxedTool):
     name = "write"
-    registers_artifact = True  # the file it writes is a product of the task (#72)
+    registers_artifact = True  # a write counts as a subtask product (#72)
     description = (
         "Write a text file inside the sandbox, creating parent directories and "
         "overwriting an existing file. Prefer this for new files; use `edit` "
@@ -265,9 +256,6 @@ class WriteTool(_SandboxedTool):
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            # P1-B: photograph the previous version before it is overwritten
-            # (fail-open — a broken snapshot store never blocks the write).
-            capture_before_image(target, settings=self.settings)
             target.write_text(content, encoding="utf-8")
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("write failed")
@@ -281,7 +269,7 @@ class WriteTool(_SandboxedTool):
 @register
 class EditTool(_SandboxedTool):
     name = "edit"
-    registers_artifact = True  # the file it rewrites is a product of the task (#72)
+    registers_artifact = True  # an edit counts as a subtask product (#72)
     description = (
         "Replace an exact string in a sandbox file. `old_string` must match the "
         "file verbatim (including whitespace/indentation) and be unique unless "
@@ -374,9 +362,6 @@ class EditTool(_SandboxedTool):
             new_text = text.replace(old_string, new_string, 1)
             replacements = 1
 
-        # P1-B: photograph the previous version before it is overwritten
-        # (fail-open — a broken snapshot store never blocks the edit).
-        capture_before_image(target, settings=self.settings)
         try:
             # Newline handling: platform-native on write, while read uses
             # universal newlines so a model-supplied "\n" old_string still

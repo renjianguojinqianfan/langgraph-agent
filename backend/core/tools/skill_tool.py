@@ -87,8 +87,6 @@ class LoadSkillTool(BaseTool):
             message = _miss_message(name, entries, home, sandbox)
             return ToolResult(success=False, data={"error": message}, error=message)
 
-        # No top-level ``path`` key on purpose: tool_node would otherwise
-        # register the skill file as a task artifact (nodes.py).
         return ToolResult(success=True, data={"name": name, "documents": documents})
 
 

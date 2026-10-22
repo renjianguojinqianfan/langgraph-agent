@@ -294,14 +294,14 @@ classDiagram
         +save_task(Task)
         +load_task(id) Task
         +list_tasks() list~Task~
-        +save_artifact(file, meta) Artifact
     }
     class TaskManager {
-        +create_task(title, input) str
+        +create_task(title, input, workspace) str
         +run(task_id)
         +stop(task_id)
         +get_task(task_id) Task
-        +get_artifact(task_id, art_id) bytes
+        +list_tasks(workspace)
+        +list_all_tasks()
     }
     TaskManager ..> EventBus : emits
     TaskManager ..> Persistence : stores
@@ -318,11 +318,11 @@ classDiagram
 | 模型 | 关键字段 |
 |------|----------|
 | `TaskStatus` | `PENDING / RUNNING / FAILED / INTERRUPTED`（三值循环：跑着 / 停下 / 出错；没有「完成」，ADR 0008 决策 5） |
-| `Task` | `id, title, user_input, status, mode(plan/build), steps[], plan[], artifacts[], conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
+| `Task` | `id, title, user_input, workspace, status, mode(plan/build), steps[], plan[], conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
 | `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error` |
 | `PlanStep` | `index, description, status(pending/active/done)` |
-| `Artifact` | `id, filename, path, mime, size, created_at` |
+| `WorkspaceFile` | 不是模型：REST 返回 `{path, size}`（C5 文件列表） |
 | `ToolResult` | `success:bool, data:Any, error:str` |
 | `LLMResponse` | `content:str, tool_calls:list, raw:dict` |
 
@@ -330,21 +330,23 @@ classDiagram
 
 > 现役端点以 `backend/api/routes.py` + Swagger 为准（本文不写计数）。
 > 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、
-> `GET /mcp/servers`（P2）、`POST /tasks/{id}/rollback`（P1-B）；S5（#139）新增
-> `PUT /tasks/{id}/mode`、`PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`。
+> `GET /mcp/servers`（P2）；S5（#139）新增 `PUT /tasks/{id}/mode`、
+> `PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`；C5 新增
+> `GET /tasks/{id}/files{,/preview,/download}`。
 > `/health` 另在 `backend/main.py`。下表其余契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`
 
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 |
 |------|------|------|---------------|------|
-| POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?:str, input:str, mode?:plan\|build}` | `{task_id:str}` |
-| GET | `/api/tasks` | 历史任务列表 | query: `?limit=50` | `{tasks: Task[]}` |
+| POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?:str, input:str, mode?:plan\|build, workspace?:str}` | `{task_id:str}` |
+| GET | `/api/tasks` | 历史任务列表 | query: `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
 | GET | `/api/tasks/{id}` | 任务完整状态 | path `id` | `Task` |
 | POST | `/api/tasks/{id}/stop` | 停止任务 | path `id` | `{ok:bool, status:str}` |
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（见 3.4） | path `id` | `text/event-stream` |
-| GET | `/api/tasks/{id}/artifacts/{aid}` | 下载产物 | path `id,aid` | `application/octet-stream` |
-| GET | `/api/tasks/{id}/artifacts/{aid}/preview` | 预览产物（文本/图片） | path `id,aid` | 按 mime 返回 |
+| GET | `/api/tasks/{id}/files` | 工作区文件列表（跳过 .git / .gitignore） | path `id` | `{files:[{path,size}], truncated:bool}` |
+| GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件 | query: `?path=<相对路径>` | `{path,content,size,truncated}` |
+| GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | query: `?path=<相对路径>` | `application/octet-stream` |
 | POST | `/api/auth/token` | P1 鉴权（auth_enabled 时） | `{token:str}` | `{ok:bool}` |
 
 **统一响应信封**：`{code:int, data:any, message:str}`（错误时 `code≠0`）。
@@ -378,14 +380,12 @@ classDiagram
 | `step_start` | `{index, thought}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形 |
 | `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
-| `artifact_created` | `Artifact` | 产物登记：仅产物源工具（`registers_artifact=True`）写出真实文件时，任务内同一路径只发一条（ADR 0004） |
 | `final_answer` | `{answer:str}` | 本轮的文字回复（不是终态；下一轮会覆盖） |
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 停下：人按停、这一轮的最后一次 `agent` 调用没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑 / 新消息续跑启动（P3；#139 起多轮对话共用） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
 | `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|
-| `task_rollback` | `{task_id, ok, files, already_original}` | 工作区回滚完成（P1-B，`files` = 实际变动的沙箱内路径） |
 | `subtask_start` | `{subtask_id, name, status, parent_task_id}` | 子任务已派生（#70 裁定 A 恢复；**只发在父频道**，子任务自己的频道不带） |
 | `subtask_result` | `{subtask_id, name, status, summary, artifacts}` | 子任务 `completed` 的折叠回传（#70 裁定 A；父频道） |
 | `subtask_failed` | `{subtask_id, name, error}` | 子任务超时 / worker 崩溃 / 折回 `failed`（#70 裁定 A；父频道，与一条失败的 `tool_result` 并存、父任务不死） |
@@ -429,10 +429,6 @@ sequenceDiagram
             G->>T: run(**input)
             T-->>G: ToolResult
             G->>EB: publish(tool_result)
-            opt 产物源工具写出真实文件
-                G->>TM: add_artifact()
-                TM->>EB: publish(artifact_created)
-            end
             Note over G: tool → agent（本轮预算未尽）
         else 本轮最后一次调用没有 tool call
             G->>EB: publish(final_answer)
@@ -441,7 +437,7 @@ sequenceDiagram
     end
     G-->>TM: 状态 INTERRUPTED / FAILED
     TM->>EB: publish(task_interrupted / task_failed)
-    EB-->>FE: 实时渲染对话 / 计划 / 步骤 / 产物
+    EB-->>FE: 实时渲染对话 / 计划 / 步骤；停下后查看工作区文件
 
     U->>FE: 停下后说一句
     FE->>API: POST /api/tasks/{id}/messages
@@ -467,7 +463,7 @@ sequenceDiagram
 5. **错误口径**：工具失败返回 `ToolResult(success=False, error=...)`；每次调用只执行一次，失败原因原样回给模型，**不自动重试**。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。被 `policy_rules` 当场拒掉的调用（S2）走**第三条**形状：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开，ADR 0008 决策 6）。
 6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在下一入口检测，为真则走 `finish` 并发布 `task_interrupted`（P0-9：2s 内生效）。
 7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里那一个钩子；命中即当场拒，不执行、不弹框、不进图重入。详见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md) 决策 6 与 `backend/core/agent/policy.py`。
-8. **产物与路径安全**：`read` / `write` / `edit` / `ls` / `glob` / `grep` 的路径限定在 `Settings.artifacts_dir`，越界路径一律拒绝（P0-4）；`bash` **不受此围栏约束**——工作目录只是起点，见 README「这不是安全边界」。产物 = 本任务写出的文件，判据与去重口径见 [ADR 0004](adr/0004-artifact-is-what-the-task-wrote.md)。
+8. **工作区与路径安全**：`read` / `write` / `edit` / `ls` / `glob` / `grep` 与工作区文件接口的路径限定在**当前任务的目录**，越界路径一律拒绝（P0-4 / ADR 0010 决策 1、6）；`bash` **不受此围栏约束**——工作目录只是起点，见 README「这不是安全边界」。文件列表是可见性过滤，不是安全边界：点名 `read` / 预览 / 下载仍可达工作区内的任意文件。
 9. **停下判定（Q8）**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 把任务停成 `INTERRUPTED`；错误 → `FAILED`。没有 `COMPLETED` 终态。
 10. **日志**：统一经 `utils/logging.py`，结构化输出到控制台 + `data_dir/logs/`；不打印明文 API Key。
 

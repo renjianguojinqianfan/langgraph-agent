@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import {
-  Artifact,
   SSEvent,
   StepRecord,
   Task,
@@ -43,7 +42,6 @@ function emptyTask(id: string): Task {
     mode: "build",
     steps: [],
     plan: [],
-    artifacts: [],
     conversation: [],
     final_answer: "",
     error: null,
@@ -111,11 +109,6 @@ function applyToTask(task: Task, ev: SSEvent): Task {
         };
       });
       return { ...task, steps };
-    }
-    case "artifact_created": {
-      const art = ev.data as Artifact;
-      if (task.artifacts.some((a) => a.id === art.id)) return task;
-      return { ...task, artifacts: [...task.artifacts, art] };
     }
     case "final_answer":
       // The conversation itself is refreshed from REST when the round parks

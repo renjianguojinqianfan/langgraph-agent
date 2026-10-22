@@ -97,8 +97,6 @@ function summarize(ev: SSEvent): string {
       )}`;
     case "step_start":
       return `步骤 #${String(d.index ?? "?")}`;
-    case "artifact_created":
-      return typeof d.filename === "string" ? String(d.filename) : "";
     case "plan_update":
       return Array.isArray(d.plan) ? `${d.plan.length} 项计划` : "";
     default:

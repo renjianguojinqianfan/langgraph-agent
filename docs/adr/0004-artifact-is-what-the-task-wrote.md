@@ -1,9 +1,11 @@
 ---
-status: accepted
+status: retired
 ---
 
 # 产物 = 本任务写出的文件；登记源与去重都是定居决策
 
+> **已退役（2026-10-20，[C5 #160](https://github.com/renjianguojinqianfan/langgraph-agent/issues/160)）**：产物账本、`artifact_created` 与回滚快照已删除；界面改为「工作区文件」列表（ADR 0010 决策 1 / 5）。本文保留为历史决策。
+>
 > 2026-09-27 [#72](https://github.com/renjianguojinqianfan/langgraph-agent/issues/72) 拍板落地。
 > 关联 [ADR 0003](0003-subagent-circuit-breaker-per-runtime.md)（「按运行各记一本账」是同一种定居）。
 

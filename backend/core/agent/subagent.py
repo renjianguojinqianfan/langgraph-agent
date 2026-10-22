@@ -3,7 +3,7 @@
 The main agent can delegate work to **isolated** sub-agents. Isolation means:
 
 * every subtask runs with its **own** :class:`AgentState` (independent
-  ``messages`` / ``plan`` / ``steps`` / ``artifacts``);
+  ``messages`` / ``plan`` / ``steps``);
 * every subtask runs over a **declared capability tier** (:data:`TOOL_TIERS`),
   not over "whatever the parent had" — a potentially dangerous tool is
   structurally absent from the subtask's face rather than present-and-gated;
@@ -202,7 +202,7 @@ class SubAgentExecutor:
         wedge the parent's worker thread) and what makes
         ``subagent_max_concurrency`` mean anything; ``_exec_one`` re-seats the
         parent task id on the pool thread so its writes still land on the
-        parent's rollback ledger (Issue #33 拍板 5). Over the bound the fold
+        parent's task context. Over the bound the fold
         also asks the worker to stop, so the slot comes back at the next node
         entry instead of at ``max_steps``: the LLM call already in flight still
         finishes, and a tool batch runs only if ``tool_node`` had already passed
@@ -318,8 +318,7 @@ class SubAgentExecutor:
         (``spec.subtask_id``) — they never reach the parent channel.
         """
         # P1-B / W1: the pool thread starts with a *fresh* context, so both the
-        # parent task id (rollback ledger) and the parent workspace must be
-        # re-seated. Since #56 every path crosses the pool, spawn_subagent
+        # parent task id and the parent workspace must be re-seated. Since #56 every path crosses the pool, spawn_subagent
         # included — which is why that tool hands the spec an explicit parent id
         # instead of relying on inheritance.
         tokens = set_runtime_context(
@@ -336,7 +335,6 @@ class SubAgentExecutor:
                 "messages": [{"role": "user", "content": spec.instruction}],
                 "plan": [],
                 "steps": [],
-                "artifacts": [],
                 "status": "RUNNING",
                 "stop_requested": False,
                 "step_index": 0,
@@ -403,40 +401,6 @@ class SubAgentExecutor:
             tool_count = sum(
                 len(s.get("tool_calls", []) or []) for s in final.get("steps", []) or []
             )
-
-            # Register subtask-produced files as artifacts of the parent task so
-            # they remain downloadable from the main task view.
-            #
-            # The hand-back is the ONLY registration a subtask write gets (#76 A:
-            # the tool node no longer registers under the subtask's own id, which
-            # had no ledger to land in). If the parent's run is already over the
-            # ledger is gone, and the refusal has to be loud: ``add_artifact``
-            # would mint a record nothing holds and fire an ``artifact_created``
-            # promising a product the task does not own. Landing the record on a
-            # finished task is ticket #106's (裁 B) job — here the drop merely
-            # becomes attributable. One narrow race survives on purpose: the
-            # liveness check and the registration are two steps, so a parent
-            # finishing exactly in between still mints the phantom record;
-            # closing that means moving the decision inside ``add_artifact``'s
-            # lock, which is #106's change anyway.
-            if spec.parent_task_id and unique:
-                if not self.tm.has_active_state(spec.parent_task_id):
-                    logger.warning(
-                        "late hand-back refused: parent task %s has no active run; "
-                        "%d artifact(s) from subtask %s not registered: %s",
-                        spec.parent_task_id,
-                        len(unique),
-                        spec.subtask_id,
-                        unique,
-                    )
-                else:
-                    for p in unique:
-                        try:
-                            path_obj = Path(p)
-                            if path_obj.exists():
-                                self.tm.add_artifact(spec.parent_task_id, path_obj)
-                        except Exception as exc:  # pragma: no cover - defensive
-                            logger.warning("failed to register subtask artifact %s: %s", p, exc)
 
             # Propagate the subtask graph's outcome: a subtask whose graph ends
             # with an error (e.g. an LLM error) must fold back as failed with

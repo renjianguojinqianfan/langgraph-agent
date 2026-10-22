@@ -68,7 +68,6 @@ def _full_state() -> AgentState:
         ],
         "plan": [{"index": 0, "description": "do a thing", "status": "done"}],
         "steps": [{"index": 0, "action": "tool_call", "tool": "web_search"}],
-        "artifacts": [],
         "status": "RUNNING",
         "stop_requested": False,
         "step_index": 3,

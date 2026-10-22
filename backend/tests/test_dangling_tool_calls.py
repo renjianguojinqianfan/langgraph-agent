@@ -33,7 +33,7 @@ def _rt(
         event_bus=bus,
         add_artifact=lambda *a, **k: None,
         is_stop_flagged=lambda _tid: False,
-        _active_states={"t1": {"artifacts": []}},
+        _active_states={"t1": {}},
     )
     rt = AgentRuntime(
         "t1",
@@ -78,7 +78,6 @@ def _state(
         "messages": list(messages),
         "plan": [],
         "steps": [{"index": 1, "thought": "", "status": "running", "tool_calls": list(records)}],
-        "artifacts": [],
         "status": "RUNNING",
         "stop_requested": False,
         "step_index": 1,

@@ -1,8 +1,8 @@
-"""Tests for JSON-file persistence (save / load / list / artifacts)."""
+"""Tests for JSON-file persistence (save / load / list / migration)."""
 
 from __future__ import annotations
 
-from backend.api.schemas import Artifact, PlanStep, StepRecord, Task, TaskStatus
+from backend.api.schemas import PlanStep, StepRecord, Task, TaskStatus
 from backend.services.persistence import Persistence
 
 
@@ -14,7 +14,6 @@ def _sample_task(task_id="abc") -> Task:
         status=TaskStatus.INTERRUPTED,
         steps=[StepRecord(index=1, thought="plan", tool_calls=[], status="done")],
         plan=[PlanStep(index=1, description="step one", status="done")],
-        artifacts=[],
         final_answer="done",
         error=None,
         created_at="2025-01-01T00:00:00+00:00",
@@ -60,36 +59,3 @@ def test_tasks_persisted_to_disk_and_reloadable(settings):
     assert p2.load_task("disk1") is not None
 
 
-def test_register_artifact_records_file(settings, tmp_path):
-    p = Persistence(settings)
-    target = settings.artifacts_path / "report.txt"
-    target.write_text("hello artifact", encoding="utf-8")
-
-    art = p.register_artifact(target)
-    assert isinstance(art, Artifact)
-    assert art.filename == "report.txt"
-    assert art.size == len("hello artifact")
-    assert art.path == str(target)
-
-
-def test_find_and_read_artifact(settings, tmp_path):
-    p = Persistence(settings)
-    target = settings.artifacts_path / "note.txt"
-    target.write_text("payload", encoding="utf-8")
-    art = p.register_artifact(target)
-
-    task = _sample_task("t-with-art")
-    task.artifacts = [art]
-    p.save_task(task)
-
-    found = p.find_artifact("t-with-art", art.id)
-    assert found is not None
-    assert found.filename == "note.txt"
-
-    data = p.read_artifact(art.id)
-    assert data == b"payload"
-
-
-def test_read_missing_artifact_returns_none(settings):
-    p = Persistence(settings)
-    assert p.read_artifact("nope") is None

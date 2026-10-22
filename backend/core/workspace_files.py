@@ -80,14 +80,52 @@ def _git_files(root: Path) -> Optional[list[Path]]:
 
 
 def _walk_files(root: Path) -> list[Path]:
+    """Regular files under ``root``; never through a link that leaves it.
+
+    ``os.walk`` follows Windows junctions even with ``followlinks=False``, so
+    every directory is resolved before descending and cut when it is outside
+    the root; visited real paths stop junction/symlink cycles. Files are
+    resolved too (a link may point outside) and must be regular.
+    """
+    root = root.resolve()
     files: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name != ".git"]
+    seen_files: set[Path] = set()
+    visited_dirs: set[Path] = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        try:
+            current = Path(dirpath).resolve()
+        except OSError:
+            dirnames[:] = []
+            continue
+        if current in visited_dirs:
+            dirnames[:] = []
+            continue
+        visited_dirs.add(current)
+
+        kept: list[str] = []
+        for name in dirnames:
+            if name == ".git":
+                continue
+            try:
+                candidate = (Path(dirpath) / name).resolve()
+            except OSError:
+                continue
+            if candidate != root and root not in candidate.parents:
+                continue
+            kept.append(name)
+        dirnames[:] = kept
+
         for name in filenames:
-            # No resolve(): a symlink is resolved by the caller, which checks
-            # containment. Resolving here would make a scoped path raise
-            # relative_to (the target can be outside the base).
-            files.append(Path(dirpath) / name)
+            try:
+                candidate = (Path(dirpath) / name).resolve()
+            except OSError:
+                continue
+            if candidate != root and root not in candidate.parents:
+                continue
+            if not candidate.is_file() or candidate in seen_files:
+                continue
+            seen_files.add(candidate)
+            files.append(candidate)
     return files
 
 
@@ -98,3 +136,15 @@ def workspace_files(root: Path) -> list[Path]:
     if git_files is not None:
         return sorted(git_files)
     return sorted(_walk_files(resolved))
+
+
+def resolve_in_workspace(root: Path, rel: str) -> Optional[Path]:
+    """Resolve ``rel`` under ``root``; None when it escapes (API + tools share it)."""
+    try:
+        resolved = root.resolve()
+        candidate = (resolved / rel).resolve()
+    except Exception:
+        return None
+    if candidate != resolved and resolved not in candidate.parents:
+        return None
+    return candidate

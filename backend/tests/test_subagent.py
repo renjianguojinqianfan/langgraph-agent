@@ -774,7 +774,6 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(tmp_
 
     # 3) The tier-legal write did happen, and it handed back to the parent.
     assert (settings.artifacts_path / mock.REPORT).exists()
-    assert any(mock.REPORT in a.filename for a in task.artifacts)
     written = [
         e["data"]
         for e in sub_events
@@ -792,17 +791,9 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(tmp_
 
 
 def test_subtask_writes_and_events_do_not_pollute_the_parent(tmp_path, event_bus):
-    """run_subtask 直连路径的隔离：内部事件在自己的频道，产物与账本挂父任务。
-
-    #76 重新裁定（改既有断言的理由）：本测试的父任务**先跑完**再派子任务，所以
-    这次 hand-back 落在已终结的父任务上——按 #76 C 它被明确拒绝并留痕，不再发那条
-    「承诺了父任务并不拥有的产物」的幻影 ``artifact_created``（记录本来就落不了任何
-    账本，事件是唯一残留，而它骗人）。留痕断言在
-    ``test_artifact_registration.test_late_hand_back_is_refused_loudly_not_dropped_silently``；
-    把记录落到已终结任务上是 #106（裁 B）的活。快照账本一行不受影响：写仍经
-    contextvar 归父任务回滚账本。
-    """
-    settings = make_settings(tmp_path, snapshot_enabled=True)
+    """A direct subtask run keeps its rounds on its own channel; its write lands
+    in the shared workspace and never fires a parent-channel event."""
+    settings = make_settings(tmp_path)
     mock = _CountingMock(plan=["p"], final_answer="写完了")
     tm = make_manager(settings, mock, event_bus=event_bus)
     task_id = tm.create_task(title="parent", user_input="父任务：只要一句话结论")
@@ -820,21 +811,13 @@ def test_subtask_writes_and_events_do_not_pollute_the_parent(tmp_path, event_bus
     )
     assert res.status == "completed"
     assert res.artifacts and Path(res.artifacts[0]).name == "direct_note.md"
+    assert (settings.artifacts_path / "direct_note.md").is_file()
 
     parent_types = {e["type"] for e in event_bus.replay(task_id)}
     assert "tool_call" not in parent_types  # internal rounds stayed away
-    # #76 C: the hand-back above lands on an already-finished parent, so it is
-    # refused and traced — the event it used to fire was a phantom one (no
-    # ledger could hold the record), and it promised a product the finished
-    # task does not own. Trace assertion lives in test_artifact_registration.
-    assert "artifact_created" not in parent_types
 
     sub_types = {e["type"] for e in event_bus.replay("iso:sub:1")}
     assert {"step_start", "tool_call", "tool_result"} <= sub_types
-
-    ledger = settings.snapshots_path / task_id / "ledger.jsonl"
-    assert ledger.exists()
-    assert "direct_note.md" in ledger.read_text(encoding="utf-8")
 
 
 def test_subtask_that_only_reads_hands_no_product_to_the_parent(tmp_path, event_bus):
@@ -867,10 +850,6 @@ def test_subtask_that_only_reads_hands_no_product_to_the_parent(tmp_path, event_
 
     assert res.status == "completed"
     assert res.artifacts == []
-    task = tm.get_task(task_id)
-    assert task is not None and task.artifacts == []
-    parent_types = {e["type"] for e in event_bus.replay(task_id)}
-    assert "artifact_created" not in parent_types
 
     sub_reads = [
         e["data"]

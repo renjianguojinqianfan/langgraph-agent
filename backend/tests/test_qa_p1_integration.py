@@ -107,9 +107,9 @@ def test_journey_subagent_spawn_summary_artifact(tmp_path, event_bus):
     # #70 裁定 A 重裁：一次真实派生回登一条 completed 子任务。
     assert len(task.subtasks) == 1
     assert task.subtasks[0].status == "completed"
-    # Subtask-produced file handed back to the parent artifacts (item 2)...
-    assert any("qa_report_notes.md" in a.filename for a in task.artifacts)
-    # ...while its own tool call stayed on the subtask channel.
+    # The subtask's file is in the shared workspace; its own tool call stayed
+    # on the subtask channel.
+    assert (settings.artifacts_path / "qa_report_notes.md").is_file()
     sub_events = event_bus.replay(spawn[0]["output"]["subtask_id"])
     assert any(
         e["type"] == "tool_call" and e["data"]["tool_name"] == "write" for e in sub_events

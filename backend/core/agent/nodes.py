@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...config import get_settings
@@ -561,29 +560,6 @@ class AgentRuntime:
                 )
             else:
                 self._feed_tool_failure(state, rec)
-
-            # Register an artifact when a producing tool wrote a file on disk.
-            # Two guards, one per axis: only a ``registers_artifact`` tool is a
-            # source of products (#72 — a ``read`` of the same file used to
-            # register it again), and the path must be a real file — a directory
-            # is not a deliverable (ADR 0004), and before #17 a result
-            # advertising one registered as a phantom 0-byte product.
-            #
-            # A subtask's write is registered by the hand-back in
-            # ``subagent._exec_one`` under the PARENT id only (#76). Registering
-            # here as well would mint a record no ledger can hold — a subtask
-            # never has an ``_active_states`` entry — so its whole cost used to
-            # be a phantom ``artifact_created`` on the subtask channel.
-            if (
-                tool.registers_artifact
-                and result.success
-                and isinstance(result.data, dict)
-                and result.data.get("path")
-                and not state.get("_is_subtask")
-            ):
-                p = Path(result.data["path"])
-                if p.is_file():
-                    self.tm.add_artifact(self.task_id, p)
 
             # #70 裁定 A：spawn 路径把子任务的折叠回传回登进图状态（``state["subtasks"]``
             # → ``Task.subtasks``，拷贝行在 ``_finalize_terminal``，前端 SubtaskList 与
