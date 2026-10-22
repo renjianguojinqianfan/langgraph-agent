@@ -16,7 +16,7 @@
 
 **主线 B · Agent 工程通用模式**
 5. Agent 主循环与 ReAct：agent→tool→agent 对照 ReAct 论文与 Anthropic agents 文章
-6. 工具层工程：BaseTool 规范、注册表、熔断+指数退避（resilience.py）
+6. 工具层工程：BaseTool 规范、注册表、失败只执行一次不重试（熔断 + 指数退避已随 ADR 0003 / C2 退役；现役是 `policy_rules` + 钩子）
 7. ✅ 上下文工程：token 预算与压缩（context.py）→ 讲义 [`lessons/0002-context-budget-and-compaction.html`](lessons/0002-context-budget-and-compaction.html) + 速查卡 [`reference/context-budget-cheatsheet.html`](reference/context-budget-cheatsheet.html)
 8. 工具生态外扩：MCP 客户端与 Git 工具（task_manager 显式加载、不经 @register 的原因）
 9. 多 Agent 协作与 RAG：子任务隔离、消息折叠、最小 KB
@@ -65,5 +65,5 @@
 
 ## 工作区说明
 - teach 状态文件位于仓库根目录（MISSION.md / lessons/ / reference/ / assets/ / learning-records/ / NOTES.md / RESOURCES.md），**已入库**（2026-09-12 杂物 triage 决定：学习痕迹是加分项，前提是索引可读）；入口索引见 `learning-records/README.md`
-- 工具态产物不入库：`.mimosa/`、`.qoder/`（2026-09-15 起整体 ignore；原 `.qoder/specs/` 已迁 `docs/specs/` + `docs/adr/`）、`_write_bh_report.py` 已在 .gitignore；文档归属约定见 `AGENTS.md` §3
-- 项目硬规则照常生效：不碰 conftest 隔离、产物登记语义、质量门禁（教学只读不写）
+- 工具态产物不入库：`.mimosa/`、`.qoder/`（2026-09-15 起整体 ignore；原 `.qoder/specs/` 已迁 `docs/specs/` + `docs/adr/`）、`_write_bh_report.py` 已在 .gitignore；文档归属约定见 `docs/agents/domain.md`「文档归属」表
+- 项目硬规则照常生效：不碰 conftest 隔离、工作区文件列表（C5 起无产物账本）、质量门禁（教学只读不写）

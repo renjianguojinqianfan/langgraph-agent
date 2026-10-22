@@ -1,5 +1,7 @@
 # bash 工具安全审计 — 2026-10-19（只读）
 
+> **归档（2026-10-23）**：本文是点-时审计，仅作历史记录与证据索引；现役安全口径见 [`README.md`](../../README.md)「这不是安全边界」，处置现状见文末「附：当前适用形态」；正文提到的 `docker-compose.yml` / `backend/Dockerfile` 已随 C4 删除。
+>
 > **点-时记录**：结论与 `file:line` 以 `0a28035`（C3 #165 的 merge commit）为准；此后提交会让行号漂移。
 > **口径**：只读审计，未改任何代码；本文件是发现存档。当前决定暂不开跟进票（2026-10-19），实际处置见文末；不在本文件维护第二份 backlog。
 > **对象**：C3（#158）新增的 `bash` 工具与本机监听面——`backend/core/tools/bash.py`、`backend/utils/sandbox.py`、
@@ -236,7 +238,7 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 ## 附：当前适用形态与下一步修复（2026-10-19 追加）
 
 > **入库注记（2026-10-20）**：本附记的 §3「后续规划」与 §4「当前流程状态」是审计当时的快照，已被
-> [ADR 0010](adr/0010-launch-dir-workspace-and-model-profiles.md) 与 [实施规划](specs/qianfan-daily-form-plan.md) §4 取代：
+> [ADR 0010](../adr/0010-launch-dir-workspace-and-model-profiles.md) 与 [实施规划](../specs/qianfan-daily-form-plan.md) §4 取代：
 > F3 → 切片 S1（含 F7 / F8 / F4 文档项），F6 与 Docker 删除 → C4；本文随 D0 文档 PR 入库，#148 待 S1 合并后关闭。正文不改。
 
 ### 1. 适用形态与重分级

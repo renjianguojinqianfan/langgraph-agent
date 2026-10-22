@@ -36,7 +36,7 @@
 - `backend/core/agent/state.py` — AgentState TypedDict，状态建模教材
 - `backend/core/agent/nodes.py` — 三个节点的真实实现（单 loop、两种模式）
 - `backend/services/task_manager.py` — resume / 孤儿对账 / 权威停止信号
-- `docs/architecture.md` 与 `docs/archive/incremental-arch-p0..p2.md`、`docs/incremental-arch-p3-resume.md` — 项目自带架构文档（含每轮迭代的「为什么」）
+- `docs/architecture.md`（现役架构，2026-10-23 全量刷新）与 `docs/archive/incremental-arch-p0..p2.md`、`docs/incremental-arch-p3-resume.md`（增量设计归档） — 项目自带架构文档（含每轮迭代的「为什么」）
 - `docs/archive/OVERVIEW.md` — 五轮迭代交付全记录（面试叙事的素材矿）
 
 ### 本机笔记库 · agent 模式库（跨工具的工程模式卡）

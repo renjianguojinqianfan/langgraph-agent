@@ -1,5 +1,7 @@
 # P1-A′ 上下文注入层实现规范
 
+> 状态：**已交付**（2026-09-17）｜注入层现役，权威面 = `backend/core/agent/inject.py` + `config.py:69-71`；文中 planner / executor 与 plan 块指针已随 S5 / C6 过期，现役形态以代码与 README 为准｜正文冻结。
+
 > 生成于 2026-09-16。决策基线全部拍板完毕，本文件只引用、不重议：
 > - 数据面七项：issue #31 resolution comment
 > - 行为面五项：issue #32 resolution comment

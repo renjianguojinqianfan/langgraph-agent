@@ -5,16 +5,16 @@ status: accepted
 # 日常形态：启动目录即工作区、共用一个后台、多套模型配置
 
 > **本文是 [ADR 0009](0009-minimal-agent-chapter.md) 之后的产品形态补充决策**：2026-10-19 用户拍板（一轮 grilling 逐题走完）。
-> 现役以 `AGENTS.md`「跨任务安全边界」表 + 代码为准，直到对应切片合并。切片、验收与风险见
+> **2026-10-22 已交付**：现役以 `AGENTS.md`「跨任务安全边界」表 + 代码为准。切片、验收与风险见
 > [实施规划](../specs/qianfan-daily-form-plan.md)；本文只记决策，不复制切片细节（沿用 ADR 0008 / 0009 的「文档分工」）。
 
 ## 背景
 
 ADR 0009 定了「`qianfan` 一条命令启动」，但没有回答「在哪儿干活」「用哪个模型」：
 
-- 工作区固定在仓库里的 `data/artifacts`（`backend/config.py:58-59,81`，按 `PROJECT_ROOT` 解析），没有办法指到别处——要在自己的项目里用，得先把项目拷进去。
+- 工作区固定在仓库里的 `data/artifacts`（`backend/config.py:59-60` 的 `data_dir` / `artifacts_dir` 与 `:128-133` 的派生路径，按 `PROJECT_ROOT` 解析），没有办法指到别处——要在自己的项目里用，得先把项目拷进去。
 - 所有任务混在一个 `data/tasks.json` 里；每个进程启动时读一次、每次保存整份覆盖（`backend/services/persistence.py:44,81-95`），两个进程共用就会互相吃掉任务。
-- 模型只认 `.env` 里的一套，启动时读一次（`config.py:205-208` 的 `lru_cache`），全进程一个客户端（`backend/services/task_manager.py:188`），网页上没有任何设置面。
+- 模型只认 `.env` 里的一套，启动时读一次（`config.py:200-203` 的 `lru_cache`），全进程一个客户端（`backend/services/task_manager.py:199`），网页上没有任何设置面。
 
 用户这一章的用途：**学习和展示为主，日常顺手也不能少**；只有自己、只在这台 Windows（Git Bash）上用；展示对象是 GitHub 访客（README + 截图）与自己学习（代码和文档讲清原理）。
 

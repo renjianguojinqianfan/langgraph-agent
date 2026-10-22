@@ -1,365 +1,170 @@
-# 系统架构设计文档：基于 LangGraph 的自主任务 Agent 平台
+# 系统架构：基于 LangGraph 的自主任务 Agent 平台
 
-> 架构师：高见远（Gao）　|　版本：v0.1　|　日期：2025-08-24
-> 关联文档：PRD（[`docs/archive/prd.md`](archive/prd.md)）
-> 项目根目录：仓库根（下文相对路径以仓库根为准）
-
-> ⚠️ **状态：v0.1 原始设计档（历史记录），不是现役架构的权威来源。**
+> **状态：现役架构文档**（2026-10-23 全量刷新）。旧的 v0.1 原始设计档（2025-08-24）原文保留在 git 历史：`git log --follow docs/architecture.md`。
 >
-> 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、类图与
-> 时序图均为**当时的计划态**。§2 / §4 已按 S5 的单 loop 更新；§3.3 REST 端点表、§3.4 SSE
-> 事件表与 §5 的跨文件共享约定仍现役（与 `docs/agents/domain.md` 的文首定位一致）；
-> §8 / §9 保留为历史决策与实施计划。
+> 本文讲「是什么、怎么连」；**决策理由**在 [`docs/adr/`](adr/)（现役：0001、0002（部分退役）、0008、0009、0010），**能力清单**在 [`README.md`](../README.md)「能力」，**跨任务硬规则**在 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」，**发布前验收**在 [`docs/manual-verification.md`](manual-verification.md)。
 >
-> **现役事实请查这里**：
-> - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
-> - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「核心模型」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
-> - 各轮增量设计 → `docs/archive/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `docs/incremental-arch-p3-resume.md`
-> - 接口契约 → 运行时 Swagger `http://localhost:8000/docs`（权威）+ [`backend/api/routes.py`](../backend/api/routes.py)
-> - 能力边界的第一性原理推导 → [`capability-first-principles.md`](archive/capability-first-principles.md)
+> **契约面有三处机械守卫，改之前先读**：
+> - **§3.4 事件表**被 `npm run check:sse`（`frontend/scripts/check-sse-event-registry.mjs`）与 `backend/tests/test_sse_publish_ast.py` 双向解析；`docs/architecture.md` 是 CI `paths` 白名单的**唯一 docs 例外**——改它触发全套 CI（见 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）。
+> - **§3.3 REST** 以 [`backend/api/routes.py`](../backend/api/routes.py) + 运行时 Swagger 为准；本节是人的可读契约。
+> - **拓扑**以 [`backend/core/agent/graph.py`](../backend/core/agent/graph.py) 为准；**数据模型**以 [`backend/api/schemas.py`](../backend/api/schemas.py) 为准；**配置键**以 [`backend/config.py`](../backend/config.py) + [`.env.example`](../.env.example) 为准。
 >
-> **本文的保留价值**（这些不随实现漂移）：§1 初始技术难点与选型理由、§5 跨文件共享约定
-> （其中多数已升格为 `AGENTS.md`「跨任务安全边界」硬规则）、§7 T01–T09 的原始实施顺序、§8 Q1–Q8 的初始决策。
+> 证据锚：`master` = `9c94a90`（2026-10-22）。文中 `file:line` 以该 commit 为准。
 
 ---
 
-## 1. 实现方案 + 框架选型
+## 1. 定位与技术栈
 
-### 1.1 技术难点分析
+自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → 停下时人看工作区里的文件。重点在运行时（多轮续说、checkpoint、模式切换、危险动作拦截、工具生态、可观测性），不是一个 demo 界面。产品形态由 ADR 0010 补充：**启动目录即工作区、一台机器共用一个后台、多套模型配置**。
 
-| 难点 | 说明 | 解决思路 |
-|------|------|----------|
-| 自主规划/反思循环 | 需 LLM 驱动多轮"规划→执行→工具→反思"状态机，且可中断 | 用 **LangGraph `StateGraph`** 显式编排节点与条件边，天然支持循环与 human-in-the-loop 中断 |
-| 流式可观测 | 后端每一步需实时推给前端，延迟 < 1s | 进程内 **EventBus（pub/sub）** + **SSE** 长连接推送结构化事件 |
-| 可控中断 | 用户点"停止"要 2s 内生效 | 任务执行在独立线程/任务中运行，通过 `threading.Event` 信号量中断循环 |
-| 多供应商 LLM | 用户可能用 OpenAI / DeepSeek / Ollama | 抽象 **`LLMClient`** 统一接口，底层走 OpenAI 兼容 HTTP |
-| 工具安全与可扩展 | bash 等于运行账号的权限；新增工具要低成本 | `BaseTool` 统一契约 + 注册表自动发现；bash 不提供沙箱，隔离靠容器（见 README「这不是安全边界」） |
-| 持久化（P1） | 重启后历史可见 | v1 用 **内存 + JSON 文件落盘**，预留 SQLite 仓储接口 |
+| 层 | 选型 | 说明 |
+|---|---|---|
+| 编排 | **LangGraph 1.2.x（StateGraph）** | 唯一一张图：`agent` / `tool` / `finish`；checkpointer 落 sqlite；1.x 迁移实测见 [`migration-langgraph-1x.md`](migration-langgraph-1x.md) |
+| 后端 | Python 3.11 · FastAPI · pydantic-settings | 离线测试零网络零 Key（MockLLM）；类型/质量门禁见 `pyproject.toml` |
+| 前端 | React 18 · Vite 8 · TypeScript · Tailwind 4 · zustand | 单页应用，`frontend/dist` 由后端同源托管（`qianfan` 命令） |
+| 存储 | sqlite（checkpoint）+ JSON（任务/模型档案）+ JSONL（trace） | `data/` 为运行态、不入库；Key 在仓库外（`~/.qianfan/credentials.json` 或环境变量） |
+| 通信 | REST + **SSE**（单向事件流） | SSE 事件词汇表是本仓最强的机械契约（§3.4） |
 
-### 1.2 框架与库选型
-
-| 层 | 选型 | 版本区间 | 理由 |
-|----|------|----------|------|
-| 后端语言 | Python | ≥3.10 | LangGraph 生态要求 |
-| 编排内核 | `langgraph`（+ checkpoint / checkpoint-sqlite） | langgraph ^1.2、checkpoint 4.2.0、checkpoint-sqlite 3.1.1 | 状态图、节点、中断、流式回调 |
-| Web 框架 | `fastapi` + `uvicorn` | fastapi ^0.111、uvicorn ^0.30 | 异步、原生 SSE、自动 OpenAPI |
-| 配置 | `pydantic-settings` | ^2.3 | `.env` → 强类型配置 |
-| LLM 调用 | `openai` SDK（兼容模式） | ^1.30 | 通过 `base_url` 适配 DeepSeek/Ollama |
-| Web 检索 | `duckduckgo-search`（默认免费）/ 预留 SerpAPI | ddgs ^4.0 | 不强制付费 Key |
-| 数据校验 | `pydantic` | ^2.7 | 模型与 API schema |
-| 前端框架 | React + Vite + TypeScript | react ^18.3、vite ^8.2 | 快速、类型安全 |
-| 前端样式 | Tailwind CSS | ^4.3 | 三栏布局、响应式；v4 起配置走 CSS-first（`@theme`），不再有 `tailwind.config.js`（#122）|
-| 状态管理 | Zustand | ^4.5 | 轻量、适合 SSE 事件累积 |
-| 图表/时间线 | 原生 DOM + Tailwind（不引入重型库） | — | 步骤时间线用列表即可 |
-
-### 1.3 架构模式
-
-- 后端：**分层 + 事件驱动**。API 层（FastAPI）→ 服务层（TaskManager）→ 编排层（LangGraph graph）→ 能力层（LLM / Tools）。执行过程通过 EventBus 解耦并以 SSE 流出。
-- 前端：**组件化 + 状态机 UI**。三栏布局，SSE 事件驱动右侧 Step 详情与中部时间线刷新。
-- 部署：**单体仓库（monorepo）**，后端独立进程、前端 Vite 开发/构建，由 `start.py` 或 `docker-compose` 统一拉起。
+**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），两者互斥（`backend/server_lock.py`）。
 
 ---
 
-## 2. 文件列表及相对路径
+## 2. 目录结构与运行时组件
 
-> ⚠️ **v0.1 计划态**，保留作原始设计意图记录。现役目录结构（含 `core/agent/` 的
-> context/risk/subagent/prompts、`core/mcp/`、`docs/adr|specs|agents/`）
-> 见仓库实际结构（`backend/` / `frontend/` / `docs/`）。
+```text
+backend/
+├── config.py            Settings（pydantic-settings；.env / 环境变量）
+├── main.py              FastAPI app：/health、/api 路由挂载、静态前端、Host 检查、CORS
+├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
+├── server_lock.py       单实例锁（一台机器只允许一个后台）
+├── api/
+│   ├── routes.py        24 条 REST 路由（§3.3）；统一 {code,data,message} 信封
+│   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
+│   └── sse.py           SSE 流组装（15s heartbeat）
+├── core/
+│   ├── agent/           graph.py 拓扑 · nodes.py 三节点 · state.py AgentState
+│   │                    prompts.py 两套 system · context.py 压缩/驱逐 · inject.py 两层注入
+│   │                    policy.py 危险动作钩子 · subagent.py 子任务运行时
+│   ├── llm/             client.py（LLMClient 抽象 + MockLLMClient）· openai_compat.py
+│   ├── tools/           base.py 契约 · registry.py @register · file_io.py（read/write/edit/ls/glob/grep）
+│   │                    bash.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
+│   ├── mcp/             MCP 客户端（stdio 现役；http 预留）
+│   └── workspace_files.py  工作区文件可见性过滤（W3）
+├── services/            task_manager.py 生命周期/worker/续说/续跑/事件 · event_bus.py
+│                        persistence.py tasks.json · plan_file.py 计划文件 · trace.py JSONL trace
+│                        model_store.py 模型档案与凭据 · auth.py token 签发/校验
+└── utils/               logging.py · sandbox.py（bash 进程组/超时）· winjob.py（Windows Job Object）
 
-项目根：`E:\code\demo\langgraph-agent\`
+frontend/src/
+├── pages/               TaskView · SettingsPage · LoginPage
+├── components/          TaskPanel · MessageStream · StepTimeline · StepDetail · PlanPanel · ModeSwitch
+│                        InputBar · HistoryPanel · TaskHeader · SubtaskList · WorkspaceFiles · TraceTab
+│                        ModelSelect · AuthGuard
+├── store/               taskStore · modelStore · authStore
+├── hooks/useSSE.ts      EventSource 订阅表 EVENT_TYPES（§3.4 的四处之一）
+├── api/client.ts        后端调用
+└── types/index.ts       与 schemas.py 字段对齐；SSEventType 联合
 
+docs/                    adr/ · specs/（冻结归档）· agents/（agent 规则）· archive/（历史）· 本文件
+scripts/                 check_doc_links.py 等
+data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>.jsonl · checkpoints/checkpoints.sqlite · logs/
 ```
-langgraph-agent/
-├── README.md                         # 启动/部署说明
-├── .env.example                      # 配置模板（复制为 .env）
-├── requirements.txt                  # Python 依赖
-├── pyproject.toml                    # 可选，项目元数据
-├── start.py                          # 一键启动（先后端，再前端 dev）
-├── docker-compose.yml                # 可选容器化
-│
-├── backend/                          # ── 后端 ──
-│   ├── __init__.py
-│   ├── main.py                       # FastAPI app 入口、CORS、挂载路由
-│   ├── config.py                     # pydantic-settings：Settings 单例
-│   ├── api/
-│   │   ├── routes.py                 # REST + SSE 端点
-│   │   ├── schemas.py                # 请求/响应 Pydantic 模型
-│   │   └── sse.py                    # SSE 响应构造 + 断线清理
-│   ├── core/
-│   │   ├── agent/
-│   │   │   ├── state.py              # AgentState（TypedDict）
-│   │   │   ├── graph.py              # 构建 StateGraph（节点+边）
-│   │   │   ├── nodes.py              # agent / tool / finish 节点（S5 单 loop）
-│   │   │   └── prompts.py           # 系统提示词/工具调用约束
-│   │   ├── llm/
-│   │   │   ├── client.py            # LLMClient 抽象基类 + LLMResponse
-│   │   │   └── openai_compat.py     # OpenAI 兼容实现（OpenAI/DeepSeek/Ollama）
-│   │   └── tools/
-│   │       ├── base.py              # BaseTool 抽象类 + ToolResult
-│   │       ├── registry.py          # 工具注册表/自动发现
-│   │       ├── web_search.py        # 联网检索（DuckDuckGo 默认，可插 SerpAPI）
-│   │       ├── file_io.py           # 六个沙箱文件工具：read/write/edit/glob/grep/ls
-│   │       └── bash.py              # C3：bash 命令（工作区根、超时、进程树），取代 code_exec/http_api
-│   ├── services/
-│   │   ├── event_bus.py             # 进程内 pub/sub（步骤事件）
-│   │   ├── persistence.py           # 内存 + JSON 落盘（预留 SQLite 仓储）
-│   │   └── task_manager.py          # 任务生命周期：run/stop/resume/续说/模式/计划
-│   └── utils/
-│       ├── sandbox.py               # 子进程环境白名单（bash 用）
-│       └── logging.py               # 统一日志
-│
-└── frontend/                         # ── 前端 ──
-    ├── package.json
-    ├── vite.config.ts
-    ├── tsconfig.json
-    ├── tsconfig.node.json
-    ├── postcss.config.js          # v4：插件是 @tailwindcss/postcss（无 autoprefixer）
-    ├── index.html
-    └── src/
-        ├── main.tsx                 # React 入口
-        ├── App.tsx                  # 根组件 + 三栏布局
-        ├── index.css                # v4 CSS-first：@import "tailwindcss" + @theme + @layer base
-        ├── api/
-        │   └── client.ts            # REST 封装 + SSE 订阅
-        ├── types/
-        │   └── index.ts             # 与后端 schema 对齐的 TS 类型
-        ├── store/
-        │   └── taskStore.ts         # Zustand：任务/事件/UI 状态
-        ├── hooks/
-        │   └── useSSE.ts            # EventSource/流式订阅 hook
-        ├── components/
-        │   ├── HistoryPanel.tsx     # 左：历史任务列表
-        │   ├── TaskPanel.tsx        # 中：任务主区容器
-        │   ├── TaskHeader.tsx       # 顶部：标题+状态徽章+停止
-        │   ├── MessageStream.tsx    # 对话/任务流（消息）
-        │   ├── StepTimeline.tsx     # 步骤时间线（规划+工具）
-        │   ├── StepDetail.tsx       # 右：当前 step 入参/出参/日志
-        │   ├── InputBar.tsx         # 输入框+发送+停止
-        │   ├── ArtifactList.tsx     # 产物列表+下载/预览
-        │   ├── PlanPanel.tsx        # 计划区（停下时可改）
-        │   ├── ModeSwitch.tsx       # 计划 / 执行模式开关
-        │   ├── TraceTab.tsx         # Trace 回放
-        │   └── SubtaskList.tsx      # 子任务面板
-        └── pages/
-            └── TaskView.tsx         # 单个任务页（组合上述组件）
-```
+
+| 运行时组件 | 职责 | 权威位置 |
+|---|---|---|
+| `TaskManager` | 任务生命周期：创建 / worker 执行 / 停止 / 续说 / 续跑 / 崩溃对账 / 事件发布；权威停止信号 `_stop_flags` | [`backend/services/task_manager.py`](../backend/services/task_manager.py) |
+| `EventBus` | 进程内 SSE 事件广播；前端按 task 订阅 | [`backend/services/event_bus.py`](../backend/services/event_bus.py) |
+| `Persistence` | `tasks.json` 原子落盘 + 损坏备份；API 与磁盘的唯一桥 | [`backend/services/persistence.py`](../backend/services/persistence.py) |
+| checkpointer | `SqliteSaver`，`thread_id == task_id`；`durability="sync"`；格式戳 v2，v1 旧库启动时拒绝挂载 | [`backend/services/task_manager.py`](../backend/services/task_manager.py) |
+| `plan_file` | 计划文件唯一来源在任务目录 `.qianfan/plans/<task_id>.md`；版本与 hash | [`backend/services/plan_file.py`](../backend/services/plan_file.py) |
+| `TraceRecorder` | 订阅事件直写 JSONL（含唯一只进文件的 `trace_end`）；前端回放/导出 | [`backend/services/trace.py`](../backend/services/trace.py) |
+| `ModelStore` | `data/models.json` 档案（不含 Key）+ `~/.qianfan/credentials.json`（粘贴的 Key） | [`backend/services/model_store.py`](../backend/services/model_store.py) |
+| `DangerPolicy` | 设置里的 `policy_rules` 规则表 + `agent` 里一个钩子；命中当场拒 | [`backend/core/agent/policy.py`](../backend/core/agent/policy.py) |
 
 ---
 
-## 3. 数据结构和接口
+## 3. 数据结构与接口契约
 
-### 3.1 类图 / 数据模型（mermaid `classDiagram`）
+### 3.1 数据模型（API / 持久化的单一来源）
 
-> 详见 `docs/archive/class-diagram.mermaid`（v0.1 历史档）。
+全部定义在 [`backend/api/schemas.py`](../backend/api/schemas.py)；前端 [`frontend/src/types/index.ts`](../frontend/src/types/index.ts) 字段同名对齐。
 
-```mermaid
-classDiagram
-    %% ── 配置与 LLM 抽象 ──
-    class Settings {
-        +str llm_base_url
-        +str llm_api_key
-        +str llm_model
-        +int max_steps
-        +int sandbox_timeout
-        +str bash_path
-        +str search_provider
-        +str serpapi_key
-        +str artifacts_dir
-        +str data_dir
-        +str host
-        +int port
-        +str cors_origins
-        +bool auth_enabled
-        +get_settings() Settings
-    }
-    class LLMClient {
-        <<abstract>>
-        +complete(messages, tools, **kw) LLMResponse
-        +stream(messages, tools) Iterator~LLMResponse~
-    }
-    class OpenAICompatibleClient {
-        +str base_url
-        +str api_key
-        +str model
-        +complete(messages, tools) LLMResponse
-    }
-    LLMClient <|-- OpenAICompatibleClient
+| 模型 | 字段要点 |
+|---|---|
+| `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；旧记录里的 `COMPLETED` 在加载时映射成 `INTERRUPTED` |
+| `TaskMode` | `plan` \| `build`（黏性任务开关，默认 `build`） |
+| `ToolCallRecord` | `id` / `tool_name` / `input` / `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
+| `StepRecord` | `index` / `thought` / `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
+| `SubTask` | `subtask_id` / `name` / `status`（`pending \| running \| completed \| failed`）/ `summary` / `artifacts[]` / `error`。`artifacts` 是**现役字段**（子任务回传用，父任务无产物账本） |
+| `ChatTurn` | `role`（user \| assistant）/ `content`；只存人读的对话，工具流量在 `Task.steps` |
+| `Task` | `id` / `title` / `user_input` / `workspace`（绝对路径，规范化后比较）/ `model`（档案 id，空 = 全局默认）/ `status` / `mode` / `steps[]` / `plan_version` / `plan_hash` / `conversation[]` / `final_answer` / `error` / `created_at` / `updated_at` / `subtasks[]` |
+| `McpServerInfo` | `name` / `transport` / `status` / `tools_count` / `error` |
+| `ApiResponse` | 统一信封 `{code, data, message}`（例外见 §3.5） |
 
-    %% ── 工具层 ──
-    class ToolResult {
-        +bool success
-        +any data
-        +str error
-    }
-    class BaseTool {
-        <<abstract>>
-        +str name
-        +str description
-        +dict args_schema
-        +bool requires_confirm
-        +bool registers_artifact
-        +run(**kwargs) ToolResult
-    }
-    class WebSearchTool
-    class BashTool
-    class _SandboxedTool
-    class ReadTool
-    class WriteTool
-    class EditTool
-    class GlobTool
-    class GrepTool
-    class LsTool
-    BaseTool <|-- WebSearchTool
-    BaseTool <|-- BashTool
-    BaseTool <|-- _SandboxedTool
-    _SandboxedTool <|-- ReadTool
-    _SandboxedTool <|-- WriteTool
-    _SandboxedTool <|-- EditTool
-    _SandboxedTool <|-- GlobTool
-    _SandboxedTool <|-- GrepTool
-    _SandboxedTool <|-- LsTool
-    BaseTool ..> ToolResult : produces
+请求体模型同文件：`CreateTaskRequest`（`title?` / `input` / `mode?` / `workspace?` / `model?`）、`SendMessageRequest`、`UpdateModeRequest`、`UpdatePlanRequest`、`TaskModelRequest`、`ModelCreate/Update/KeyRequest`、`AuthTokenRequest`。
 
-    %% ── 编排状态 ──
-    class AgentState {
-        +str task_id
-        +list messages
-        +str plan_text
-        +int plan_version
-        +str plan_hash
-        +list steps
-        +str status
-        +bool stop_requested
-        +str mode
-        +int round_steps
-    }
+### 3.2 AgentState 与图拓扑
 
-    %% ── 持久化模型 ──
-    class TaskStatus {
-        <<enum>>
-        PENDING RUNNING FAILED INTERRUPTED
-    }
-    class ToolCallRecord {
-        +str id
-        +str tool_name
-        +dict input
-        +any output
-        +str status
-        +str error
-    }
-    class StepRecord {
-        +int index
-        +str thought
-        +list tool_calls
-        +str status
-    }
-    class Task {
-        +str id
-        +str title
-        +str user_input
-        +TaskStatus status
-        +str mode
-        +list steps
-        +int plan_version
-        +list conversation
-        +str final_answer
-        +str error
-        +str created_at
-        +str updated_at
-    }
-    Task "1" *-- "many" StepRecord
-    StepRecord "1" *-- "many" ToolCallRecord
+**拓扑**（来源：`backend/core/agent/graph.py`；主任务与子任务同一张图）：
 
-    %% ── 服务层 ──
-    class EventBus {
-        +subscribe(task_id, cb)
-        +publish(task_id, event)
-        +unsubscribe(task_id, cb)
-    }
-    class Persistence {
-        +save_task(Task)
-        +load_task(id) Task
-        +list_tasks() list~Task~
-    }
-    class TaskManager {
-        +create_task(title, input, workspace) str
-        +run(task_id)
-        +stop(task_id)
-        +get_task(task_id) Task
-        +list_tasks(workspace)
-        +list_all_tasks()
-    }
-    TaskManager ..> EventBus : emits
-    TaskManager ..> Persistence : stores
-    TaskManager ..> AgentState : drives
-    TaskManager ..> LLMClient : uses
-    TaskManager ..> BaseTool : dispatches
-
-    Settings ..> LLMClient : configures
-    Settings ..> BaseTool : configures
+```text
+START → agent ──有 tool call──→ tool ──→ agent
+          └── 停下/出错/本轮最后一次调用没有 tool call ──→ finish → END
 ```
 
-### 3.2 关键数据模型（Pydantic 字段摘要）
+- 只有**一个 LLM 节点** `agent`；模式不是第二个节点，只决定该节点用哪套 system prompt 与哪个工具面（ADR 0008 决策 2）。
+- 路由是带 `Literal` 注解的具名函数（LangGraph 1.x 用注解声明静态拓扑）：`_after_agent` 走 `finish | tool`；`_after_tool` 走 `finish | agent`，并在 `round_steps >= max_steps` 时收口。
+- **步数预算按轮计**：`round_steps` 只数本轮 `agent` 调用，不封顶任务总寿命（`max_steps` 默认 15）。
+- 子任务复用同一拓扑，在独立 `thread_id` 上跑，工作区继承父任务。
 
-| 模型 | 关键字段 |
-|------|----------|
-| `TaskStatus` | `PENDING / RUNNING / FAILED / INTERRUPTED`（三值循环：跑着 / 停下 / 出错；没有「完成」，ADR 0008 决策 5） |
-| `Task` | `id, title, user_input, workspace, status, mode(plan/build), steps[], plan_version, plan_hash, conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
-| `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
-| `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error` |
-| `Task.plan_version` / `plan_hash` | 计划文件内容的版本与哈希；正文在 `<任务目录>/.qianfan/plans/<task_id>.md`（C6） |
-| `WorkspaceFile` | 不是模型：REST 返回 `{path, size}`（C5 文件列表） |
-| `ToolResult` | `success:bool, data:Any, error:str` |
-| `LLMResponse` | `content:str, tool_calls:list, raw:dict` |
+**AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks` / `_is_subtask`）。
 
-### 3.3 REST + SSE 接口定义
+**checkpoint 语义**：挂载后每个 superstep 都是一份 state 副本并持久化；`thread_id == task_id`，因此停止/崩溃可续跑，停下后也能沿同一 thread 续说。`stop_requested` 在带 checkpointer 时不可靠（每步是副本），所以 `agent` 节点额外轮询 manager 级的 `_stop_flags`（`task_manager.py`）。
 
-> 现役端点以 `backend/api/routes.py` + Swagger 为准（本文不写计数）。
-> 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、
-> `GET /mcp/servers`（P2）；S5（#139）新增 `PUT /tasks/{id}/mode`、
-> `PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`；C5 新增
-> `GET /tasks/{id}/files{,/preview,/download}`；M1 新增 `PUT /tasks/{id}/model` 与
-> `/models*` 七条（`GET/POST /models`、`PUT/DELETE /models/{id}`、
-> `POST /models/{id}/default`、`PUT /models/{id}/key`、`POST /models/{id}/test`）。
-> `/health` 另在 `backend/main.py`。下表其余契约仍现役。
+### 3.3 REST 接口定义
 
-**基础路径**：`/api`　**内容类型**：`application/json`
+**基础路径**：`/api`（`backend/main.py` 用 `include_router(..., prefix="/api")` 挂载）；`/health` 不在前缀下。**内容类型**：`application/json`（例外：`/events` 为 `text/event-stream`，`/trace` 默认 `application/x-ndjson`，`/files/download` 为文件流）。
 
-| 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 |
-|------|------|------|---------------|------|
-| POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?:str, input:str, mode?:plan\|build, workspace?:str}` | `{task_id:str}` |
-| GET | `/api/tasks` | 历史任务列表 | query: `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
-| GET | `/api/tasks/{id}` | 任务完整状态 | path `id` | `Task` |
-| POST | `/api/tasks/{id}/stop` | 停止任务 | path `id` | `{ok:bool, status:str}` |
-| GET | `/api/tasks/{id}/events` | **SSE 流式事件**（见 3.4） | path `id` | `text/event-stream` |
-| GET | `/api/tasks/{id}/files` | 工作区文件列表（跳过 .git / .gitignore） | path `id` | `{files:[{path,size}], truncated:bool}` |
-| GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件 | query: `?path=<相对路径>` | `{path,content,size,truncated}` |
-| GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | query: `?path=<相对路径>` | `application/octet-stream` |
-| GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | path `id` | `{text, version}` |
-| PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下时） | `{text:str}` | `{ok:bool, version:int}` |
-| POST | `/api/auth/token` | P1 鉴权（auth_enabled 时） | `{token:str}` | `{ok:bool}` |
+所有端点除 `POST /api/auth/token` 外都挂 `Depends(verify_token)`；`auth_enabled=false` 时它是 no-op。
 
-**统一响应信封**：`{code:int, data:any, message:str}`（错误时 `code≠0`）。
+| 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 `data` |
+|---|---|---|---|---|
+| GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
+| POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 |
+| GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
+| GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |
+| POST | `/api/tasks/{id}/stop` | 停止任务 | — | `{ok, status}` |
+| POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 |
+| PUT | `/api/tasks/{id}/model` | 换任务模型（下一条消息生效） | `{model}` | `TaskManager.set_model` 结果；不能改 → 409 |
+| PUT | `/api/tasks/{id}/mode` | 切计划/执行模式（黏性，下一轮生效） | `{mode}` | `TaskManager.set_mode` 结果；不能切 → 409 |
+| POST | `/api/tasks/{id}/messages` | 停下后续说（同一 thread，多轮对话入口） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 |
+| GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；读不到 → 404/409 |
+| PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下时） | `{text}` | `{ok, version}`；非停下 → 409 |
+| GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4） | — | `text/event-stream` |
+| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认原始 NDJSON；`?format=json` 走信封 `{data:[Event...]}`；无 trace → 404 |
+| GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
+| GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（上限 200 KB） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400 |
+| GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
+| GET | `/api/models` | 模型档案列表（不含 Key） | — | `[public profile...]` |
+| POST | `/api/models` | 新建模型档案 | `{name, base_url, model, api_key_env?}` | public profile；非法 → 400 |
+| PUT | `/api/models/{id}` | 更新模型档案 | `{name?, base_url?, model?, api_key_env?}` | public profile；404/400 |
+| DELETE | `/api/models/{id}` | 删除模型档案 | — | `{ok}`；404/409 |
+| POST | `/api/models/{id}/default` | 设为全局默认 | — | `{ok, default}`；404 |
+| PUT | `/api/models/{id}/key` | 写入粘贴的 Key（只写） | `{key}` | `{ok, key_set, key_source}`；404 |
+| POST | `/api/models/{id}/test` | 测试模型连通性 | — | 测试结果；404 |
+| POST | `/api/auth/token` | 登录签发（`auth_enabled` 关闭时回 `{ok, note}`） | `{token}` | 关闭：`{ok, note}`；开启：`{token, expires_at, ok}`；错误口令 → 401 |
+| GET | `/api/mcp/servers` | MCP 服务器连接状态 | — | `{servers: McpServerInfo[]}`（未启用 → `[]`） |
+
+> 契约细节（状态码、字段形状）以 [`backend/api/routes.py`](../backend/api/routes.py) 与运行时 Swagger `/docs` 为准；本表与路由的「方法+路径」由人工维护，无自动守卫——新增/删除端点时**必须**同步本表。
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 
-> ⚠️ **现役清单以下表为准，本文不写计数**（计数每次增删都要重推一遍，23→24 连续两代
-> 都错在这里；同 `AGENTS.md`「文档不写现役测试计数（数字必腐，以实跑为准）」一个道理）。
-> v0.1 只有 12 种，此后新增的都在下表行内标了来源。
-> `subtask_start` / `subtask_result` / `subtask_failed`：#56 删入口 B 时曾退役（后端零发布点），
-> **#70 裁定 A 已把生产者补回 `spawn_subagent` 路径**——三条汇总事件重发在**父频道**上，见下表末三行。
-> 「子任务失败改由一条失败的 tool call 带回、父任务不死」那半契约没变，两条并存。
-> 面板（`SubtaskList`）数据源是 REST 的 `Task.subtasks`，不吃这三条事件；事件只进 Trace 时间线。
-> 前端两处注册表：`frontend/src/hooks/useSSE.ts` 的 `EVENT_TYPES`（EventSource **只派发注册过的
-> 类型**——漏注册不是「显示不全」，是静默收不到）与 `frontend/src/types/index.ts` 的
-> `SSEventType` 联合。本表、两处注册表与后端发布点由 `npm run check:sse` 逐条对齐，已接进 CI 的
-> frontend job（#92）。「后端发布点」这侧另有第二条机械路径：`backend/tests/test_sse_publish_ast.py`
-> 用 `ast` 枚举发布调用的字符串字面量类型实参、与本表第一列比对，跑在 CI 的 backend-test job（#104）。
-> 两条并存互为备份（`.mjs` 守前端 job 且跑得快，pytest 这条守「发布点枚举」本身），谁先漂谁先红。
-> 共同的盲区是**类型经变量名传入**的发布调用——两条路径都只认字面量，那种事件必须手工同步四处，
-> 不许指望机械门。唯一不对称是 `trace_end`：只写 trace JSONL、不经 EventBus，故进联合不进订阅表。
-> **改本表的 PR 会触发全套 CI**（#103）：`ci.yml` 的触发面是 `paths` 白名单，末尾的正模式把本文件
-> 单独收了回来——表与代码一漂就红在本次 PR 上，不用等下一张不相干的前端 PR。
+> ⚠️ **本表是现役事件清单的唯一权威，不写计数。**
+> v0.1 时只有 12 种；此后新增/退役都在下表行内标了来源。
+> **改本表的 PR 会触发全套 CI**（`ci.yml` 的 `paths` 白名单用末尾正模式把本文件单独收回）。
+> **守卫链**：`npm run check:sse`（前端 job）逐条比对「后端发布点 == 本表 == `EVENT_TYPES`」，并校验 `SSEventType` 联合 = `EVENT_TYPES ∪ trace 文件独有类型`；`backend/tests/test_sse_publish_ast.py`（backend job）用 AST 枚举发布调用，与上表第一列比对。两条路径都只认**字符串字面量**类型：经变量名传入的发布调用是共同盲区，必须手工同步四处。
+> **唯一不对称**：`trace_end` 只写 trace JSONL、不经 EventBus——进 `SSEventType` 联合、不进 `EVENT_TYPES` 订阅表。
+> 面板（`SubtaskList`）数据源是 REST 的 `Task.subtasks`，不吃 `subtask_*` 三条事件；事件只进 Trace 时间线。`subtask_*` 三条只发在**父频道**，子任务自己的频道不带。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
@@ -374,219 +179,173 @@ classDiagram
 | `task_interrupted` | `{task_id, status}` | 停下：人按停、这一轮的最后一次 `agent` 调用没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑 / 新消息续跑启动（P3；#139 起多轮对话共用） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
-| `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy, model, model_profile}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|
-| `subtask_start` | `{subtask_id, name, status, parent_task_id}` | 子任务已派生（#70 裁定 A 恢复；**只发在父频道**，子任务自己的频道不带） |
-| `subtask_result` | `{subtask_id, name, status, summary, artifacts}` | 子任务 `completed` 的折叠回传（#70 裁定 A；父频道） |
+| `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy, model, model_profile}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压） |
+| `subtask_start` | `{subtask_id, name, status, parent_task_id}` | 子任务已派生（#70 裁定 A 恢复；只发在父频道） |
+| `subtask_result` | `{subtask_id, name, status, summary, artifacts}` | 子任务 `completed` 的折叠回传（#70 裁定 A；父频道）。`artifacts` 是现役字段 |
 | `subtask_failed` | `{subtask_id, name, error}` | 子任务超时 / worker 崩溃 / 折回 `failed`（#70 裁定 A；父频道，与一条失败的 `tool_result` 并存、父任务不死） |
 | `heartbeat` | `{}` | 保活（每 15s） |
 
----
+### 3.5 错误口径与响应信封
 
-## 4. 程序调用流程（mermaid `sequenceDiagram`）
-
-> 现役拓扑与 `backend/core/agent/graph.py` 逐边一致；下图是一次 plan → build → 停下 → 续说
-> 的典型调用。
-
-> 详见 `docs/archive/sequence-diagram.mermaid`（v0.1 历史档）。
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as 用户
-    participant FE as 前端(TaskView)
-    participant API as FastAPI 路由
-    participant TM as TaskManager
-    participant EB as EventBus
-    participant G as LangGraph (agent/tool/finish)
-    participant L as LLMClient
-    participant T as BaseTool
-
-    U->>FE: 新建任务（可选 mode=plan）
-    FE->>API: POST /api/tasks {input, mode}
-    API->>TM: create_task()
-    TM->>EB: publish(task_created)
-    API-->>FE: {task_id}
-    FE->>API: GET /api/tasks/{id}/events (SSE)
-    API->>EB: subscribe(task_id)
-
-    TM->>G: invoke [独立线程]
-    loop 本轮（START → agent → tool → agent …）
-        G->>L: agent.complete(system + messages, tools)
-        L-->>G: tool_calls 或 final_answer
-        G->>EB: publish(step_start / tool_call)
-        alt 有 tool_call
-            G->>T: run(**input)
-            T-->>G: ToolResult
-            G->>EB: publish(tool_result)
-            Note over G: tool → agent（本轮预算未尽）
-        else 本轮最后一次调用没有 tool call
-            G->>EB: publish(final_answer)
-            G->>G: finish：INTERRUPTED（停下）
-        end
-    end
-    G-->>TM: 状态 INTERRUPTED / FAILED
-    TM->>EB: publish(task_interrupted / task_failed)
-    EB-->>FE: 实时渲染对话 / 计划 / 步骤；停下后查看工作区文件
-
-    U->>FE: 停下后说一句
-    FE->>API: POST /api/tasks/{id}/messages
-    API->>TM: send_message()（同一 thread_id / checkpoint）
-    TM->>EB: publish(task_resumed)
-    TM->>G: 新一轮 invoke
-```
+- **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/415/500）。
+- **工具失败两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。
+- **被规则当场拒的调用**走第三形状（ADR 0008 决策 6）：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开）。
+- **只执行一次**：工具调用无自动重试、无熔断（ADR 0003 已退役）；失败原因原样回给模型。
+- **任务级异常**：节点级异常被 `TaskManager` 捕获并发布 `task_failed`（`status=FAILED`）。
 
 ---
 
-## 5. 共享知识（跨文件约定）
+## 4. 运行时流程
 
-> 工程师编码前务必遵循以下全局约定。
+### 4.1 一轮
 
-1. **配置管理**：所有配置经 `backend/config.py` 的 `Settings`（`pydantic-settings`），从 `.env` 读取。**禁止**在业务代码中硬编码 Key/路径；通过 `get_settings()` 获取单例。
-2. **LLM 接入抽象层**：业务只依赖 `LLMClient` 抽象。调用统一返回 `LLMResponse{content, tool_calls, raw}`。新增供应商只需新增 `LLMClient` 子类并据 `Settings` 选择；支持 OpenAI / DeepSeek / 本地 Ollama（仅改 `base_url`）。
-3. **工具接口规范 `BaseTool`**：
-   - 每个工具实现 `name / description / args_schema(dict) / requires_confirm / registers_artifact / run(**kwargs)->ToolResult`；
-   - `args_schema` 必须是 JSON Schema（供 LLM function calling 使用）；
-   - 工具务必返回 `ToolResult`，**禁止**抛未捕获异常导致进程崩溃（外层统一 try/except 兜底）；
-   - 新工具在 `registry.py` 中 `@register` 即被 Agent 自动发现（满足 SC4 上手 <30min）。
-4. **事件/消息协议**：后端 → 前端仅通过 SSE 事件（见 3.4）通信；事件 `data` 为 JSON，字段名与后端模型一致；前端 `types/index.ts` 必须与后端 schema 保持字段对齐（单一事实来源：后端 `schemas.py`）。
-5. **错误口径**：工具失败返回 `ToolResult(success=False, error=...)`；每次调用只执行一次，失败原因原样回给模型，**不自动重试**。LangGraph 节点级异常被 `TaskManager` 捕获并 `publish(task_failed)`。失败的理由**两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。被 `policy_rules` 当场拒掉的调用（S2）走**第三条**形状：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开，ADR 0008 决策 6）。
-6. **停止信号**：`AgentState.stop_requested` 由 `TaskManager.stop()` 置位；图节点在下一入口检测，为真则走 `finish` 并发布 `task_interrupted`（P0-9：2s 内生效）。
-7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里那一个钩子；命中即当场拒，不执行、不弹框、不进图重入。详见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md) 决策 6 与 `backend/core/agent/policy.py`。
-8. **工作区与路径安全**：`read` / `write` / `edit` / `ls` / `glob` / `grep` 与工作区文件接口的路径限定在**当前任务的目录**，越界路径一律拒绝（P0-4 / ADR 0010 决策 1、6）；`bash` **不受此围栏约束**——工作目录只是起点，见 README「这不是安全边界」。文件列表是可见性过滤，不是安全边界：点名 `read` / 预览 / 下载仍可达工作区内的任意文件。
-9. **停下判定（Q8）**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 把任务停成 `INTERRUPTED`；错误 → `FAILED`。没有 `COMPLETED` 终态。
-10. **日志**：统一经 `utils/logging.py`，结构化输出到控制台 + `data_dir/logs/`；不打印明文 API Key。
+1. `TaskManager` 为任务创建 `AgentRuntime`（LLM client + 工具实例 + 工具 schema）并 `invoke` 图，`thread_id = task_id`。
+2. `agent` 节点：取当前模式 → 组装 system（两套 prompt 之一 + 注入块）与对话 → 读计划文件（build 模式、轮开始处）→ 调模型 → 记录一步与 `step_index/round_steps` → 有 tool call 则路由到 `tool`，否则本轮结束。
+3. `tool` 节点：逐条执行工具（危险规则命中则当场拒），回填 `ToolCallRecord` 与对话消息，然后按预算/停止信号路由回 `agent` 或 `finish`。
+4. `finish`：发 `final_answer`、写对话与计划状态，任务进入 `INTERRUPTED`（停下）。
 
----
+**「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用**（`round_steps` 按步计预算）。一轮的最后一次 `agent` 调用没有工具调用，这一轮就结束（ADR 0008 决策 4）。
 
-## 6. 依赖包列表
+### 4.2 停下 / 续说 / 续跑
 
-### 6.1 Python（`requirements.txt`）
+| 路径 | 触发 | 机制 |
+|---|---|---|
+| 停止 | 用户按停 | `TaskManager.stop()` 翻 `_stop_flags` 与 state、发布 `task_interrupted`；worker 在节点入口检测后收口，状态 `INTERRUPTED` |
+| 续说 | 停下后发消息 | `POST /api/tasks/{id}/messages`：同一 `thread_id` / checkpoint 继续同一段对话（多轮入口） |
+| 续跑 | 停止 / 崩溃后 | `POST /api/tasks/{id}/resume`：从最近 durable checkpoint 重建并继续；发布 `task_resumed` |
+| 崩溃对账 | 进程重启 | 启动时把 `tasks.json` 里非终态记录翻成 `INTERRUPTED`（可恢复），清扫悬空 tool call |
 
-> 完整依赖、钉版区间与理由以仓库根 `requirements.txt` 为准；本节只列核心，避免逐行复制再次滞后。
+checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`），格式戳 v2；v1 旧库启动时拒绝挂载并按迁移文档 §2.4 处置。`data/` 可弃，不做跨大版本快照兼容。
 
-```
-langgraph>=1.2,<1.3
-langgraph-checkpoint==4.2.0
-langgraph-checkpoint-sqlite==3.1.1
-fastapi>=0.111.0,<0.113.0
-uvicorn[standard]>=0.30.0,<0.31.0
-pydantic>=2.7.0,<3.0.0
-pydantic-settings>=2.3.0,<3.0.0
-openai>=1.30.0,<2.0.0
-duckduckgo-search>=4.0.0,<5.0.0
-python-dotenv>=1.0.0
-httpx>=0.27.0          # 供 web_search 的 SerpAPI 路径使用
-```
+### 4.3 模式与计划文件
 
-### 6.2 前端（`frontend/package.json`）
+- 模式是**任务上的黏性开关**，默认 `build`，用户显式切才走 `plan`（ADR 0008 决策 3）；切换在下一轮生效。
+- `plan` 模式：`PLANNER_SYSTEM` + `explore` 只读档；一轮没有工具调用时把回复里的计划写进计划文件。
+- `build` 模式：`EXECUTOR_SYSTEM` + 全部已挂载工具；计划以**一条对话消息**进入上下文，不是 system 块。
+- **计划文件是唯一来源**：`<任务目录>/.qianfan/plans/<task_id>.md`；版本与内容 hash 记在 `Task.plan_version` / `plan_hash`。计划只在**一轮开始**与**每次压缩后**核对；版本变动时在对话里留**恰好一条**灰字 `计划已更新到第 N 版。`。
+- 停下时可整份编辑：页面的计划区走 `PUT /api/tasks/{id}/plan` 写回文件，外部编辑器改同一文件同样生效；下一条消息按文件当前内容跑。
+- `.qianfan/.gitignore` 内容为 `*`，工作区文件列表会跳过它，不污染用户的 `git status`。
 
-```
-{
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "zustand": "^4.5.0"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.3",
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^6.1.0",
-    "postcss": "^8.4.0",
-    "tailwindcss": "^4.3.3",
-    "typescript": "^5.5.0",
-    "vite": "^8.2.2"
-  }
-}
-```
+### 4.4 上下文供给链
 
----
+1. **注入块**（`context_inject_enabled`，默认开）：home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md` 两层合并 + skills 清单（字符预算，超额从尾部整卡丢弃）+ 环境事实；每任务计算一次，**不计入压缩预算**，永不淘汰。实现 [`backend/core/agent/inject.py`](../backend/core/agent/inject.py)。
+2. **工具结果驱逐**（`context_evict_enabled`，默认开）：单条 tool 消息超过阈值（默认 4000 字符）时替换为「标记 + 工具名 + 原文字数 + trace 指针 + 首尾预览」；最近 N 条永不驱逐；纯机械、零额外 LLM 调用。发 `tool_result_evicted`。
+3. **压缩**（`context_*`）：估算 token（chars/4）超预算或条数超限时触发；默认 `truncate`（零额外调用），可选 `summarize`（用当前模型写摘要）。先驱逐、后压缩（顺序固定）。发 `context_compressed`。
+4. 计划的版本核对插在第 1、3 步之间/之后（见 §4.3）。
 
-## 7. 有序任务列表（工程师编码依据）
+### 4.5 工具执行与危险动作
 
-> ⚠️ **历史**：T01–T09 是 v0.1 首轮实施顺序，均已交付。后续七轮的任务拆分见
-> `docs/archive/incremental-prd-p{0,1,2}.md`；当前待做清单见 GitHub Issues。
+- 工具注册：`BaseTool` 子类 + `@register`，由 `registry.build_tools` 自动实例化（新增工具零接线）。
+- **MCP 工具例外**：由 `task_manager` 显式追加（不经 `@register`）；每次 `call_tool` 只执行一次。
+- 危险动作：`policy_rules`（JSON 数组，`{tool, pattern?, reason?}`）在 `agent` 节点里由**一个钩子**匹配入参；命中即不执行，把 `{block, reason}` 当该次调用结果回给模型，记录 `status="skipped"`。**不弹框、不进图重入、不改参数、不 terminate**（与 pi 的有意分歧，ADR 0008 决策 6）。空表 = 不拦，它不是安全边界（见 §7）。
+- 失败回传：见 §3.5；无自动重试 / 熔断。
 
-> 说明：任务按**实现依赖顺序**排列，每个任务含 ≥3 个文件。`T01` 为项目基础设施（必为首个任务）。优先级：`P0`=MVP，`P1`=重要。任务粒度到"可独立编码"。
+### 4.6 子任务
 
-| ID | 任务名 | 源文件（核心） | 依赖 | 优先级 |
-|----|--------|----------------|------|--------|
-| T01 | 项目基础设施与配置 | `backend/config.py`、`backend/__init__.py`、`requirements.txt`、`frontend/package.json`、`frontend/vite.config.ts`、`frontend/tsconfig.json`、`frontend/tailwind.config.js`、`frontend/index.html`、`start.py`、`.env.example`、`README.md` | — | P0 |
-| T02 | LLM 接入抽象层 | `backend/core/llm/client.py`、`backend/core/llm/openai_compat.py`、`backend/utils/logging.py` | T01 | P0 |
-| T03 | 工具层（BaseTool + 四件套） | `backend/core/tools/base.py`、`backend/core/tools/registry.py`、`backend/core/tools/web_search.py`、`backend/core/tools/file_io.py`、`backend/core/tools/bash.py`（C3 取代 `code_exec` / `http_api`）、`backend/utils/sandbox.py` | T01 | P0/P1 |
-| T04 | LangGraph 编排内核 | `backend/core/agent/state.py`、`backend/core/agent/graph.py`、`backend/core/agent/nodes.py`、`backend/core/agent/prompts.py` | T02, T03 | P0 |
-| T05 | 后端服务与 API | `backend/services/event_bus.py`、`backend/services/persistence.py`、`backend/services/task_manager.py`、`backend/api/schemas.py`、`backend/api/routes.py`、`backend/api/sse.py`、`backend/main.py` | T04 | P0 |
-| T06 | 前端骨架与状态管理 | `frontend/src/main.tsx`、`frontend/src/App.tsx`、`frontend/src/index.css`、`frontend/src/types/index.ts`、`frontend/src/store/taskStore.ts`、`frontend/src/api/client.ts` | T01 | P0 |
-| T07 | 前端组件与三栏可视化 | `frontend/src/components/HistoryPanel.tsx`、`TaskPanel.tsx`、`TaskHeader.tsx`、`MessageStream.tsx`、`StepTimeline.tsx`、`StepDetail.tsx`、`InputBar.tsx`、`ArtifactList.tsx`、`pages/TaskView.tsx` | T06 | P0 |
-| T08 | 前端流式渲染与交互 | `frontend/src/hooks/useSSE.ts`、`MessageStream` / `PlanPanel` / `ModeSwitch`（增强 `StepDetail`/`ArtifactList` 下载预览） | T05, T07 | P0/P1 |
-| T09 | 集成联调与一键启动 | `start.py`（联调）、`docker-compose.yml`、`README.md`（补充）、端到端 demo 验证脚本 | T05, T08 | P0 |
+- 单入口工具 `spawn_subagent`（`subagent_enabled`，默认开）；两档工具面 `explore`（只读）/ `execute`，只能比父任务**收窄**。
+- 子任务在独立 `thread_id` 上跑同一张图，工作区继承父任务；父频道只收 `subtask_start / subtask_result / subtask_failed`，子任务自己的频道不带这三条。
+- `SubTask` 记录折进父任务 `Task.subtasks`；超时（`subagent_timeout_sec`）或崩溃折回 `failed`，与一条失败的 `tool_result` 并存，父任务不死。
+- 并发由 `subagent_max_concurrency` 控制（1 = 串行）。
 
-### 7.1 实现顺序建议
+### 4.7 事件与可观测
 
-```
-T01(基建) → T02(LLM) ┐
-                     ├→ T04(编排) → T05(服务/API) ┐
-        T01 → T03(工具) ┘                          ├→ T09(联调)
-        T01 → T06(前端骨架) → T07(组件) ───────────┘
-                                            T08(流式/交互) ↑依赖 T05,T07
-```
+- `EventBus` → SSE → 前端 `taskStore.applyEvent` 进时间线；EventSource 只派发已注册类型（§3.4 守卫的原因）。
+- `TraceRecorder` 订阅同一事件流写 `data/traces/<task_id>.jsonl`，含只进文件的 `trace_end`；前端可回放 / 导出，`GET /trace` 供外部读取。
+- 停止/续跑/压缩/驱逐/子任务都是同一条事件流上的可观测对象。
+
+### 4.8 工作区与文件接口
+
+- 任务拥有一个目录：`Task.workspace`（绝对路径；创建时规范化 `~` / 相对路径 / `..` / 符号链接，比较用 `workspace_key`）。日常入口 `qianfan` 的启动目录就是新任务的工作区（ADR 0010 决策 1/2）。
+- 文件工具与工作区文件接口的路径**限定在任务目录**；`bash` 不受围栏——工作目录只是起点（见 §7）。
+- 文件列表按 `.gitignore` 类规则做**可见性过滤**，不是安全边界：点名 `preview` / `download` 仍可达工作区内的任意文件。
+- `artifacts_path`（`data/artifacts`）只作**无任务时的 fallback**（注入块发现、子任务无父工作区等场景），不是现役产物账本。
 
 ---
 
-## 8. 待明确事项与已确认技术决策
+## 5. 跨文件共享约定
 
-> ⚠️ **Q1–Q8 大体仍现役**，两处已被超越：**Q3 持久化**——任务记录仍走 JSON，但
-> P3 已把 sqlite 真正用起来（`langgraph-checkpoint-sqlite` 存对话快照，含格式守卫）；
-> **Q7 人工介入**——确认闸门已随 ADR 0008 退役，危险动作改由 `policy_rules` + 钩子当场拒。
-> §8.2 的 4 项待定均已落定（能力概述以 [`README.md`](../README.md)「能力」为准）。
+> 与 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」同源；冲突时以 AGENTS.md 的硬规则为准。
 
-### 8.1 已确认技术决策（面向本地 demo，可后续调整）
-
-| 问题 | 决策 | 说明 |
-|------|------|------|
-| **Q1 前端栈** | **React + Vite + TypeScript + Tailwind** | 见 T01/T06/T07 |
-| **Q2 LLM** | **OpenAI 兼容接口**，抽象 `LLMClient`；`base_url`+`api_key`+`model` 经 `.env`；支持 OpenAI / DeepSeek / 本地 Ollama | 见 T02 |
-| **Q3 持久化** | v1 **内存 + JSON 文件落盘**（任务记录 + 产物），**预留 SQLite 仓储**（`Persistence` 抽象隔离） | 见 `persistence.py` |
-| **Q4 鉴权** | v1 **本地 demo 不做登录鉴权**；`Settings.auth_enabled=False`；接口预留 `POST /api/auth/token`（P1-6 仅在公网时开启） | 文档注明 |
-| **Q5 沙箱** | **没有沙箱**（C3）：bash 拿运行账号的权限，工作目录只是起点；危险规则默认空表，要隔离就放容器 / 虚拟机 | 见 README「这不是安全边界」/ `core/tools/bash.py` |
-| **Q6 web search** | **内置可插拔搜索工具**，默认轻量免费方案 **DuckDuckGo**（`ddgs`），预留 SerpAPI 接口（需 Key 时配置） | 见 `web_search.py` |
-| **Q7 人工介入** | **已随 ADR 0008 退役**：没有确认闸门 / 人工确认节点；危险动作由 `policy_rules` + 钩子当场拒 | 见 §5.7 |
-| **Q8 停下度量** | 一轮的最后一次 `agent` 调用没有工具调用 → `INTERRUPTED`（停下）；错误 → `FAILED`；没有 `COMPLETED` | 见 §5.9 |
-
-### 8.2 仍需用户/产品最终确认的极少数项（非阻塞，已给默认值）
-
-1. **默认 LLM 供应商**：当前默认占位为 OpenAI 兼容，需用户填入实际 `base_url/api_key`（或确认用 DeepSeek/Ollama）。→ 已默认提供 `.env.example`，用户启动时填即可。
-2. **`max_steps` 默认值**：当前默认 `15`（PRD P0-1），如需调整请在 `.env` 覆盖。
-3. **Web 检索默认供应商**：默认 DuckDuckGo（免费）；若需更高召回率是否启用 SerpAPI（付费）？→ 已预留接口，按需开启。
-4. **鉴权范围**：确认 v1 仅本地 demo（无鉴权）是否被接受；若需公网演示则开启 `auth_enabled` 与 `P1-6`。
-
-> 以上 4 项均不阻塞开发，架构已按"可配置、可插拔"设计，后续调整无需改核心代码。
+1. **配置管理**：所有配置经 [`backend/config.py`](../backend/config.py) 的 `Settings`（pydantic-settings）从 `.env` / 环境变量读取；业务代码用 `get_settings()` 单例，**禁止**硬编码 Key/路径。例外：`ModelStore` 自带 `data/models.json` 档案与仓库外 `~/.qianfan/credentials.json`（Key 只在那里）。
+2. **LLM 接入**：业务只依赖 `LLMClient` 抽象；`LLMResponse{content, tool_calls, raw, reasoning_content}`。现役实现 = `OpenAICompatibleClient`（唯一真实供应商路径，OpenAI 兼容）+ `MockLLMClient`（离线脚本）。**选哪套模型不再是硬编码分支**：由 `ModelStore` 档案（`data/models.json`）+ 任务 `Task.model` / 全局默认决定；预设只有 DeepSeek，其余用自定义 `base_url`。
+3. **工具接口**：`name / description / args_schema(JSON Schema) / requires_confirm / registers_artifact / run(**kwargs) -> ToolResult`。`run` 不得抛未捕获异常（内核兜底）；新工具 `@register` 即被自动发现。**现状**：`requires_confirm` 是确认闸门退役后的**兼容字段，已无消费者**；`registers_artifact` 只剩子任务产物收集在用；MCP 工具不经 `@register`，由 `task_manager` 追加。
+4. **事件/消息协议**：后端 → 前端只经 SSE（§3.4）；`data` 字段名与后端模型一致；`frontend/src/types/index.ts` 与 `schemas.py` 字段对齐（单一来源 `schemas.py`）。字段级无机械守卫，只有事件**类型名**有。
+5. **错误口径**：见 §3.5（失败两个面 + 规则拒绝第三形状 + 只执行一次）。
+6. **停止信号**：权威信号是 `TaskManager` 级的 `_stop_flags`（带 checkpointer 时 state 是每 superstep 副本，不可靠）；`stop()` 同时翻 state 与 flag，**`task_interrupted` 由 `TaskManager` 发布**（节点从不发布它）。
+7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里一个钩子；命中当场拒、不弹框、不进图重入（ADR 0008 决策 6）。
+8. **路径安全**：`read/write/edit/ls/glob/grep` 与工作区文件接口限定在当前任务目录；`bash` 不受此围栏；文件列表是可见性过滤，不是安全边界（`bash` 拿运行账号权限）。
+9. **停下判定**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 停成 `INTERRUPTED`；错误 → `FAILED`；**没有 `COMPLETED` 终态**。
+10. **日志**：统一经 [`backend/utils/logging.py`](../backend/utils/logging.py)，结构化输出到控制台 + `data_dir/logs/`；不打印明文 Key。
 
 ---
 
-## 9. 任务依赖图（mermaid `graph`）
+## 6. 依赖与运行形态
 
-```mermaid
-graph TD
-    T01[T01 项目基础设施与配置]
-    T02[T02 LLM 接入抽象层]
-    T03[T03 工具层]
-    T04[T04 LangGraph 编排内核]
-    T05[T05 后端服务与 API]
-    T06[T06 前端骨架与状态管理]
-    T07[T07 前端组件与可视化]
-    T08[T08 前端流式渲染与人工介入]
-    T09[T09 集成联调与一键启动]
+### 6.1 依赖
 
-    T01 --> T02
-    T01 --> T03
-    T01 --> T06
-    T02 --> T04
-    T03 --> T04
-    T04 --> T05
-    T06 --> T07
-    T05 --> T08
-    T07 --> T08
-    T05 --> T09
-    T08 --> T09
+| 面 | 现役钉版（详见源文件） |
+|---|---|
+| 存储/编排三包 | `langgraph>=1.2,<1.3` · `langgraph-checkpoint==4.2.0` · `langgraph-checkpoint-sqlite==3.1.1`（三包同钉，抬版须人工评估；理由见 [`requirements.txt`](../requirements.txt) 注释） |
+| Web | `fastapi>=0.111,<0.113` · `uvicorn[standard]>=0.30,<0.31` · `pydantic>=2.7,<3` · `pydantic-settings>=2.3,<3` |
+| 其他 | `openai>=1.30,<2` · `httpx>=0.27,<0.29` · `duckduckgo-search>=4,<5` · `pyyaml>=6,<7` · `mcp>=1.2,<2`（`--no-deps` 安装 + overrides，防抬 uvicorn/starlette） |
+| 前端 | React 18 · Vite 8 · TS 5 · Tailwind 4 · zustand 4（`npm ci` 口径） |
+| 质量门禁工具链 | `requirements-dev.txt` 钉 ruff / mypy / pre-commit；配置在 `pyproject.toml` |
+
+### 6.2 启动形态
+
+```bash
+qianfan                       # 日常：uv tool install -e . --overrides overrides.txt，单后台 + 自动开浏览器
+python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
+uvicorn backend.main:app --port 8000 --reload   # 手工起后端
 ```
+
+一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示先构建。
+
+### 6.3 运行态数据布局
+
+| 路径 | 内容 | 备注 |
+|---|---|---|
+| `data/tasks.json` | 任务记录（原子写，损坏自动备份） | 唯一任务记录源 |
+| `data/models.json` | 模型档案（**不含 Key**） | 全局默认 / 每任务模型 id |
+| `~/.qianfan/credentials.json` | 界面粘贴的 Key | 仓库外；接口只回 `key_set` / `key_source` |
+| `data/traces/<task_id>.jsonl` | 事件 + trace 时间线 | `trace_end` 只在这里 |
+| `data/checkpoints/checkpoints.sqlite` | LangGraph checkpoint | 格式戳 v2；v1 拒绝挂载 |
+| `data/logs/` | 结构化日志 | |
+| `<任务目录>/.qianfan/plans/<task_id>.md` | 计划文件 | 任务工作区内，唯一来源 |
+
+### 6.4 CI 与验证入口
+
+- CI 两个 job（[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）：`backend-test`（ruff + mypy + pytest 离线全量）、`frontend-build`（`npm ci` → typecheck → `check:sse` → build）。
+- 本地权威命令：`.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q`、`-m ruff check backend scripts`、`-m mypy`；前端 `npm run typecheck` / `npm run check:sse` / `npm run build`。
+- 文档链接门：`python scripts/check_doc_links.py`（只校验 tracked Markdown 的相对链接）。
+- 发布前 / 换供应商：按 [`docs/manual-verification.md`](manual-verification.md) 的 9 个场景启服务、在网页端手动跑一遍（CI 不跑真模型）。
+
+---
+
+## 7. 安全边界（这不是安全边界）
+
+`qianfan` 只监听回环、Host 检查只认 `127.0.0.1` / `localhost`（挡 DNS 重绑定）、CORS 只放行自身来源——这些是**减少暴露面**，不是沙箱。完整口径与审计证据见 [`README.md`](../README.md)「这不是安全边界」与 [`security-audit-2026-10-19-bash.md`](archive/security-audit-2026-10-19-bash.md)。
+
+- **默认没有登录**：同机其他进程/用户可直接驱动 API；`auth_enabled` 只挡无凭据访问，不是权限边界。远程访问不在本章范围。
+- **`bash` 拿运行账号权限**：工作目录只是起点，`data/`、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
+- **子进程只继承白名单环境变量**（挡「继承」，不挡读文件）；停止 / 超时回收本次调用建立的进程组 / Job Object，自行 `setsid` 脱离的进程不受管。
+- **只限时**（默认 30s，1–600s）+ 截断输出尾部；**没有** CPU / 内存 / 磁盘 / 进程数上限。
+- `policy_rules` 空表 = 不拦；它拦的是「工具调用入参」，不是 bash 内部行为。
+- 需要真隔离就放进容器或虚拟机（本章不提供 Docker 启动方式；C4 已删 `Dockerfile` 与 `docker-compose.yml`）。
+
+---
+
+## 8. 文档与验证入口
+
+| 想知道 | 去这里 |
+|---|---|
+| 能力清单 / 快速开始 / 模型与工作区形态 | [`README.md`](../README.md) |
+| 跨任务硬规则、任务路由、验证入口 | [`AGENTS.md`](../AGENTS.md) |
+| 决策与理由（现役 5 份 + 退役 5 份） | [`docs/adr/`](adr/) |
+| 交付历史（五轮迭代 + 切片） | [`docs/archive/OVERVIEW.md`](archive/OVERVIEW.md)、[`docs/archive/pivot-plan-build.md`](archive/pivot-plan-build.md) |
+| LangGraph 0.2 → 1.2.x 迁移实测 | [`docs/migration-langgraph-1x.md`](migration-langgraph-1x.md) |
+| stop / resume / durability 说明 | [`docs/incremental-arch-p3-resume.md`](incremental-arch-p3-resume.md) |
+| 已交付 / 已退役的 spec | [`docs/specs/`](specs/)（冻结归档，逐份带状态头） |
+| 发布前真模型验收 | [`docs/manual-verification.md`](manual-verification.md) |
+| 配置键与默认值 | [`.env.example`](../.env.example) + [`backend/config.py`](../backend/config.py) |
+| 文档归属与归档规则 | [`docs/agents/domain.md`](agents/domain.md) |
