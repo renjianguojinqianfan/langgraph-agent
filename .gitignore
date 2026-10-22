@@ -54,4 +54,6 @@ logs/
 .mimosa/
 .qoder/
 .qoderignore
+# 会话交接文档（handoff）：一次性工作稿，不入库；复盘 retros 仍跟踪
+.agents/handoffs/
 _write_bh_report.py
