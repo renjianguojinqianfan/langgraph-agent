@@ -7,8 +7,8 @@
 
 基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 工具生态 / 两层注入 / 工作区文件）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/archive/pivot-plan-build.md`。能力见 `README.md`「能力」，交付长史见 `docs/archive/OVERVIEW.md`，设计与 spec 见 `docs/`。
 
-- **最简 agent 一章（pi 式工具面、计划文件、一条命令启动）**：[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)，切片 C1–C7 见 `docs/capability-registry-rescope.md` §0.9。ADR 0009 是章节目标：现役以下面的「跨任务安全边界」表 + 代码为准，直到对应切片合并。
-- **日常形态补充（启动目录即工作区、共用一个后台、多套模型配置）**：[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)，C4 起的切片重排见 `docs/specs/qianfan-daily-form-plan.md` §4（spec #166）。同样以下表 + 代码为准，直到对应切片合并。
+- **最简 agent 一章（pi 式工具面、计划文件、一条命令启动，2026-10-22 已交付）**：[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)，切片 C1–C7 见 `docs/capability-registry-rescope.md` §0.9。现役以下面的「跨任务安全边界」表 + 代码为准。
+- **日常形态补充（启动目录即工作区、共用一个后台、多套模型配置，2026-10-22 已交付）**：[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)；实施记录见 `docs/specs/qianfan-daily-form-plan.md`（spec #166，切片 PR #167、#176–#187）。现役以下表 + 代码为准。
 - **本文件面向外部开发 agent**（改这个仓库时读）。
 - **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md`（`Task.workspace`；旧任务为 `data/artifacts`）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py` + `backend/core/runtime_context.py`。
 
@@ -39,7 +39,6 @@
 | 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse` |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/archive/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑）+ `backend/services/plan_file.py`（计划文件） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源） |
-| 本章切片（本批 12 片：S1 / S2 / W1–W3 / C4–C7 / M1 / M2 / D1） | `docs/adr/0009` + `docs/adr/0010` + `docs/specs/qianfan-daily-form-plan.md` §4（每片内容与随片文档；C1–C3 见 `docs/capability-registry-rescope.md` §0.9） | 按该片票面验收；规划 §4「随片文档」逐项改完 |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
 | 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆）；读料可交后台代理跑 `research` skill | 调研产物落 `docs/`（按 domain「文档归属」表，带文件级引用），票面只留结论 + 链接，再拍板 |

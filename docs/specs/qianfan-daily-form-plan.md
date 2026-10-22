@@ -1,6 +1,6 @@
-# qianfan 日常形态：全库实施规划（草案）
+# qianfan 日常形态：全库实施规划（已实施，2026-10-22）
 
-> **状态：现役规划**（2026-10-20 随 D0 落库；用户批准开 D0 PR）。基线 `master` = `0a28035`。对外入口：spec [#166](https://github.com/renjianguojinqianfan/langgraph-agent/issues/166)。
+> **状态：已完成**（2026-10-20 落库；2026-10-22 收尾：12 片全部合入 master，PR #167、#176–#187，子票 #159–#162、#168–#175 已关，父票 #155 已关）。本文留作实施记录，现役形态以 ADR 0009 / 0010 + 代码为准。开工基线 `master` = `0a28035`。对外入口：spec [#166](https://github.com/renjianguojinqianfan/langgraph-agent/issues/166)。
 > 决策权威是 [ADR 0010](../adr/0010-launch-dir-workspace-and-model-profiles.md)（产品形态补充）与 [ADR 0009](../adr/0009-minimal-agent-chapter.md)（本章目标）；
 > 本文只管**切片、验收、风险**，不重复决策理由。原切片表（[决策日志](../capability-registry-rescope.md) §0.9）的 C4–C7 在本文里**重排并扩充**，
 > 票面以本文 §4 为准；§0.9 只加一行指针，正文不动。
@@ -206,3 +206,4 @@ D0 文档 → C4 命令 → S1 bash 后台进程 → S2 搜索源 → W1 目录�
 - **已开新票**：S1 [#168](https://github.com/renjianguojinqianfan/langgraph-agent/issues/168)、W1 [#169](https://github.com/renjianguojinqianfan/langgraph-agent/issues/169)、W2 [#170](https://github.com/renjianguojinqianfan/langgraph-agent/issues/170)、W3 [#171](https://github.com/renjianguojinqianfan/langgraph-agent/issues/171)、M1 [#172](https://github.com/renjianguojinqianfan/langgraph-agent/issues/172)、M2 [#173](https://github.com/renjianguojinqianfan/langgraph-agent/issues/173)、D1 [#174](https://github.com/renjianguojinqianfan/langgraph-agent/issues/174)；以及 2026-10-20 开跑前环境检查后插入的 S2 [#175](https://github.com/renjianguojinqianfan/langgraph-agent/issues/175)（本机 duckduckgo 连接超时；票面见 §4 新小节）。
 - **#148**：S1 合并后评论审计结论（链到审计文档）并关闭。
 - **PR**：D0 文档 PR [#167](https://github.com/renjianguojinqianfan/langgraph-agent/pull/167) 已合（`316a510`）；C4 起每片一个堆叠 PR（目标 `master`）。
+- **收尾（2026-10-22）**：12 片全部合入（PR #176–#187）；九场景真模型验收与门禁证据见 PR [#186](https://github.com/renjianguojinqianfan/langgraph-agent/pull/186) 与 `docs/manual-verification.md`；#148 已关。
