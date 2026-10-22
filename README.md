@@ -71,7 +71,7 @@ agent ──有 tool call──> tool ──> agent
 
 - 设置页管理多套「地址 + 模型 + Key」；预设只有 **DeepSeek**，其余用「自定义」；只支持 OpenAI 兼容接口。
 - Key 两种来源：界面粘贴（存 `~/.qianfan/credentials.json`，仓库外）优先；其次配置里写的环境变量名（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）。接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无），不回 Key 本身。
-- 新建任务用全局默认；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。
+- 新建任务默认用全局默认，创建前也可先选一套；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。
 - 粘贴的 Key 是明文落盘，同账号的 bash 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
 
 ## 这不是安全边界
@@ -101,8 +101,8 @@ CI 跑后端 lint / 类型 / 测试、前端类型 / 构建。发布前 / 换供
 
 ## 文档
 
-- 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）；[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)（当前一章：最简 agent）
-- 架构（v0.1 历史档；§5 共享约定仍现役）：[docs/architecture.md](docs/architecture.md)；拓扑以 [graph.py](backend/core/agent/graph.py) 为准
+- 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）；[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)（当前一章：最简 agent）；[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)（工作区 / 单后台 / 模型配置）
+- 架构：[docs/architecture.md](docs/architecture.md)（现役；§3.3 REST / §3.4 SSE / §5 共享约定是契约面）；拓扑以 [graph.py](backend/core/agent/graph.py) 为准
 - 切片历史：[docs/archive/pivot-plan-build.md](docs/archive/pivot-plan-build.md)
 - 迁移：[docs/migration-langgraph-1x.md](docs/migration-langgraph-1x.md)
 - 配置：[.env.example](.env.example)；工程约定：[AGENTS.md](AGENTS.md)；术语：[GLOSSARY.md](GLOSSARY.md)

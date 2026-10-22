@@ -1,6 +1,12 @@
+---
+status: accepted
+---
+
 # 简历项目定位与 langgraph 迁移决策（grilling 总结）
 
 > 2026-09-12 grilling 会话定居的决策树。本文件是跨会话交接的唯一权威来源；执行任何阶段前先读此文件。
+>
+> **2026-10-23 注**：§2.6 的三项硬规则（`_needs_confirm` 重算 / `resilience.py`+`registry.py` 冻结区 CI 守卫 / 351 计数）已随 ADR 0008 / 0010 失效；本文其余决策（D1–D9）仍现役。
 
 ## 1. 定居决策树
 

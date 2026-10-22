@@ -2,9 +2,9 @@
 
 Covers :class:`MockLLMClient` behaviour, the :func:`create_llm_client` factory
 returning the correct implementation for each provider configuration, and the
-``reasoning_content`` round-trip (#45) — which drives the executor node so the
-field is asserted on the request actually sent, not just on the response parsed.
-All of this runs offline (no API keys, no network).
+``reasoning_content`` round-trip (#45) — which the single ``agent`` node sends in
+build mode, so the field is asserted on the request actually sent, not just on
+the response parsed. All of this runs offline (no API keys, no network).
 """
 
 from __future__ import annotations

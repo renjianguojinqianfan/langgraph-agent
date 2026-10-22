@@ -196,7 +196,7 @@ def test_block_does_not_mutate_the_arguments(tmp_path):
 
 
 def test_block_does_not_terminate_the_run(tmp_path):
-    """不 terminate：这一轮照常收口，球回给 planner（终止由人按停）。"""
+    """不 terminate：这一轮照常收口，球回给 ``agent``（下一轮）；终止由人按停。"""
     settings = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": "no"}))
     _rt, state, _tool, _tm, _bus = _run(settings)
 

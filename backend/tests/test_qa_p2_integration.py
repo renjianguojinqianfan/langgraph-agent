@@ -5,10 +5,10 @@ kernel:
 
 * ``import backend.main`` succeeds (P1 circular-import fix regression guard —
   previously ``subagent.py`` imported lazily so the FastAPI app could be built);
-* smoke race regression: the terminal event is published BEFORE the terminal
-  status is persisted, so once ``get_task()`` reports a terminal status the
-  ``task_completed`` event is always already available in the replay buffer —
-  run repeatedly to catch the pre-fix race;
+* smoke race regression: the ``task_interrupted`` event is published BEFORE the
+  terminal status is persisted, so once ``get_task()`` reports a terminal status
+  the event is always already available in the replay buffer — run repeatedly
+  to catch the pre-fix race;
 * MCP tools are mounted alongside the built-ins.
 
 All tests are offline.
@@ -77,10 +77,10 @@ def _run_task_once(tmp_path, index: int) -> tuple[str, set[str]]:
     events = eb.replay(task_id)
     event_types = {e["type"] for e in events}
     # Pre-fix race: the terminal status could be persisted before the event was
-    # published, so an observer would see COMPLETED but no task_completed event.
+    # published, so an observer would see INTERRUPTED but no task_interrupted event.
     if status == "INTERRUPTED":
         assert "task_interrupted" in event_types, (
-            "terminal status visible but task_completed event missing (publish-before-save race)"
+            "terminal status visible but task_interrupted event missing (publish-before-save race)"
         )
     tm.shutdown()
     return status, event_types

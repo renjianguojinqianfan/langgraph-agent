@@ -4,7 +4,7 @@ Full lifecycle through the public seam (TaskManager service layer / REST):
 
     create → RUNNING → stop → INTERRUPTED
            → simulate restart (rebuild manager on same storage)
-           → resume → COMPLETED
+           → resume → INTERRUPTED (parked)
 
 Design note (implementation-grade deviation from spec D4, recorded here):
 the project stops a task by flipping ``stop_requested`` and exiting through

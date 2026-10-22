@@ -295,7 +295,8 @@ def test_subtask_failure_returns_through_the_tool_and_keeps_the_parent_alive(
     """子任务崩溃 -> 一次失败的 spawn 工具回传；父任务自己收场，不跟着崩。
 
     #137 重裁（#46 曾把这里改判成 UNVERIFIED）：验证层退役后不再有机器判决，父任务
-    声称完成就是 COMPLETED；本用例的钉子（不崩、失败经工具面回传）一条没少。
+    以 final_answer 收口，状态是 INTERRUPTED；本用例的钉子（不崩、失败经工具面
+    回传）一条没少。
     """
     settings = make_settings(tmp_path)
     mock = _SpawnOnceMock()
@@ -398,7 +399,8 @@ def test_subagent_disabled_removes_the_entry_point(tmp_path, event_bus):
     """``subagent_enabled=False``：入口本身从面上消失。
 
     #137 重裁（#46 曾把这里改判成 UNVERIFIED）：面上没回归，终态也没有机器判决了——
-    唯一的调用被拒成 unknown tool、零成功却声称完成，现在照常收尾成 COMPLETED。
+    唯一的调用被拒成 unknown tool、零成功却声称完成，任务照常停在 INTERRUPTED
+    （没有子任务被派出）。
     """
     settings = make_settings(tmp_path, subagent_enabled=False)
     mock = _QaResearchMock()

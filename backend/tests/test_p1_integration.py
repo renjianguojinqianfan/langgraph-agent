@@ -17,10 +17,10 @@ from backend.tests.test_graph import _run_until_done
 class _ResearchMock(MockLLMClient):
     """Parent delegates the research leg; the subtask writes one file then ends.
 
-    Issue #56: the wording no longer splits the plan by itself — the parent has
-    to ask for the delegation and a human has to approve it. The scripted turns
-    cover both sides of that exchange (the subtask is recognised by the marker in
-    its instruction).
+    Issue #56: the wording no longer splits the plan by itself — the parent asks
+    for the delegation as an ordinary tool call. The scripted turns cover both
+    sides of that exchange (the subtask is recognised by the marker in its
+    instruction).
     """
 
     def __init__(self):

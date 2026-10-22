@@ -19,8 +19,8 @@
 
 | 触发词 | 不变量 | 权威源 |
 |---|---|---|
-| 危险动作拦截 | 危险动作由**设置里的规则表 + 一个钩子**当场拒：命中即不执行，把 `{block, reason}` 当该次调用的结果回给模型；**不弹框、不进图重入**。钩子**不改参数、不 terminate**（与 pi 的有意分歧） | `docs/adr/0008` + `backend/core/agent/policy.py`（规则表）与 `nodes.py::agent`（钩子所在） |
-| 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /api/tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源）；停下时可整份改（`PUT /api/tasks/{id}/plan` 写文件），改动随后续消息生效 | `docs/adr/0008`（决策 1–7）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
+| 危险动作拦截 | 危险动作由**设置里的规则表 + 一个钩子**当场拒：命中即不执行，把 `{block, reason}` 当该次调用的结果回给模型；**不弹框、不进图重入**。钩子**不改参数、不 terminate**（与 pi 的有意分歧） | `docs/adr/0008` + `backend/core/agent/policy.py`（规则表）与 `nodes.py::_handle_tool_calls`（钩子所在） |
+| 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /api/tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源）；停下时可整份改（`PUT /api/tasks/{id}/plan` 写文件），改动随后续消息生效 | `docs/adr/0008`（决策 1–8）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/plan_file.py`（计划文件）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
 | 工具挂载与失败回传 | MCP 工具由 `task_manager` 显式追加（不经 `@register`）；工具每次调用**只执行一次**，失败原因原样回给模型——**无自动重试、无熔断**（ADR 0003 已退役） | `backend/services/task_manager.py`（MCP 追加）+ `backend/core/agent/nodes.py::tool_node` |
 | 密钥 | Key 只存在仓库外的 `~/.qianfan/credentials.json`（界面粘贴）或配置里写的环境变量（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）；不进仓库、日志、trace、SSE；接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无）；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文 | `backend/services/model_store.py` + `.env.example` 注释 |
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
@@ -36,7 +36,7 @@
 |---|---|---|
 | 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：qoder 实施 + `code-review` 自评审 + `neat-freak` 文档收尾（步 3.5，能力面/接口/配置语义变了必须同步文档）+ 提 PR；opencode 独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
-| 前端改动 | `frontend/package.json` + `ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse` |
+| 前端改动 | `frontend/package.json` + `.github/workflows/ci.yml` 的 frontend-build job | `npm ci` 口径；`npm run typecheck` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse` |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/archive/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑）+ `backend/services/plan_file.py`（计划文件） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源） |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
@@ -52,6 +52,9 @@
 # 质量门禁（与 CI backend-test 同命令；工具链：pip install -r requirements-dev.txt）
 .\.venv311\Scripts\python.exe -m ruff check backend scripts
 .\.venv311\Scripts\python.exe -m mypy
+
+# 文档链接（改 docs/ 或根级 md 必跑；只校验 tracked Markdown 的相对链接）
+.\.venv311\Scripts\python.exe scripts\check_doc_links.py
 
 # 真实模型验证（发布前 / 换模型）：启服务、在网页端手动跑一遍（CI 不再跑真模型）
 .\.venv311\Scripts\python.exe -m uvicorn backend.main:app --port 8000 --reload
@@ -84,7 +87,7 @@ GitHub Issues（`renjianguojinqianfan/langgraph-agent`），走 `gh` CLI；Power
 
 ### Domain docs
 
-Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001 / 0002 / 0003 / 0004 / 0005 / 0006 / 0007 / 0008 / 0009 / 0010；0005–0007 已随 0008 退役、0002 部分退役、0003 已随 C2 退役；0004 已随 C5 退役；0009 = 最简 agent 一章；0010 = 日常形态补充）。See `docs/agents/domain.md`.
+Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/core/agent/state.py`，节点名见 `graph.py`）+ `docs/adr/`（0001–0010；**状态总表见 `docs/agents/domain.md` 文首**）。See `docs/agents/domain.md`.
 
 ### Implementation workflow
 

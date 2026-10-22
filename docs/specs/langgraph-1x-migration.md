@@ -1,5 +1,7 @@
 # Spec：langgraph 0.2 → 1.2.x 原地迁移与简历化包装（Phase 0–2）
 
+> 状态：**已交付**（2026-09，Issue #7）｜迁移已落地：`langgraph>=1.2,<1.3` + `durability="sync"`（`backend/services/task_manager.py:58-69`）；现役记录见 [`docs/migration-langgraph-1x.md`](../migration-langgraph-1x.md)｜正文冻结。
+
 > 决策来源：`docs/adr/0001-in-place-migration-and-resume-positioning.md`（D1–D9，2026-09-12 grilling 定居）。本 spec 决策完整，执行时不做二次决策。
 
 ## Problem Statement

@@ -1,5 +1,7 @@
 # langgraph 0.2 → 1.2.x 原地迁移：评估与执行记录
 
+> 状态：**已完成**（迁移已落地；`langgraph>=1.2,<1.3`，1.x 特性采用 `durability="sync"`）。§2 存储守卫与 §5 durability 仍是现役参考（`AGENTS.md` 任务路由）；其余为 2026-09 的实测与闸门记录，脚本名 / 计数以当时为准（§6 的 `scripts/live_e2e.py` 与 `guard-protected-files` CI 守卫此后已删除，现役验收口径见 `AGENTS.md`「真实模型验证」）。
+
 > Issue #7 / spec `docs/specs/langgraph-1x-migration.md` 的 Phase 1 评估档。
 > 本文只记**实测结果**与由它推出的决策；未实测的猜测一律标注为推测。
 > 复现环境：Python 3.11.15（`.venv311`），Windows / Ubuntu(CI) 双跑。
@@ -238,7 +240,7 @@ spec 的选择规则：优先 durability；仅当 spike 证明 typed streaming v
 注释写的正是这个竞态（「第一个 superstep 的 put 可能在 stop() 翻转状态之后几百毫秒才
 落地」）。`durability="sync"` 让写入在下一个 superstep 开始前完成，从机制上关掉这个窗口。
 
-宽限双探**保留**不删：resume 拒绝语义不可放松（`AGENTS.md`「任务路由」；三类 409 见
+宽限双探**保留**不删：resume 拒绝语义不可放松（`AGENTS.md`「任务路由」；两类 409 见
 `docs/incremental-arch-p3-resume.md` §4），`sync` 只是让它从
 "必需的补丁"降级为"纵深防御"。这是有意的冗余，不是忘删。
 

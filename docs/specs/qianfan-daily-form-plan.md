@@ -40,7 +40,7 @@ D0 文档 → C4 命令 → S1 bash 后台进程 → S2 搜索源 → W1 目录�
 | 模型 | 只 OpenAI 兼容；预设 openai / deepseek / ollama；设置 `lru_cache` 启动读一次；**全进程一个客户端**（runtime、子代理、压缩摘要共用）；思考内容已原样回传 | `backend/core/llm/openai_compat.py:43-150`；`config.py:37-44,205-208`；`task_manager.py:188,548,850,1048`；`subagent.py:351`；`nodes.py:194,334-335,379-380,438-439` |
 | 文件遍历 | glob `base.glob`、grep `sorted(base.rglob("*"))`、ls `iterdir`，**无任何跳过清单** | `file_io.py:385-422,425-527,530-586` |
 | bash 后台进程（F3） | shell 一退出就跳出轮询；两个读管道线程各 `join(timeout=5)` 串行 ≈ 10 秒；shell 已退出时 `_kill_tree` 直接返回，后台子进程不被收；Windows 无进程组 | `bash.py:186-187,311-325,339-360` |
-| SSE 事件面 | 事件名是任意字符串；权威表在 architecture §3.4；`check:sse` 四处对齐 | `backend/services/event_bus.py:34-48`；`docs/architecture.md:352-392`；`frontend/scripts/check-sse-event-registry.mjs` |
+| SSE 事件面 | 事件名是任意字符串；权威表在 architecture §3.4；`check:sse` 四处对齐 | `backend/services/event_bus.py:34-48`；`docs/architecture.md` §3.4（以节号为准；行号随文档刷新漂移）；`frontend/scripts/check-sse-event-registry.mjs` |
 
 ## 3. 目标形态与差异
 

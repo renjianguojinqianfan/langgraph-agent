@@ -1,5 +1,7 @@
 # T1.4 Tool-Result Eviction：先搬大件再摘要
 
+> 状态：**已交付**（2026-09-16，PR #40）｜工具结果驱逐现役，权威面 = `config.py:73-78` + `context.py` 的 `evict_tool_results` + `nodes.py` 的挂接；文末验收里的 `live_e2e` 已删，现役验收口径 = 网页端手动跑一遍｜正文冻结。
+
 > Issue [#38](https://github.com/renjianguojinqianfan/langgraph-agent/issues/38) · 2026-09-16 grilling 拍板 · 执行序：P1-A′ → **T1.4** → P1-B → P1-A → 评测台
 
 ## 一、背景与目标

@@ -1,5 +1,7 @@
 # P3 增量架构：断点续跑（LangGraph Checkpointer）
 
+> 状态：**已完成（2026-08-27）**；§4 确认闸门已随 ADR 0008 退役。§1 / §2 / §5 的续跑机制说明可作参考；§2.2 / §3 / §6 的守卫与控制位清单、终端语义以现役代码 + `AGENTS.md` 为准。测试基线数字为当时记录，不更新。
+
 > Spec：[Issue #4](https://github.com/renjianguojinqianfan/langgraph-agent/issues/4) · 实施日期：2026-08-27 · 测试基线：351 passed（331 既有 + 20 新增）
 
 ## 1. 目标与范围
