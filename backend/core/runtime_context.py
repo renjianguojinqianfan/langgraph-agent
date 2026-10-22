@@ -31,14 +31,16 @@ def _reject_non_local_path(value: "str | Path") -> None:
     (and its forward-slash spelling), which turns an unauthenticated GET into
     an NTLM handshake with an attacker-chosen host. Device namespaces
     (``\\\\?\\``, ``\\\\.\\``) and NUL bytes are rejected for the same reason:
-    they are never a task workspace.
+    they are never a task workspace. Windows treats ``/`` and ``\\`` as
+    interchangeable separators, so mixed spellings (``/\\host\\share``) are
+    folded to backslashes before the prefix check.
     """
     raw = os.fspath(value)
     if isinstance(raw, bytes):
         raw = os.fsdecode(raw)
     if "\x00" in raw:
         raise ValueError("workspace path must not contain a NUL byte")
-    if raw.startswith(("\\\\", "//", "\\??\\")):
+    if raw.replace("/", "\\").startswith(("\\\\", "\\??\\")):
         raise ValueError("workspace must be a local path; UNC and device paths are rejected")
 
 
