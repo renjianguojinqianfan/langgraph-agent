@@ -75,7 +75,7 @@ Preload only resources whose late discovery is visible in the trace. Each preloa
 }
 </script>
 ```
-`moderate` waits for a stronger intent signal than eager modes. Measure prediction hit rate, transferred bytes, and server cost; a wrong prerender is roughly an unused navigation. See [core-web-vitals → LCP](../core-web-vitals/SKILL.md#lcp-largest-contentful-paint) for the tradeoffs and the `prerenderingchange` gating needed for analytics.
+`moderate` waits for a stronger intent signal than eager modes. Measure prediction hit rate, transferred bytes, and server cost; a wrong prerender is roughly an unused navigation. See the upstream core-web-vitals skill's LCP section (not vendored in this repo) for the tradeoffs and the `prerenderingchange` gating needed for analytics.
 
 **Defer non-critical CSS:**
 ```html
@@ -396,4 +396,4 @@ Raw `PerformanceObserver` snippets are useful for the current browser session bu
 
 ## References
 
-For Core Web Vitals specific optimizations, see [Core Web Vitals](../core-web-vitals/SKILL.md).
+For Core Web Vitals specific optimizations, see the upstream Core Web Vitals skill (not vendored in this repo).
