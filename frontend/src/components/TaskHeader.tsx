@@ -1,5 +1,6 @@
 import { stopTask } from "../api/client";
 import { useAuthStore } from "../store/authStore";
+import { profileName, useModelStore } from "../store/modelStore";
 import { Task, TaskStatus } from "../types";
 
 const STATUS_STYLE: Record<TaskStatus, string> = {
@@ -20,6 +21,9 @@ export function TaskHeader({ task }: { task: Task }) {
   const running = task.status === "RUNNING";
   const authEnabled = useAuthStore((s) => s.authEnabled);
   const logout = useAuthStore((s) => s.logout);
+  const models = useModelStore((s) => s.models);
+  const defaultId = useModelStore((s) => s.defaultId);
+  const modelLabel = profileName(models, task.model || defaultId);
 
   const onStop = async () => {
     try {
@@ -36,6 +40,9 @@ export function TaskHeader({ task }: { task: Task }) {
         <div className="text-xs text-slate-500 truncate">{task.user_input}</div>
         <div className="text-[11px] text-slate-600 truncate" title={task.workspace}>
           目录：{task.workspace || "默认"}
+        </div>
+        <div className="text-[11px] text-slate-500 truncate" title={task.model || defaultId}>
+          模型：{modelLabel}
         </div>
       </div>
       <span

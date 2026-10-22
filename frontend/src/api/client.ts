@@ -3,6 +3,9 @@ import {
   AuthTokenResponse,
   ChatTurn,
   CreateTaskRequest,
+  ModelKeySource,
+  ModelProfile,
+  ModelsData,
   SSEvent,
   Task,
   TaskMode,
@@ -10,6 +13,15 @@ import {
 } from "../types";
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
+
+/** Failure text from either a FastAPI ``{detail}`` body or a non-ok envelope. */
+export function apiErrorText(r: unknown): string {
+  const detail = (r as { detail?: unknown })?.detail;
+  if (typeof detail === "string") return detail;
+  const message = (r as { message?: unknown })?.message;
+  if (typeof message === "string" && message !== "ok") return message;
+  return "操作失败";
+}
 
 // localStorage key must match backend/services/auth.py:TOKEN_STORAGE_KEY.
 const TOKEN_KEY = "lga_auth_token";
@@ -96,6 +108,51 @@ export const sendMessage = (id: string, input: string) =>
   });
 
 export type { ChatTurn };
+
+// ── M1/M2: model profiles (Key is write-only) ──
+export const listModels = () => req<ModelsData>("/models");
+
+export const createModel = (body: {
+  name: string;
+  base_url: string;
+  model: string;
+  api_key_env: string;
+}) => req<ModelProfile>("/models", { method: "POST", body: JSON.stringify(body) });
+
+export const updateModel = (
+  id: string,
+  body: Partial<Pick<ModelProfile, "name" | "base_url" | "model" | "api_key_env">>
+) => req<ModelProfile>(`/models/${encodeURIComponent(id)}`, {
+  method: "PUT",
+  body: JSON.stringify(body),
+});
+
+export const deleteModel = (id: string) =>
+  req<{ ok: boolean }>(`/models/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+export const setDefaultModel = (id: string) =>
+  req<{ ok: boolean; default: string }>(`/models/${encodeURIComponent(id)}/default`, {
+    method: "POST",
+  });
+
+/** Write-only: the response reports set/source, never the key. */
+export const setModelKey = (id: string, key: string) =>
+  req<{ ok: boolean; key_set: boolean; key_source: ModelKeySource }>(
+    `/models/${encodeURIComponent(id)}/key`,
+    { method: "PUT", body: JSON.stringify({ key }) }
+  );
+
+export const testModel = (id: string) =>
+  req<{ ok: boolean; error?: string; note?: string }>(
+    `/models/${encodeURIComponent(id)}/test`,
+    { method: "POST" }
+  );
+
+export const putTaskModel = (id: string, model: string) =>
+  req<{ ok: boolean; model: string }>(`/tasks/${id}/model`, {
+    method: "PUT",
+    body: JSON.stringify({ model }),
+  });
 
 // ── P1 item 5: auth ──
 export const loginRequest = (secret: string) =>

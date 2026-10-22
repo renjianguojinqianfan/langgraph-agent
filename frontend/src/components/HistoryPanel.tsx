@@ -21,17 +21,26 @@ export function HistoryPanel() {
   const setCurrent = useTaskStore((s) => s.setCurrentTask);
   const filter = useTaskStore((s) => s.historyFilter);
   const setFilter = useTaskStore((s) => s.setHistoryFilter);
+  const setSettingsOpen = useTaskStore((s) => s.setSettingsOpen);
 
   return (
     <aside className="w-64 shrink-0 bg-panel border-r border-slate-800 flex flex-col">
       <div className="px-3 py-3 border-b border-slate-800 font-semibold flex items-center justify-between">
         <span>历史任务</span>
-        <button
-          className="text-xs text-sky-400 hover:text-sky-300"
-          onClick={() => setCurrent(null)}
-        >
-          + 新建
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="text-xs text-slate-400 hover:text-slate-200"
+            onClick={() => setSettingsOpen(true)}
+          >
+            设置
+          </button>
+          <button
+            className="text-xs text-sky-400 hover:text-sky-300"
+            onClick={() => setCurrent(null)}
+          >
+            + 新建
+          </button>
+        </div>
       </div>
       <div className="px-2 py-2 border-b border-slate-800 flex gap-1 text-xs">
         <button

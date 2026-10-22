@@ -4,6 +4,7 @@ import { StepDetail } from "../components/StepDetail";
 import { TaskPanel } from "../components/TaskPanel";
 import { getTask, listTasks } from "../api/client";
 import { useSSE } from "../hooks/useSSE";
+import { useModelStore } from "../store/modelStore";
 import { useTaskStore } from "../store/taskStore";
 import { TaskViewTab } from "../types";
 import { currentDir } from "../workspace";
@@ -17,8 +18,13 @@ export function TaskView() {
   const upsertTask = useTaskStore((s) => s.upsertTask);
   const setTasks = useTaskStore((s) => s.setTasks);
   const historyFilter = useTaskStore((s) => s.historyFilter);
+  const refreshModels = useModelStore((s) => s.refresh);
   const listRevision = useTaskStore((s) => s.listRevision);
   const [tab, setTab] = useState<TaskViewTab>("run");
+
+  useEffect(() => {
+    refreshModels();
+  }, [refreshModels]);
 
   // History load: this page's directory by default, or every task (ADR 0010).
   // Membership is the server GET's answer; refetch on filter, create and select.
