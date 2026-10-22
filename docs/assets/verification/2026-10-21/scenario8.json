@@ -1,7 +1,7 @@
 {
   "scenario": 8,
   "date": "2026-10-21",
-  "result": "通过",
+  "result": "部分",
   "task_id": "b55af32a3d7345c2ac44aae18ed51883",
   "status": "INTERRUPTED",
   "mode": "build",

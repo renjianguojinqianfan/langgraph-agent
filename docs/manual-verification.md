@@ -55,7 +55,7 @@
 | 4 | 2026-10-21 | 默认 | 通过：`policy_rules` 命中 `rm -rf` → `skipped` + 理由；canary 目录未删；模型改写成 `policy-blocked-ok.txt` | `scenario4.png` / `scenario4.json`，任务 `63481ed3` |
 | 5 | 2026-10-21 | 默认 | 通过：`bash-made.txt` 出现在工作区文件列表（20 字节） | `scenario5.png` / `scenario5.json`，任务 `2cf1218d` |
 | 6 | 2026-10-21 | 默认 | 通过：A/B 各自列表；B 第二次启动交接同一后台；从「全部」续 A 任务，`a-continued.txt` 落在 A 而非 B。交接步骤 2026-10-22 在 #180 F1 修复后复跑 | `scenario6.png` / `scenario6.json` / `scenario6-handoff.txt`，任务 `2cf1218d` / `d7c3a8d0`；复跑 `docs/assets/verification/2026-10-22/scenario6-handoff.json` |
-| 7 | 2026-10-21 | 默认 | 通过：重启后 12 条历史仍在；停下任务可续说（`after-restart.txt`）；RUNNING 孤儿重启后转 INTERRUPTED，悬空调用被清扫后从断点续跑（`kill-resume.txt`） | `scenario7.png` / `scenario7.json`，任务 `8ca45bc4` / `2cf1218d` |
+| 7 | 2026-10-21 | 默认 | 通过：重启后当前目录 10 条历史（重启时点全部 11 条）仍在；停下任务可续说（`after-restart.txt`）；RUNNING 孤儿重启后转 INTERRUPTED，悬空调用被清扫后从断点续跑（`kill-resume.txt`） | `scenario7.png` / `scenario7.json`，任务 `8ca45bc4` / `2cf1218d` |
 | 8 | 2026-10-21 | 默认 | 部分：后台命令立即返回（`C7BG2-1982`），心跳文件在停止后不再增长；前景 `sleep 600` 被 `task stop requested` 终止。未记录 PID，进程树停止以心跳停止为证 | `scenario8.png` / `scenario8.json`，任务 `b55af32a` |
 | 9 | 2026-10-21 | 默认 + qwen3.8-flash | 通过：MCP `echo:hello-c7-mcp`；Exa 搜索返回 `langgraph==1.2.0`；子代理 `read-notes` completed；中途切换 trace 记录 `default → 2556f5d79830`，第 4 步起用 qwen3.8-flash | `scenario9.png` / `scenario9.json`，任务 `7f8204d1` |
 
