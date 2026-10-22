@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from backend.core.agent.inject import build_inject_block
 from backend.core.llm.client import MockLLMClient
 from backend.core.runtime_context import (
+    _reject_non_local_path,
     normalize_workspace,
     reset_runtime_context,
     set_runtime_context,
@@ -203,6 +204,9 @@ def test_list_filters_by_directory_and_all(tmp_path):
         pytest.param("bad\x00path", id="nul-byte"),
         pytest.param(r"\\server\share", id="unc-backslash"),
         pytest.param("//server/share", id="unc-forward-slash"),
+        pytest.param(r"/\192.0.2.1\share", id="unc-mixed-forward-backslash"),
+        pytest.param(r"\/192.0.2.1\share", id="unc-mixed-backslash-forward"),
+        pytest.param(r"/\??\C:\tmp", id="device-mixed"),
     ],
 )
 def test_list_tasks_rejects_non_local_workspace_paths(tmp_path, bad):
@@ -213,6 +217,31 @@ def test_list_tasks_rejects_non_local_workspace_paths(tmp_path, bad):
         assert r.status_code == 400, r.text
     finally:
         client.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(r"\\server\share", id="unc-backslash"),
+        pytest.param("//server/share", id="unc-forward-slash"),
+        pytest.param(r"/\server\share", id="unc-mixed-forward-backslash"),
+        pytest.param(r"\/server\share", id="unc-mixed-backslash-forward"),
+        pytest.param(r"\\?\C:\tmp", id="device-namespace"),
+        pytest.param(r"/\??\C:\tmp", id="device-mixed"),
+        pytest.param("bad\x00path", id="nul-byte"),
+    ],
+)
+def test_reject_non_local_path_before_resolve(monkeypatch, bad):
+    """The guard refuses UNC/device spellings before ``Path.resolve()`` runs."""
+    with pytest.raises(ValueError):
+        _reject_non_local_path(bad)
+
+    def _resolve_must_not_run(*args, **kwargs):
+        raise AssertionError("Path.resolve() ran for a rejected workspace")
+
+    monkeypatch.setattr(Path, "resolve", _resolve_must_not_run)
+    with pytest.raises(ValueError):
+        normalize_workspace(bad)
 
 
 def test_legacy_task_gets_the_old_sandbox_workspace(tmp_path):
