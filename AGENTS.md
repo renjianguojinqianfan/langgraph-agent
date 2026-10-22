@@ -5,7 +5,7 @@
 
 ## 项目定位与适用范围
 
-基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 工具生态 / 两层注入 / 回滚）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/pivot-plan-build.md`。能力见 `README.md`「能力」，交付长史见 `OVERVIEW.md`，设计与 spec 见 `docs/`。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 工具生态 / 两层注入 / 工作区文件）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/pivot-plan-build.md`。能力见 `README.md`「能力」，交付长史见 `OVERVIEW.md`，设计与 spec 见 `docs/`。
 
 - **最简 agent 一章（pi 式工具面、计划文件、一条命令启动）**：[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)，切片 C1–C7 见 `docs/capability-registry-rescope.md` §0.9。ADR 0009 是章节目标：现役以下面的「跨任务安全边界」表 + 代码为准，直到对应切片合并。
 - **日常形态补充（启动目录即工作区、共用一个后台、多套模型配置）**：[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)，C4 起的切片重排见 `docs/specs/qianfan-daily-form-plan.md` §4（spec #166）。同样以下表 + 代码为准，直到对应切片合并。
@@ -26,7 +26,7 @@
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
 | 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部覆盖块（`setdefault` 语义）保持原样；SDK **自读**的 LangSmith / LangChain 开关与 Key 另由同文件的 pop 块摘除（#84）——「离线全绿」不靠开发者 shell 恰好没设变量 | `backend/tests/conftest.py` 顶部两块（代码即权威）+ 复现测试 `test_langsmith_offline_guard.py` |
 | 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn / starlette 区间不动；`qianfan` 的安装入口只多一个 build 期 setuptools，运行期依赖仍只以 `requirements.txt` 为源，mcp 的 `uvicorn>=0.31.1` 元数据用根目录 `overrides.txt` 覆盖（区间不变） | `requirements.txt` 注释 + `pyproject.toml` 头注 |
-| 真实模型验证 | 发布前 / 换供应商时，**启服务、在网页端手动跑一遍**（CI 不再跑真模型）；README **不记**跑过的时间与模型 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
+| 真实模型验证 | 发布前 / 换供应商时，按 [9 个场景](docs/manual-verification.md) **启服务、在网页端手动跑一遍**（CI 不再跑真模型）；README **不记**跑过的时间与模型 | `docs/manual-verification.md` + [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
 | 提交边界 | 副作用可逆或事先说明；提交只含本次意图内的源码与文档（`.env` / `data/` / `frontend/dist` 是本地态）；`push --force` 类默认拒绝 | `.gitignore` + 全局 `~/.agents/AGENTS.md` |
 | 发布与合并惯例 | 功能 / 依赖 / 代码走 PR + CI 全绿；docs 小修可直推；依赖类 PR 先人工评估 | `docs/agents/issue-tracker.md`「Release conventions」 |
 

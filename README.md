@@ -4,7 +4,9 @@
 
 重点是运行时：多轮续说、checkpoint、模式切换、危险动作拦截、工具生态与可观测性，而不是一个 demo 界面。
 
-**离线测试全绿**（零网络、零 Key、MockLLM）· CI 两个 job · 发布前在网页端跑一次真实模型。
+**离线测试全绿**（零网络、零 Key、MockLLM）· CI 两个 job · 发布前按 [9 个真模型场景](docs/manual-verification.md) 在网页端跑一遍。
+
+![qianfan 任务界面：计划 / 执行、模型下拉、子任务与工作区文件](docs/assets/qianfan-ui.png)
 
 ## 快速开始
 

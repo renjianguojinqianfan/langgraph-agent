@@ -27,7 +27,7 @@ body {
 
 /* #122 v4 preflight 删掉了 v3 的 `button,[role=button]{cursor:pointer}` 与
    `:disabled{cursor:default}` 两条（实测整个 v4 产物 CSS 里 cursor 出现 0 次，落回浏览器默认）。
-   本仓三栏界面整屏都是可点的 button（历史任务项 / Tab / 筛选 chip / 确认框两个按钮 / 回滚 / 登出），
+   本仓三栏界面整屏都是可点的 button（历史任务项 / Tab / 筛选 chip / 确认框两个按钮 / 登出），
    指针手势是最基本的可供性，按官方升级指南原样恢复。放 @layer base 而不是裸写：base 层优先级
    低于 utilities 层，cursor-* utility 才盖得住它。删掉这一段 = 接受「按钮没有手型」。 */
 @layer base {

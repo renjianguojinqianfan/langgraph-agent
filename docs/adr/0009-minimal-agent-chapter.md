@@ -66,7 +66,7 @@ status: accepted
 | 上下文 | 两层 AGENTS.md + 技能目录 + 环境信息注入；大结果驱逐；历史压缩 | `inject.py`、`context.py` |
 | 事件 | EventBus → SSE（网页）+ trace 文件 | `backend/services/event_bus.py`、`trace.py`、`backend/api/sse.py` |
 | 网页 | 步骤视图、计划文件、工作区文件 | `frontend/src/` |
-| 启动 | `qianfan` → uvicorn（127.0.0.1）+ 托管前端 + 开浏览器 | 本章新增 |
+| 启动 | `qianfan` → uvicorn（127.0.0.1）+ 托管前端 + 开浏览器；**C4 起**第二次启动只把浏览器交接给同一后台（ADR 0010 决策 3；安装方式见本章决策 10） | 本章新增 |
 
 核不点名具体功能（G-1 的尺子）这一条，本章只做到「删掉被点名的那些」；把剩下的接到统一卡口上是插件那一章的事。
 

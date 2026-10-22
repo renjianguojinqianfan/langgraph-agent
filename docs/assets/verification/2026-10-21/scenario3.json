@@ -1,0 +1,57 @@
+{
+  "scenario": 3,
+  "date": "2026-10-21",
+  "result": "通过",
+  "task_id": "3353c791cb2b485e84d1e532b06c8eef",
+  "status": "INTERRUPTED",
+  "mode": "build",
+  "model": "default",
+  "plan_version": 0,
+  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "steps": [
+    {
+      "index": 1,
+      "tools": []
+    },
+    {
+      "index": 2,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "failed",
+          "input": {
+            "command": "sleep 30",
+            "timeout": 60
+          },
+          "error": "command stopped: task stop requested",
+          "output_excerpt": "{\"stdout\": \"\", \"stderr\": \"\", \"exit_code\": 1, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": true, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "tools": [
+        {
+          "name": "write",
+          "status": "success",
+          "input": {
+            "path": "stop-continued.txt",
+            "content": "done-scenario-3"
+          },
+          "error": null,
+          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\stop-continued.txt\", \"size\": 15}"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "tools": []
+    }
+  ],
+  "checks": {
+    "stopped_status": "INTERRUPTED",
+    "sleep tool status": "failed (command stopped: task stop requested)",
+    "stop-continued.txt content": "done-scenario-3"
+  },
+  "notes": "停止发生在续说轮（准备轮 parked 后发送 sleep 30）；停下后同一任务续说并落盘。"
+}

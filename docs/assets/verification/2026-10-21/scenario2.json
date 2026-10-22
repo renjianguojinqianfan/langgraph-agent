@@ -1,0 +1,109 @@
+{
+  "scenario": 2,
+  "date": "2026-10-21",
+  "result": "通过",
+  "task_id": "d771829cf8554baeaaaf78b9de9b5944",
+  "status": "INTERRUPTED",
+  "mode": "build",
+  "model": "default",
+  "plan_version": 3,
+  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "steps": [
+    {
+      "index": 1,
+      "tools": [
+        {
+          "name": "ls",
+          "status": "success",
+          "input": {
+            "path": "."
+          },
+          "error": null,
+          "output_excerpt": "{\"dir\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"entries\": [{\"name\": \".git\", \"is_dir\": true, \"size\": 0}, {\"name\": \"hello.txt\", \"is_dir\": false, \"size\": 18}], \"truncated\": false}"
+        },
+        {
+          "name": "glob",
+          "status": "success",
+          "input": {
+            "pattern": "*.txt"
+          },
+          "error": null,
+          "output_excerpt": "{\"pattern\": \"*.txt\", \"matches\": [\"hello.txt\"], \"count\": 1, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "tools": [
+        {
+          "name": "read",
+          "status": "success",
+          "input": {
+            "path": "hello.txt"
+          },
+          "error": null,
+          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\hello.txt\", \"content\": \"     1\\tqianfan-scenario-1\", \"total_lines\": 1, \"start_line\": 1, \"end_line\": 1, \"returned_lines\": 1, \"truncated\": false, \"size\": 18}"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "tools": []
+    },
+    {
+      "index": 4,
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "cd \"E:\\qianfan-c7-20261021\\A\" && printf 'edited-by-human\\n' > plan-demo.txt && ls -la"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"total 6\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:47 .\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:43 ..\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:44 .git\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:46 .qianfan\\n-rw-r--r-- 1 DELL 197121 18 Oct 21 12:44 hello.txt\\n-rw-r--r-- 1 DELL 197121 16 Oct 21 12:47 plan-demo.txt\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "tools": [
+        {
+          "name": "read",
+          "status": "success",
+          "input": {
+            "path": "plan-demo.txt"
+          },
+          "error": null,
+          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\plan-demo.txt\", \"content\": \"     1\\tedited-by-human\", \"total_lines\": 1, \"start_line\": 1, \"end_line\": 1, \"returned_lines\": 1, \"truncated\": false, \"size\": 16}"
+        },
+        {
+          "name": "bash",
+          "status": "success",
+          "input": {
+            "command": "cd \"E:\\qianfan-c7-20261021\\A\" && od -c plan-demo.txt && git status --porcelain"
+          },
+          "error": null,
+          "output_excerpt": "{\"stdout\": \"0000000   e   d   i   t   e   d   -   b   y   -   h   u   m   a   n  \\\\n\\n0000020\\n?? hello.txt\\n?? plan-demo.txt\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "tools": []
+    }
+  ],
+  "checks": {
+    "plan_version": 3,
+    "plan_contains_human_edit": true,
+    "plan-demo.txt content": "edited-by-human",
+    "git_status_has_dot_qianfan": false
+  },
+  "notes": "计划先由计划模式产出（v1），人工改动后以 v3 进入执行轮；执行结果采用人工指定的 edited-by-human。",
+  "plan_evidence": {
+    "version": 3,
+    "v1_excerpt": "- **产出**：`E:\\qianfan-c7-20261021\\A\\plan-demo.txt`，内容为 `first-version`（单行）。",
+    "human_edit_excerpt": "## 人工修改（EDITED-BY-HUMAN）\n\n- 覆盖上面所有内容要求：`plan-demo.txt` 的内容必须是 `edited-by-human`，不是 `first-version`。",
+    "executed_value": "edited-by-human",
+    "source": ".qianfan/plans/d771829cf8554baeaaaf78b9de9b5944.md（2026-10-22 复核读取）"
+  }
+}
