@@ -88,7 +88,8 @@
     }
   ],
   "checks": {
-    "history_count_after_restart": 12,
+    "history_count_after_restart": 10,
+    "history_count_after_restart_scope": "重启后当前目录（A）10 条；重启时点全部任务 11 条（A 10 + B 1）。12 是全部场景结束后的终局统计，不是重启后计数",
     "orphan_status_after_restart": "INTERRUPTED",
     "resumed_pending_call": "bash skipped: interrupted before execution; swept at loop entry",
     "kill-resume.txt content": "done-scenario-7",
