@@ -51,8 +51,9 @@ class Settings(BaseSettings):
     bash_path: str = ""  # explicit bash executable; empty = Git install dir, then PATH
 
     # ── Web search ──
-    search_provider: str = "duckduckgo"  # duckduckgo | serpapi
+    search_provider: str = "duckduckgo"  # duckduckgo | serpapi | exa
     serpapi_key: str = ""
+    exa_api_key: str = ""  # injected via EXA_API_KEY; keep .env empty (AGENTS.md「密钥」)
 
     # ── Persistence paths (relative to PROJECT_ROOT unless absolute) ──
     data_dir: str = "data"
