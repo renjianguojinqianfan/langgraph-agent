@@ -27,6 +27,9 @@ function MarkerRow({ marker }: { marker: TraceMarker }) {
 
 function Turn({ turn }: { turn: ChatTurn }) {
   const mine = turn.role === "user";
+  if (!mine && turn.content.startsWith("计划已更新到")) {
+    return <div className="px-1 text-[11px] text-slate-500">{turn.content}</div>;
+  }
   return (
     <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
       <div

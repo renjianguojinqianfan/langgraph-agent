@@ -98,8 +98,6 @@ def _run(settings: Settings) -> int:
         # #139 / ADR 0008: a round ending is a park, not a completion.
         "status parked (INTERRUPTED)": task is not None
         and task.status.value == "INTERRUPTED",
-        # Build mode does not plan on its own; the plan face only fills in plan mode.
-        "no surprise plan": "plan_update" not in event_types,
         "tool_call event": "tool_call" in event_types,
         "tool_result event": "tool_result" in event_types,
         "final_answer event": "final_answer" in event_types,

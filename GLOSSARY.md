@@ -19,7 +19,7 @@
 ## 速查术语（权威定义以上方指针为准）
 
 图节点：`agent`（唯一的 LLM 节点，两种模式共用）/ `tool` / `finish`。
-模式：`plan`（计划模式：`explore` 只读档 + 计划 prompt，产出结构化计划）/ `build`（执行模式：全部已挂载工具）。
+模式：`plan`（计划模式：`explore` 只读档 + 计划 prompt，产出计划文件）/ `build`（执行模式：全部已挂载工具）。
 任务是开关的载体，**开关黏性、默认 build**；模式不是第二个节点，也不是每条消息选一次（ADR 0008 决策 2 / 3）。
 状态三值：`RUNNING`（跑着）/ `INTERRUPTED`（停下，等你说话）/ `FAILED`（出错）——**没有「完成」终态**。
 「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用（`round_steps` 按步计预算）。一次 `agent` 调用返回时没有工具调用，这一轮就结束（停下，决策 4）。
@@ -37,9 +37,10 @@
 
 **`plan` 有两个意思，禁用裸词「计划」**：
 
-- `state["plan"]` / `Task.plan`（运行时对象）：`PlanStep` 列表。生产者是计划模式的一轮（或用户停下时的
-  手工编辑 `PUT /api/tasks/{id}/plan`），消费者是 `plan_update` 事件与两种模式的 system 尾部渲染块
-  （`# Current Plan`，替换语义、不参与压缩淘汰）。执行模式不再自动重算计划（#139）。
+- 任务的计划文件（运行时对象，C6）：`<任务目录>/.qianfan/plans/<task_id>.md`，唯一来源。计划模式的一轮产出它
+  （模型给 Markdown、系统写文件），用户停下时可整份编辑（`PUT /api/tasks/{id}/plan` 写回文件，外部编辑器同理）；
+  执行时以一条消息进入对话，文件变了就换那条，版本记在 `Task.plan_version`。不再有 `PlanStep` 列表 /
+  `plan_update` 事件 / system 尾部计划块。
 - 票面计划（工作级）：issue/spec 层的拆解与 AC。指它时写「票面 / spec」。
 
 ## 禁用词（`_Avoid_`，domain-modeling 定居；原 `CONTEXT.md` 收编而来）
@@ -48,7 +49,7 @@
 
 | 想说 | 别用 | 为什么 |
 |---|---|---|
-| `step`（步 / 一次 `agent` 调用）/ `plan step`（计划项） | 裸用「步骤」 | 本仓「步骤」同时指两者；`plan` 也禁用裸词「计划」（见上一节） |
+| `step`（一次 `agent` 调用） | 裸用「步骤」 | 会和计划文件里编号的步骤混淆；指前者写 `step` / 一次 `agent` 调用，指后者写「计划里的步骤」 |
 | `plan mode` / `build mode` | 「planner 节点」「executor 节点」 | 两节点已合并成一个 `agent`（#139）；再说节点名会把模式误当拓扑 |
 | 一轮结束 / 停下 | 「完成」「COMPLETED」 | 没有完成终态（ADR 0008 决策 5）；`COMPLETED` 只是旧记录，加载时映射成 `INTERRUPTED` |
 | 一次工具动作 | 「动作」 | 与已退役的「动作类步骤」撞词（ADR-0006 推翻了这个分类） |

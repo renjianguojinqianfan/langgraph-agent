@@ -63,7 +63,9 @@ def _main_state(user_input: str) -> Dict[str, Any]:
     return {
         "task_id": "qa-main",
         "messages": [{"role": "user", "content": user_input}],
-        "plan": [],
+        "plan_text": "",
+        "plan_version": 0,
+        "plan_hash": "",
         "steps": [],
         "status": "RUNNING",
         "stop_requested": False,
@@ -222,8 +224,8 @@ def test_parent_context_carries_only_the_folded_digest(tmp_path):
         for m in messages
         if m.get("role") == "assistant" and SUBTASK_ANSWER in str(m.get("content", ""))
     ]
-    # The subtask's own plan never enters the parent's plan.
-    assert all(SUBTASK_MARKER not in str(p.get("description", "")) for p in final["plan"])
+    # The subtask's own plan never enters the parent's plan text.
+    assert SUBTASK_MARKER not in str(final.get("plan_text", ""))
 
 
 # ── event-channel isolation ──────────────────────────────────────────────────

@@ -109,7 +109,10 @@ class MockLLMClient(LLMClient):
             return LLMResponse(content="", tool_calls=[tc])
         if self._is_plan_phase(messages):
             logger.info("MockLLM agent -> plan (%d step(s))", len(self.plan))
-            return LLMResponse(content=json.dumps(self.plan, ensure_ascii=False))
+            body = "\n".join(f"{i}. {step}" for i, step in enumerate(self.plan, 1))
+            return LLMResponse(
+                content=f"<qianfan-plan>\n# Plan\n\n{body}\n</qianfan-plan>"
+            )
         logger.info("MockLLM agent -> final_answer")
         return LLMResponse(content=self.final_answer)
 

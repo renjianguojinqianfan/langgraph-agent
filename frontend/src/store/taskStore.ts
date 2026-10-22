@@ -41,7 +41,7 @@ function emptyTask(id: string): Task {
     status: "PENDING",
     mode: "build",
     steps: [],
-    plan: [],
+    plan_version: 0,
     conversation: [],
     final_answer: "",
     error: null,
@@ -67,8 +67,6 @@ function applyToTask(task: Task, ev: SSEvent): Task {
         title: ev.data.title ?? task.title,
         status: ev.data.status ?? task.status,
       };
-    case "plan_update":
-      return { ...task, plan: ev.data.plan ?? [] };
     case "step_start": {
       const t = ensureStep(task, ev.data.index);
       const steps = t.steps.map((s) =>

@@ -223,9 +223,10 @@ classDiagram
     class AgentState {
         +str task_id
         +list messages
-        +list plan
+        +str plan_text
+        +int plan_version
+        +str plan_hash
         +list steps
-        +list artifacts
         +str status
         +bool stop_requested
         +str mode
@@ -245,24 +246,11 @@ classDiagram
         +str status
         +str error
     }
-    class PlanStep {
-        +int index
-        +str description
-        +str status
-    }
     class StepRecord {
         +int index
         +str thought
         +list tool_calls
         +str status
-    }
-    class Artifact {
-        +str id
-        +str filename
-        +str path
-        +str mime
-        +int size
-        +str created_at
     }
     class Task {
         +str id
@@ -271,8 +259,7 @@ classDiagram
         +TaskStatus status
         +str mode
         +list steps
-        +list plan
-        +list artifacts
+        +int plan_version
         +list conversation
         +str final_answer
         +str error
@@ -280,8 +267,6 @@ classDiagram
         +str updated_at
     }
     Task "1" *-- "many" StepRecord
-    Task "1" *-- "many" PlanStep
-    Task "1" *-- "many" Artifact
     StepRecord "1" *-- "many" ToolCallRecord
 
     %% ── 服务层 ──
@@ -318,10 +303,10 @@ classDiagram
 | 模型 | 关键字段 |
 |------|----------|
 | `TaskStatus` | `PENDING / RUNNING / FAILED / INTERRUPTED`（三值循环：跑着 / 停下 / 出错；没有「完成」，ADR 0008 决策 5） |
-| `Task` | `id, title, user_input, workspace, status, mode(plan/build), steps[], plan[], conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
+| `Task` | `id, title, user_input, workspace, status, mode(plan/build), steps[], plan_version, plan_hash, conversation[]:ChatTurn, final_answer, error, created_at, updated_at` |
 | `StepRecord` | `index, thought, tool_calls[]:ToolCallRecord, status` |
 | `ToolCallRecord` | `id, tool_name, input, output, status(success/failed), error` |
-| `PlanStep` | `index, description, status(pending/active/done)` |
+| `Task.plan_version` / `plan_hash` | 计划文件内容的版本与哈希；正文在 `<任务目录>/.qianfan/plans/<task_id>.md`（C6） |
 | `WorkspaceFile` | 不是模型：REST 返回 `{path, size}`（C5 文件列表） |
 | `ToolResult` | `success:bool, data:Any, error:str` |
 | `LLMResponse` | `content:str, tool_calls:list, raw:dict` |
@@ -347,6 +332,8 @@ classDiagram
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（跳过 .git / .gitignore） | path `id` | `{files:[{path,size}], truncated:bool}` |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件 | query: `?path=<相对路径>` | `{path,content,size,truncated}` |
 | GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | query: `?path=<相对路径>` | `application/octet-stream` |
+| GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | path `id` | `{text, version}` |
+| PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下时） | `{text:str}` | `{ok:bool, version:int}` |
 | POST | `/api/auth/token` | P1 鉴权（auth_enabled 时） | `{token:str}` | `{ok:bool}` |
 
 **统一响应信封**：`{code:int, data:any, message:str}`（错误时 `code≠0`）。
@@ -376,7 +363,6 @@ classDiagram
 | event 类型 | data 字段 | 含义 |
 |------------|-----------|------|
 | `task_created` | `{task_id, title, status}` | 任务已创建 |
-| `plan_update` | `{plan: PlanStep[]}` | 计划更新：计划模式一轮产出，或停下时人工编辑（`PUT /tasks/{id}/plan`） |
 | `step_start` | `{index, thought}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形 |
 | `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |

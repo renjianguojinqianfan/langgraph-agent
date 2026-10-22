@@ -23,12 +23,6 @@ export interface ChatTurn {
   content: string;
 }
 
-export interface PlanStep {
-  index: number;
-  description: string;
-  status: string; // pending | active | done
-}
-
 export interface ToolCallRecord {
   id: string;
   tool_name: string;
@@ -60,7 +54,9 @@ export interface Task {
   status: TaskStatus;
   mode: TaskMode;
   steps: StepRecord[];
-  plan: PlanStep[];
+  /** Plan file version; the text lives in the workspace (C6). */
+  plan_version: number;
+  plan_hash?: string;
   /** User/assistant text turns across every round of the conversation. */
   conversation: ChatTurn[];
   final_answer: string;
@@ -126,7 +122,6 @@ export interface ApiResponse<T = any> {
  */
 export type SSEventType =
   | "task_created"
-  | "plan_update"
   | "step_start"
   | "tool_call"
   | "tool_result"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.api.schemas import PlanStep, StepRecord, Task, TaskStatus
+from backend.api.schemas import StepRecord, Task, TaskStatus
 from backend.services.persistence import Persistence
 
 
@@ -13,7 +13,6 @@ def _sample_task(task_id="abc") -> Task:
         user_input="do something",
         status=TaskStatus.INTERRUPTED,
         steps=[StepRecord(index=1, thought="plan", tool_calls=[], status="done")],
-        plan=[PlanStep(index=1, description="step one", status="done")],
         final_answer="done",
         error=None,
         created_at="2025-01-01T00:00:00+00:00",
@@ -32,7 +31,6 @@ def test_save_and_load_round_trip(settings):
     assert loaded.status == TaskStatus.INTERRUPTED
     assert loaded.final_answer == "done"
     assert loaded.steps[0].index == 1
-    assert loaded.plan[0].description == "step one"
 
 
 def test_load_missing_returns_none(settings):

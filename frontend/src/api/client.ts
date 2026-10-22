@@ -3,7 +3,6 @@ import {
   AuthTokenResponse,
   ChatTurn,
   CreateTaskRequest,
-  PlanStep,
   SSEvent,
   Task,
   TaskMode,
@@ -80,10 +79,13 @@ export const putMode = (id: string, mode: TaskMode) =>
   });
 
 /** Replace a parked task's plan; it seeds the next round. */
-export const putPlan = (id: string, plan: Array<Pick<PlanStep, "description" | "status">>) =>
-  req<{ ok: boolean; plan: PlanStep[] }>(`/tasks/${id}/plan`, {
+export const getPlan = (id: string) =>
+  req<{ text: string; version: number }>(`/tasks/${id}/plan`);
+
+export const putPlan = (id: string, text: string) =>
+  req<{ ok: boolean; version: number }>(`/tasks/${id}/plan`, {
     method: "PUT",
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify({ text }),
   });
 
 /** Say one more thing to a parked task and continue the same conversation. */

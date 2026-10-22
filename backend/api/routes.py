@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, Response
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
+from ..services.plan_file import PlanError
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
 from .schemas import (
@@ -161,6 +162,24 @@ def update_mode(
     return _envelope(data=result)
 
 
+@router.get("/tasks/{task_id}/plan")
+def get_plan(
+    task_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """The plan file's text and version (C6)."""
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).get_plan(task_id)
+    except PlanError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return _envelope(data=result)
+
+
 @router.put("/tasks/{task_id}/plan")
 def update_plan(
     task_id: str,
@@ -168,13 +187,11 @@ def update_plan(
     request: Request,
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
-    """Replace a parked task's plan; the next message runs against the edit."""
+    """Replace a parked task's plan file; the next message runs against it."""
     if _tm(request).get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
     try:
-        result = _tm(request).set_plan(
-            task_id, [p.model_dump() for p in payload.plan]
-        )
+        result = _tm(request).set_plan(task_id, payload.text)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data=result)

@@ -6,7 +6,7 @@ Frontend ``src/types/index.ts`` mirrors these field names exactly.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -37,17 +37,6 @@ class TaskMode(str, Enum):
     BUILD = "build"
 
 
-class PlanStep(BaseModel):
-    index: int
-    description: str
-    status: str = "pending"  # pending | active | done
-
-
-class PlanItem(BaseModel):
-    """One editable plan row (request side; the server assigns ``index``)."""
-
-    description: str
-    status: Literal["pending", "active", "done"] = "pending"
 
 
 class ToolCallRecord(BaseModel):
@@ -106,7 +95,9 @@ class Task(BaseModel):
     #: Sticky mode (ADR 0008 decision 3): default build, user switches explicitly.
     mode: TaskMode = TaskMode.BUILD
     steps: List[StepRecord] = Field(default_factory=list)
-    plan: List[PlanStep] = Field(default_factory=list)
+    #: Plan file state (the text lives in ``<workspace>/.qianfan/plans/``).
+    plan_version: int = 0
+    plan_hash: str = ""
     #: User/assistant text turns across every round of the conversation.
     conversation: List[ChatTurn] = Field(default_factory=list)
     final_answer: str = ""
@@ -130,13 +121,9 @@ class UpdateModeRequest(BaseModel):
 
 
 class UpdatePlanRequest(BaseModel):
-    """The editable plan (ADR 0008 decision 3 / pivot item 1).
+    """The whole plan as Markdown; the server writes the plan file."""
 
-    Indices are assigned server-side (1..n), so the client sends only order,
-    descriptions and (optionally) status per step.
-    """
-
-    plan: List[PlanItem] = Field(default_factory=list)
+    text: str
 
 
 class SendMessageRequest(BaseModel):

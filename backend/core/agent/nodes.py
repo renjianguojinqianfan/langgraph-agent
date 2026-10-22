@@ -24,12 +24,15 @@ import re
 from typing import Any, Dict, List, Optional
 
 from ...config import get_settings
+from ...services import plan_file
+from ...services.plan_file import extract_plan, plan_hash, write_plan
 from ...utils.logging import get_logger
+from ..runtime_context import workspace_root
 from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
 from .policy import DangerPolicy
-from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, render_plan_section
+from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
 from .state import AgentState
 
 logger = get_logger("agent.runtime")
@@ -66,6 +69,34 @@ _TOOL_MARKUP_ONLY = re.compile(
 def _is_tool_markup_only(text: str) -> bool:
     """True for provider leakage like ``</parameter></invoke>``."""
     return bool(_TOOL_MARKUP_ONLY.fullmatch(text or ""))
+
+
+#: The one gray line G-34 allows when the plan version moves.
+_PLAN_NOTE_PREFIX = "计划已更新到"
+
+
+def _plan_note_text(version: int) -> str:
+    return f"{_PLAN_NOTE_PREFIX}第 {version} 版。"
+
+
+def _is_plan_note(message: Dict[str, Any]) -> bool:
+    return message.get("role") == "assistant" and str(
+        message.get("content") or ""
+    ).startswith(_PLAN_NOTE_PREFIX)
+
+
+def _drop_plan_notes(messages: List[Dict[str, Any]]) -> None:
+    messages[:] = [m for m in messages if not _is_plan_note(m)]
+
+
+def _ensure_plan_note(messages: List[Dict[str, Any]], version: int) -> None:
+    """Keep exactly one gray note, carrying the current version."""
+    expected = _plan_note_text(version)
+    notes = [m for m in messages if _is_plan_note(m)]
+    if len(notes) == 1 and str(notes[0].get("content") or "") == expected:
+        return
+    _drop_plan_notes(messages)
+    messages.append({"role": "assistant", "content": expected})
 
 
 class AgentRuntime:
@@ -136,25 +167,25 @@ class AgentRuntime:
             return True
         return False
 
-    def _build_messages(
-        self, state: AgentState, system: str, *, include_plan: bool = False
-    ) -> List[Dict[str, Any]]:
+    def _build_messages(self, state: AgentState, system: str) -> List[Dict[str, Any]]:
         """Build the message list sent to the LLM, compressing history first.
 
-        Compression happens exactly here (both modes) so every LLM call sees an
-        up-to-date, bounded context. Under the budget the messages are returned
-        untouched. The P1-A′ injection block rides on the *system* message and
-        is deliberately outside the compression budget.
+        Compression happens exactly here (both modes) so every LLM call sees a
+        bounded context; eviction and compression may rewrite the history even
+        when nothing is over budget. The P1-A′ injection block rides on the
+        *system* message and is deliberately outside the compression budget.
 
-        ``include_plan`` appends the rendering of ``state["plan"]`` after that
-        block, with the same rights: system-side, outside the budget, never
-        evicted or compressed. It is re-derived from the live state each call,
-        so a re-plan replaces the section instead of adding a second copy. Both
-        modes pass it: build mode reads the plan as its brief (#119), plan mode
-        revises what is already there instead of planning from scratch.
+        The plan file is checked only at the two moments G-34 allows: the first
+        call of a round (``round_steps == 1``) and immediately after compression.
+        A mid-round edit therefore takes effect on the next round, never on the
+        next call. The plan enters the conversation as one message at the end
+        (C6) and is outside the compression input, so compression cannot drop
+        it; when the version changes, exactly one gray note records it.
         """
         settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
-        messages = state.get("messages", []) or []
+        # The previous call's injected plan is stale input for eviction,
+        # compression and the summarizer; the current file is appended below.
+        messages = plan_file.strip_plan_messages(state.get("messages", []) or [])
         # Trace pointer shared by eviction and the in-band squeeze (#49), so both
         # write the same 留痕 contract.
         trace_ref = (
@@ -214,50 +245,28 @@ class AgentRuntime:
                 )
             except Exception:  # pragma: no cover - event is optional
                 logger.warning("failed to publish context_compressed event", exc_info=True)
-        plan_block = render_plan_section(state.get("plan") or []) if include_plan else ""
-        return [{"role": "system", "content": system + self._inject_block + plan_block}, *compressed]
-
-    def _parse_plan(self, content: str) -> Optional[List[Dict[str, Any]]]:
-        """Parse a plan-mode reply as a JSON array of steps; ``None`` if it is not one.
-
-        Only an actual JSON array (fenced ```json blocks tolerated) counts as a
-        plan. Everything else is the model **talking to the user** — most often
-        asking the clarifying question ADR 0008 decision 1 expects it to ask.
-        Turning a question into a one-line "plan" (the old line fallback) both
-        destroyed the previous plan and swallowed the question.
-        """
-        raw = (content or "").strip()
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            raw = "\n".join(lines).strip()
-        try:
-            data = json.loads(raw)
-        except Exception:
-            return None
-        if isinstance(data, dict):
-            data = [data]
-        if not isinstance(data, list):
-            return None
-        steps: List[Dict[str, Any]] = []
-        for item in data:
-            if isinstance(item, dict):
-                desc = item.get("description") or item.get("step") or item.get("text")
+        # G-34: the file is checked only when a round starts (the manager has
+        # already seeded state from it) and after compression. Every other call
+        # sends the version the round started with.
+        refresh_plan = state.get("round_steps", 0) <= 1 or meta["compressed"]
+        if refresh_plan:
+            workspace = workspace_root(settings)
+            plan_text = plan_file.read_plan(workspace, self.task_id)
+            digest = plan_file.plan_hash(plan_text)
+            if digest != state.get("plan_hash", ""):
+                state["plan_hash"] = digest
+                if plan_text.strip():
+                    state["plan_version"] = int(state.get("plan_version", 0)) + 1
+            state["plan_text"] = plan_text
+            if plan_text.strip():
+                _ensure_plan_note(compressed, int(state.get("plan_version", 0)))
             else:
-                desc = item
-            description = str(desc or "").strip()
-            if description:
-                steps.append(
-                    {
-                        "index": len(steps) + 1,
-                        "description": description,
-                        "status": "pending",
-                    }
-                )
-        return steps or None
+                _drop_plan_notes(compressed)
+        else:
+            plan_text = str(state.get("plan_text", ""))
+        plan_file.sync_plan_message(compressed, plan_text)
+        state["messages"] = compressed
+        return [{"role": "system", "content": system + self._inject_block}, *compressed]
 
     # ── nodes ──
     def agent(self, state: AgentState) -> AgentState:
@@ -301,10 +310,10 @@ class AgentRuntime:
     def _plan_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
         """Plan mode: read-only face; no tool call means the round is over.
 
-        A JSON plan array is the round's product (``state["plan"]`` +
-        ``plan_update``). Any other text is the model talking to the user — most
-        often the clarifying question ADR 0008 decision 1 explicitly allows —
-        and leaves the existing plan untouched.
+        A reply wrapped in the agreement markers is stored as the plan file and
+        bumped to the next version. Any other text is the model talking to the
+        user (e.g. the clarifying question ADR 0008 decision 1 allows) and
+        leaves the file untouched.
         """
         face = self._tool_face(PLAN_MODE)
         schemas = [t.to_openai_schema() for t in face.values()]
@@ -314,11 +323,21 @@ class AgentRuntime:
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
-        plan = self._parse_plan(resp.content)
-        if plan:
-            state["plan"] = plan
-            self._publish("plan_update", {"plan": plan})
-            answer = f"计划已更新（{len(plan)} 步）。"
+        plan_text = extract_plan(resp.content)
+        updated = False
+        if plan_text:
+            workspace = workspace_root(self.tm.settings)
+            try:
+                write_plan(workspace, self.task_id, plan_text)
+            except ValueError as exc:
+                plan_text = ""
+                answer = f"[error] {exc}"
+            else:
+                state["plan_text"] = plan_text
+                state["plan_hash"] = plan_hash(plan_text)
+                state["plan_version"] = int(state.get("plan_version", 0)) + 1
+                answer = _plan_note_text(state["plan_version"])
+                updated = True
         elif _is_tool_markup_only(resp.content):
             # Never persist provider protocol leakage as a conversation turn.
             answer = "(no content)"
@@ -332,7 +351,12 @@ class AgentRuntime:
         # turn; the plan round is no exception (a missing trace 400s forever).
         if resp.reasoning_content:
             assistant_turn["reasoning_content"] = resp.reasoning_content
-        state.setdefault("messages", []).append(assistant_turn)
+        messages = state.setdefault("messages", [])
+        if updated:
+            # One gray "plan updated" line: replace the previous one. A
+            # non-plan reply (e.g. a clarifying question) leaves it alone.
+            _drop_plan_notes(messages)
+        messages.append(assistant_turn)
         step["thought"] = answer
         self._publish("final_answer", {"answer": answer})
         state["_last_action"] = "final_answer"
@@ -345,7 +369,7 @@ class AgentRuntime:
         schemas: List[Dict[str, Any]],
     ) -> Optional[Any]:
         """One plan-mode LLM call; ``None`` means the error path already settled."""
-        messages = self._build_messages(state, system, include_plan=True)
+        messages = self._build_messages(state, system)
         try:
             return self.llm.complete(messages, tools=schemas)
         except Exception as exc:
@@ -359,7 +383,7 @@ class AgentRuntime:
         """Build mode: every mounted tool, with the current plan as a brief."""
         try:
             resp = self.llm.complete(
-                self._build_messages(state, EXECUTOR_SYSTEM, include_plan=True),
+                self._build_messages(state, EXECUTOR_SYSTEM),
                 tools=self.tool_schemas,
             )
         except Exception as exc:
