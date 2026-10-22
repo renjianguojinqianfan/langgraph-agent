@@ -204,8 +204,8 @@ ToolResult(success=False, data={"error": "`name` is required."}, error="`name` i
 
 - `README.md`：能力清单加「skills 运行时（P1-A）」一条；顶部与门禁段测试计数同步为合入时的实测值（当前基线 525，§四 设计新增 24 例）；
 - `AGENTS.md`：§1 快照追加 P1-A 交付；§3 测试行计数（test 文件数 / 用例数）随实测同步；
-- `docs/capability-first-principles.md`：§四 T2.2 行改「✅ 已交付（P1-A）」；§六 清单 `⬜ P1-A` 改 ✅；顺手把 §五 结论 4 的「444 测试」改为现役计数（既有过期数字，反熵修正）；
-- `docs/roadmap-pawbench.md`：§三 skills 运行时行与 §五 分支拓扑标注交付（以合入后的实际 PR 编号写入，格式对齐邻居行）；
+- `docs/archive/capability-first-principles.md`：§四 T2.2 行改「✅ 已交付（P1-A）」；§六 清单 `⬜ P1-A` 改 ✅；顺手把 §五 结论 4 的「444 测试」改为现役计数（既有过期数字，反熵修正）；
+- `docs/archive/roadmap-pawbench.md`：§三 skills 运行时行与 §五 分支拓扑标注交付（以合入后的实际 PR 编号写入，格式对齐邻居行）；
 - `.env.example` 与 README 配置计数**零改动**（无新配置，#10）。
 
 ## 六、非目标（显式排除）

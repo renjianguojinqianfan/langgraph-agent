@@ -1,7 +1,7 @@
 # PawBench harness 接入接口分析（一手来源调研）
 
 > 🗄️ **已归档（2026-10-17，S6 / #140）**：PawBench / 无人值守评测入口已随 ADR 0008 / S1 退役；
-> 本文保留为历史调研，不再维护。现役形态见 [README](../README.md) / [ADR 0008](adr/0008-single-loop-plan-build-modes.md)。
+> 本文保留为历史调研，不再维护。现役形态见 [README](../../README.md) / [ADR 0008](../adr/0008-single-loop-plan-build-modes.md)。
 
 > 生成于 2026-09-14。本文是 [`roadmap-pawbench.md`](roadmap-pawbench.md) 里 **M1 第一件事**
 > 的交付物：从 PawBench 官方仓库源码取证，回答"一个自定义 harness 要接入 PawBench 跑分，
@@ -222,8 +222,8 @@ timeout --kill-after=10s <inner_timeout>s hermes chat \
   fds) eventually closes"；
 - **用直接文件重定向而不是 `| tee`**，理由是"orphaned hermes child processes holding the pipe
   write-end cannot keep docker exec alive"。
-  → 本项目有 SSE 长连接与后台任务（[`backend/api/sse.py`](../backend/api/sse.py)、
-  [`backend/services/task_manager.py`](../backend/services/task_manager.py)），**孤儿进程挂住
+  → 本项目有 SSE 长连接与后台任务（[`backend/api/sse.py`](../../backend/api/sse.py)、
+  [`backend/services/task_manager.py`](../../backend/services/task_manager.py)），**孤儿进程挂住
   `docker exec` 是本项目最可能踩的坑**，必须照抄直接重定向。
 
 **workspace 回收**：`docker cp` 两次（来源：S5）——
@@ -536,13 +536,13 @@ roadmap §三 把 P0-C 列为"评测前置依赖"，本次调研可以把它从�
    → **定向结论：不要走 QwenPaw 的 HTTP 路线。** S12 显示 HTTP 型适配器要在容器内起服务、
    轮询 `/api/version` 就绪、写 `call_agent.py` 走 provider 配置 + SSE 流式解析 + 等 session
    文件落盘，共 770 行，还得 monkey-patch 上游 `agentscope` 才能拿到 `_model_trajectory`。
-   本项目虽有现成 FastAPI + SSE（[`backend/api/routes.py`](../backend/api/routes.py)、
-   [`backend/api/sse.py`](../backend/api/sse.py)），但**评测态用 CLI 单发的成本低一个数量级**。
+   本项目虽有现成 FastAPI + SSE（[`backend/api/routes.py`](../../backend/api/routes.py)、
+   [`backend/api/sse.py`](../../backend/api/sse.py)），但**评测态用 CLI 单发的成本低一个数量级**。
 2. **闸门必须可旁路**。三个官方 harness 无一例外关掉了确认机制：Hermes 用 CLI `--yolo`，
    镜像预置 `approvals: mode: off`（来源：S11、S21），QwenPaw 用
    `QWENPAW_TOOL_GUARD_ENABLED=false` + `PUT /api/config/security/tool-guard {enabled: false}`
    （来源：S12）。
-   → 本项目 [`backend/core/agent/`](../backend/core/agent) 的 `_needs_confirm` 重算块属于
+   → 本项目 [`backend/core/agent/`](../../backend/core/agent) 的 `_needs_confirm` 重算块属于
    roadmap §五 纪律 1 的**受保护文件**，P0-C 不应改它；正确做法是在 headless 入口层
    加一个显式开关（如 `PAWBENCH_YOLO=1` / `--headless --auto-approve`），
    并在文档里写清"评测态 ≠ 生产态"。这与
@@ -554,20 +554,20 @@ roadmap §三 把 P0-C 列为"评测前置依赖"，本次调研可以把它从�
    `output/` 子目录都能被回收（来源：S5、S7、S9）。
 5. **凭据只从环境变量读，且外部 env 优先**：容器只注入 `OPENAI_API_KEY` /
    `OPENAI_BASE_URL` / `DASHSCOPE_API_KEY`（来源：S5）。本项目
-   [`backend/config.py`](../backend/config.py) 若用 `load_dotenv()`，必须是
+   [`backend/config.py`](../../backend/config.py) 若用 `load_dotenv()`，必须是
    `override=False` 语义（PawBench 自己的 `run_bench.py` 就是这么做的，并注明
    "Existing shell exports take priority"，来源：S3）。
 6. **每题无状态**：容器是一次性的，但**镜像里不能预置脏状态**。Hermes 每题显式
    `_reset_hermes_state()` 删 `state.db` / `sessions/*.jsonl`，backend 也会清空整个 workspace
    （来源：S11、S5）。
-   → 本项目 [`data/checkpoints/checkpoints.sqlite`](../data/checkpoints) 与
-   [`data/traces/`](../data/traces) 在 headless 模式下必须用**每题唯一的 thread_id**
+   → 本项目 `data/checkpoints/checkpoints.sqlite` 与 `data/traces/`（运行态目录，不入库）
+   在 headless 模式下必须用**每题唯一的 thread_id**
    （建议直接用 task_id），或跑完清理，否则跨题串味。
 7. **必须产出 ≥5 条 OpenClaw 格式 transcript 事件**，否则触发 `SHORT_TRANSCRIPT` /
    `EMPTY_TRANSCRIPT`（均 ERROR 级）→ 每题白重试 3 次，且 hybrid 题拿不到惩罚豁免
    （来源：S18、S17）。
    → **最低成本实现**：在 adapter 里 override `extract_transcript()`，直接把本项目
-   [`backend/services/trace.py`](../backend/services/trace.py) 已落盘的
+   [`backend/services/trace.py`](../../backend/services/trace.py) 已落盘的
    `data/traces/<thread_id>.jsonl` 映射成 OpenClaw 事件列表，**不要**去容器里伪造
    qwenpaw 风格的 `sessions/*.json`。这是本项目相对三个官方 harness 的天然优势
    （我们本来就有结构化 trace）。映射要点：assistant 的 tool 调用 → `toolCall` block，
@@ -612,7 +612,7 @@ roadmap §三 把 P0-C 列为"评测前置依赖"，本次调研可以把它从�
 - ❌ 闸门旁路开关（§4.1-2，注意受保护文件纪律）；
 - ❌ trace → OpenClaw 事件映射器（§4.1-7，**主要新增工作量**）；
 - ❌ PawBench fork/patch 策略（§4.2-1）；
-- ❌ 评测镜像：本项目现有 [`backend/Dockerfile`](../backend/Dockerfile) 是 API 服务镜像，
+- ❌ 评测镜像：本项目当时的 `backend/Dockerfile`（C4 起已删）是 API 服务镜像，
   **不含** chromium/xvfb/中文字体/pytest，也不是"CLI + 评测依赖"形态，需要新写；
 - ❌ JUDGE 凭据（见 §六.3）；
 - ❌ 宿主 grader 依赖：`requirements.txt` 里 `cvxpy>=1.4.0`、`unified-planning==1.3.0`、

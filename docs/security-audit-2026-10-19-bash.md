@@ -194,7 +194,7 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 - **超时与输出**：1–600s 钳制；每流 30KB 尾部缓冲，内存不随输出线性增长；`truncated` 如实回给模型。
 - **环境继承（仅指继承）**：白名单确实生效（本机 `env` 探针无 `LLM_API_KEY`）；它不挡 `/proc` 与文件读取，见 F2。`PYTHONUNBUFFERED=1` 只影响缓冲。
 - **本机默认面**：`host=127.0.0.1`、CORS 自身来源、Host 检查挡 DNS 重绑定、auth 占位符拒绝启动（`main.py:24-30`）。
-- **危险规则钩子**：`nodes.py:405-448` 在派发前判定，命中即 `skipped` + `{block, reason}`，不改参数、不重入；默认空表是 D1(b) 的定案，**不是遗漏**（`docs/research-danger-policy-across-agents.md` §6.4）。
+- **危险规则钩子**：`nodes.py:405-448` 在派发前判定，命中即 `skipped` + `{block, reason}`，不改参数、不重入；默认空表是 D1(b) 的定案，**不是遗漏**（`docs/archive/research-danger-policy-across-agents.md` §6.4）。
 
 ## 不修 / 不在本章范围
 
@@ -205,7 +205,7 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 - **F3 的脱离进程**：本章只修“管道拖尾与线程泄漏”，不承诺按任务追踪所有脱离进程。
 - **C2 遗留**：`tool_node` 的 `except Exception` 转换点缺直接测试；非 bash 面，留待后续。
 - **C3 遗留非安全项**：`start.py --port` 与 `frontend/vite.config.ts` 硬编码 `localhost:8000` 的代理不一致；属功能问题，归 C7 或单独小票。
-- **文档残影**：`subagent_tool.py:62`、`docs/class-diagram.mermaid` 的 `CodeExecTool` / `HttpTool`、`pyproject.toml` 的 `resilience.py` 注释——归 C7。
+- **文档残影**：`subagent_tool.py:62`、`docs/archive/class-diagram.mermaid` 的 `CodeExecTool` / `HttpTool`、`pyproject.toml` 的 `resilience.py` 注释——归 C7。
 
 ## 建议票
 
@@ -284,11 +284,11 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 
 - F7/F8/F4 文档：README:40,47-54、`.env.example:57-64`、`architecture.md:566`、ADR 0009 注记；补 `.env` / 家目录 / `data/` 可达、“停止只杀活树”、无 CPU/内存/磁盘上限；
 - `start.py --port` 与 `frontend/vite.config.ts` 的 8000 代理不一致；
-- `subagent_tool.py:62` 的过期描述、`docs/class-diagram.mermaid` 与 `architecture.md:152` 的 `CodeExecTool`/`HttpTool` 残影；
+- `subagent_tool.py:62` 的过期描述、`docs/archive/class-diagram.mermaid` 与 `architecture.md:152` 的 `CodeExecTool`/`HttpTool` 残影；
 - `tool_node` 的 `except Exception` 直接测试（现有 `_FailTool` 是返回失败，不是抛异常）；
 - `pyproject.toml` 的 `resilience.py` 注释；
 - Docker 文案/产物：不用 Docker 就删 `docker-compose.yml` 或标“不支持”，README:19 与 CI docker-build 同步决定；
-- `OVERVIEW.md`、`docs/incremental-*`、`docs/agent-*`、`docs/capability-registry-rescope.md` §0.5 的残影按 C7 处理；`NOTES.md` 由用户决定。
+- `docs/archive/OVERVIEW.md`、`docs/archive/incremental-*`、`docs/archive/agent-*`、`docs/capability-registry-rescope.md` §0.5 的残影按 C7 处理；`NOTES.md` 由用户决定。
 
 **D. 不做 / 触发条件**
 
@@ -327,4 +327,4 @@ README:52 已经说“工作目录只是起点，不是围墙”，所以这不�
 - [Docker 端口发布](https://docs.docker.com/reference/cli/docker/container/run/)：`-p 8000:8000` 绑所有接口，`-p 127.0.0.1:8000:8000` 只绑回环。
 - [proc_pid_environ(5)](https://man7.org/linux/man-pages/man5/proc_pid_environ.5.html)：`/proc/<pid>/environ` 受 ptrace 读检查约束。
 - [dsh connection README](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/connection/README.md)：每进程随机 launch token、URL 交换 cookie、Host/Origin 检查、不支持 `--host 0.0.0.0`。
-- 本仓决策：`docs/adr/0009-minimal-agent-chapter.md`（决策 4/5、三笔账）、`docs/capability-registry-rescope.md` G-20 / G-26、`docs/research-danger-policy-across-agents.md` §6.4。
+- 本仓决策：`docs/adr/0009-minimal-agent-chapter.md`（决策 4/5、三笔账）、`docs/capability-registry-rescope.md` G-20 / G-26、`docs/archive/research-danger-policy-across-agents.md` §6.4。

@@ -5,8 +5,8 @@ status: accepted
 # 单一 loop + 计划/执行两模式，取代完成验证栈
 
 > 2026-10-14 用户拍板（一轮 grilling 逐条走完，决策见下）。
-> 参照物调研：[pi v1.2.0 的 agent 构建](../research-pi-agent-construction.md)。
-> 落地方案（七片切法 + 每片判据）另文：[pivot-plan-build](../pivot-plan-build.md)——本文只记决策，
+> 参照物调研：[pi v1.2.0 的 agent 构建](../archive/research-pi-agent-construction.md)。
+> 落地方案（七片切法 + 每片判据）另文：[pivot-plan-build](../archive/pivot-plan-build.md)——本文只记决策，
 > 不复制执行细节（沿用 [ADR 0002](0002-moat-discipline-no-attention-reallocation.md) 的「文档分工（防漂移）」）。
 
 ## 背景

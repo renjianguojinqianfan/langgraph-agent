@@ -1,9 +1,9 @@
 # 转向落地：七片切法（计划/执行两模式取代完成验证栈）
 
 > 🗄️ **切片历史（2026-10-17，S6 / #140）**：S0–S6 已合入；本文保留切片决策历史，不再代表现役实现。
-> 现役形态见 [README](../README.md)「核心模型」与 [ADR 0008](adr/0008-single-loop-plan-build-modes.md)。
+> 现役形态见 [README](../../README.md)「核心模型」与 [ADR 0008](../adr/0008-single-loop-plan-build-modes.md)。
 
-> 2026-10-14。决策本体见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md)，**本文只记怎么切、每片怎么验**，
+> 2026-10-14。决策本体见 [ADR 0008](../adr/0008-single-loop-plan-build-modes.md)，**本文只记怎么切、每片怎么验**，
 > 不复制决策理由。参照物调研见 [pi v1.2.0 agent 构建](research-pi-agent-construction.md)。
 
 ## 目标形态（一句话）
@@ -23,7 +23,7 @@
 
 | 片 | 做什么 | 完成判据 |
 |---|---|---|
-| **S0 治理先行**（零行为代码）〔已合 [#134](https://github.com/renjianguojinqianfan/langgraph-agent/pull/134)〕 | 新增 [ADR 0008](adr/0008-single-loop-plan-build-modes.md)；0002/0005/0006/0007 加退役标记；删 `ci.yml` 的 `guard-protected-files` job；`AGENTS.md` 不变量表按新形态重估 | CI 全绿（少一个 job）；文档里不再有「守卫着一个已不存在的闸门」的条目 |
+| **S0 治理先行**（零行为代码）〔已合 [#134](https://github.com/renjianguojinqianfan/langgraph-agent/pull/134)〕 | 新增 [ADR 0008](../adr/0008-single-loop-plan-build-modes.md)；0002/0005/0006/0007 加退役标记；删 `ci.yml` 的 `guard-protected-files` job；`AGENTS.md` 不变量表按新形态重估 | CI 全绿（少一个 job）；文档里不再有「守卫着一个已不存在的闸门」的条目 |
 | **S1 先砍评测入口**〔已合 [#142](https://github.com/renjianguojinqianfan/langgraph-agent/pull/142)；票面 [#135](https://github.com/renjianguojinqianfan/langgraph-agent/issues/135)〕 | 删 `backend/headless.py`、`scripts/live_e2e.py`、`scripts/live_skill_test.py`、`backend/services/run_manifest.py`；删 `ci.yml` 的 `live-e2e` job 与两步 `--check`；删 `config.py` 的 `run_manifest_*` | 离线全绿（对应测试显式重裁并写明理由）；CI 步骤数变少；前端不受影响 |
 | **S2 新增钩子拦截**〔已合 [#144](https://github.com/renjianguojinqianfan/langgraph-agent/pull/144)；票面 [#136](https://github.com/renjianguojinqianfan/langgraph-agent/issues/136)〕 | 新增 `backend/core/agent/policy.py`（读设置里的规则表）；接到 `nodes.py::executor` 里今天算 `need_confirm` 的那一处；命中 → 不执行 + `{block, reason}` 当结果回模型 | 新增离线测试（命中即拒 / 不命中照旧）；既有测试全绿——**本片是纯增量** |
 | **S3 删验证层**〔已合 [#143](https://github.com/renjianguojinqianfan/langgraph-agent/pull/143)；票面 [#137](https://github.com/renjianguojinqianfan/langgraph-agent/issues/137)〕 | `grader.py`、`reflect` 节点及其 `_verify_completion` / `_expectation_failures`、state 的 `_verification` / `_verify_attempts` / `_rubric_attempts` / `expectations` / `rubric`、`Task` 的四个字段、`Expectation` / `TaskReview`、`POST /tasks/{id}/review`、`accept_unverified`、`UNVERIFIED` 终态、`verification` / `task_unverified` / `task_accepted` 三个 SSE 事件、grader 对 `aux_llm` 的消费（配置本身留给摘要 / 风险语义）；图改「说完 → 直接 finish」 | 离线全绿；无回环；`check:sse` 四处对齐仍绿 |

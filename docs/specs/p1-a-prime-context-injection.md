@@ -4,7 +4,7 @@
 > - 数据面七项：issue #31 resolution comment
 > - 行为面五项：issue #32 resolution comment
 > - 发现链修正两项：#32「记录修正」comment（追加 home 全局层）+ **2026-09-16 spec 编写会话再修正（发现链收窄为两层、子文件夹懒加载暂缓，见 §二 表 #13–#15）**
-> - 权威依据：`docs/capability-first-principles.md` §七（P13）、`AGENTS.md` §2 硬规则、#29 拍板 2/3（TDD 占比 45/35/20，本 spec 风险中心 = 注入语义，测试设计是灵魂）
+> - 权威依据：`docs/archive/capability-first-principles.md` §七（P13）、`AGENTS.md` §2 硬规则、#29 拍板 2/3（TDD 占比 45/35/20，本 spec 风险中心 = 注入语义，测试设计是灵魂）
 >
 > 关联 issue：#31（closed）/ #32（closed）/ 地图 #27。下游分支：`feat/context-injection`（roadmap §五 分支拓扑已定）。
 > 本文件是 P1-A′ 的权威设计源。

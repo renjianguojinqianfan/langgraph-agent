@@ -6,7 +6,7 @@
 就是答案。
 
 工程侧的权威文档在别处：架构看 [`docs/architecture.md`](../docs/architecture.md)，
-每轮迭代的取舍看 [`OVERVIEW.md`](../OVERVIEW.md)，改代码前必读
+每轮迭代的取舍看 [`docs/archive/OVERVIEW.md`](../docs/archive/OVERVIEW.md)，改代码前必读
 [`AGENTS.md`](../AGENTS.md)。本目录只放**学习者视角**的痕迹。
 
 ## 记录编号约定

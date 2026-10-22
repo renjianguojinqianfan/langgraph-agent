@@ -1,6 +1,6 @@
 """Tests for the six-piece discrete file tools: read / write / edit / glob / grep / ls.
 
-These are the precision file tools added under ``docs/roadmap-pawbench.md`` P0-A
+These are the precision file tools added under ``docs/archive/roadmap-pawbench.md`` P0-A
 (``ls`` closing the set in issue #17). They live in
 ``backend/core/tools/file_io.py``; the legacy multi-action ``file_io`` tool they
 replaced is retired (#17).

@@ -6,7 +6,7 @@
 不执行，把 ``{block, reason}`` 当这次调用的结果回给模型，模型自己换路。
 
 与 pi 的 ``tool_call`` 钩子的三条有意分歧（实证见
-``docs/research-pi-agent-construction.md`` §5）：
+``docs/archive/research-pi-agent-construction.md`` §5）：
 
 * **不改参数**——pi 的钩子能原地改 ``event.input`` 且**改完不复核**；「校验过的参数被
   钩子改掉又不复核」是后门，本仓库只回 ``{block, reason}``；
@@ -21,7 +21,7 @@
 
 坏配置一律 warning + 忽略，绝不因为规则表写错把运行炸掉；
 整表都编不出规则时另发一条「什么都没拦住」——**软档**：出声但照跑
-（裁定见 ``docs/research-danger-policy-across-agents.md`` §4.1）。**空表 = 不拦**，
+（裁定见 ``docs/archive/research-danger-policy-across-agents.md`` §4.1）。**空表 = 不拦**，
 与改造前逐字节一致。
 """
 
@@ -115,7 +115,7 @@ def _table_is_explicitly_empty(raw: str) -> bool:
     整表写坏与「我就是要空表」在**结果**上一样（都是不拦），所以只有读一眼原文才分得开：
     解析不了、或解析出来不是数组，都按写坏论（下面那条 warning 就是给这一格用的）——
     参照物里够证据的三家（dsh / pi / codex）在这一格全是 fail-closed，本仓选的是软档：
-    **出声但照跑**，见 ``docs/research-danger-policy-across-agents.md`` §4.1。
+    **出声但照跑**，见 ``docs/archive/research-danger-policy-across-agents.md`` §4.1。
     """
     text = (raw or "").strip()
     if not text:

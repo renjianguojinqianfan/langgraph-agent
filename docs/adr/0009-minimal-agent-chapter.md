@@ -9,7 +9,7 @@ status: accepted
 > 2026-10-18 – 10-19 用户拍板（一轮 grilling 逐条走完）。逐条结论、理由与被否选项见
 > [决策日志](../capability-registry-rescope.md) §0（G-1 – G-35）；本文只记决策，不复制切片细节
 > （切片见同文 §0.9，沿用 [ADR 0008](0008-single-loop-plan-build-modes.md) 的「文档分工」）。
-> 对照物的一手调研：[pi](../research-pi-minimal-agent.md)、[dsh](../research-dsh-plugin-core.md)，
+> 对照物的一手调研：[pi](../archive/research-pi-minimal-agent.md)、[dsh](../archive/research-dsh-plugin-core.md)，
 > 以及决策日志 §0.5 – §0.8 与 §0.6b（运行时部件、打包、计划形态、分发、计划与压缩）。
 
 ## 背景
@@ -30,7 +30,7 @@ status: accepted
    ls / glob / grep / load_skill 留下，因为 bash 进不了计划模式与只读子代理，而 `read` 只能读工作区（G-9 / G-13 / G-18）。
 3. **只读面**：计划模式与只读子代理 = read、ls、glob、grep、load_skill、web_search；子代理执行档 = 只读面 + write / edit，**不带 bash**（G-19）。
 4. **bash 的安全口径照 D1 (b)**：危险规则默认空表、不附黑名单；bash 拿的是运行账号的权限，工作目录只是起点不是围墙，
-   要隔离就放进容器或虚拟机——README 写清楚（G-23；[危险规则调研](../research-danger-policy-across-agents.md) §6.4）。
+   要隔离就放进容器或虚拟机——README 写清楚（G-23；[危险规则调研](../archive/research-danger-policy-across-agents.md) §6.4）。
    子进程只放行环境变量白名单，密钥不进 bash。
    **修订（2026-10-20，M1 #172 / ADR 0010 决策 8）**：白名单照旧；但界面粘贴进 `~/.qianfan/credentials.json` 的 Key **bash 读得到**（同账号），这句话改为如实描述。
 5. **只让本机访问**：监听 127.0.0.1，跨域只放行自身页面（G-20），Host 检查只认 127.0.0.1 / localhost（G-35）；

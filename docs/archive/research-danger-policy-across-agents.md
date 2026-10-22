@@ -2,7 +2,7 @@
 
 > 2026-10-16。**用途**：S2（[#136](https://github.com/renjianguojinqianfan/langgraph-agent/issues/136)）「设置里的规则表 + 一个钩子」的拍板依据——
 > 它回答「别人家有没有这种东西、长什么样、我们哪几条有先例、哪几条是有意分歧」。
-> 决策本体见 [ADR 0008](adr/0008-single-loop-plan-build-modes.md) 第 6 条与对照表；切法见 [pivot-plan-build](pivot-plan-build.md) §S2；
+> 决策本体见 [ADR 0008](../adr/0008-single-loop-plan-build-modes.md) 第 6 条与对照表；切法见 [pivot-plan-build](pivot-plan-build.md) §S2；
 > pi 的逐行实证另见 [research-pi-agent-construction](research-pi-agent-construction.md) §5（本文不复制它的内容，只取结论）。
 > 横向能力对标（粒度到「审批模式」）见 [agent-comparison-report](agent-comparison-report.md)。
 

@@ -1,21 +1,22 @@
 # 系统架构设计文档：基于 LangGraph 的自主任务 Agent 平台
 
 > 架构师：高见远（Gao）　|　版本：v0.1　|　日期：2025-08-24
-> 关联文档：PRD（[`docs/prd.md`](prd.md)）
+> 关联文档：PRD（[`docs/archive/prd.md`](archive/prd.md)）
 > 项目根目录：仓库根（下文相对路径以仓库根为准）
 
 > ⚠️ **状态：v0.1 原始设计档（历史记录），不是现役架构的权威来源。**
 >
-> 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、REST
-> 端点表、SSE 事件表、类图与时序图均为**当时的计划态**。§2 / §4 已按 S5 的单 loop 更新；
-> §5 的跨文件共享约定仍现役；§8 / §9 保留为历史决策与实施计划。
+> 本文写于 P0 / P1 / P2 / P3 / P0-ABC 七轮迭代之前。其中的文件清单、工具数量、类图与
+> 时序图均为**当时的计划态**。§2 / §4 已按 S5 的单 loop 更新；§3.3 REST 端点表、§3.4 SSE
+> 事件表与 §5 的跨文件共享约定仍现役（与 `docs/agents/domain.md` 的文首定位一致）；
+> §8 / §9 保留为历史决策与实施计划。
 >
 > **现役事实请查这里**：
 > - 能力清单 → [`README.md`](../README.md)「能力」；工程约定与任务路由 → [`AGENTS.md`](../AGENTS.md)
 > - 图拓扑（与代码逐边一致）→ [`README.md`](../README.md)「核心模型」+ [`backend/core/agent/graph.py`](../backend/core/agent/graph.py)
-> - 各轮增量设计 → `docs/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `-p3-resume.md`
+> - 各轮增量设计 → `docs/archive/incremental-arch-p0.md` / `-p1.md` / `-p2.md` / `docs/incremental-arch-p3-resume.md`
 > - 接口契约 → 运行时 Swagger `http://localhost:8000/docs`（权威）+ [`backend/api/routes.py`](../backend/api/routes.py)
-> - 能力边界的第一性原理推导 → [`capability-first-principles.md`](capability-first-principles.md)
+> - 能力边界的第一性原理推导 → [`capability-first-principles.md`](archive/capability-first-principles.md)
 >
 > **本文的保留价值**（这些不随实现漂移）：§1 初始技术难点与选型理由、§5 跨文件共享约定
 > （其中多数已升格为 `AGENTS.md`「跨任务安全边界」硬规则）、§7 T01–T09 的原始实施顺序、§8 Q1–Q8 的初始决策。
@@ -149,7 +150,7 @@ langgraph-agent/
 
 ### 3.1 类图 / 数据模型（mermaid `classDiagram`）
 
-> 详见 `docs/class-diagram.mermaid`。
+> 详见 `docs/archive/class-diagram.mermaid`（v0.1 历史档）。
 
 ```mermaid
 classDiagram
@@ -386,7 +387,7 @@ classDiagram
 > 现役拓扑与 `backend/core/agent/graph.py` 逐边一致；下图是一次 plan → build → 停下 → 续说
 > 的典型调用。
 
-> 详见 `docs/sequence-diagram.mermaid`。
+> 详见 `docs/archive/sequence-diagram.mermaid`（v0.1 历史档）。
 
 ```mermaid
 sequenceDiagram
@@ -504,8 +505,7 @@ httpx>=0.27.0          # 供 web_search 的 SerpAPI 路径使用
 ## 7. 有序任务列表（工程师编码依据）
 
 > ⚠️ **历史**：T01–T09 是 v0.1 首轮实施顺序，均已交付。后续七轮的任务拆分见
-> `docs/incremental-prd-p{0,1,2}.md`；当前待做清单见
-> [`roadmap-pawbench.md`](roadmap-pawbench.md) §三 与 GitHub Issues。
+> `docs/archive/incremental-prd-p{0,1,2}.md`；当前待做清单见 GitHub Issues。
 
 > 说明：任务按**实现依赖顺序**排列，每个任务含 ≥3 个文件。`T01` 为项目基础设施（必为首个任务）。优先级：`P0`=MVP，`P1`=重要。任务粒度到"可独立编码"。
 

@@ -22,7 +22,7 @@ status: superseded by ADR-0009
 这是一条**隐式假设被第二种运行静默继承**的口子，不记下来就会被下一个读代码的人当成 bug 重修：
 
 1. P0 落 `resilience.py` 时世界上只有一种运行（一个任务一个循环），账记在循环身上自然成立。
-2. P1 的架构约束（`docs/incremental-arch-p1.md` 首段）明确写着「不破坏现有编排内核（含 P0 压缩 /
+2. P1 的架构约束（`docs/archive/incremental-arch-p1.md` 首段）明确写着「不破坏现有编排内核（含 P0 压缩 /
    熔断）」——当时正确的保守选择，代价是"一次运行 = 一本保险丝账"从未被登记为决定。
 3. 共享它现在只有三条路，都不划算：改 `resilience.py`（CI 机械冻结区，需 `[OVERRIDE]` 人工批准）；
    从非冻结侧写入它的私有 `_breakers`（guard 拦不住，但一旦那层改动就**静默失效**，比走批准更坏）；
@@ -36,7 +36,7 @@ status: superseded by ADR-0009
 - 同一个工具在 N 个子任务里各自失败，各吃各的 `tool_failure_threshold`，**不会合并成一次跳闸**；
   最坏额外耗时约 `并发数 × 阈值 × 单次工具超时`。
 - 「单条循环不被拖死」这一原始语义不受影响——它本来就是 per-runtime 的。
-- 2026-09-27 [#71](../../issues/71) 追加：超时折 `failed` 之后 worker 仍跑到 `max_steps` 的那段窗口，
+- 2026-09-27 [#71](https://github.com/renjianguojinqianfan/langgraph-agent/issues/71) 追加：超时折 `failed` 之后 worker 仍跑到 `max_steps` 的那段窗口，
   现在由「置子任务自身 stop 旗标」收到下一个节点入口。它缩小的是上一条最坏耗时里的一个输入项
   （失控轮数），不改变本 ADR 的判定——熔断计数仍按运行各记一本账。
 

@@ -11,13 +11,13 @@ status: partially superseded by ADR-0008
 # 护城河纪律：不为凑功能挪用深度能力的注意力
 
 > 2026-09-16 wayfinder map #27 / ticket #30 grilling 定居；推导依据见
-> [capability §五 结论 4](../capability-first-principles.md)，
-> 执行纪律见 [roadmap §〇/§五](../roadmap-pawbench.md)。
+> [capability §五 结论 4](../archive/capability-first-principles.md)，
+> 执行纪律见 [roadmap §〇/§五](../archive/roadmap-pawbench.md)。
 
 ## 决策
 
 本仓库的 Tier 1 深度能力（现列三项：**T1.5 安全预防面、T1.6 持久化恢复、
-T1.3 循环控制韧性**；细目以 [capability §四](../capability-first-principles.md)
+T1.3 循环控制韧性**；细目以 [capability §四](../archive/capability-first-principles.md)
 对照表为准。**开放式清单**——后续交付新的 Tier 1 深度能力（如 P1-B 回滚）即自动入列）
 是反超两个开源标杆的护城河，其验收走**离线测试全量 + live 双场景，不走评测分**。
 任何后续规划（P1-A′ / P1-B / M2 及以后）不得为凑功能或追分数，挪用维护这些能力的注意力。

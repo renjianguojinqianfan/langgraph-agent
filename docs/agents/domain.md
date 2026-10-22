@@ -12,9 +12,10 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 > **Current state (2026-10-20):** root `GLOSSARY.md` exists as a pointer entry (vocabulary
 > authority stays in `backend/core/agent/state.py`; follows upstream's `GLOSSARY.md` convention
-> since #876); `docs/adr/` holds `0001`–`0010` — `0001`, `0002`, `0008`, `0009` and `0010` are live,
-> `0005`–`0007` retired with `0008` (single loop + plan/build two modes), `0003` retired with
-> slice C2, and `0004` retired with C5 (the workspace file list replaced the artifact ledger); `0010` supplements the
+> since #876); `docs/adr/` holds `0001`–`0010` — `0001`, `0008`, `0009` and `0010` are live,
+> `0002` partially retired (`0008`「三笔账」3), `0005`–`0007` retired with `0008` (single loop +
+> plan/build two modes), `0003` retired with slice C2, and `0004` retired with C5 (the workspace
+> file list replaced the artifact ledger); `0010` supplements the
 > daily form (launch dir = workspace owned by the task, one shared server, model profiles). This repo is **single-context** —
 > one `GLOSSARY.md` + one `docs/adr/` at the root. No `GLOSSARY-MAP.md`, no per-package context dirs.
 >
@@ -41,17 +42,20 @@ Single-context repo (this repo's layout):
 │   │                                     （README 能力 / architecture）；**未开工增量**的 spec 是活的设计
 │   │                                     权威，可以也应该改（如前置依赖清掉了就更新）
 │   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain)
-│   ├── prd.md · architecture.md       ← original v0/v0.1 design docs
-│   ├── incremental-prd-p{0,1,2}.md    ← per-iteration PRDs
-│   ├── incremental-arch-p{0,1,2,3-resume}.md
+│   ├── archive/                       ← 过时 / 点-时文档（git mv 保留历史；不作现役权威）
+│   ├── assets/                        ← README 截图等文档资产
+│   ├── architecture.md                ← v0.1 历史档；§3.3 REST / §3.4 SSE / §5 共享约定现役
+│   ├── manual-verification.md         ← 9 个真模型网页验收场景（发布前跑）
+│   ├── capability-registry-rescope.md ← 本章能力包线与切片决策日志（G-1…）
 │   ├── migration-langgraph-1x.md      ← 0.2 → 1.2.x migration, measured
-│   ├── capability-first-principles.md ← first-principles capability derivation
-│   ├── agent-comparison-report.md     ←横向对标（Codex/Qoder/Hermes/dsh）
-│   ├── architecture-audit-2026-09-22.md ← 历史只读架构审计（已归档；发现 → issue 映射）
-│   └── roadmap-pawbench.md            ← archived evaluation roadmap (PawBench retired)
+│   ├── incremental-arch-p3-resume.md  ← stop / resume / durability 的说明（§4 确认闸门已随 0008 退役，其余现役）
+│   └── security-audit-2026-10-19-bash.md ← bash 工具点-时审计与当前形态附记
 ├── backend/                           ← Python: api / core(agent,llm,tools,mcp) / services / utils
 └── frontend/                          ← React + Vite + TS: components / pages / store / hooks
 ```
+
+> 2026-10-20 D1（#174）：v0 / 迭代期文档、PawBench / benchmark、调研快照与旧图表已 `git mv` 到
+> `docs/archive/`；根目录 `OVERVIEW.md` 也移入其中。ADR 不移动（退役的原地加标记），`docs/specs/` 保持冻结归档。
 
 Multi-context repo (presence of `GLOSSARY-MAP.md` at the root) — **not this repo**, kept for reference:
 
@@ -104,7 +108,8 @@ the same way — surface it, don't silently override.
 |---|---|---|
 | 决策记录（grilling 定居、定位 / 选型结论）| `docs/adr/` | `NNNN-英文-kebab-case.md`（4 位递增编号）|
 | spec / 实施方案 / 任务计划 | `docs/specs/` | `英文-kebab-case.md` |
-| 调研 / 对标 / 路线图 / 迁移评估 | `docs/` 根 | 同上（沿用既有惯例）|
+| 调研 / 对标 / 路线图 / 迁移评估 | `docs/` 根（过时后移入 `docs/archive/`）| 同上（沿用既有惯例）|
+| 过时 / 点-时文档 | `docs/archive/` | 原文件名（`git mv` 保历史；不作现役权威）|
 | 技能组配置 | `docs/agents/` | 由 setup 技能生成 |
 | 记忆类（不迁） | 留原地：`.workbuddy/memory/`、teach 的 `MISSION.md`/`NOTES.md`/`RESOURCES.md`/`learning-records/`/`lessons/` | 各家 agent 自己消费 |
 

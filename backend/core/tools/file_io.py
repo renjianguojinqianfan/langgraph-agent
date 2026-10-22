@@ -39,7 +39,7 @@ logger = get_logger("tool.file_io")
 
 # ───────────────────── the discrete sandbox file tools ─────────────────────
 # Six-piece-style precision tools (read / write / edit / glob / grep / ls) under
-# docs/roadmap-pawbench.md P0-A, the set closed by issue #17.
+# docs/archive/roadmap-pawbench.md P0-A, the set closed by issue #17.
 #
 # The defaults below are module constants (not Settings) to avoid config
 # sprawl; they can be promoted to Settings later if a deployment needs to tune

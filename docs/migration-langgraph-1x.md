@@ -297,7 +297,7 @@ v2 判成 `newer` 并拒绝挂载。回滚同样要先把 `data/checkpoints/chec
 
 ## 7. Phase 2 待办（本次交付刻意不含）
 
-> **2026-09-12 补记：下列四项已全部交付**（Issue #7 Phase 2）。交付摘要见 `OVERVIEW.md` 的
+> **2026-09-12 补记：下列四项已全部交付**（Issue #7 Phase 2）。交付摘要见 `docs/archive/OVERVIEW.md` 的
 > Issue #7 章节，门禁配置与每条取舍理由见仓库根 `pyproject.toml`。保留下文原样，
 > 因为「当时为什么不在迁移分支里做」本身就是阶段划分的一部分。
 
@@ -317,15 +317,15 @@ v2 判成 `newer` 并拒绝挂载。回滚同样要先把 `data/checkpoints/chec
   → **已交付**：定位与亮点 → 架构图（mermaid 拓扑 + 分层）→ 迁移章节 → 组合分工互链 → 运行与门禁。
 - **与 `interview-agent-py` 互链并显式写分工**（US15）：本仓库单侧先写。
   → **已交付**：README §4（分工对照表 + 一句话分工）。
-- **OVERVIEW.md 补 Issue #7 章节**：既有章节是历史交付日志（里面的 351/2.0.11 是当时事实），
+- **docs/archive/OVERVIEW.md 补 Issue #7 章节**：既有章节是历史交付日志（里面的 351/2.0.11 是当时事实），
   不改旧章节，只追加新一章。
   → **已交付**：旧章节逐字未动，末尾追加 Issue #7 一章。
 
 > **2026-09-12 后续注记**：上文「`registry.py` 2 处走唯一一条 override」已在解冻窗口修正——
 > `get_tool` / `make_openapi_tool` 两处签名改正、`pyproject.toml` 那条唯一 mypy override 已撤除，
-> mypy 现零 override。详见 `OVERVIEW.md` Issue #7 后续候选 #1。
+> mypy 现零 override。详见 `docs/archive/OVERVIEW.md` Issue #7 后续候选 #1。
 >
 > **2026-09-22 后续注记**：上文「planner 异常分支的 `plan` 形态不一致（只加注解未改行为）」已修——
 > planner 异常改为写 `state["error"]` + 空 plan，`_after_planner` / `_after_planner_subtask` 在 `error`
-> 时短路到 `finish`（判定 `FAILED` 并保留真实原因）。详见 `OVERVIEW.md` Issue #7 后续候选 #2 /
+> 时短路到 `finish`（判定 `FAILED` 并保留真实原因）。详见 `docs/archive/OVERVIEW.md` Issue #7 后续候选 #2 /
 > [Issue #12](https://github.com/renjianguojinqianfan/langgraph-agent/issues/12)。

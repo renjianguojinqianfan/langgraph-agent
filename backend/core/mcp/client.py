@@ -323,7 +323,7 @@ class McpClientManager:
         self._closed = False
         self._lock = threading.Lock()
 
-    # ── SDK import convergence (fallback reserved; see incremental-arch §1) ──
+    # ── SDK import convergence (fallback reserved; see docs/archive/incremental-arch-p2.md §1) ──
     @staticmethod
     def _import_sdk() -> Any:
         """Import the ``mcp`` SDK lazily.
