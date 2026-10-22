@@ -18,6 +18,7 @@ from backend.core.tools.registry import build_tools
 from backend.main import app
 from backend.services.auth import TokenIssuer
 from backend.services.event_bus import EventBus
+from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
@@ -72,7 +73,14 @@ def _make_client(tmp_path, auth_enabled):
     eb = EventBus()
     persistence = Persistence(settings)
     mock = MockLLMClient(plan=["p"], final_answer="done")
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
     client = TestClient(app, base_url="http://localhost")
     client.__enter__()
     client.app.state.settings = settings

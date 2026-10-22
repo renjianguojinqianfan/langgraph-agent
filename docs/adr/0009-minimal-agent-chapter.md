@@ -32,6 +32,7 @@ status: accepted
 4. **bash 的安全口径照 D1 (b)**：危险规则默认空表、不附黑名单；bash 拿的是运行账号的权限，工作目录只是起点不是围墙，
    要隔离就放进容器或虚拟机——README 写清楚（G-23；[危险规则调研](../research-danger-policy-across-agents.md) §6.4）。
    子进程只放行环境变量白名单，密钥不进 bash。
+   **修订（2026-10-20，M1 #172 / ADR 0010 决策 8）**：白名单照旧；但界面粘贴进 `~/.qianfan/credentials.json` 的 Key **bash 读得到**（同账号），这句话改为如实描述。
 5. **只让本机访问**：监听 127.0.0.1，跨域只放行自身页面（G-20），Host 检查只认 127.0.0.1 / localhost（G-35）；
    `.env.example` 的 `HOST` 旁注一句「本章只支持本机访问」。**本章不支持远程访问**：远程模式（改监听 + 扩 Host 允许名单 + 必须开登录）整块不做（G-26）。
 6. **交付 = 工作区里的文件**：「产物」栏换成「工作区文件」列表（整个工作区、不分任务、可预览下载，bash 写的也在）。
@@ -59,7 +60,7 @@ status: accepted
 |---|---|---|
 | 一条 loop | `agent → tool → agent`，一个 `agent` 节点；模式只换提示词与工具面；一轮没有工具调用即停下 | `backend/core/agent/graph.py`、`nodes.py` |
 | 状态与存档 | `AgentState` + LangGraph checkpoint（续说 / 续跑）+ 任务记录 | `state.py`、`backend/services/task_manager.py`、`persistence.py` |
-| 模型连接 | OpenAI 兼容客户端 + 离线模拟模型 | `backend/core/llm/` |
+| 模型连接 | OpenAI 兼容客户端 + 离线模拟模型；**M1 起**多套配置（`data/models.json`）+ 凭据文件，按任务取客户端（ADR 0010 决策 7） | `backend/core/llm/` + `backend/services/model_store.py` |
 | 工具 | 决策 2 的 10 个 + MCP；派发处按模式收窄工具面 | `backend/core/tools/`、`nodes.py::tool_node` |
 | 危险规则钩子 | 设置里的规则表，命中即拒、把 `{block, reason}` 回给模型 | `backend/core/agent/policy.py` |
 | 上下文 | 两层 AGENTS.md + 技能目录 + 环境信息注入；大结果驱逐；历史压缩 | `inject.py`、`context.py` |

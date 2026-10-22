@@ -317,7 +317,9 @@ classDiagram
 > 新增：`POST /tasks/{id}/resume`（P3）、`GET /tasks/{id}/trace`（P0）、
 > `GET /mcp/servers`（P2）；S5（#139）新增 `PUT /tasks/{id}/mode`、
 > `PUT /tasks/{id}/plan`、`POST /tasks/{id}/messages`；C5 新增
-> `GET /tasks/{id}/files{,/preview,/download}`。
+> `GET /tasks/{id}/files{,/preview,/download}`；M1 新增 `PUT /tasks/{id}/model` 与
+> `/models*` 七条（`GET/POST /models`、`PUT/DELETE /models/{id}`、
+> `POST /models/{id}/default`、`PUT /models/{id}/key`、`POST /models/{id}/test`）。
 > `/health` 另在 `backend/main.py`。下表其余契约仍现役。
 
 **基础路径**：`/api`　**内容类型**：`application/json`
@@ -363,7 +365,7 @@ classDiagram
 | event 类型 | data 字段 | 含义 |
 |------------|-----------|------|
 | `task_created` | `{task_id, title, status}` | 任务已创建 |
-| `step_start` | `{index, thought}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形 |
+| `step_start` | `{index, thought, model, model_profile}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形。`model` / `model_profile` 是本次调用用的模型名与配置 id（M1 / ADR 0010） |
 | `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
 | `final_answer` | `{answer:str}` | 本轮的文字回复（不是终态；下一轮会覆盖） |
@@ -371,7 +373,7 @@ classDiagram
 | `task_interrupted` | `{task_id, status}` | 停下：人按停、这一轮的最后一次 `agent` 调用没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑 / 新消息续跑启动（P3；#139 起多轮对话共用） |
 | `tool_result_evicted` | `{tool_call_id, tool_name, original_chars, step_index}` | 旧的大段 tool 结果被换成占位（T1.4，全文留 trace） |
-| `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|
+| `context_compressed` | `{step_index, dropped, band_evicted, converged, context_tokens, strategy, model, model_profile}` | 上下文压缩发生。#49 起含带内挤压：`band_evicted` = 保护带里被挤成便签的条数；`converged` = 结果是否已进预算，`false` = 角色闸门下够不到、已如实停手不空转 ；`strategy=summarize` 时同样可非 0，`dropped=0` 时也可非 0（#85：摘要与截断共享带内挤压）|
 | `subtask_start` | `{subtask_id, name, status, parent_task_id}` | 子任务已派生（#70 裁定 A 恢复；**只发在父频道**，子任务自己的频道不带） |
 | `subtask_result` | `{subtask_id, name, status, summary, artifacts}` | 子任务 `completed` 的折叠回传（#70 裁定 A；父频道） |
 | `subtask_failed` | `{subtask_id, name, error}` | 子任务超时 / worker 崩溃 / 折回 `failed`（#70 裁定 A；父频道，与一条失败的 `tool_result` 并存、父任务不死） |

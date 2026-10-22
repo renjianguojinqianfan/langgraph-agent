@@ -111,9 +111,11 @@ class AgentRuntime:
         tool_schemas: List[Dict[str, Any]],
         max_steps: int = 15,
         parent_task_id: str = "",
+        model_profile: str = "",
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
+        self.model_profile = model_profile
         # Issue #60: ``TaskManager.stop()`` only flips the id it was handed, so a
         # subtask has to watch its own id *and* the parent's. Watching the parent
         # alone would break ``stop(subtask_id)``.
@@ -226,6 +228,7 @@ class AgentRuntime:
             trace_ref=trace_ref,
             head_chars=settings.context_evict_head_chars,
             tail_chars=settings.context_evict_tail_chars,
+            redact=self._redact,
         )
         state["context_tokens"] = meta["context_tokens"]
         if meta["compressed"]:
@@ -241,6 +244,8 @@ class AgentRuntime:
                         "converged": meta["converged"],
                         "context_tokens": meta["context_tokens"],
                         "strategy": meta["strategy"],
+                        "model": getattr(self.llm, "model", ""),
+                        "model_profile": self.model_profile,
                     },
                 )
             except Exception:  # pragma: no cover - event is optional
@@ -267,6 +272,30 @@ class AgentRuntime:
         plan_file.sync_plan_message(compressed, plan_text)
         state["messages"] = compressed
         return [{"role": "system", "content": system + self._inject_block}, *compressed]
+
+    def _redact(self, text: str) -> str:
+        """Strip known keys before an error reaches state / SSE / trace."""
+        redact = getattr(getattr(self, "tm", None), "redact", None)
+        return redact(text) if callable(redact) else text
+
+    def _public_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+        """A copy safe for SSE / trace: the args are redacted, dispatch is not."""
+        return {**rec, "input": self._redact_value(rec.get("input"))}
+
+    def _redact_value(self, value: Any) -> Any:
+        """Recursively redact strings inside a tool result payload."""
+        if isinstance(value, str):
+            return self._redact(value)
+        if isinstance(value, list):
+            return [self._redact_value(item) for item in value]
+        if isinstance(value, dict):
+            # Keys can carry a key too; a collision overwrites one entry,
+            # which is safer than shipping the secret.
+            return {
+                self._redact(key if isinstance(key, str) else str(key)): self._redact_value(item)
+                for key, item in value.items()
+            }
+        return value
 
     # ── nodes ──
     def agent(self, state: AgentState) -> AgentState:
@@ -301,7 +330,15 @@ class AgentRuntime:
         mode = state.get("mode") or BUILD_MODE
         thought = f"Step {idx}: planning." if mode == PLAN_MODE else f"Step {idx}: acting."
         step["thought"] = thought
-        self._publish("step_start", {"index": idx, "thought": thought})
+        self._publish(
+            "step_start",
+            {
+                "index": idx,
+                "thought": thought,
+                "model": getattr(self.llm, "model", ""),
+                "model_profile": self.model_profile,
+            },
+        )
 
         if mode == PLAN_MODE:
             return self._plan_round(state, step)
@@ -345,6 +382,7 @@ class AgentRuntime:
             # Not a plan: keep the previous plan and surface what the model
             # actually said (e.g. a question) instead of inventing a step.
             answer = (resp.content or "").strip() or "(no content)"
+        answer = self._redact(answer)
         state["final_answer"] = answer
         assistant_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         # Issue #45: thinking-mode providers require the trace back on the next
@@ -373,9 +411,10 @@ class AgentRuntime:
         try:
             return self.llm.complete(messages, tools=schemas)
         except Exception as exc:
-            logger.exception("agent LLM error (plan mode)")
-            state["error"] = f"Plan-mode LLM error: {exc}"
-            state["final_answer"] = f"[error] {exc}"
+            message = self._redact(str(exc))
+            logger.error("agent LLM error (plan mode): %s", message)
+            state["error"] = f"Plan-mode LLM error: {message}"
+            state["final_answer"] = f"[error] {message}"
             state["_last_action"] = "final_answer"
             return None
 
@@ -387,16 +426,17 @@ class AgentRuntime:
                 tools=self.tool_schemas,
             )
         except Exception as exc:
-            logger.exception("agent LLM error (build mode)")
-            state["error"] = f"Build-mode LLM error: {exc}"
-            state["final_answer"] = f"[error] {exc}"
+            message = self._redact(str(exc))
+            logger.error("agent LLM error (build mode): %s", message)
+            state["error"] = f"Build-mode LLM error: {message}"
+            state["final_answer"] = f"[error] {message}"
             state["_last_action"] = "final_answer"
             return state
 
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
-        answer = resp.content or "(no content)"
+        answer = self._redact(resp.content or "(no content)")
         state["final_answer"] = answer
         final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn
@@ -437,6 +477,9 @@ class AgentRuntime:
                 "status": "skipped" if block_reason is not None else "pending",
                 "error": block_reason or "",
             }
+            if block_reason is not None:
+                # Never dispatched: the args can be redacted here and persist.
+                rec["input"] = self._redact_value(args)
             tcs.append(rec)
 
         state["_current_tool_calls"] = tcs
@@ -463,7 +506,7 @@ class AgentRuntime:
         state.setdefault("messages", []).append(assistant_turn)
         for rec in tcs:
             step["tool_calls"].append(rec)
-            self._publish("tool_call", rec)
+            self._publish("tool_call", self._public_record(rec))
             if rec["status"] == "skipped":
                 # S2 (#136): a policy refusal is delivered here, at the point of
                 # decision, and never handed to the tool node.
@@ -559,6 +602,7 @@ class AgentRuntime:
                     )
                 else:
                     rec["error"] = f"unknown tool: {rec['tool_name']}"
+                rec["input"] = self._redact_value(rec.get("input"))
                 self._publish("tool_result", rec)
                 self._feed_tool_failure(state, rec)
                 continue
@@ -566,12 +610,16 @@ class AgentRuntime:
             try:
                 result: ToolResult = tool.run(**rec["input"])
             except Exception as exc:  # final safety net
-                logger.exception("tool %s crashed", rec["tool_name"])
-                result = ToolResult(success=False, error=str(exc))
+                message = self._redact(str(exc))
+                logger.error("tool %s crashed: %s", rec["tool_name"], message)
+                result = ToolResult(success=False, error=message)
 
+            # Dispatch used the raw args; the record (SSE / trace / steps) keeps
+            # only the redacted copy.
+            rec["input"] = self._redact_value(rec.get("input"))
             rec["status"] = "success" if result.success else "failed"
-            rec["output"] = result.data
-            rec["error"] = result.error or ""
+            rec["output"] = self._redact_value(result.data)
+            rec["error"] = self._redact(result.error or "")
             self._publish("tool_result", rec)
 
             # Feed the tool result back into the conversation: the payload
@@ -580,7 +628,7 @@ class AgentRuntime:
             # wrong).
             if result.success:
                 state.setdefault("messages", []).append(
-                    {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(result.data, ensure_ascii=False, default=str)}
+                    {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(rec["output"], ensure_ascii=False, default=str)}
                 )
             else:
                 self._feed_tool_failure(state, rec)
@@ -594,10 +642,10 @@ class AgentRuntime:
             # 在面板上是「失败的一条」，不是「暂无子任务」。
             if (
                 rec["tool_name"] == "spawn_subagent"
-                and isinstance(result.data, dict)
-                and "subtask_id" in result.data
+                and isinstance(rec["output"], dict)
+                and "subtask_id" in rec["output"]
             ):
-                state.setdefault("subtasks", []).append(dict(result.data))
+                state.setdefault("subtasks", []).append(dict(rec["output"]))
 
         state["_last_action"] = "tool_done"
         if step is not None:

@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 
 from langgraph.types import Durability
 
@@ -46,6 +46,7 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from . import plan_file
 from .event_bus import EventBus
+from .model_store import ModelStore
 from .persistence import Persistence
 from .trace import TraceRecorder
 
@@ -181,6 +182,8 @@ class TaskManager:
         llm_client: Optional[LLMClient] = None,
         tools: Optional[List[BaseTool]] = None,
         default_workspace: Optional[Path] = None,
+        model_store: Optional[ModelStore] = None,
+        llm_factory: Optional[Callable[[Any, str], LLMClient]] = None,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
@@ -191,7 +194,16 @@ class TaskManager:
         self._default_workspace = normalize_workspace(
             default_workspace or settings.artifacts_path
         )
+        self.models = model_store or ModelStore(settings)
+        self._injected_llm = llm_client
         self._llm = llm_client or create_llm_client(settings)
+        self._llm_factory = llm_factory
+        self._llm_clients: Dict[str, LLMClient] = {}
+        #: Keys a live/cached client may still hold after a rotation. Memory
+        #: only: the point is redaction, not a second credentials store.
+        self._known_secrets: set[str] = set()
+        #: The (profile, client) a round is pinned to; subagents inherit it.
+        self._round_models: Dict[str, tuple[str, LLMClient]] = {}
         self._tools = tools if tools is not None else build_tools(settings)
         # P1 item 2: sub-agent executor (None when disabled).
         self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None
@@ -459,12 +471,143 @@ class TaskManager:
                 logger.warning("checkpoint connection close failed: %s", exc)
             self._checkpointer = None
             self._checkpoint_conn = None
+        with self._lock:
+            self._known_secrets.clear()
+            self._round_models.clear()
 
     # ── creation / query ──
     @staticmethod
     def _require_workspace(task: Task) -> None:
         if not Path(task.workspace).is_dir():
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
+
+    def _build_llm(self, profile: Any, key: str) -> LLMClient:
+        if key:
+            self._known_secrets.add(key)
+        if self._llm_factory is not None:
+            return self._llm_factory(profile, key)
+        from ..core.llm.openai_compat import OpenAICompatibleClient
+
+        return OpenAICompatibleClient(
+            profile.base_url, key, profile.model, self.settings.llm_request_timeout_sec
+        )
+
+    def _llm_for(self, task: Optional[Task]) -> LLMClient:
+        """The task's model client, cached per profile (ADR 0010 decision 7)."""
+        if self._injected_llm is not None:
+            return self._injected_llm
+        if self.settings.use_mock_llm:
+            return self._llm
+        requested = task.model if task is not None else ""
+        # Resolve, read the key, check the cache and build under one lock: a
+        # concurrent profile edit invalidates the cache before this method can
+        # insert a client built from the pre-edit profile.
+        with self._lock:
+            profile = self.models.resolve(requested)
+            if profile is None:
+                # A pinned profile that no longer exists must not silently
+                # reroute the conversation to another provider.
+                raise RuntimeError(
+                    f"model profile {requested!r} no longer exists; switch the task's model"
+                )
+            client = self._llm_clients.get(profile.id)
+            if client is None:
+                client = self._build_llm(profile, self.models.key_for(profile.id))
+                self._llm_clients[profile.id] = client
+        return client
+
+    def _pin_round_model(self, task: Task) -> LLMClient:
+        """Fix this round's client; a subagent must not re-read the task record."""
+        llm = self._llm_for(task)
+        profile_id = self.model_id_for(task)
+        with self._lock:
+            self._round_models[task.id] = (profile_id, llm)
+        return llm
+
+    def round_llm_for(self, task_id: str) -> Optional[tuple[str, LLMClient]]:
+        with self._lock:
+            return self._round_models.get(task_id)
+
+    def llm_for_task_id(self, task_id: str) -> LLMClient:
+        return self._llm_for(self.persistence.load_task(task_id))
+
+    def model_id_for(self, task: Optional[Task]) -> str:
+        """The profile id a task runs with; empty task -> the global default."""
+        return (task.model if task is not None else "") or self.models.default_id
+
+    def redact(self, text: str) -> str:
+        """Strip every known key from text before it is logged, stored or sent."""
+        secrets = set(self._known_secrets) | self.models.secret_values()
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "[redacted]")
+        return text
+
+    def set_model(self, task_id: str, model_id: str) -> Dict[str, Any]:
+        """Switch a task's model; the next message uses it."""
+        if self.models.get(model_id) is None:
+            raise RuntimeError(f"unknown model {model_id!r}")
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            task.model = model_id
+            task.updated_at = _now()
+            self.persistence.save_task(task)
+        return {"ok": True, "model": model_id}
+
+    # Profile mutations go through the manager so the per-profile client cache
+    # cannot keep serving the old address / key after an edit.
+    def add_model_profile(self, **fields: Any) -> Any:
+        with self._lock:
+            return self.models.add(**fields)
+
+    def set_default_model_profile(self, model_id: str) -> None:
+        with self._lock:
+            self.models.set_default(model_id)
+
+    def update_model_profile(self, model_id: str, **fields: Any) -> Any:
+        with self._lock:
+            old_key = self.models.key_for(model_id)
+            profile = self.models.update(model_id, **fields)
+            self._llm_clients.pop(model_id, None)
+            if old_key:
+                self._known_secrets.add(old_key)
+        return profile
+
+    def delete_model_profile(self, model_id: str) -> None:
+        with self._lock:
+            old_key = self.models.key_for(model_id)
+            self.models.delete(model_id)
+            self._llm_clients.pop(model_id, None)
+            if old_key:
+                self._known_secrets.add(old_key)
+
+    def set_model_key(self, model_id: str, key: str) -> None:
+        with self._lock:
+            old_key = self.models.key_for(model_id)
+            self.models.set_key(model_id, key)
+            self._llm_clients.pop(model_id, None)
+            if old_key:
+                self._known_secrets.add(old_key)
+
+    def test_model(self, model_id: str) -> Dict[str, Any]:
+        """Send one minimal request; the key never appears in the answer."""
+        profile = self.models.get(model_id)
+        if profile is None:
+            raise KeyError(model_id)
+        if self.settings.use_mock_llm:
+            return {"ok": True, "note": "mock mode"}
+        key = self.models.key_for(model_id)
+        if not key:
+            return {"ok": False, "error": "key not set"}
+        try:
+            self._build_llm(profile, key).complete(
+                [{"role": "user", "content": "ping"}], max_tokens=1
+            )
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": self.redact(str(exc))}
 
     @staticmethod
     def _seed_plan(task: Task) -> Dict[str, Any]:
@@ -486,15 +629,20 @@ class TaskManager:
         user_input: str,
         mode: str = TaskMode.BUILD.value,
         workspace: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
         """Start one task (ADR 0008 decision 1: one task = one conversation).
 
         ``mode`` is the sticky task switch; default is build (decision 3).
         ``workspace`` is the page-supplied directory; absent -> the launch dir.
+        ``model`` is a profile id; absent -> the global default.
         """
         chosen = normalize_workspace(workspace or self._default_workspace)
         if not Path(chosen).is_dir():
             raise ValueError(f"workspace does not exist: {chosen}")
+        model_id = model or self.models.default_id
+        if self.models.get(model_id) is None:
+            raise ValueError(f"unknown model: {model_id}")
         task_id = uuid.uuid4().hex
         now = _now()
         task = Task(
@@ -502,6 +650,7 @@ class TaskManager:
             title=(title or user_input[:40]).strip(),
             user_input=user_input,
             workspace=chosen,
+            model=model_id,
             status=TaskStatus.PENDING,
             mode=TaskMode(mode),
             conversation=[ChatTurn(role="user", content=user_input)],
@@ -579,10 +728,11 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._pin_round_model(task),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
+                model_profile=self.model_id_for(task),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -592,18 +742,19 @@ class TaskManager:
             task = self.persistence.load_task(task_id) or task
             self._finalize_terminal(task, final)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("run() crashed for task %s", task_id)
             task.status = TaskStatus.FAILED
-            task.error = str(exc)
+            task.error = self.redact(str(exc))
+            logger.error("run() crashed for task %s: %s", task_id, task.error)
             task.updated_at = _now()
             self.persistence.save_task(task)
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+                task_id, "task_failed", {"task_id": task_id, "error": task.error}
             )
         finally:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
             reset_runtime_context(tokens)
             # P0 item 4: always close the trace (success / failure / interrupt)
@@ -724,6 +875,26 @@ class TaskManager:
                 time.sleep(0.3)
         return False
 
+    def _redact_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist tool arguments redacted; dispatch already saw the raw copy."""
+
+        def redact_value(value: Any) -> Any:
+            if isinstance(value, str):
+                return self.redact(value)
+            if isinstance(value, list):
+                return [redact_value(item) for item in value]
+            if isinstance(value, dict):
+                return {self.redact(str(k)): redact_value(v) for k, v in value.items()}
+            return value
+
+        calls = []
+        for call in step.get("tool_calls") or []:
+            call = dict(call)
+            if "input" in call:
+                call["input"] = redact_value(call["input"])
+            calls.append(call)
+        return {**step, "tool_calls": calls}
+
     def _finalize_terminal(self, task: Task, final: Dict[str, Any]) -> None:
         """Map a finished run onto the persisted task record.
 
@@ -737,15 +908,18 @@ class TaskManager:
         other park publishes it here — one event per stop, whichever caused it.
         """
         status = final.get("status") or "FAILED"
-        task.status = TaskStatus(status)
-        task.steps = [StepRecord(**s) for s in final.get("steps", [])]
+        task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
         task.plan_version = int(final.get("plan_version", task.plan_version))
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
         task.conversation = self._conversation_from(final.get("messages"))
-        task.final_answer = final.get("final_answer", "")
-        task.error = final.get("error")
+        task.final_answer = self.redact(final.get("final_answer", "") or "")
+        task.error = self.redact(final["error"]) if final.get("error") else None
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()
+        # Flip the status last: a poll between assignments must never see
+        # "parked" carrying the previous round's steps (the redaction walk
+        # above widened that window).
+        task.status = TaskStatus(status)
         if status == "FAILED":
             self.event_bus.publish(
                 task.id,
@@ -898,10 +1072,11 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._pin_round_model(current),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
+                model_profile=self.model_id_for(current),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -943,20 +1118,22 @@ class TaskManager:
                 raise RuntimeError(f"task {task_id} vanished during resume")
             self._finalize_terminal(task, final)
         except Exception as exc:
-            logger.exception("resume() crashed for task %s", task_id)
+            message = self.redact(str(exc))
+            logger.error("resume() crashed for task %s: %s", task_id, message)
             task = self.persistence.load_task(task_id)
             if task is not None:
                 task.status = TaskStatus.FAILED
-                task.error = str(exc)
+                task.error = message
                 task.updated_at = _now()
                 self.persistence.save_task(task)
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+                task_id, "task_failed", {"task_id": task_id, "error": message}
             )
         finally:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
             if tokens is not None:
                 reset_runtime_context(tokens)
@@ -1106,10 +1283,11 @@ class TaskManager:
             runtime = AgentRuntime(
                 task_id=task_id,
                 task_manager=self,
-                llm=self._llm,
+                llm=self._pin_round_model(current),
                 tools=self._tools,
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
+                model_profile=self.model_id_for(current),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -1149,23 +1327,24 @@ class TaskManager:
                 raise RuntimeError(f"task {task_id} vanished during continuation")
             self._finalize_terminal(task, final)
         except Exception as exc:
-            logger.exception("continuation crashed for task %s", task_id)
+            message = self.redact(str(exc))
+            logger.error("continuation crashed for task %s: %s", task_id, message)
             task = self.persistence.load_task(task_id)
             if task is not None:
                 task.status = TaskStatus.FAILED
-                task.error = str(exc)
+                task.error = message
                 task.updated_at = _now()
                 self.persistence.save_task(task)
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": str(exc)}
+                task_id, "task_failed", {"task_id": task_id, "error": message}
             )
         finally:
             self._active_states.pop(task_id, None)
             self._threads.pop(task_id, None)
             self._stop_flags.pop(task_id, None)
+            self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
             if tokens is not None:
                 reset_runtime_context(tokens)
             if self._trace is not None:
                 self._trace.close(task_id)
-

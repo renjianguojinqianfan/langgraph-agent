@@ -91,6 +91,8 @@ class Task(BaseModel):
     user_input: str = ""
     #: Absolute, normalized directory the task reads/writes (ADR 0010 decision 1).
     workspace: str = ""
+    #: Model profile id; empty -> the global default (ADR 0010 decision 7).
+    model: str = ""
     status: TaskStatus = TaskStatus.PENDING
     #: Sticky mode (ADR 0008 decision 3): default build, user switches explicitly.
     mode: TaskMode = TaskMode.BUILD
@@ -114,6 +116,8 @@ class CreateTaskRequest(BaseModel):
     mode: TaskMode = TaskMode.BUILD
     #: Page-supplied directory; absent -> the backend's launch directory.
     workspace: Optional[str] = None
+    #: Model profile id; absent -> the global default.
+    model: Optional[str] = None
 
 
 class UpdateModeRequest(BaseModel):
@@ -124,6 +128,28 @@ class UpdatePlanRequest(BaseModel):
     """The whole plan as Markdown; the server writes the plan file."""
 
     text: str
+
+
+class TaskModelRequest(BaseModel):
+    model: str
+
+
+class ModelCreateRequest(BaseModel):
+    name: str
+    base_url: str
+    model: str
+    api_key_env: str = "LLM_API_KEY"
+
+
+class ModelUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    api_key_env: Optional[str] = None
+
+
+class ModelKeyRequest(BaseModel):
+    key: str = ""
 
 
 class SendMessageRequest(BaseModel):

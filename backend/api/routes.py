@@ -33,7 +33,11 @@ from .schemas import (
     AuthTokenRequest,
     CreateTaskRequest,
     McpServerInfo,
+    ModelCreateRequest,
+    ModelKeyRequest,
+    ModelUpdateRequest,
     SendMessageRequest,
+    TaskModelRequest,
     UpdateModeRequest,
     UpdatePlanRequest,
 )
@@ -70,6 +74,7 @@ def create_task(
             payload.input.strip(),
             mode=payload.mode.value,
             workspace=payload.workspace,
+            model=payload.model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -138,6 +143,128 @@ def resume_task(
         result = _tm(request).resume(task_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
+@router.put("/tasks/{task_id}/model")
+def update_task_model(
+    task_id: str,
+    payload: TaskModelRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Switch a task's model; the next message uses it (ADR 0010 decision 7)."""
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).set_model(task_id, payload.model)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data=result)
+
+
+@router.get("/models")
+def list_models(
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    return _envelope(data=_tm(request).models.list_public())
+
+
+@router.post("/models")
+def create_model(
+    payload: ModelCreateRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    try:
+        profile = _tm(request).add_model_profile(
+            name=payload.name,
+            base_url=payload.base_url,
+            model=payload.model,
+            api_key_env=payload.api_key_env,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _envelope(data=_tm(request).models.public_profile(profile.id))
+
+
+@router.put("/models/{model_id}")
+def update_model(
+    model_id: str,
+    payload: ModelUpdateRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    try:
+        _tm(request).update_model_profile(model_id, **payload.model_dump(exclude_none=True))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="model not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _envelope(data=_tm(request).models.public_profile(model_id))
+
+
+@router.delete("/models/{model_id}")
+def delete_model(
+    model_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    try:
+        _tm(request).delete_model_profile(model_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="model not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _envelope(data={"ok": True})
+
+
+@router.post("/models/{model_id}/default")
+def set_default_model(
+    model_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    try:
+        _tm(request).set_default_model_profile(model_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="model not found")
+    return _envelope(data={"ok": True, "default": model_id})
+
+
+@router.put("/models/{model_id}/key")
+def set_model_key(
+    model_id: str,
+    payload: ModelKeyRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Write-only: a key goes in, only ``key_set`` comes back."""
+    try:
+        _tm(request).set_model_key(model_id, payload.key)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="model not found")
+    store = _tm(request).models
+    return _envelope(
+        data={
+            "ok": True,
+            "key_set": store.key_set(model_id),
+            "key_source": store.key_source(model_id),
+        }
+    )
+
+
+@router.post("/models/{model_id}/test")
+def test_model(
+    model_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    try:
+        result = _tm(request).test_model(model_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="model not found")
     return _envelope(data=result)
 
 

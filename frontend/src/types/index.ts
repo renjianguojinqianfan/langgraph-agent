@@ -162,6 +162,9 @@ export interface ContextCompressedData {
   converged?: boolean;
   context_tokens: number;
   strategy: string;
+  /** Model used for the summary (M1 / ADR 0010); absent on older events. */
+  model?: string;
+  model_profile?: string;
 }
 
 export type TraceMarkerType = "context_compressed";

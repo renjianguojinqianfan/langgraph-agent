@@ -26,6 +26,7 @@ from backend.config import Settings  # noqa: E402
 from backend.core.llm.client import MockLLMClient  # noqa: E402
 from backend.core.tools.registry import build_tools  # noqa: E402
 from backend.services.event_bus import EventBus  # noqa: E402
+from backend.services.model_store import ModelStore  # noqa: E402
 from backend.services.persistence import Persistence  # noqa: E402
 from backend.services.task_manager import TaskManager  # noqa: E402
 from backend.tests.conftest import make_settings  # noqa: E402
@@ -50,7 +51,15 @@ def build_manager(settings: Settings) -> tuple[TaskManager, EventBus]:
         final_answer="I created hello.txt with the requested content.",
     )
     tools = build_tools(settings)
-    return TaskManager(settings, eb, persistence, llm_client=mock, tools=tools), eb
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=tools,
+        model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
+    )
+    return tm, eb
 
 
 def main(settings: Settings | None = None) -> int:

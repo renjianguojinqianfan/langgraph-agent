@@ -109,10 +109,10 @@ class OpenAICompatibleClient(LLMClient):
                 yield LLMResponse(content=content, tool_calls=tool_calls)
 
 
+# M1 / ADR 0010: DeepSeek is the only built-in preset. Other OpenAI-compatible
+# hosts are configured per profile with an explicit base_url.
 _PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
-    "openai": {"base_url": "https://api.openai.com/v1"},
     "deepseek": {"base_url": "https://api.deepseek.com/v1"},
-    "ollama": {"base_url": "http://localhost:11434/v1"},
 }
 
 
@@ -139,8 +139,13 @@ def create_llm_client(settings: Settings) -> LLMClient:
         logger.info("Using MockLLMClient (use_mock_llm=True)")
         return make_default_mock_client()
 
-    preset = _PROVIDER_PRESETS.get(settings.llm_provider, {})
-    base_url = settings.llm_base_url or preset.get("base_url", "https://api.openai.com/v1")
+    preset = _PROVIDER_PRESETS.get(settings.llm_provider)
+    if preset is None and not settings.llm_base_url:
+        logger.warning(
+            "llm_provider %r has no preset; falling back to DeepSeek (set llm_base_url for a custom host)",
+            settings.llm_provider,
+        )
+    base_url = settings.llm_base_url or _PROVIDER_PRESETS["deepseek"]["base_url"]
     api_key = settings.llm_api_key
     model = settings.llm_model
     if not api_key:

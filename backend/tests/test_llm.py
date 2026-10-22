@@ -104,13 +104,6 @@ def test_factory_returns_mock_when_use_mock_llm_true():
     assert isinstance(client, MockLLMClient)
 
 
-def test_factory_returns_openai_client_for_openai_provider():
-    s = Settings(use_mock_llm=False, llm_provider="openai", llm_base_url="", llm_api_key="sk-test")
-    client = create_llm_client(s)
-    assert isinstance(client, OpenAICompatibleClient)
-    assert "api.openai.com" in client.base_url
-
-
 def test_factory_returns_openai_client_for_deepseek_provider():
     s = Settings(use_mock_llm=False, llm_provider="deepseek", llm_base_url="", llm_api_key="sk-test")
     client = create_llm_client(s)
@@ -118,11 +111,12 @@ def test_factory_returns_openai_client_for_deepseek_provider():
     assert "deepseek" in client.base_url
 
 
-def test_factory_returns_openai_client_for_ollama_provider():
+def test_factory_without_a_preset_falls_back_to_deepseek():
+    # M1: DeepSeek is the only built-in preset; openai / ollama are gone.
     s = Settings(use_mock_llm=False, llm_provider="ollama", llm_base_url="", llm_api_key="")
     client = create_llm_client(s)
     assert isinstance(client, OpenAICompatibleClient)
-    assert "11434" in client.base_url  # local Ollama default port
+    assert "deepseek" in client.base_url
 
 
 def test_factory_uses_explicit_base_url_when_provided():

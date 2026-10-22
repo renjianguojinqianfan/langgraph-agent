@@ -2,7 +2,7 @@
 
 > 本文件是**词汇表入口**，不是第二份词汇表。定义型权威在 `backend/core/agent/state.py`
 > （状态字段与节点名，图拓扑见 `backend/core/agent/graph.py`）与 `AGENTS.md`「跨任务安全边界」表；
-> 已定居决策在 `docs/adr/`（现役 0001 / 0002（部分退役）/ 0008 / 0009；0003 随 C2 退役，0004 随 C5 退役，0005–0007 随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
+> 已定居决策在 `docs/adr/`（现役 0001 / 0002（部分退役）/ 0008 / 0009 / 0010；0003 随 C2 退役，0004 随 C5 退役，0005–0007 随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
 > diagnosing-bugs / wait-what / domain-modeling / triage …）读完本文件，按指针去读权威源。
 > 单上下文仓库：无 `GLOSSARY-MAP.md`。
 
@@ -12,7 +12,7 @@
 |---|---|
 | 节点 / 状态字段术语的定义 | `backend/core/agent/state.py`（节点名见 `graph.py`） |
 | 硬规则与边界不变量 | `AGENTS.md`「跨任务安全边界」表 |
-| 已定居的决策与理由 | `docs/adr/0001`–`0009`（0003 随 C2 退役；0004 随 C5 退役；0005–0007 随 0008 退役，均保留历史） |
+| 已定居的决策与理由 | `docs/adr/0001`–`0010`（0003 随 C2 退役；0004 随 C5 退役；0005–0007 随 0008 退役，均保留历史） |
 | 计划 / 执行两模式、停下、交付 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（决策 1–8） |
 | 技能组配置（tracker / 标签 / 本文档的消费规则） | `docs/agents/` 三件套 |
 
@@ -25,7 +25,8 @@
 「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用（`round_steps` 按步计预算）。一次 `agent` 调用返回时没有工具调用，这一轮就结束（停下，决策 4）。
 「续说」= 停下后 `POST /api/tasks/{id}/messages`，沿同一 `thread_id` / checkpoint 接着跑，不是重开任务（决策 1）。
 「交付」= 停下时人去看工作区里的文件，不是新状态（决策 8）。
-运行时概念：`checkpoint` / `resume` / `workspace`（任务目录）/ 运行上下文 / 两层注入。
+运行时概念：`checkpoint` / `resume` / `workspace`（任务目录）/ 运行上下文 / 两层注入 / 模型配置。
+「模型配置」（ADR 0010 决策 7）= `data/models.json` 里的一套 OpenAI 兼容配置（id、名称、地址、模型名、环境变量名、是否预设）；`Task.model` 存配置 id，空 = 全局默认；取 Key 顺序 = 粘贴（`~/.qianfan/credentials.json`）> 该配置的环境变量，接口只回 `key_set` / `key_source`（pasted / env / none）；预设只有 DeepSeek。
 工作区：`Task.workspace`（绝对路径，存储前用 `normalize_workspace` 解析 `~`、相对路径、`..` 与符号链接；比较用 `workspace_key`，Windows 上再折叠盘符大小写与斜杠方向，所以同一目录的不同写法过滤结果一致）。新建任务取页面 `?dir=`，缺省为后台启动目录；旧任务补 `data/artifacts`。文件工具、`bash`、`load_skill` 与注入块都从运行上下文（`backend/core/runtime_context.py`）取这个目录；子代理继承父任务的目录（ADR 0010 决策 1）。
 任务：`thread_id`（= task_id，resume 与续说寻址恒等）；工作区文件列表 = 任务目录里按 `.gitignore` 可见的文件（C5，无产物账本）。
 工具调用状态：`pending | success | failed | skipped`——只有后三是终态（`nodes.py` 的 `TERMINAL_TOOL_CALL_STATUSES`，#100）；`pending` 未收口即 `dangling tool call`（消息面也没有配对的 `role: tool` 回答）。

@@ -237,12 +237,13 @@ class SubAgentExecutor:
             result = future.result(timeout=self.settings.subagent_timeout_sec)
         except Exception as exc:  # timeout / worker crash
             self._request_worker_stop(future, spec)
-            logger.warning("subtask %s aborted: %s", spec.subtask_id, exc)
+            message = self.tm.redact(f"subtask timeout or worker error: {exc}")
+            logger.warning("subtask %s aborted: %s", spec.subtask_id, message)
             result = SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="failed",
-                error=f"subtask timeout or worker error: {exc}",
+                error=message,
             )
         if parent:
             if result.status == "completed":
@@ -253,7 +254,7 @@ class SubAgentExecutor:
                         "subtask_id": result.subtask_id,
                         "name": result.name,
                         "status": result.status,
-                        "summary": result.summary,
+                        "summary": self.tm.redact(result.summary),
                         "artifacts": list(result.artifacts),
                     },
                 )
@@ -264,7 +265,7 @@ class SubAgentExecutor:
                     {
                         "subtask_id": result.subtask_id,
                         "name": result.name,
-                        "error": result.error or "unknown error",
+                        "error": self.tm.redact(result.error or "unknown error"),
                     },
                 )
         return result
@@ -357,14 +358,25 @@ class SubAgentExecutor:
             # is imported first (the uvicorn entry point).
             from .nodes import AgentRuntime
 
+            parent_id = spec.parent_task_id or spec.subtask_id
+            # The parent's round owns the model: a switch made while the parent
+            # is running must not leak into a child spawned by that round.
+            pinned = self.tm.round_llm_for(parent_id)
+            if pinned is not None:
+                model_profile, llm = pinned
+            else:
+                parent_task = self.tm.get_task(parent_id)
+                model_profile = self.tm.model_id_for(parent_task)
+                llm = self.tm.llm_for_task_id(parent_id)
             runtime = AgentRuntime(
                 task_id=spec.subtask_id,
                 task_manager=self.tm,
-                llm=self.tm._llm,
+                llm=llm,
                 tools=tools,
                 tool_schemas=schemas,
                 max_steps=self.settings.max_steps,
                 parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
+                model_profile=model_profile,
             )
             from .graph import build_graph
 
@@ -436,20 +448,22 @@ class SubAgentExecutor:
             # A refusal the face can never honor (bad tier, out-of-tier name,
             # unmounted tier member) never started a run: no LLM call, no tool,
             # no side effect.
-            logger.warning("subtask %s refused: %s", spec.subtask_id, exc)
+            message = self.tm.redact(str(exc))
+            logger.warning("subtask %s refused: %s", spec.subtask_id, message)
             return SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="failed",
-                error=str(exc),
+                error=message,
             )
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("subtask %s crashed", spec.subtask_id)
+            message = self.tm.redact(str(exc))
+            logger.error("subtask %s crashed: %s", spec.subtask_id, message)
             return SubTaskResult(
                 subtask_id=spec.subtask_id,
                 name=spec.name,
                 status="failed",
-                error=str(exc),
+                error=message,
             )
         finally:
             reset_runtime_context(tokens)
