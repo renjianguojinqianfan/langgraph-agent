@@ -1,9 +1,9 @@
 """Child-process environment helper.
 
 The bash tool runs commands with this process's account privileges — it is not
-a sandbox (README「这不是安全边界」). What survives here is the one boundary the
-tool does keep: the child sees only :data:`ENV_ALLOWLIST`, so API keys and
-provider endpoints never leak into a command.
+a sandbox (README「这不是安全边界」). The allowlist filters what the child
+*inherits*; it is not a secret boundary — files, and on Linux
+``/proc/$PPID/environ``, remain readable by the same account.
 """
 
 from __future__ import annotations

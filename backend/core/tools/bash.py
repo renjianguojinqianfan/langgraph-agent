@@ -10,16 +10,29 @@ The working directory is ``Settings.artifacts_path`` (the workspace root the
 file tools use). Output is captured to a bounded tail buffer rather than
 ``subprocess.run``'s full copy: a runaway command must not be able to exhaust
 memory, and the tail is what the next model turn needs.
+
+Background processes (S1 / #148 F3): the shell's descendants are tracked as a
+POSIX process group or a Windows Job Object, so a stop can reap them even after
+the shell itself exited. A command that returns leaves its background children
+running; its pumps keep draining the inherited pipes (bounded by the tail
+buffer) until the reaper sees the tree end, then join and close them. If the
+task is stopped later, the tool's reaper kills that tree. A
+child that leaves the group/session itself (``setsid``, a self-daemonizing
+service) is outside this control — it is a starting point, not a sandbox.
 """
 
 from __future__ import annotations
 
+import contextvars
+import ctypes
 import os
+import select
 import shutil
 import signal
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
@@ -38,6 +51,10 @@ MIN_TIMEOUT_SEC = 1
 MAX_TIMEOUT_SEC = 600
 #: How often the run loop checks stop / timeout / process exit.
 POLL_INTERVAL_SEC = 0.1
+#: How long to keep draining inherited pipes after the shell exits (F3).
+DRAIN_SEC = 0.4
+#: How often the background reaper checks its tracked process trees.
+REAP_INTERVAL_SEC = 0.1
 
 
 class _TailBuffer:
@@ -158,63 +175,196 @@ def find_bash(
     return None
 
 
-def _pump(pipe: Any, sink: _TailBuffer) -> None:
-    """Drain ``pipe`` into ``sink`` until EOF (reader thread body)."""
+def _peek_named_pipe() -> Any:
+    """``PeekNamedPipe`` with the right prototypes (Windows only)."""
+    loader: Any = getattr(ctypes, "WinDLL")
+    kernel32 = loader("kernel32", use_last_error=True)
+    peek = kernel32.PeekNamedPipe
+    peek.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_void_p,
+    ]
+    peek.restype = ctypes.c_int
+    return peek
+
+
+def _pump_posix(fd: int, sink: _TailBuffer, stop: threading.Event) -> None:
+    while not stop.is_set():
+        try:
+            ready, _, _ = select.select([fd], [], [], 0.1)
+        except (OSError, ValueError):
+            return
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 8192)
+        except OSError:
+            return
+        if not chunk:
+            return
+        sink.feed(chunk)
+
+
+def _pump_windows(fd: int, sink: _TailBuffer, stop: threading.Event) -> None:
+    import msvcrt
+
+    peek = _peek_named_pipe()
+    get_osfhandle: Any = getattr(msvcrt, "get_osfhandle")
+    handle = get_osfhandle(fd)
+    while not stop.is_set():
+        available = ctypes.c_uint32()
+        if not peek(handle, None, 0, None, ctypes.byref(available), None):
+            return
+        if not available.value:
+            stop.wait(0.05)
+            continue
+        try:
+            chunk = os.read(fd, min(8192, int(available.value)))
+        except OSError:
+            return
+        if not chunk:
+            return
+        sink.feed(chunk)
+
+
+def _pump(pipe: Any, sink: _TailBuffer, stop: threading.Event) -> None:
+    """Drain ``pipe`` into ``sink`` without blocking on inherited handles.
+
+    A background child can keep the write end open after the shell exits;
+    blocking ``read`` would then hang the reader thread. Both branches poll.
+    """
     try:
-        while True:
-            chunk = pipe.read(8192)
-            if not chunk:
-                break
-            sink.feed(chunk)
+        fd = pipe.fileno()
+        if os.name == "nt":
+            _pump_windows(fd, sink, stop)
+        else:
+            _pump_posix(fd, sink, stop)
     except Exception:  # pragma: no cover - pipe closed under us at teardown
         pass
-    finally:
-        try:
-            pipe.close()
-        except Exception:  # pragma: no cover - defensive
-            pass
 
 
-def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
-    """Kill the process and all of its descendants, then reap it.
-
-    ``Popen.kill`` only reaches the direct child; a shell command routinely
-    leaves grandchildren behind. On Windows ``taskkill /T`` walks the parent
-    chain; elsewhere the child was started in its own session and the whole
-    process group is signalled.
-    """
-    if proc.poll() is not None:
-        return
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                check=False,
-            )
-        except Exception:  # pragma: no cover - taskkill missing / wedged
-            logger.warning("taskkill failed for pid %s", proc.pid, exc_info=True)
-    else:
-        # getattr: Windows typings omit the POSIX process-group API.
-        killpg = getattr(os, "killpg", None)
-        getpgid = getattr(os, "getpgid", None)
-        sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
-        try:
-            if killpg is not None and getpgid is not None:
-                killpg(getpgid(proc.pid), sigkill)
-            else:  # pragma: no cover - non-POSIX fallback
-                proc.kill()
-        except ProcessLookupError:
-            pass
-        except Exception:  # pragma: no cover - defensive
-            logger.warning("killpg failed for pid %s", proc.pid, exc_info=True)
+def _taskkill(pid: int) -> None:
+    taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:  # pragma: no cover - last resort
-        proc.kill()
-        proc.wait(timeout=5)
+        subprocess.run(
+            [str(taskkill), "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except Exception:  # pragma: no cover - taskkill missing / wedged
+        logger.warning("taskkill failed for pid %s", pid, exc_info=True)
+
+
+class _ProcessContainer:
+    """One shell and its descendants: a POSIX process group or a Windows job."""
+
+    def __init__(self, proc: subprocess.Popen[bytes], job: Any = None) -> None:
+        self.proc = proc
+        self.job = job
+        self.stop_event = threading.Event()
+        self.pipes: list[Any] = []
+        self.pumps: list[threading.Thread] = []
+
+    def attach_pipes(self, pipes: list[Any], pumps: list[threading.Thread]) -> None:
+        """The container owns the read ends so a surviving child keeps its pumps."""
+        self.pipes = pipes
+        self.pumps = pumps
+
+    def alive(self) -> bool:
+        if self.job is not None:
+            return bool(self.job.active_processes() > 0)
+        if os.name == "nt":
+            return self.proc.poll() is None
+        killpg: Any = getattr(os, "killpg")
+        try:
+            killpg(self.proc.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except Exception:  # pragma: no cover - defensive
+            return False
+
+    def terminate(self) -> None:
+        """Kill the tree, including children left behind by an exited shell."""
+        if self.job is not None:
+            self.job.terminate()
+        elif os.name == "nt":
+            if self.proc.poll() is None:
+                _taskkill(self.proc.pid)
+        else:
+            killpg: Any = getattr(os, "killpg")
+            sigkill: Any = getattr(signal, "SIGKILL", signal.SIGTERM)
+            try:
+                killpg(self.proc.pid, sigkill)
+            except ProcessLookupError:
+                pass
+            except Exception:  # pragma: no cover - defensive
+                logger.warning("killpg failed for pid %s", self.proc.pid, exc_info=True)
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover - last resort
+            self.proc.kill()
+            try:
+                self.proc.wait(timeout=5)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def stop_pumps(self) -> None:
+        self.stop_event.set()
+        for pump in self.pumps:
+            pump.join(timeout=0.5)
+        for pipe in self.pipes:
+            try:
+                pipe.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        self.pipes = []
+        self.pumps = []
+
+    def close(self) -> None:
+        self.stop_pumps()
+        if self.job is not None:
+            self.job.close()
+            self.job = None
+
+
+@dataclass(eq=False)
+class _BackgroundProcess:
+    container: _ProcessContainer
+    context: contextvars.Context
+    checker: Callable[[], bool]
+    task_id: str
+
+
+_CREATE_SUSPENDED = 0x00000004
+
+
+def _make_job() -> Any:
+    """A Windows Job Object, or None when unavailable (POSIX / OS failure)."""
+    if os.name != "nt":
+        return None
+    try:
+        from ...utils.winjob import WindowsJob
+
+        return WindowsJob()
+    except Exception:  # pragma: no cover - OS-facing
+        logger.warning(
+            "Windows Job Object unavailable; background tree cleanup falls back to taskkill",
+            exc_info=True,
+        )
+        return None
+
+
+def _never_stopped() -> bool:
+    return False
 
 
 @register
@@ -250,6 +400,9 @@ class BashTool(BaseTool):
         super().__init__(settings)
         #: Wired by TaskManager so a long command can observe a task stop.
         self.stop_checker: Optional[Callable[[], bool]] = None
+        self._background: list[_BackgroundProcess] = []
+        self._background_lock = threading.Lock()
+        self._reaper: Optional[threading.Thread] = None
 
     @property
     def _settings(self) -> Settings:
@@ -282,11 +435,78 @@ class BashTool(BaseTool):
             logger.warning("bash stop checker failed", exc_info=True)
             return False
 
+    def kill_background(self, task_id: str) -> int:
+        """Kill background trees left by a call of ``task_id``; returns the count.
+
+        Called by ``TaskManager.stop`` so a parked task's background processes
+        are reaped too — the stop flag alone only reaches a live run.
+        """
+        with self._background_lock:
+            entries = [entry for entry in self._background if entry.task_id == task_id]
+            for entry in entries:
+                self._background.remove(entry)
+        for entry in entries:
+            entry.container.terminate()
+            entry.container.close()
+        return len(entries)
+
+    def _register_background(
+        self,
+        container: _ProcessContainer,
+        context: contextvars.Context,
+        checker: Callable[[], bool],
+        task_id: str,
+    ) -> None:
+        with self._background_lock:
+            self._background.append(
+                _BackgroundProcess(container, context, checker, task_id)
+            )
+            if self._reaper is None or not self._reaper.is_alive():
+                self._reaper = threading.Thread(
+                    target=self._reap_background, name="bash-reaper", daemon=True
+                )
+                self._reaper.start()
+
+    def _reap_background(self) -> None:
+        """Kill tracked trees when their task stops; drop them when they end."""
+        while True:
+            with self._background_lock:
+                if not self._background:
+                    self._reaper = None
+                    return
+                entries = list(self._background)
+            finished: list[_BackgroundProcess] = []
+            for entry in entries:
+                try:
+                    stopped = bool(entry.context.run(entry.checker))
+                except Exception:  # pragma: no cover - a broken watcher must not wedge the reaper
+                    stopped = False
+                if stopped:
+                    entry.container.terminate()
+                    finished.append(entry)
+                elif not entry.container.alive():
+                    finished.append(entry)
+            if finished:
+                with self._background_lock:
+                    for entry in finished:
+                        if entry in self._background:
+                            self._background.remove(entry)
+                for entry in finished:
+                    entry.container.close()
+            else:
+                time.sleep(REAP_INTERVAL_SEC)
+
     def run(self, **kwargs: Any) -> ToolResult:
         command = kwargs.get("command", "")
         if not isinstance(command, str) or not command.strip():
             return ToolResult(success=False, error="`command` is required.")
 
+        # Local import: W1 moves this contextvar out of services/snapshots.
+        from ...services.snapshots import get_current_task_id
+
+        stop_context = contextvars.copy_context()
+        stop_checker: Callable[[], bool] = self.stop_checker or _never_stopped
+        task_id = get_current_task_id() or ""
         settings = self._settings
         bash = find_bash(settings)
         if bash is None:
@@ -317,22 +537,61 @@ class BashTool(BaseTool):
             stderr=subprocess.PIPE,
             shell=False,
         )
-        if os.name != "nt":
+        job = _make_job()
+        if job is not None:
+            # Start suspended so the shell cannot spawn before it joins the job.
+            popen_kwargs["creationflags"] = _CREATE_SUSPENDED
+        elif os.name != "nt":
             # Own session -> the whole tree shares one process group.
             popen_kwargs["start_new_session"] = True
 
         try:
             proc = subprocess.Popen([bash, "-c", command], **popen_kwargs)
         except Exception as exc:
+            if job is not None:
+                job.close()
             logger.exception("bash failed to start")
             return ToolResult(success=False, error=f"failed to start bash: {exc}")
+
+        if job is not None:
+            assigned = True
+            try:
+                job.assign(proc)
+            except Exception:  # pragma: no cover - job assignment is OS-facing
+                assigned = False
+                logger.warning("job assignment failed; background cleanup is best effort", exc_info=True)
+            try:
+                job.resume(proc)
+            except Exception as exc:  # pragma: no cover - OS-facing
+                job.close()
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                return ToolResult(success=False, error=f"failed to resume bash: {exc}")
+            if not assigned:
+                job.close()
+                job = None
+        container = _ProcessContainer(proc, job)
 
         stdout = _TailBuffer(MAX_OUTPUT_BYTES)
         stderr = _TailBuffer(MAX_OUTPUT_BYTES)
         pumps = [
-            threading.Thread(target=_pump, args=(proc.stdout, stdout), daemon=True),
-            threading.Thread(target=_pump, args=(proc.stderr, stderr), daemon=True),
+            threading.Thread(
+                target=_pump,
+                args=(proc.stdout, stdout, container.stop_event),
+                name="bash-pump-out",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=_pump,
+                args=(proc.stderr, stderr, container.stop_event),
+                name="bash-pump-err",
+                daemon=True,
+            ),
         ]
+        container.attach_pipes([proc.stdout, proc.stderr], pumps)
         for pump in pumps:
             pump.start()
 
@@ -344,20 +603,37 @@ class BashTool(BaseTool):
                 break
             if self._stop_requested():
                 stopped = True
-                _kill_tree(proc)
+                container.terminate()
                 break
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_tree(proc)
+                container.terminate()
                 break
             time.sleep(POLL_INTERVAL_SEC)
 
+        # Bounded drain: a background child may hold the write end open. Give
+        # the pumps a short window, then stop them without waiting for EOF.
+        drain_deadline = time.monotonic() + DRAIN_SEC
+        while time.monotonic() < drain_deadline:
+            if not any(pump.is_alive() for pump in pumps):
+                break  # EOF reached: nothing is holding the pipes
+            if not stopped and not timed_out and self._stop_requested():
+                stopped = True
+                container.terminate()
+                break
+            container.stop_event.wait(0.05)
+
+        # A live tree still owns the write ends: leave the pumps running so a
+        # later write does not hit a closed pipe; the reaper closes them.
+        if container.alive():
+            self._register_background(container, stop_context, stop_checker, task_id)
+        else:
+            container.close()
+
         exit_code = proc.poll()
-        if exit_code is None:  # pragma: no cover - _kill_tree reaps, belt and braces
-            proc.kill()
+        if exit_code is None:  # pragma: no cover - terminate reaps, belt and braces
+            container.terminate()
             exit_code = proc.wait(timeout=5)
-        for pump in pumps:
-            pump.join(timeout=5)
 
         out = stdout.text()
         err = stderr.text()
