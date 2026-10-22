@@ -3,14 +3,9 @@
 Wires the :class:`~backend.core.agent.nodes.AgentRuntime` node methods into a
 single loop: ``agent -> (finish | tool) -> (agent | finish)``.
 
-Issue #139 (slice S5, ADR 0008 decision 2) merged ``planner`` / ``executor``
-into **one** ``agent`` node. The task's mode is not a second node: it selects
-the prompt and the tool face inside that node. A round ends when the node
-returns no tool call.
-
-Issue #56 removed the third main-mode node, ``subagent_split``: it dispatched
-subtasks on a keyword match, i.e. a side effect no one had approved. #137
-removed ``reflect``; #138 removed ``risk_scan`` and the ``human_confirm`` gate.
+The topology is one loop with a single ``agent`` node; a task's mode is not a
+second node — it selects the prompt and the tool face inside ``agent``, and a
+round ends when the node returns no tool call (history: ADR 0008).
 
 langgraph 1.x conventions used here (Issue #7 migration; the measurements
 behind each one are in ``docs/migration-langgraph-1x.md``):

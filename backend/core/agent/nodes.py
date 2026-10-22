@@ -635,11 +635,11 @@ class AgentRuntime:
 
             # #70 裁定 A：spawn 路径把子任务的折叠回传回登进图状态（``state["subtasks"]``
             # → ``Task.subtasks``，拷贝行在 ``_finalize_terminal``，前端 SubtaskList 与
-            # REST 字段读的就是它）。生产者随 #56 删入口 B 一起断了，字段自此恒空——
-            # 「看着有、其实没有」的骗人面。只认 ``SubTaskResult.to_dict()`` 的回传
-            # （带 ``subtask_id``）：参数校验与 #74 档位拒绝的早退 ``data`` 为 None，
-            # 一次都没派出，不登。completed 与 failed 同登——派出去又失败的子任务
-            # 在面板上是「失败的一条」，不是「暂无子任务」。
+            # REST 字段读的就是它）。#70 后由 spawn 路径重新登记；本块只登真正派出的
+            # 结果。只认 ``SubTaskResult.to_dict()`` 的回传（带 ``subtask_id``）：参数
+            # 校验与 #74 档位拒绝的早退 ``data`` 为 None，一次都没派出，不登。
+            # completed 与 failed 同登——派出去又失败的子任务在面板上是「失败的一条」，
+            # 不是「暂无子任务」。
             if (
                 rec["tool_name"] == "spawn_subagent"
                 and isinstance(rec["output"], dict)

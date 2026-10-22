@@ -4,8 +4,8 @@ The orchestration kernel depends only on :class:`LLMClient`. New providers are
 added by subclassing :class:`LLMClient` (see ``openai_compat.py``). A scripted
 :class:`MockLLMClient` is provided so the whole stack can run offline without
 any API key — this is what the smoke test and the ``use_mock_llm`` flag use, and
-``mock_llm_script_path`` lets a JSON file script that mock instead (#108), which
-is how a confirmation-requiring call reaches the gate with no key configured.
+``mock_llm_script_path`` lets a JSON file script that mock instead (#108), so a
+full tool-call sequence can be replayed offline with no key configured.
 """
 
 from __future__ import annotations

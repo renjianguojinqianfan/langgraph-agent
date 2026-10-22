@@ -6,8 +6,9 @@ These are the precision file tools added under ``docs/archive/roadmap-pawbench.m
 replaced is retired (#17).
 
 Design contract under test:
-* every tool is confined to ``Settings.artifacts_path`` (the sandbox root);
-  reads / writes / edits / listings / searches that escape the root are rejected;
+* every tool is confined to the task workspace (runtime context), falling back
+  to ``Settings.artifacts_path`` outside a run; reads / writes / edits /
+  listings / searches that escape the root are rejected;
 * ``read`` paginates by line (``offset`` / ``limit``) and prefixes 1-based line
   numbers when ``line_numbers`` is on (default) — the P1 "don't blow the context
   on a full read" fix;

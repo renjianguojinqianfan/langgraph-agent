@@ -5,8 +5,8 @@ A minimal Model Context Protocol server over stdio exposing two tools:
 * ``echo(text)``       -> ``TextContent("echo:<text>")``   (self-reported
   read-only: ``readOnlyHint=True``)
 * ``write_file(...)``  -> ``TextContent("wrote:<path>")``  (self-reported
-  destructive: ``destructiveHint=True``, used by the per-call confirmation
-  tests)
+  destructive: ``destructiveHint=True``, used by the danger-annotation tests
+  that pin ``danger_signal``)
 
 The annotations are what issue #57 made the danger judgement read — the server
 reporting them is the point, not the tool names. ``Tool`` carries them straight

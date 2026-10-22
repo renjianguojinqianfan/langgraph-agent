@@ -733,7 +733,7 @@ class _EscalatingSubtaskMock(MockLLMClient):
 
 
 def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(tmp_path, event_bus):
-    """票面验收 a：主任务批准派生后，子任务要不到「写外部系统」的工具，也没留下副作用。"""
+    """票面验收 a：父任务用普通工具调用发起派生后，子任务要不到「写外部系统」的工具，也没留下副作用。"""
     settings = make_settings(tmp_path)
     mock = _EscalatingSubtaskMock()
     tm = make_manager(settings, mock, event_bus=event_bus)
@@ -1095,8 +1095,8 @@ def test_subtask_crash_folds_back_as_failed_and_the_parent_survives(
     """崩掉的子任务只折回成一次失败的工具调用，父任务必须自己收场。
 
     #137 重裁（#46 曾把这里改判成 UNVERIFIED）：验证层退役后不再有机器判决，
-    「零成功却声称完成」照常收尾成 COMPLETED；「不跟着子任务一起崩」这条钉子没动
-    （终态不是 FAILED、也没有异常）。
+    「零成功却声称完成」任务照常停在 INTERRUPTED；「不跟着子任务一起崩」这条钉子
+    没动（终态不是 FAILED、也没有异常）。
     """
     settings = make_settings(tmp_path)
     mock = _EscalatingSubtaskMock()
