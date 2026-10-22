@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""One-command launcher for the LangGraph autonomous-task agent.
+"""Development launcher: FastAPI backend (uvicorn) + Vite (npm run dev).
 
-Starts the FastAPI backend (uvicorn) and the Vite frontend (npm run dev).
+Daily use is the ``qianfan`` command (same-origin build, no hot reload); this
+script is for changing the frontend.
 
 Usage:
     python start.py                 # start both

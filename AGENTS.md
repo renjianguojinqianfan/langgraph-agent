@@ -26,7 +26,7 @@
 | 产物登记语义 | 产物 = 本任务（含子任务）**写出的文件**：只有 `registers_artifact=True` 的工具（现役仅 `write` / `edit`）是产物源，`read` / `ls` / `glob` / `grep` 带的 `path` 与动态包装面一律不登记；去重按「任务内 resolved path」收口在 `add_artifact`。读到同文件不新增产物、重写只一条，都是**定居决策不是 bug**，别照旧直觉「修回去」 | `docs/adr/0004`（判据、影响面与重开条件） |
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
 | 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部覆盖块（`setdefault` 语义）保持原样；SDK **自读**的 LangSmith / LangChain 开关与 Key 另由同文件的 pop 块摘除（#84）——「离线全绿」不靠开发者 shell 恰好没设变量 | `backend/tests/conftest.py` 顶部两块（代码即权威）+ 复现测试 `test_langsmith_offline_guard.py` |
-| 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn / starlette 区间不动 | `requirements.txt` 注释（三包理由 / mcp `--no-deps`） |
+| 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn / starlette 区间不动；`qianfan` 的安装入口只多一个 build 期 setuptools，运行期依赖仍只以 `requirements.txt` 为源，mcp 的 `uvicorn>=0.31.1` 元数据用根目录 `overrides.txt` 覆盖（区间不变） | `requirements.txt` 注释 + `pyproject.toml` 头注 |
 | 真实模型验证 | 发布前 / 换供应商时，**启服务、在网页端手动跑一遍**（CI 不再跑真模型）；README **不记**跑过的时间与模型 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
 | 提交边界 | 副作用可逆或事先说明；提交只含本次意图内的源码与文档（`.env` / `data/` / `frontend/dist` 是本地态）；`push --force` 类默认拒绝 | `.gitignore` + 全局 `~/.agents/AGENTS.md` |
 | 发布与合并惯例 | 功能 / 依赖 / 代码走 PR + CI 全绿；docs 小修可直推；依赖类 PR 先人工评估 | `docs/agents/issue-tracker.md`「Release conventions」 |

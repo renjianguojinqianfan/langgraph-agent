@@ -34,6 +34,9 @@ os.environ.setdefault(
 os.environ.setdefault("CONTEXT_INJECT_ENABLED", "false")  # P1-A′: isolate the injection chain
 os.environ.setdefault("CONTEXT_EVICT_ENABLED", "false")  # T1.4: isolate tool-result eviction
 os.environ.setdefault("SNAPSHOT_ENABLED", "false")  # P1-B: no rollback ledger unless a test opts in
+# C4: a developer's local frontend/dist must not change the app composition
+# (CI has no build output). Tests that need a dist build their own app.
+os.environ.setdefault("FRONTEND_DIST", "_no_frontend_dist_for_tests")
 
 # ── LangSmith tracing is off for the offline suite (Issue #84) ──
 # The block above zeroes *this repo's* settings; it cannot zero what the SDK

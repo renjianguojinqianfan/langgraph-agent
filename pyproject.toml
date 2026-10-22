@@ -1,17 +1,39 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# 质量门禁配置（Issue #7 Phase 2 / spec US11 + US22）
+# 打包 + 质量门禁配置。
 #
-# 本文件只承载 ruff 与 mypy 两个闸门，**不放 [build-system]**：本仓库不是可安装
-# 包（后端由 uvicorn 直接跑源码，镜像只 COPY requirements.txt），加 build 段会让
-# 人误以为能 `pip install .`。同理不放 [tool.pytest.ini_options]——离线套件的
-# 环境隔离靠 backend/tests/conftest.py 顶部的环境变量块，不靠 ini（pytest 只在
-# 本文件含该 table 时才把它当 inifile，因此加这个文件不改 rootdir/收集行为，
-# 已用「加文件前后均 365 passed」验证）。
+# 打包（ADR 0009 决策 10 / ADR 0010）：`[project.scripts] qianfan` 是本仓唯一的
+# 安装入口。运行期依赖只从 requirements.txt 读（[tool.setuptools.dynamic]），避免
+# 两处版本漂移；mcp 声明 `uvicorn>=0.31.1`，与仓库钉的 `uvicorn<0.31` 冲突，安装
+# 时用仓库根的 overrides.txt 覆盖（确切命令见 README「快速开始」）。
+#
+# 门禁：ruff 与 mypy 两个闸门。不放 [tool.pytest.ini_options]——离线套件的环境
+# 隔离靠 backend/tests/conftest.py 顶部的环境变量块，不靠 ini（pytest 只在本文件
+# 含该 table 时才把它当 inifile，因此加这个 table 不改 rootdir/收集行为）。
 #
 # 选取原则：合入时基线全净、不留 ignore 债——下面没有任何 per-file-ignores，
-# 唯一的 mypy override 是 CI 冻结文件（理由写在该段）。每条「刻意不启用」都附了
-# 量过的数字，免得后人把它当成漏配。
+# 没有 mypy override。每条「刻意不启用」都附了量过的数字，免得后人把它当成漏配。
 # ─────────────────────────────────────────────────────────────────────────────
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qianfan"
+version = "0.1.0"
+description = "LangGraph autonomous task agent (local, single user)"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+qianfan = "backend.cli:main"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+exclude = ["backend.tests*"]
 
 [tool.ruff]
 target-version = "py311"   # 与 .python-version、CI setup-python 一致

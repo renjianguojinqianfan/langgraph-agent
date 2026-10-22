@@ -7,9 +7,11 @@ Wires configuration, the event bus, persistence and the task manager into
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .api.routes import router
@@ -78,3 +80,18 @@ def health(request: Request) -> dict:
         "mock_llm": s.use_mock_llm,
         "auth_enabled": s.auth_enabled,  # P1 item 5: frontend login gate
     }
+
+
+def mount_frontend(app: FastAPI, dist: Path) -> bool:
+    """Serve the built frontend at ``/`` when it exists (ADR 0010).
+
+    Registered after every API route so ``/api`` and ``/health`` keep
+    precedence. Returns whether the build output was mounted.
+    """
+    if not (dist / "index.html").is_file():
+        return False
+    app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+    return True
+
+
+mount_frontend(app, settings.frontend_dist_path)
