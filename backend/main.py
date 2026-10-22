@@ -6,6 +6,7 @@ Wires configuration, the event bus, persistence and the task manager into
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -82,6 +83,9 @@ def health(request: Request) -> dict:
         "status": "ok",
         "mock_llm": s.use_mock_llm,
         "auth_enabled": s.auth_enabled,  # P1 item 5: frontend login gate
+        # W2: the launcher's one-time identity, so a second launch can tell
+        # this backend apart from an unrelated program on the same port.
+        "instance": os.environ.get("QIANFAN_INSTANCE", ""),
     }
 
 
