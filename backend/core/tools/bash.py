@@ -6,8 +6,9 @@ a wall-clock timeout and a stop watcher. There is **no sandbox**: the child has
 the same account privileges as this process and the working directory is a
 starting point, not a fence — see README「这不是安全边界」.
 
-The working directory is ``Settings.artifacts_path`` (the workspace root the
-file tools use). Output is captured to a bounded tail buffer rather than
+The working directory is the task's workspace (runtime context, falling back
+to ``Settings.artifacts_path`` outside a run). Output is captured to a bounded
+tail buffer rather than
 ``subprocess.run``'s full copy: a runaway command must not be able to exhaust
 memory, and the tail is what the next model turn needs.
 
@@ -501,8 +502,7 @@ class BashTool(BaseTool):
         if not isinstance(command, str) or not command.strip():
             return ToolResult(success=False, error="`command` is required.")
 
-        # Local import: W1 moves this contextvar out of services/snapshots.
-        from ...services.snapshots import get_current_task_id
+        from ..runtime_context import get_current_task_id, workspace_root
 
         stop_context = contextvars.copy_context()
         stop_checker: Callable[[], bool] = self.stop_checker or _never_stopped
@@ -522,7 +522,7 @@ class BashTool(BaseTool):
             )
 
         timeout = self._resolve_timeout(kwargs.get("timeout"))
-        workdir = settings.artifacts_path
+        workdir = workspace_root(settings)
         try:
             workdir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # pragma: no cover - defensive

@@ -26,11 +26,12 @@
 「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用（`round_steps` 按步计预算）。一次 `agent` 调用返回时没有工具调用，这一轮就结束（停下，决策 4）。
 「续说」= 停下后 `POST /api/tasks/{id}/messages`，沿同一 `thread_id` / checkpoint 接着跑，不是重开任务（决策 1）。
 「交付」= 停下时人去看产物，不是新状态（决策 8）。
-运行时概念：`checkpoint` / `resume` / 沙箱根 / 两层注入。
+运行时概念：`checkpoint` / `resume` / `workspace`（任务目录）/ 运行上下文 / 两层注入。
+工作区：`Task.workspace`（绝对路径，存储前用 `normalize_workspace` 解析 `~`、相对路径、`..` 与符号链接；比较用 `workspace_key`，Windows 上再折叠盘符大小写与斜杠方向，所以同一目录的不同写法过滤结果一致）。新建任务取页面 `?dir=`，缺省为后台启动目录；旧任务补 `data/artifacts`。文件工具、`bash`、`load_skill`、注入块与回滚快照都从运行上下文（`backend/core/runtime_context.py`）取这个目录；子代理继承父任务的目录（ADR 0010 决策 1）。
 任务与产物：`artifact`（产物，ADR-0004：本任务**写出**的文件，仅 `registers_artifact` 工具为源）/ `thread_id`（= task_id，resume 与续说寻址恒等）。
 工具调用状态：`pending | success | failed | skipped`——只有后三是终态（`nodes.py` 的 `TERMINAL_TOOL_CALL_STATUSES`，#100）；`pending` 未收口即 `dangling tool call`（消息面也没有配对的 `role: tool` 回答）。
 危险动作：`policy_rules` 规则表 + `agent` 里那一个钩子；命中 → `skipped` 记录 + `{block, reason}` 回模型（ADR 0008 决策 6）。**默认空表 = 不拦**，它不是安全边界（见 README「这不是安全边界」）。
-注入：`两层注入`（home 层 `AGENTS.md` → 工作区根 `AGENTS.md`；实现 `inject.py`）。
+注入：`两层注入`（home 层 `AGENTS.md` → 任务目录 `AGENTS.md`；实现 `inject.py`）。
 记录：`trace`（系统侧事件/轨迹 JSONL，可回放；**不进** LLM 上下文——压缩留痕里只放指针）——与 `transcript` 是两回事，勿混。
 
 ## 术语澄清（domain-modeling 定居，2026-10-07）

@@ -359,7 +359,7 @@ def test_task_manager_wires_bash_to_the_stop_flag(tmp_path):
     bash = next(t for t in tm._tools if t.name == "bash")
     assert bash.stop_checker is not None
 
-    from backend.services.snapshots import set_current_task_id
+    from backend.core.runtime_context import set_current_task_id
 
     set_current_task_id("task-1")
     try:

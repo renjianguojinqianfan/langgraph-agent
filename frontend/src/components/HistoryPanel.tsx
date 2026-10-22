@@ -19,6 +19,8 @@ export function HistoryPanel() {
   const tasks = useTaskStore((s) => s.tasks);
   const current = useTaskStore((s) => s.currentTaskId);
   const setCurrent = useTaskStore((s) => s.setCurrentTask);
+  const filter = useTaskStore((s) => s.historyFilter);
+  const setFilter = useTaskStore((s) => s.setHistoryFilter);
 
   return (
     <aside className="w-64 shrink-0 bg-panel border-r border-slate-800 flex flex-col">
@@ -29,6 +31,24 @@ export function HistoryPanel() {
           onClick={() => setCurrent(null)}
         >
           + 新建
+        </button>
+      </div>
+      <div className="px-2 py-2 border-b border-slate-800 flex gap-1 text-xs">
+        <button
+          onClick={() => setFilter("current")}
+          className={`px-2 py-1 rounded ${
+            filter === "current" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          当前目录
+        </button>
+        <button
+          onClick={() => setFilter("all")}
+          className={`px-2 py-1 rounded ${
+            filter === "all" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          全部
         </button>
       </div>
       <div className="flex-1 overflow-auto p-2 space-y-1">

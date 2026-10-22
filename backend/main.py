@@ -42,7 +42,10 @@ async def lifespan(app: FastAPI):
     # P1 item 5: token issuer (used by verify_token when auth_enabled=True).
     app.state.auth = TokenIssuer(settings.auth_token, settings.auth_token_ttl_sec)
     app.state.task_manager = TaskManager(
-        settings, app.state.event_bus, app.state.persistence
+        settings,
+        app.state.event_bus,
+        app.state.persistence,
+        default_workspace=Path.cwd(),
     )
     yield
     # P2 item 1: gracefully shut down MCP child processes on app exit so no

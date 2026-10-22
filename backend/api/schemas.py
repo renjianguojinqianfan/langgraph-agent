@@ -109,6 +109,8 @@ class Task(BaseModel):
     id: str
     title: str = ""
     user_input: str = ""
+    #: Absolute, normalized directory the task reads/writes (ADR 0010 decision 1).
+    workspace: str = ""
     status: TaskStatus = TaskStatus.PENDING
     #: Sticky mode (ADR 0008 decision 3): default build, user switches explicitly.
     mode: TaskMode = TaskMode.BUILD
@@ -129,6 +131,8 @@ class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
     input: str
     mode: TaskMode = TaskMode.BUILD
+    #: Page-supplied directory; absent -> the backend's launch directory.
+    workspace: Optional[str] = None
 
 
 class UpdateModeRequest(BaseModel):

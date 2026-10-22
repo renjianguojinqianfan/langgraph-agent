@@ -24,11 +24,17 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...config import Settings
-from ...services.snapshots import get_current_task_id, set_current_task_id
 from ...utils.logging import get_logger
+from ..runtime_context import (
+    get_current_task_id,
+    get_current_workspace,
+    reset_runtime_context,
+    set_runtime_context,
+)
 from .state import AgentState
 
 logger = get_logger("agent.subagent")
@@ -223,7 +229,10 @@ class SubAgentExecutor:
                     "parent_task_id": parent,
                 },
             )
-        future = self._pool.submit(self._exec_one, spec)
+        # Pool threads start with a fresh context: carry the parent's workspace
+        # across the submit so the subtask writes where the parent lives.
+        parent_workspace = get_current_workspace() or Path(self.settings.artifacts_path)
+        future = self._pool.submit(self._exec_one, spec, parent_workspace)
         try:
             result = future.result(timeout=self.settings.subagent_timeout_sec)
         except Exception as exc:  # timeout / worker crash
@@ -300,20 +309,23 @@ class SubAgentExecutor:
         """The declared tier of the parent face (see :func:`resolve_tool_face`)."""
         return resolve_tool_face(self.tm._tools, spec.tier, spec.tools)
 
-    def _exec_one(self, spec: SubTaskSpec) -> SubTaskResult:
+    def _exec_one(
+        self, spec: SubTaskSpec, parent_workspace: Optional[Path] = None
+    ) -> SubTaskResult:
         """Execute one subtask in its own runtime + state + simplified graph.
 
         Internal events are published on the subtask's own EventBus channel
         (``spec.subtask_id``) — they never reach the parent channel.
         """
-        # P1-B: the pool thread starts with a *fresh* context, so the parent task
-        # id must be re-seated or the subtask's file writes would miss the
-        # parent's rollback ledger (Issue #33 拍板 5: 子代理写归主任务账本).
-        # Since #56 every path crosses the pool, spawn_subagent included — which
-        # is why that tool hands the spec an explicit parent id (see
-        # ``SpawnSubagentTool.run``) instead of relying on inheritance.
-        if spec.parent_task_id:
-            set_current_task_id(spec.parent_task_id)
+        # P1-B / W1: the pool thread starts with a *fresh* context, so both the
+        # parent task id (rollback ledger) and the parent workspace must be
+        # re-seated. Since #56 every path crosses the pool, spawn_subagent
+        # included — which is why that tool hands the spec an explicit parent id
+        # instead of relying on inheritance.
+        tokens = set_runtime_context(
+            spec.parent_task_id,
+            parent_workspace or Path(self.settings.artifacts_path),
+        )
         try:
             state: AgentState = {
                 "task_id": spec.subtask_id,
@@ -420,8 +432,6 @@ class SubAgentExecutor:
                 else:
                     for p in unique:
                         try:
-                            from pathlib import Path
-
                             path_obj = Path(p)
                             if path_obj.exists():
                                 self.tm.add_artifact(spec.parent_task_id, path_obj)
@@ -475,3 +485,5 @@ class SubAgentExecutor:
                 status="failed",
                 error=str(exc),
             )
+        finally:
+            reset_runtime_context(tokens)

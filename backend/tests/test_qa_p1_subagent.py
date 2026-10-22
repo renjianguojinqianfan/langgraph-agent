@@ -32,7 +32,7 @@ from backend.core.agent.subagent import (
     tier_face_names,
 )
 from backend.core.llm.client import LLMResponse, MockLLMClient
-from backend.services.snapshots import set_current_task_id
+from backend.core.runtime_context import set_current_task_id
 from backend.tests.conftest import make_manager, make_settings
 from backend.tests.test_graph import _run_until_done
 

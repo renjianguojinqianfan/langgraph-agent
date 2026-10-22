@@ -17,9 +17,10 @@ Design rules (Issue #34 拍板 12):
   follows it (:func:`capture_before_image` returns False and logs);
 * **undoable in data** — restoring first photographs the files' current state
   into ``retention/`` (the v2 "undo the undo" entry point reads these);
-* **sandbox-root boundary** — only paths inside ``Settings.artifacts_path`` are
-  captured or replayed; ledger entries pointing elsewhere are skipped, so a
-  tampered ledger cannot write outside the sandbox.
+* **workspace-root boundary** — only paths inside the current task's workspace
+  (runtime context; ``Settings.artifacts_path`` outside a run) are captured or
+  replayed; ledger entries pointing elsewhere are skipped, so a tampered ledger
+  cannot write outside that directory.
 
 Layout::
 
@@ -38,12 +39,12 @@ import json
 import shutil
 import threading
 import time
-from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import Settings
+from ..core.runtime_context import get_current_task_id, workspace_root
 from ..utils.logging import get_logger
 
 logger = get_logger("services.snapshots")
@@ -52,26 +53,11 @@ LEDGER_NAME = "ledger.jsonl"
 RETENTION_DIR = "retention"
 RETENTION_LEDGER = "retention.jsonl"
 
-# Task id owned by the current worker thread. Set at the TaskManager worker
-# entry points (run / _resume_run) and re-seated by SubAgentExecutor._exec_one,
-# because pool threads start with a fresh context. A write tool with no task
-# binding is simply not captured — never an error.
-_current_task_id: ContextVar[Optional[str]] = ContextVar("snapshot_task_id", default=None)
 
 # One lock for every ledger mutation: subtasks may run on parallel pool threads
 # and capture into the same task ledger, so seq allocation and the backup
 # filename derived from it must never collide.
 _lock = threading.Lock()
-
-
-def set_current_task_id(task_id: Optional[str]) -> None:
-    """Bind (``None`` = clear) the capturing task on the current thread."""
-    _current_task_id.set(task_id or None)
-
-
-def get_current_task_id() -> Optional[str]:
-    """Return the task id writes on this thread are accounted to."""
-    return _current_task_id.get()
 
 
 def _now() -> str:
@@ -87,10 +73,10 @@ def _under_root(candidate: Path, root: Path) -> bool:
     return candidate == root or root in candidate.parents
 
 
-def _relative_in_sandbox(path: Path, settings: Settings) -> Optional[str]:
-    """Return the POSIX sandbox-relative path, or None when outside the root."""
+def _relative_in_sandbox(path: Path, root: Path) -> Optional[str]:
+    """Return the POSIX root-relative path, or None when outside the root."""
     try:
-        root = settings.artifacts_path.resolve()
+        root = Path(root).resolve()
         candidate = Path(path).resolve()
     except Exception:
         return None
@@ -160,7 +146,7 @@ def capture_before_image(path: Path, *, settings: Settings | None = None) -> boo
     task_id = get_current_task_id()
     if not task_id:
         return False
-    rel = _relative_in_sandbox(path, settings)
+    rel = _relative_in_sandbox(path, workspace_root(settings))
     if rel is None:
         return False
     target = Path(path)
@@ -252,7 +238,9 @@ def _replay_entry(target: Optional[Path], task_dir: Path, entry: Dict[str, Any])
         logger.warning("replay of %s failed (%s: %s)", rel, type(exc).__name__, exc)
 
 
-def restore_task(task_id: str, *, settings: Settings) -> Dict[str, Any]:
+def restore_task(
+    task_id: str, *, settings: Settings, workspace: Optional[Path] = None
+) -> Dict[str, Any]:
     """Replay the ledger backwards: the sandbox returns to its pre-task state.
 
     Whole-task granularity (拍板 10): every file the task touched ends at the
@@ -268,7 +256,7 @@ def restore_task(task_id: str, *, settings: Settings) -> Dict[str, Any]:
     if not entries:
         return result
 
-    root = settings.artifacts_path.resolve()
+    root = (Path(workspace) if workspace is not None else settings.artifacts_path).resolve()
     # De-duplicate by path in first-write order and confine ONCE: retention,
     # the before/after digests and the replay all use the same resolved target,
     # and an entry that escapes the sandbox is dropped here — before anything

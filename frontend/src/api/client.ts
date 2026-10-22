@@ -65,8 +65,8 @@ export const createTask = (body: CreateTaskRequest) =>
     body: JSON.stringify(body),
   });
 
-export const listTasks = (limit = 50) =>
-  req<{ tasks: Task[] }>(`/tasks?limit=${limit}`);
+export const listTasks = (limit = 50, dir = "current") =>
+  req<{ tasks: Task[] }>(`/tasks?limit=${limit}&dir=${encodeURIComponent(dir)}`);
 
 export const getTask = (id: string) => req<Task>(`/tasks/${id}`);
 

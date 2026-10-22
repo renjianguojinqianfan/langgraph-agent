@@ -58,6 +58,8 @@ export interface Task {
   id: string;
   title: string;
   user_input: string;
+  /** Absolute directory this task reads/writes (ADR 0010). */
+  workspace: string;
   status: TaskStatus;
   mode: TaskMode;
   steps: StepRecord[];
@@ -107,6 +109,8 @@ export interface CreateTaskRequest {
   title?: string;
   input: string;
   mode?: TaskMode;
+  /** Page-supplied directory (`?dir=`); absent -> backend launch directory. */
+  workspace?: string;
 }
 
 // --- P1-B: workspace rollback (POST /api/tasks/{id}/rollback) ---

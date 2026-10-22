@@ -3,6 +3,7 @@ import { createTask, getTask, putMode, sendMessage } from "../api/client";
 import { useTaskStore } from "../store/taskStore";
 import { TaskMode } from "../types";
 import { ModeSwitch } from "./ModeSwitch";
+import { currentDir } from "../workspace";
 
 /** FastAPI error bodies carry `{detail}`; the normal envelope carries `message`. */
 function detailText(r: unknown): string | undefined {
@@ -60,7 +61,11 @@ export function InputBar() {
     setNote(null);
     try {
       if (!task) {
-        const res = await createTask({ input, mode: draftMode });
+        const res = await createTask({
+          input,
+          mode: draftMode,
+          workspace: currentDir() ?? undefined,
+        });
         const id = res.data?.task_id;
         if (id) {
           setCurrent(id);

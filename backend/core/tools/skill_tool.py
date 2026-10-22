@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from ...config import Settings, get_settings
 from ..agent.inject import SKILLS_LAYER_SUBPATH, SkillEntry, discover_skills
+from ..runtime_context import workspace_root
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -65,7 +66,7 @@ class LoadSkillTool(BaseTool):
 
     def _resolve_sandbox(self) -> Path:
         settings = self.settings or get_settings()
-        return Path(settings.artifacts_path).resolve()
+        return workspace_root(settings).resolve()
 
     def run(self, **kwargs: Any) -> ToolResult:
         name = str(kwargs.get("name") or "").strip()

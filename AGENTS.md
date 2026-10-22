@@ -10,7 +10,7 @@
 - **最简 agent 一章（pi 式工具面、计划文件、一条命令启动）**：[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)，切片 C1–C7 见 `docs/capability-registry-rescope.md` §0.9。ADR 0009 是章节目标：现役以下面的「跨任务安全边界」表 + 代码为准，直到对应切片合并。
 - **日常形态补充（启动目录即工作区、共用一个后台、多套模型配置）**：[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)，C4 起的切片重排见 `docs/specs/qianfan-daily-form-plan.md` §4（spec #166）。同样以下表 + 代码为准，直到对应切片合并。
 - **本文件面向外部开发 agent**（改这个仓库时读）。
-- **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 工作区根 `AGENTS.md`（= 沙箱根）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py`。
+- **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md`（`Task.workspace`；旧任务为 `data/artifacts`）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py` + `backend/core/runtime_context.py`。
 
 ## 跨任务安全边界（不变量）
 

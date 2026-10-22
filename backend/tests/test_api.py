@@ -52,7 +52,14 @@ def client(tmp_path):
         ],
         final_answer="Created api_out.txt.",
     )
-    tm = TaskManager(settings, eb, persistence, llm_client=mock, tools=build_tools(settings))
+    tm = TaskManager(
+        settings,
+        eb,
+        persistence,
+        llm_client=mock,
+        tools=build_tools(settings),
+        default_workspace=settings.artifacts_path,
+    )
 
     with TestClient(app, base_url="http://localhost") as test_client:
         # Inject offline, deterministic components.
