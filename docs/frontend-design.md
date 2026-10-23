@@ -26,13 +26,15 @@
 | 三文字 | `--text-tertiary` | `#8B9097` | 机器事实、时间、计数 |
 | 发丝线 | `--rule` / `--rule-strong` | `rgba(255,255,255,.07)` / `.12` | 行分隔 / 控件环 |
 | 信号 | `--signal-now` | `#4C8DFF` | 仅五处：运行点、发送键、焦点环、链接与行内代码、当前文件 |
+| 蓝底字 | `--text-on-signal` | `#0A0A0B` | 信号蓝底上的字形（发送键），6.18:1 |
 | 状态 | `--state-ok` / `--state-warn` / `--state-danger` | `#3FB97F` / `#D9A441` / `#E5534B` | 状态点与状态词；不做大块底色 |
 
 - 选中态（页签、模式、任务行、文件行）用墨色 + 2px 内嵌脊线；**信号蓝不参与选中**。
 - 光从上方来，只上一级：页 → 栏 → 纸。发丝线只做分隔；无渐变、无辉光、无网格、无装饰边框。
 - 圆角 token：`--radius-sheet 11`、`--radius-dialog 14`、`--radius-well 8`、`--radius-composer 12`、胶囊 999；**行与页签 0**。
+- 状态色分工：`--state-ok` 只用于工具「成功」与产物/成功标记；任务状态用 `--signal-now`（运行）/ `--state-warn`（停下）/ `--state-danger`（失败）/ `--text-tertiary`（启动）。
 
-> **本文值为准**：#54 2026-10-19 段的旧三级文字（`#9BA0A6` / `#63676D`）与 `--rule` .06/.11 作废——旧值在深色底上不足 AA，本文提亮为 `#A6ABB2` / `#8B9097`、`.07` / `.12`。
+> **本文值为准**：旧 `#63676D`（3.26:1）不足 AA；`#9BA0A6` 与 `--rule` .06/.11 一并提亮，是为统一色阶（不改变其对比度结论）。本文用 `#A6ABB2` / `#8B9097`、`.07` / `.12`。
 
 ## 2. 字体与排版
 
@@ -49,7 +51,7 @@
 - 数字一律 `tabular-nums`；用于比较的数字不做截断。
 - 标题 `text-wrap: balance`；正文段落 `text-wrap: pretty`；除标题 `-0.01em` 外不加字距、不拉宽标签、不全大写。
 - 标题层级：页面唯一 `h1`（任务标题）；回答标题 `h2`；计划文档从 `h2` 起（`h3` 小节）；对话框自成一级。
-- **实施前置（依赖）**：Inter / JetBrains Mono 是目标字，未装前用系统栈等效，不静默换成其他字族。`@fontsource/jetbrains-mono` 已批但仓库未装；`react-markdown` + `remark-gfm` 仍待批（#54 §7）——未批前 Markdown 走纯文本兜底并单独报批，不静默加依赖。
+- **实施前置（依赖）**：Inter / JetBrains Mono 是目标字，未装前用系统栈兜底（视觉有差异），不静默换成其他字族。`@fontsource/jetbrains-mono` 已批但仓库未装；`react-markdown` + `remark-gfm` 仍待批（#54 §7）——未批前 Markdown 走纯文本兜底并单独报批，不静默加依赖。
 
 ## 3. 布局与三栏职责
 
@@ -71,15 +73,16 @@
 | 组件 | 规则 |
 |---|---|
 | `TaskHeader` | 标题（15.5、单行截断、`title`）；第二行「模式词 + 工作目录」（mono、截断、`title`）；右侧状态、停止、右栏开关。模型只在 composer。 |
+| `TaskRail` | 左栏：搜索、目录上下文（本目录 / 全部）、任务行（状态点 + 词 + 相对时间）、设置入口；行截断 + `title`。 |
 | `Status` | 单一来源：启动中 / 运行中 / 已停下 / 失败；色点 + 文字双通道；`role=status aria-live=polite`。 |
-| `SubagentStrip` / `Plate` | 平板条（无阴影、发丝分栏）；每张 = 名字 + 状态 + 两个机器事实（状态词 + 产物数；无 token / 耗时）；名字截断 + `title`；点开就地展开详情（摘要 / 产物 / 边界说明）。 |
+| `SubagentStrip` / `Plate` | 平板条（无阴影、发丝分栏）；每张 = 名字 + 状态词（Inter）+ 机器事实（短 id + 产物数，mono；无 token / 耗时）；名字截断 + `title`；点开就地展开详情（摘要 / 产物 / 边界说明）。 |
 | `StepRow` | 行形状（无卡、无圆角）；左 gutter 放状态点；主体 = 一句话 + 右列机器事实；点开原地展开工具行。 |
-| `ToolRow` | 槽底；工具名与参数 mono、可截断 + `title`；结果词只用后端三值：成功 / 失败 / 未执行（原因写进 `error`；不新增 `blocked` 状态）。 |
+| `ToolRow` | 槽底；工具名与参数 mono、可截断 + `title`；结果词只用**终态**三值：成功 / 失败 / 未执行（`success / failed / skipped`；`pending` 是进行中，不改结果词。原因写进 `error`；不新增 `blocked` 状态）。 |
 | `PlanAnchor` | 对话里一行入口：「计划 v3 · 状态」（版本 = `Task.plan_version`；状态词由 `Task.status` 派生，不是计划自己的字段）；点开切右栏计划页；不复制全文。 |
-| `AnswerSheet` | **内容区唯一纸面**（11 圆角、唯一阴影）；头部只放 provenance：模型 = `Task.model` 的档案名，工具次数 = `steps[].tool_calls` 全任务累计（写「累计」，不是本轮），不放「回答」标签；正文 Markdown（标题 / 列表 / 代码 / 行内代码）。 |
-| `Composer` | 模式段 + 模型 chip + 输入 + 发送（蓝底 + 深色字形 `#0A0A0B`，对比度 6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
+| `AnswerSheet` | **内容区唯一纸面**（11 圆角、唯一阴影）；头部只放 provenance：模型 = `Task.model` 的档案名（空则全局默认），工具次数 = `steps[].tool_calls` 全任务累计（写「累计」，不是本轮），不放「回答」标签；正文 Markdown（标题 / 列表 / 代码 / 行内代码）。 |
+| `Composer` | 模式段 + 模型 chip + 输入 + 发送（蓝底 + `--text-on-signal` 字形，6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
 | `FilePane` | 平铺清单由客户端按 `/` 分组；文本预览 ≤200KB；二进制给下载；>2000 条明示截断。 |
-| `PlanPane` | 渲染 Markdown + 标题目录；版本 / 状态徽标；编辑仅「已停下 / 失败」可用并写明原因；保存提示「下一条消息生效」。 |
+| `PlanPane` | 渲染 Markdown + 标题目录；版本 / 状态徽标；**编辑仅「已停下」可用；失败待后端放宽（见 §9）**，未放宽前禁用并写明原因；保存提示「下一条消息生效」。 |
 | `EventPane` | 时间 mono + 类型词 + 摘要；不做可点假象；注明事件只做旁证、状态以快照为准。 |
 | `TraceFace` | 保留现役 `TraceTab` 能力（`GET /trace`，NDJSON 回放 / 导出）；入口在右栏事件页底部，打开时中栏临时全宽显示并带返回；本期不重构。 |
 | `SettingsDialog` | 原生 `<dialog>`（焦点圈定 / Esc / 归还焦点）；模型 CRUD 与 Key 状态；删除 / 清除 Key 二次确认。 |
@@ -179,3 +182,4 @@
 
 - 2026-10-23：创建。来自 #54 设计 grilling；原型经六个前端设计 skill（frontend-design / web-design-guidelines / accessibility / break-ui / emil-design-eng / performance）打磨后沉淀。
 - 2026-10-23：按 PR #192 评审修订：`PUT /plan` 放宽列入 §9、provenance 来源点名、Trace 归宿（`TraceFace`）、状态改为「未交付」+ 现役→目标组件映射、发送键对比度（深色字形）、ToolRow 三值、状态色点列、纸面口径（对话框不算纸面）、#54 旧 token 作废、字体/Markdown 依赖登记、原型指针改指存档分支。
+- 2026-10-23：按 PR #192 第二轮复审修订：PlanPane 只给「已停下」编辑（失败待 §9）、SubagentStrip 状态词归 Inter、机器事实改短 id + 产物数、AA 旧值依据纠正（`#63676D` 不足、`#9BA0A6` 为统一色阶）、`--text-on-signal` token、`TaskRail` 组件规则、`--state-ok` 用途收窄、ToolRow 改「终态三值」、依赖措辞改「兜底」、AnswerSheet 补「空则全局默认」。
