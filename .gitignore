@@ -56,4 +56,6 @@ logs/
 .qoderignore
 # 会话交接文档（handoff）：一次性工作稿，不入库；复盘 retros 仍跟踪
 .agents/handoffs/
+# 设计 / 调研草稿（本机临时工作稿，不入库；正式产物归 docs/）
+.agents/temp/
 _write_bh_report.py
