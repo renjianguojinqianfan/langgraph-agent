@@ -23,6 +23,11 @@
 整表都编不出规则时另发一条「什么都没拦住」——**软档**：出声但照跑
 （裁定见 ``docs/archive/research-danger-policy-across-agents.md`` §4.1）。**空表 = 不拦**，
 与改造前逐字节一致。
+
+规则名**命不中任何已挂载工具**是「死规则」：#145 的跟进口子。它编译通过、启动无异常，
+只是永远不会触发——「以为拦着，其实没拦」，与整表写坏同族、范围小到一条。
+:func:`warn_unmatched_rules` 在 **TaskManager 构造期（生产里每个后台进程一次）** 核一遍
+出声，不改拦截行为；通配名跳过（无法穷举），空表零输出。
 """
 
 from __future__ import annotations
@@ -160,3 +165,46 @@ class DangerPolicy:
             if rule.matches(tool_name, args):
                 return rule.reason or f"{tool_name} is blocked by policy"
         return None
+
+
+#: fnmatch 的通配字符。规则名带任何一个，就无法用「命不中任何工具」下结论。
+_GLOB_CHARS = frozenset("*?[")
+
+
+def warn_unmatched_rules(
+    rules: Sequence[BlockRule], tool_names: Sequence[str]
+) -> Tuple[str, ...]:
+    """#145：把「规则名命不中任何已挂载工具」的死规则点出来，返回这些规则名。
+
+    判据只用**规则名**对**当前实际挂载的工具全集**做 ``fnmatch``（非通配名即精确
+    比较）：``pattern`` 管的是入参、不是工具面，不参与。**通配规则名**
+    （``mcp__*__write``）跳过——目标无法穷举，「没匹配上」会是假阳性。
+
+    挂载面比配置面小是正常的（MCP 服务器连不上、某项功能开关关着），那时的 warning
+    可能是「这次没开」而不是拼写错误——消息里报的是核对用的实际挂载数，人自己判。
+
+    **检查点由调用方决定**（``TaskManager.__init__`` 工具面成形之后）：生产里每个后台
+    进程只构造一次 manager，挂载面因此稳定，核一次即可；放 ``AgentRuntime.__init__``
+    之类的按次位置会假阳性——``mcp_enabled`` / 每个 MCP 服务器开关 /
+    ``subagent_enabled`` 都按次改变工具面，一条「给以后开着的功能写的规则」会在每次
+    关掉该功能的任务里刷「这次没开」。
+
+    只出声、不改行为；空表零输出（零回归锚）。返回元组供测试断言，顺序与规则表一致；
+    每条同时逐条 ``logger.warning``，带规则名与核对用的工具数。
+    """
+    mounted = tuple(tool_names)
+    dead = tuple(
+        rule.tool
+        for rule in rules
+        if not _GLOB_CHARS.intersection(rule.tool)
+        and not any(fnmatch.fnmatchcase(name, rule.tool) for name in mounted)
+    )
+    for rule_name in dead:
+        logger.warning(
+            "policy rule %r matches none of the %d mounted tool(s); check the "
+            "tool name for a typo, or whether that tool is enabled here "
+            "(wildcard rules are never checked)",
+            rule_name,
+            len(mounted),
+        )
+    return dead
