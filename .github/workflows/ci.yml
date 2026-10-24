@@ -97,9 +97,10 @@ jobs:
 
   # ── 后端：Windows 冒烟（静态挂载 / 路径面） ──────────────────────────────
   # 为什么不是全量：Linux 全量已覆盖与 OS 无关的逻辑；这里只补「Linux 上根本跑不到」的面。
-  # 清单按「Windows-only 代码分支 / skipif(os.name != "nt")」维护——改 os.name /
-  # sys.platform / 路径 / 进程代码时，把对应测试文件加进下面的 pytest 命令行
-  # （同步 AGENTS.md「验证入口」的同一条命令）：
+  # 清单按「Windows-only 行为测试」维护——改 os.name / sys.platform / 路径分隔符时，
+  # 把对应测试文件加进下面的 pytest 命令行（同步 AGENTS.md「验证入口」的同一条命令）。
+  # 例外：进程树 / 子进程类（test_bash_tool / test_p2_mcp / test_workspace*）暂不入清单——
+  # Windows runner 上稳定性无数据，需要时按票添加。
   #   test_static_guard.py           路径判据（UNC / 盘符 / NUL / Windows 反斜杠形态）
   #   test_static_frontend.py        StaticFiles 挂载 e2e（Windows 上 get_path 用 \ 连接）
   #   test_gitignore_visibility.py   Windows-only 反斜杠 glob 用例（Linux 上被 skip）

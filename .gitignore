@@ -13,6 +13,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+# CI Windows job 在仓库根生成的 mcp 过滤副本（Linux job 写 /tmp）；本地复跑也会生成
+requirements-ci.txt
 
 # ── Virtual environments ───────────────────────────────
 .venv/
