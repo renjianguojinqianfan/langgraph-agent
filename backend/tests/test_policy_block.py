@@ -12,6 +12,9 @@ S4（#138）整链删除，危险动作的防护现在就只剩这一条钩子�
 
 零回归口径：记录体、事件载荷、对话面消息**都不多一个键**——被拒的调用就落在「没执行」
 那两格里（``status:"skipped"`` + 理由在 ``error``），没有新字段。
+
+#145 跟进（2026-10-24）：同一文件还钉「死规则」观测面——规则名命不中任何已挂载工具时
+在**任务创建**期出声，通配名跳过，空表 / 未配置零输出。只出声，不改拦截行为。
 """
 
 from __future__ import annotations
@@ -25,12 +28,13 @@ import pytest
 from backend.api.schemas import StepRecord, ToolCallRecord
 from backend.config import Settings
 from backend.core.agent.nodes import AgentRuntime
-from backend.core.agent.policy import DangerPolicy
+from backend.core.agent.policy import DangerPolicy, warn_unmatched_rules
 from backend.core.agent.state import AgentState
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
+from backend.core.tools.registry import build_tools
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_settings
+from backend.tests.conftest import make_manager, make_settings
 
 TASK_ID = "t_policy_block"
 
@@ -444,6 +448,93 @@ def test_settings_expose_the_rule_table_as_a_list(tmp_path):
         assert Settings(policy_rules=raw).policy_rules_list == [], f"{raw!r} 不该产出规则"
     # 非 dict 的条目原样透出（由消费者出声处置）
     assert Settings(policy_rules='[1, {"tool": "a"}]').policy_rules_list == [1, {"tool": "a"}]
+
+
+# ── 死规则告警（#145） ──────────────────────────────────────────────────────
+def test_a_rule_that_names_no_mounted_tool_is_loud(tmp_path, policy_logs):
+    """#145 AC1：规则名不含通配符、命不中任何已挂载工具 → warning 带规则名与口径。
+
+    检查点 = **TaskManager 构造期**（后台启动时工具面已成形）；为什么不放按次位置，
+    见 ``policy.warn_unmatched_rules`` 的 docstring。
+    """
+    # 离线测试不受本地 .env 影响：钉住会收窄挂载面的开关，warning 里的挂载数才可预期。
+    settings = _settings(
+        tmp_path,
+        policy_rules=_rules({"tool": "git_comit", "reason": "typo"}),
+        subagent_enabled=True,
+    )
+    mounted = build_tools(settings)
+
+    make_manager(settings)
+
+    messages = policy_logs.messages()
+    assert len(messages) == 1, f"死规则应恰好报一次，实际 {messages!r}"
+    assert "git_comit" in messages[0], "warning 没带规则名"
+    assert f"{len(mounted)} mounted" in messages[0], "warning 没带核对用的工具全集口径"
+
+
+def test_a_rule_that_names_a_mounted_tool_stays_silent(tmp_path, policy_logs):
+    """#145 AC1 反面：活规则不出声（``bash`` 恒在挂载面，不依赖工具开关）。"""
+    settings = _settings(tmp_path, policy_rules=_rules({"tool": "bash", "reason": "no"}))
+
+    make_manager(settings)
+
+    assert policy_logs.messages() == []
+
+
+def test_a_wildcard_rule_is_not_checked(tmp_path, policy_logs):
+    """#145 AC2：通配规则名无法穷举（``mcp__*__write`` 可能对应任何 MCP 工具），不参与核对。"""
+    settings = _settings(tmp_path, policy_rules=_rules({"tool": "mcp__*__write", "reason": "no"}))
+
+    make_manager(settings)
+
+    assert policy_logs.messages() == []
+
+
+def test_an_empty_table_is_silent_at_manager_construction(tmp_path, policy_logs):
+    """#145 AC4（零回归锚）：未配置 / 空表 → 后台启动（TaskManager 构造期）零输出。"""
+    for raw in ("", "[]", "null"):
+        make_manager(_settings(tmp_path, policy_rules=raw))
+
+    assert policy_logs.messages() == []
+
+
+def test_each_dead_rule_is_reported_once_per_manager(tmp_path, policy_logs):
+    """#145 AC1/AC3：一次构造里每条死规则只报一遍，不按任务 / 轮次重复。"""
+    settings = _settings(
+        tmp_path,
+        policy_rules=_rules(
+            {"tool": "git_comit", "reason": "typo"},
+            {"tool": "file_read", "reason": "typo"},
+            {"tool": "bash", "reason": "live"},
+        ),
+    )
+
+    make_manager(settings)
+    assert len(policy_logs.messages()) == 2, "死规则数与 warning 数不一致"
+
+    before = len(policy_logs.messages())
+    make_manager(settings)
+    assert len(policy_logs.messages()) == before + 2, "第二次构造没有各报一次"
+
+
+def test_the_dead_rule_return_value_skips_wildcards_and_live_names():
+    """纯函数契约（#145）：返回非通配且命不中的规则名，按表序；通配名不参与核对。"""
+    policy = _policy(
+        {"tool": "git_comit", "reason": "typo"},
+        {"tool": "mcp__*__write", "reason": "glob"},
+        {"tool": "bash", "reason": "live"},
+    )
+
+    assert warn_unmatched_rules(policy.rules, ["bash", "read"]) == ("git_comit",)
+
+
+def test_a_broken_table_is_loud_at_manager_construction_too(tmp_path, policy_logs):
+    """检查点复用 ``DangerPolicy`` 编译：整表写坏时后台启动就出声（#136 的 warning 提前
+    到启动，拦截行为不变——不是新增的拦截面）。"""
+    make_manager(_settings(tmp_path, policy_rules="nope"))
+
+    assert any("NOTHING is blocked" in message for message in policy_logs.messages())
 
 
 # ── 持久化面 ────────────────────────────────────────────────────────────────

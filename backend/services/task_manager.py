@@ -29,6 +29,7 @@ from ..api.schemas import (
 from ..config import Settings
 from ..core.agent.graph import build_graph
 from ..core.agent.nodes import AgentRuntime
+from ..core.agent.policy import DangerPolicy, warn_unmatched_rules
 from ..core.agent.state import AgentState
 from ..core.agent.subagent import SubAgentExecutor
 from ..core.llm.client import LLMClient
@@ -219,6 +220,15 @@ class TaskManager:
             self._tools = [t for t in self._tools if t.name != "spawn_subagent"]
         self._tool_schemas = [t.to_openai_schema() for t in self._tools]
         self._wire_injected_tools()
+        # #145: dead rules never fire — the same silent-loss family as a broken
+        # table, one rule wide. The mount face is stable at manager construction
+        # (MCP appended, subagent switch applied), so check it once here;
+        # rationale and the per-run false-positive argument live in
+        # warn_unmatched_rules.
+        warn_unmatched_rules(
+            DangerPolicy.from_settings(settings).rules,
+            [tool.name for tool in self._tools],
+        )
         # P0 item 4: resident trace recorder (EventBus subscriber).
         self._trace: Optional[TraceRecorder] = TraceRecorder(settings) if settings.trace_enabled else None
 
