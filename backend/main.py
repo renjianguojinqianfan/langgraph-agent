@@ -95,7 +95,7 @@ def mount_frontend(app: FastAPI, dist: Path) -> bool:
     Registered after every API route so ``/api`` and ``/health`` keep
     precedence. Returns whether the build output was mounted.
 
-    ``SafeStaticFiles`` rejects UNC / drive-absolute / backslash paths before
+    ``SafeStaticFiles`` rejects UNC / drive-absolute / root-relative paths before
     starlette resolves them (CVE-2026-48818 mitigation; see the module docstring).
     """
     if not (dist / "index.html").is_file():

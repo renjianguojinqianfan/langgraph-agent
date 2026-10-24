@@ -40,8 +40,7 @@ from starlette.types import Scope
 def is_unsafe_static_path(path: str) -> bool:
     """True when the normalised static path must not reach ``lookup_path``.
 
-    Rejected forms (each would make ``os.path.join`` drop the served directory
-    or reach a special device):
+    Rejected forms (all escape the served directory or are invalid paths):
     * a leading separator — ``\\\\host\\share`` (UNC), ``\\name``
       (drive-root-relative) and, on POSIX, ``//host/share``. A backslash
       *inside* the path is not rejected: ``StaticFiles.get_path`` produces

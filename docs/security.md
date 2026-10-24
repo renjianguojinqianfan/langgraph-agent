@@ -73,17 +73,20 @@
 - 起步集是**可调基线**，不是完整清单：按自己的任务面删减；规则故意写得窄（避免挡正常操作），
   漏掉的场景优先靠运行隔离兜底。
 - 已知边界（2026-10-24 评审复核，故意不追的取舍）：
-  - 破坏性 OS 命令词（`format` / `diskpart` / `mkfs` / `shutdown` / `reboot` / `bcdedit`）与
-    `useradd` 一类 / `systemctl enable|disable|mask|unmask` 只锚**命令位**（行首或 `;`、`&`、
-    `|`、换行之后）；`timeout 10 shutdown`、`xargs shutdown`、绝对路径调用会漏拦，换来
-    `cat logs/shutdown.log` / `grep -rn reboot docs/` 不误伤。
+  - `shutdown` / `reboot`、Linux 账户命令（`useradd` / `usermod` / `userdel` / `groupadd` /
+    `groupdel`）与 `systemctl` 的 `enable|disable|mask|unmask`（允许 `--user` 一类前置旗标）
+    只锚**命令位**（行首或 `;`、`&`、`|`、换行之后）；`timeout 10 shutdown`、`xargs shutdown`、
+    绝对路径调用会漏拦，换来 `cat logs/shutdown.log` / `grep -rn reboot docs/` 不误伤。
+    `format` / `diskpart` / `mkfs` / `bcdedit` 保持宽匹配：宁可误伤 `grep -rn bcdedit docs/`，
+    也不漏磁盘 / 启动项命令。
   - `.env` 家族拦 `.env` 与 `.env.<后缀>`（后缀可多段，如 `.env.production.local`），放行
     `.env.example` / `.env.sample` / `.env.template`；引号包裹 / 括号收尾等没有空白或 shell
     元字符边界的写法可能漏拦。
   - 下载即执行拦 `| bash|sh|zsh`（含 `sudo` 前缀）；`| env bash` / `| python`、
     `sudo -u … bash` 不在表内。
   - `git restore` / `git commit --amend` 这类历史或工作树重写未覆盖。
-  - 更一般的漏拦仍是环境变量拼接与 argv 拆成多段（见 `.env.example` 的 pattern 说明）。
+  - 更一般的漏拦仍是环境变量拼接，以及 argv 被拆成多段（后者的机制见 `.env.example` 的
+    pattern 说明）。
 
 ## 6. 依赖与已知 CVE（当前缓解）
 
@@ -117,5 +120,5 @@
 - 2026-10-24（评审返工）：`SafeStaticFiles` 改为拒**前导分隔符 / 盘符 / NUL**（原「任何反斜杠」
   在 Windows 上会把 `assets\app.js` 这类正常嵌套路径全部 404，白屏级回归）；补 mount 级回归测试。
   规则起步集补 `rm --recursive`、`.env` 多段后缀（`.env.local` / `.env.production.local`）、
-  `| sudo bash`、Linux 账户 / `systemctl` 持久化，破坏性 OS 命令词（含 `shutdown` / `reboot`）
-  改为命令位锚定消误伤；§5 记录已知边界。
+  `| sudo bash`、Linux 账户 / `systemctl` 持久化，`shutdown` / `reboot`、账户 / 服务命令改为
+  命令位锚定消误伤；§5 记录已知边界。
