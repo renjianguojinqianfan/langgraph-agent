@@ -46,7 +46,7 @@ agent ──有 tool call──> tool ──> agent
 - **停下 = 这一轮的最后一次 `agent` 调用没有工具调用**；状态只有 `RUNNING / INTERRUPTED / FAILED`，没有「完成」。
 - **停下后可以继续说**：`POST /api/tasks/{id}/messages` 沿同一 `thread_id` / checkpoint 续跑；`POST /api/tasks/{id}/resume` 保留给停止 / 崩溃后的续跑。
 - **计划是一个文件**：计划模式下模型把计划写成 Markdown，系统存到任务目录的 `.qianfan/plans/<task_id>.md`；计划区显示原文、可整份编辑（`PUT /api/tasks/{id}/plan` 写回文件），用外部编辑器改同样生效。执行时计划以一条消息进入对话，下一条消息按文件当前内容跑。
-- **危险动作**由设置里的 `policy_rules` + 一个钩子当场拒：不弹框、不进图重入；空表 = 不拦（不是安全边界，见下）。
+- **危险动作**由设置里的 `policy_rules` + 一个钩子当场拒：不弹框、不进图重入；空表 = 不拦（`.env.example` / 本地 `.env` 已带一组保守起步规则，理由见 `docs/security.md` §5；不是安全边界，见下）。
 - **断点续跑**用 `SqliteSaver` + `durability="sync"`；checkpoint 格式 v2，v1 旧库按迁移文档 §2.4 拒绝挂载。
 
 ## 工作区
@@ -85,6 +85,7 @@ agent ──有 tool call──> tool ──> agent
 - **停止 / 超时**回收本次调用建立的进程组（POSIX）或 Job Object（Windows），包括调用已返回、任务随后被停止时的后台进程；用 `setsid` 等自行脱离的进程不受管。
 - **只限时**（默认 30s，1–600s）并截断输出尾部（每流 30KB）；没有 CPU / 内存 / 磁盘 / 进程数上限。
 - 需要真隔离就放进容器或虚拟机（本章不提供 Docker 启动方式）。
+- 密钥明文决策 / 轮换处置、公开仓库的路径与用户名暴露面、危险动作起步集、已知 CVE 的当前缓解，统一见 [`docs/security.md`](docs/security.md)。
 
 ## 质量门禁
 

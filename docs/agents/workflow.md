@@ -10,7 +10,7 @@
 | 1 | **qoder** | 从 `master` 切 feature 分支（`feat/<slug>` 或 `fix/<slug>`，票号写进 PR）；读票面 + AGENTS.md 任务路由指定的权威文档 |
 | 2 | **qoder** | 调用 `implement` skill 实施（TDD：约定的 seam 上先写红测试；常跑类型检查与单测） |
 | 3 | **qoder** | 调用 `code-review` skill **自评审**（双轴：规范轴 + 需求轴），返工发现后才进下一步 |
-| 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/archive/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」 |
+| 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/archive/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」；**暴露面清理例外**：本机路径 / 用户目录的占位符替换优先于快照冻结，见 [`docs/security.md`](../security.md) §3 |
 | 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号（`Closes #N`）；body 调 `pr` skill 写（Summary 最小可视化 / Before-After Evidence / Merge Danger）；验证状态四态如实写（通过/跳过/未运行/产物验收） |
 | 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest）+ 危险动作钩子检查〔2026-10-14 起取代「冻结区检查」，冻结区随 ADR 0008 解除〕 + 真模型视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
 | 6 | 评审侧/用户 | 合并：调 `verification-loop` skill 走收尾门（机械验证 + 端到端验收）→ CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
@@ -51,7 +51,7 @@
 - **并行段只到步 3**：步 3.5 文档收尾、开 PR、评审、合并一律**串行**（由主会话逐张做）。撞车面从来不在源文件，在权威文档面
 - **ADR 发号由合并门统一**：两个 agent 各建 `docs/adr/0005-<不同slug>.md` 时路径不同 → git 不报冲突、rebase 也不报，合出来就是两个 0005，而 AGENTS.md/README 里所有 `docs/adr/0005` 指向同时失效。这条对机械门禁**隐形**，只能靠发号顺序
 - **master 在并行批中间前进会造「幽灵 hunk」**：各票分支都起于当时的 master，此后任何先落地的小改（docs-only 直推、先合的 PR）都会让**两点** diff（`git diff master <head>`）比出一条「本分支回退了那行」的假改动——分支是**没带**那个 commit，不是改了它。实证：#96 被要求「拿掉 p1.md 的 hunk」，而 `/pulls/96/files` 只有 2 个文件、`mergeable_state=clean`。**diff 一律走三点口径**（`git diff master...<head>` / `gh pr diff <n> --name-only`），报返工前先核 `gh api repos/<owner>/<repo>/pulls/<n>/files`
-- **工具链共享**：worktree 是干净检出、没有 `.venv311`——门禁一律用绝对路径 `E:\code\demo\langgraph-agent\.venv311\Scripts\python.exe`；前端可 junction 主检出 `node_modules` 免 `npm ci`（CI 仍以 `npm ci` 口径终裁）
+- **工具链共享**：worktree 是干净检出、没有 `.venv311`——门禁用仓库相对 `.venv311/Scripts/python.exe`；worktree 里需自备 `.venv311`（可 junction 主检出）或回主检出跑门禁。前端可 junction 主检出 `node_modules` 免 `npm ci`（CI 仍以 `npm ci` 口径终裁）
 - **brief 纪律**：委托 prompt 要短，且显式授权「依据缺失就停下问，不许猜」——试水中两次源头截断都靠这条救回
 - **禁改文档的子代理要另答一题「你的改动让哪句现有声明失效了」**：并行段把步 3.5 收归主会话，等于让子代理**只改代码**；而 push 前四断言拦得住「越界改文档」，拦不住「改了代码让文档过期」。实证（#119 / PR #128）：给 executor 的 system 尾部加计划块后，README 那句「`context_inject_enabled=false` 一键回到旧行为（零回归锚：system 与改造前逐字节相同）」当场失准，而子代理全绿交回、一字未提——因为既有零回归锚断的是 `_build_messages` 的**默认形态**而非真实调用点，**测试与文档可以同时「没坏」，漂移却在门禁照不到的地方发生**。做法：任务卡边界段之后加这条必答项（没有就答「无」），汇报里点名；主会话收到后判归属——改文档措辞 / 补一条钉真实调用点的测试 / 加开关，**别默认加开关**（本次按事实改写 README 并在 PR 里列为请裁项，因为「关掉 AGENTS.md 注入」与「关掉计划供给」不是一个概念）
 - **派活前按 AC 跨层数估工作量**：一条 AC 动一层，五条 AC 动五层（判定→协议→配置→事件→测试）≈ 顶到一轮子代理预算上限——#57 就这么中断的（AC1-4 完成、AC5-7 半路）。超三层先拆再派，或按语义边界直接拆两张 PR

@@ -7,7 +7,7 @@
   "mode": "build",
   "model": "default",
   "plan_version": 0,
-  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "workspace": "<tmp>\\qianfan-c7-20261021\\A",
   "steps": [
     {
       "index": 1,
@@ -34,7 +34,7 @@
             "command": "ls -la; echo \"---\"; cat kill-resume.txt 2>/dev/null && echo \"FILE EXISTS\" || echo \"FILE MISSING\""
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"total 16\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:55 .\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:43 ..\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:57 .git\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:46 .qianfan\\n-rw-r--r-- 1 DELL 197121 11 Oct 21 12:55 a-continued.txt\\n-rw-r--r-- 1 DELL 197121 20 Oct 21 12:54 bash-made.txt\\ndrwxr-xr-x 1 DELL 197121  0 Oct 21 12:53 canary\\n-rw-r--r-- 1 DELL 197121 18 Oct 21 12:44 hello.txt\\n-rw-r--r-- 1 DELL 197121  9 Oct 21 12:52 long-stop.txt\\n-rw-r--r-- 1 DELL 197121 16 Oct 21 12:47 plan-demo.txt\\n-rw-r--r-- 1 DELL 197121  2 Oct 21 12:53 policy-blocked-ok.txt\\n"
+          "output_excerpt": "{\"stdout\": \"total 16\\ndrwxr-xr-x 1 <user> 197121  0 Oct 21 12:55 .\\ndrwxr-xr-x 1 <user> 197121  0 Oct 21 12:43 ..\\ndrwxr-xr-x 1 <user> 197121  0 Oct 21 12:57 .git\\ndrwxr-xr-x 1 <user> 197121  0 Oct 21 12:46 .qianfan\\n-rw-r--r-- 1 <user> 197121 11 Oct 21 12:55 a-continued.txt\\n-rw-r--r-- 1 <user> 197121 20 Oct 21 12:54 bash-made.txt\\ndrwxr-xr-x 1 <user> 197121  0 Oct 21 12:53 canary\\n-rw-r--r-- 1 <user> 197121 18 Oct 21 12:44 hello.txt\\n-rw-r--r-- 1 <user> 197121  9 Oct 21 12:52 long-stop.txt\\n-rw-r--r-- 1 <user> 197121 16 Oct 21 12:47 plan-demo.txt\\n-rw-r--r-- 1 <user> 197121  2 Oct 21 12:53 policy-blocked-ok.txt\\n"
         }
       ]
     },
@@ -49,7 +49,7 @@
             "timeout": 90
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"sleep done\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"sleep done\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
@@ -64,7 +64,7 @@
             "content": "done-scenario-7"
           },
           "error": null,
-          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\kill-resume.txt\", \"size\": 15}"
+          "output_excerpt": "{\"path\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\\\\kill-resume.txt\", \"size\": 15}"
         }
       ]
     },
@@ -78,7 +78,7 @@
             "command": "cat kill-resume.txt"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"done-scenario-7\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"done-scenario-7\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },

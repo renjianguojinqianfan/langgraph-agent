@@ -2,7 +2,7 @@
 
 > **状态：现役架构文档**（2026-10-23 全量刷新）。旧的 v0.1 原始设计档（2025-08-24）原文保留在 git 历史：`git log --follow docs/architecture.md`。
 >
-> 本文讲「是什么、怎么连」；**决策理由**在 [`docs/adr/`](adr/)（现役：0001、0002（部分退役）、0008、0009、0010），**能力清单**在 [`README.md`](../README.md)「能力」，**跨任务硬规则**在 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」，**发布前验收**在 [`docs/manual-verification.md`](manual-verification.md)。
+> 本文讲「是什么、怎么连」；**决策理由**在 [`docs/adr/`](adr/)（现役：0001、0002（部分退役）、0008、0009、0010），**能力清单**在 [`README.md`](../README.md)「能力」，**跨任务硬规则**在 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」，**发布前验收**在 [`docs/manual-verification.md`](manual-verification.md)，**安全边界与暴露面**在 [`docs/security.md`](security.md)。
 >
 > **契约面有三处机械守卫，改之前先读**：
 > - **§3.4 事件表**被 `npm run check:sse`（`frontend/scripts/check-sse-event-registry.mjs`）与 `backend/tests/test_sse_publish_ast.py` 双向解析；`docs/architecture.md` 是 CI `paths` 白名单的**唯一 docs 例外**——改它触发全套 CI（见 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）。
@@ -34,13 +34,14 @@
 ```text
 backend/
 ├── config.py            Settings（pydantic-settings；.env / 环境变量）
-├── main.py              FastAPI app：/health、/api 路由挂载、静态前端、Host 检查、CORS
+├── main.py              FastAPI app：/health、/api 路由挂载、静态前端（SafeStaticFiles）、Host 检查、CORS
 ├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
 ├── server_lock.py       单实例锁（一台机器只允许一个后台）
 ├── api/
 │   ├── routes.py        24 条 REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
-│   └── sse.py           SSE 流组装（15s heartbeat）
+│   ├── sse.py           SSE 流组装（15s heartbeat）
+│   └── static_guard.py  静态挂载路径防护（CVE-2026-48818 缓解；见 security.md §6）
 ├── core/
 │   ├── agent/           graph.py 拓扑 · nodes.py 三节点 · state.py AgentState
 │   │                    prompts.py 两套 system · context.py 压缩/驱逐 · inject.py 两层注入
@@ -332,6 +333,7 @@ uvicorn backend.main:app --port 8000 --reload   # 手工起后端
 - **只限时**（默认 30s，1–600s）+ 截断输出尾部；**没有** CPU / 内存 / 磁盘 / 进程数上限。
 - `policy_rules` 空表 = 不拦；它拦的是「工具调用入参」，不是 bash 内部行为。
 - 需要真隔离就放进容器或虚拟机（本章不提供 Docker 启动方式；C4 已删 `Dockerfile` 与 `docker-compose.yml`）。
+- 完整暴露面、密钥面与已知 CVE 缓解见 [`docs/security.md`](security.md) §1/§2/§6/§7；本节只保留架构视角，不复述细节。
 
 ---
 

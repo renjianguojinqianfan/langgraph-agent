@@ -1,8 +1,8 @@
 # dsh 的「小心脏 + 可开关 + 可增删」一手调研
 
-> **基线与方法**：本地源码 `E:\code\deepseek-harness`，HEAD `d743267388`，tag `dsh-v0.2.1-alpha.2`。只读源码与仓库内文档，未修改该仓库。
+> **基线与方法**：本地源码 `<dsh-checkout>`，HEAD `d743267388`，tag `dsh-v0.2.1-alpha.2`。只读源码与仓库内文档，未修改该仓库。
 > **2026-10-19 注**：该克隆此后已更新到 `687f282e86`（`dsh-v0.2.1-rc.2`）；[决策日志](../capability-registry-rescope.md) §0.5 – §0.7 引用的 dsh 行号属新 HEAD，本文行号属旧 HEAD，引用前以各自基线复核。
-> 下文 dsh 路径均相对 `E:\code\deepseek-harness`；标「本仓」的路径相对 `E:\code\demo\langgraph-agent`。
+> 下文 dsh 路径均相对 `<dsh-checkout>`；标「本仓」的路径相对 仓库根。
 > 否定性结论都写了检索范围。量级数字用 `rg`/`Get-Content | Measure-Object -Line` 在本机 HEAD 上数出，只作量级参考。
 > pi 侧不作为本次取证对象，引用本仓既有一手调研 `docs/research-pi-minimal-agent.md`（其基线是 pi `v1.3.0-10-g4dd2b149d`），并明确标注。
 

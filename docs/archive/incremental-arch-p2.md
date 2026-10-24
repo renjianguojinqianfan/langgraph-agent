@@ -3,7 +3,7 @@
 > 文档性质：**增量架构设计（仅描述 P2 两项能力变更，不重写整份架构）**
 > 架构师：高见远（Gao）　|　版本：v0.1　|　日期：2026-08-24
 > 关联文档：`docs/architecture.md`（整体架构）、`docs/incremental-arch-p1.md`（P1 增量）、`docs/incremental-prd-p2.md`（P2 增量 PRD）
-> 项目根目录：`E:\code\demo\langgraph-agent\`
+> 项目根目录：仓库根
 
 ---
 

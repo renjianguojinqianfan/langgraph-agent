@@ -131,7 +131,7 @@
 
 ### 0.5 运行时部件对照（G-16 的依据，2026-10-19 读源码）
 
-pi = `E:\code\pi` @ `4dd2b149d`；dsh = `E:\code\deepseek-harness` @ `687f282e86`（rc.2）。行号由子代理读出，引用前以当时 HEAD 为准。
+pi = `<pi-checkout>` @ `4dd2b149d`；dsh = `<dsh-checkout>` @ `687f282e86`（rc.2）。行号由子代理读出，引用前以当时 HEAD 为准。
 
 | 部件 | 本仓现状 | pi | dsh |
 |---|---|---|---|
@@ -166,7 +166,7 @@ pi = `E:\code\pi` @ `4dd2b149d`；dsh = `E:\code\deepseek-harness` @ `687f282e86
 
 ### 0.6b 计划进入执行阶段后，压缩与改动怎么处理（G-29 缺口的依据，2026-10-19）
 
-子代理读本机克隆（`E:\code\` 下）与 Claude Code 官方文档；行号属各自 HEAD。
+子代理读本机克隆（路径按机器而异）与 Claude Code 官方文档；行号属各自 HEAD。
 
 | agent @ HEAD | 执行阶段计划放哪 | 压缩后还在吗 | 改了计划会重发吗 | 频率 |
 |---|---|---|---|---|
@@ -182,7 +182,7 @@ pi = `E:\code\pi` @ `4dd2b149d`；dsh = `E:\code\deepseek-harness` @ `687f282e86
 
 ### 0.7 别家 agent 的计划是什么形态（G-24 的依据，2026-10-19）
 
-子代理读本机克隆（`E:\code\` 下）与 Claude Code 官方文档；行号属各自 HEAD。
+子代理读本机克隆（路径按机器而异）与 Claude Code 官方文档；行号属各自 HEAD。
 
 | agent @ HEAD | 计划是文件吗 | 谁写 | 用户怎么改 | 执行阶段怎么用 | 进度清单 |
 |---|---|---|---|---|---|

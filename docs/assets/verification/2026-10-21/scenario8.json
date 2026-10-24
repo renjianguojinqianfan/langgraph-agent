@@ -7,7 +7,7 @@
   "mode": "build",
   "model": "default",
   "plan_version": 0,
-  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "workspace": "<tmp>\\qianfan-c7-20261021\\A",
   "steps": [
     {
       "index": 1,
@@ -23,7 +23,7 @@
             "command": "(while true; do date +%s%N >> bg-heartbeat.txt; sleep 1; done) & echo C7BG2-$RANDOM"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"C7BG2-1982\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"C7BG2-1982\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
@@ -38,7 +38,7 @@
             "timeout": 650
           },
           "error": "command stopped: task stop requested",
-          "output_excerpt": "{\"stdout\": \"\", \"stderr\": \"\", \"exit_code\": 1, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": true, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"\", \"stderr\": \"\", \"exit_code\": 1, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": true, \"truncated\": false}"
         }
       ]
     }

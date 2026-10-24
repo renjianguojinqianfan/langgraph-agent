@@ -3,7 +3,7 @@
 > 文档性质：**增量 PRD（仅描述变更部分，不重写整份 PRD）**
 > 产品经理：许清楚（Xu）　|　版本：v0.1（P0 增量草案）　|　日期：2025-08-24
 > 关联文档：现有 PRD `docs/prd.md`（P0/P1/P2 分级）、架构 `docs/architecture.md`、本增量目标文件 `docs/incremental-prd-p0.md`
-> 项目根目录：`E:\code\demo\langgraph-agent\`
+> 项目根目录：仓库根
 
 ---
 

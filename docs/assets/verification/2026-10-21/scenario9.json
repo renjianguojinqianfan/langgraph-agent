@@ -7,7 +7,7 @@
   "mode": "build",
   "model": "2556f5d79830",
   "plan_version": 0,
-  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "workspace": "<tmp>\\qianfan-c7-20261021\\A",
   "steps": [
     {
       "index": 1,
@@ -27,7 +27,7 @@
             ]
           },
           "error": null,
-          "output_excerpt": "{\"subtask_id\": \"spawn:sub:dddb059d\", \"name\": \"read-notes\", \"status\": \"completed\", \"summary\": \"**File path:** `E:\\\\qianfan-c7-20261021\\\\A\\\\notes.txt` (sandbox root, `notes.txt`)\\n\\n**One-sentence summary:** The file is a short three-line note titled \\\"qianfan notes\\\" listing two entries, \\\"alpha\\\" and \\\"beta\\\".\\n\\n**Missing?** No — the file exists and was read successfully (3 lines, 25 bytes, not truncated).\", \"artifacts\": [], \"error\": null}"
+          "output_excerpt": "{\"subtask_id\": \"spawn:sub:dddb059d\", \"name\": \"read-notes\", \"status\": \"completed\", \"summary\": \"**File path:** `<tmp>\\\\qianfan-c7-20261021\\\\A\\\\notes.txt` (sandbox root, `notes.txt`)\\n\\n**One-sentence summary:** The file is a short three-line note titled \\\"qianfan notes\\\" listing two entries, \\\"alpha\\\" and \\\"beta\\\".\\n\\n**Missing?** No — the file exists and was read successfully (3 lines, 25 bytes, not truncated).\", \"artifacts\": [], \"error\": null}"
         },
         {
           "name": "mcp__echo__echo",
@@ -59,7 +59,7 @@
             "path": "notes.txt"
           },
           "error": null,
-          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\notes.txt\", \"content\": \"     1\\tqianfan notes\\n     2\\talpha\\n     3\\tbeta\", \"total_lines\": 3, \"start_line\": 1, \"end_line\": 3, \"returned_lines\": 3, \"truncated\": false, \"size\": 25}"
+          "output_excerpt": "{\"path\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\\\\notes.txt\", \"content\": \"     1\\tqianfan notes\\n     2\\talpha\\n     3\\tbeta\", \"total_lines\": 3, \"start_line\": 1, \"end_line\": 3, \"returned_lines\": 3, \"truncated\": false, \"size\": 25}"
         }
       ]
     },
