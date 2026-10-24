@@ -12,6 +12,8 @@ returns), which is also why a request like ``/C:/Windows/win.ini`` is caught.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from starlette.exceptions import HTTPException
 
@@ -40,7 +42,18 @@ def test_unsafe_paths_are_rejected(path: str) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["index.html", "assets/app-abc123.js", "a/b/c.png", "%5C%5Cnotdecoded"],
+    [
+        "index.html",
+        "assets/app-abc123.js",
+        "a/b/c.png",
+        "%5C%5Cnotdecoded",
+        # Windows: ``StaticFiles.get_path`` joins segments with the OS separator,
+        # so a perfectly normal nested asset arrives as ``assets\app.js``.
+        os.path.join("assets", "app.js"),
+        # The literal shape, so the regression test is red on every platform
+        # before the fix (CI only runs Linux, where get_path keeps "/").
+        r"assets\app.js",
+    ],
 )
 def test_normal_paths_pass(path: str) -> None:
     assert not is_unsafe_static_path(path)
@@ -66,6 +79,13 @@ def test_mount_refuses_unsafe_paths_before_resolution(path: str) -> None:
 def test_mount_serves_normal_paths() -> None:
     files = SafeStaticFiles(directory=".")
     assert files.get_path(_scope("/index.html")) == "index.html"
+
+
+def test_mount_serves_nested_assets() -> None:
+    # Regression (2026-10-24 review): the guard first rejected *any* backslash,
+    # which on Windows 404s every Vite asset under ``assets/`` (white screen).
+    files = SafeStaticFiles(directory=".")
+    assert files.get_path(_scope("/assets/app.js")) == os.path.join("assets", "app.js")
 
 
 def test_mount_honours_root_path() -> None:

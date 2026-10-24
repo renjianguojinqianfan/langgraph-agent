@@ -11,13 +11,17 @@ process account's NTLMv2 hash (CVE-2026-48818: SSRF + credential theft).
 We cannot bump starlette on its own: ``fastapi==0.112.4`` pins
 ``starlette<0.39``, and the FastAPI/starlette bump is a separate dependency
 chore (see ``docs/security.md``). Until that chore lands, the frontend mount
-uses :class:`SafeStaticFiles`, which rejects every path that would leave the
-served directory **before** starlette touches the filesystem.
+uses :class:`SafeStaticFiles`, which rejects the forms that would reach outside
+the served directory (UNC, absolute / drive-qualified, NUL) **before** starlette
+touches the filesystem. Traversal that survives ``normpath`` (``..``) still
+relies on starlette's own ``commonpath`` check; this guard is not a complete
+path validator, it removes the network-capable forms from the ``realpath`` call.
 
 The check runs on the already-normalised path that ``StaticFiles.get_path``
 returns (that is exactly the argument ``lookup_path`` receives), so drive
-letters, UNC and backslash forms are caught after ``normpath`` has converted
-them — checking the raw request path would miss ``/C:/Windows/...``.
+letters and leading UNC / root-relative separators are caught after
+``normpath`` has converted them — checking the raw request path would miss
+``/C:/Windows/...``.
 
 Scope: the frontend mount only. API routes never go through ``StaticFiles``.
 Remove this module (and go back to plain ``StaticFiles``) once the framework
@@ -36,24 +40,24 @@ from starlette.types import Scope
 def is_unsafe_static_path(path: str) -> bool:
     """True when the normalised static path must not reach ``lookup_path``.
 
-    Rejected forms:
-    * any backslash — Windows separator; ``\\\\host\\share`` is a UNC path and
-      ``\\name`` is drive-root-relative. Neither is a file we serve.
-    * an absolute or drive-qualified path (``C:\\...``) — ``os.path.join``
-      would discard the served directory and escape it.
+    Rejected forms (each would make ``os.path.join`` drop the served directory
+    or reach a special device):
+    * a leading separator — ``\\\\host\\share`` (UNC), ``\\name``
+      (drive-root-relative) and, on POSIX, ``//host/share``. A backslash
+      *inside* the path is not rejected: ``StaticFiles.get_path`` produces
+      ``assets\\app.js`` for every served asset on Windows.
+    * an absolute or drive-qualified path (``C:\\...``, ``C:foo``).
     * NUL bytes — invalid in paths and a classic truncation trick.
-    * a leading ``//`` (defensive; on Windows ``normpath`` already turns it
-      into a UNC-ish backslash path).
     """
     if not path:
         return True
-    if "\\" in path or "\x00" in path:
-        return True
-    if path.startswith("//"):
+    if path.startswith(("\\", "/")):
         return True
     if os.path.isabs(path):
         return True
-    return len(path) >= 2 and path[1] == ":" and path[0].isalpha()
+    if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
+        return True
+    return "\x00" in path
 
 
 class SafeStaticFiles(StaticFiles):

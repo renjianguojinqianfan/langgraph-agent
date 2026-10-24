@@ -72,13 +72,26 @@
   下载即执行、账户 / 服务 / 持久化、反弹 shell、写 `.env` 与 `.git/hooks`。
 - 起步集是**可调基线**，不是完整清单：按自己的任务面删减；规则故意写得窄（避免挡正常操作），
   漏掉的场景优先靠运行隔离兜底。
+- 已知边界（2026-10-24 评审复核，故意不追的取舍）：
+  - 破坏性 OS 命令词（`format` / `diskpart` / `mkfs` / `shutdown` / `reboot` / `bcdedit`）与
+    `useradd` 一类 / `systemctl enable|disable|mask|unmask` 只锚**命令位**（行首或 `;`、`&`、
+    `|`、换行之后）；`timeout 10 shutdown`、`xargs shutdown`、绝对路径调用会漏拦，换来
+    `cat logs/shutdown.log` / `grep -rn reboot docs/` 不误伤。
+  - `.env` 家族拦 `.env` 与 `.env.<后缀>`（后缀可多段，如 `.env.production.local`），放行
+    `.env.example` / `.env.sample` / `.env.template`；引号包裹 / 括号收尾等没有空白或 shell
+    元字符边界的写法可能漏拦。
+  - 下载即执行拦 `| bash|sh|zsh`（含 `sudo` 前缀）；`| env bash` / `| python`、
+    `sudo -u … bash` 不在表内。
+  - `git restore` / `git commit --amend` 这类历史或工作树重写未覆盖。
+  - 更一般的漏拦仍是环境变量拼接与 argv 拆成多段（见 `.env.example` 的 pattern 说明）。
 
 ## 6. 依赖与已知 CVE（当前缓解）
 
 - **starlette 0.38.6**（`fastapi==0.112.4` 钉住 `<0.39`）命中 2026 年一批 CVE。其中
   **CVE-2026-48818**（Windows `StaticFiles` UNC → SSRF / NTLM 凭证泄露）在本机可达：
   现役用 `backend/api/static_guard.py::SafeStaticFiles` 在 `os.path.realpath` 之前拒掉
-  反斜杠 / 前导 `//` / 盘符路径 / NUL，前端挂载只走这个类。
+  **前导分隔符**（UNC / drive-root-relative / 前导 `//`）、盘符路径与 NUL；普通嵌套路径
+  （Windows 上 `get_path` 返回的 `assets\app.js`）必须放行，否则前端 assets 全 404。前端挂载只走这个类。
   **升级到 `fastapi>=0.162` + `starlette>=1.1` 的独立 chore 尚未执行**；升级落地后删除该 guard。
 - 其余同批 starlette CVE（Host 投毒 / `HTTPEndpoint` / `request.url.hostname` / form 限制）
   在本仓不可达或已被 `TrustedHostMiddleware` 缓解；mcp 的 StreamableHTTP 服务端 CVE 与
@@ -101,3 +114,8 @@
   `.env.example` 增加危险动作起步集；新增 `backend/api/static_guard.py`（CVE-2026-48818 缓解）。
 - 2026-10-24（复审）：§4 精简为操作者 checklist，删除与 README 重复的越界描述；运行边界
   统一指向 `README.md`「这不是安全边界」，本文不展开任何绕过手段。
+- 2026-10-24（评审返工）：`SafeStaticFiles` 改为拒**前导分隔符 / 盘符 / NUL**（原「任何反斜杠」
+  在 Windows 上会把 `assets\app.js` 这类正常嵌套路径全部 404，白屏级回归）；补 mount 级回归测试。
+  规则起步集补 `rm --recursive`、`.env` 多段后缀（`.env.local` / `.env.production.local`）、
+  `| sudo bash`、Linux 账户 / `systemctl` 持久化，破坏性 OS 命令词（含 `shutdown` / `reboot`）
+  改为命令位锚定消误伤；§5 记录已知边界。
