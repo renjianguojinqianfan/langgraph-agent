@@ -7,7 +7,7 @@
   "mode": "build",
   "model": "default",
   "plan_version": 0,
-  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "workspace": "<tmp>\\qianfan-c7-20261021\\A",
   "steps": [
     {
       "index": 1,
@@ -19,7 +19,7 @@
             "command": "printf 'scenario5-nine-bytes' > bash-made.txt && cat bash-made.txt && echo && wc -c < bash-made.txt"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"scenario5-nine-bytes\\n20\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"scenario5-nine-bytes\\n20\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
@@ -37,7 +37,7 @@
             "command": "printf 'a-continued' > a-continued.txt && cat a-continued.txt && echo"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"a-continued\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"a-continued\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
@@ -55,7 +55,7 @@
             "command": "pwd && ls -1 && printf 'done-scenario-7' > after-restart.txt && cat after-restart.txt && echo"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"/e/qianfan-c7-20261021/A\\na-continued.txt\\nbash-made.txt\\ncanary\\nhello.txt\\nlong-stop.txt\\nplan-demo.txt\\npolicy-blocked-ok.txt\\nstop-continued-3.txt\\nstop-continued.txt\\ndone-scenario-7\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"/e/qianfan-c7-20261021/A\\na-continued.txt\\nbash-made.txt\\ncanary\\nhello.txt\\nlong-stop.txt\\nplan-demo.txt\\npolicy-blocked-ok.txt\\nstop-continued-3.txt\\nstop-continued.txt\\ndone-scenario-7\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
@@ -67,13 +67,13 @@
   "checks": {
     "A_list_count": 12,
     "B_list_count": 1,
-    "B_task_workspace": "E:\\qianfan-c7-20261021\\B",
+    "B_task_workspace": "<tmp>\\qianfan-c7-20261021\\B",
     "a-continued.txt in A": true,
     "a-continued.txt in B": false,
-    "handoff_output": "[qianfan] 已有后台在 http://127.0.0.1:8000/，本目录：E:\\qianfan-c7-20261021\\B"
+    "handoff_output": "[qianfan] 已有后台在 http://127.0.0.1:8000/，本目录：<tmp>\\qianfan-c7-20261021\\B"
   },
   "notes": "第二次启动在 B 目录执行，输出交接信息后退出 0；从「全部」打开 A 任务续说，文件落在 A。",
   "b_task_id": "d7c3a8d0d1344eaa9339c8c4a8474759",
-  "b_task_workspace": "E:\\qianfan-c7-20261021\\B",
+  "b_task_workspace": "<tmp>\\qianfan-c7-20261021\\B",
   "handoff_rerun_evidence": "docs/assets/verification/2026-10-22/scenario6-handoff.json"
 }

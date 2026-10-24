@@ -477,7 +477,7 @@ durable 的 task 有 owner edge、`waiting(on, policy: failFast|allSettled)`、`
 |---|---|---|---|---|
 | 44 | `examples/extensions/jev-router.ts` @ v1.0.4：强模型规划 → 切便宜模型执行，"accepting a single prompt-cache miss"，phase 存 router state | https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/examples/extensions/jev-router.ts | 2026-10-05 | Tier 1 |
 | 53 | `docs/virtual-models.md` @ v1.0.4：`previous`/`failed` 的 `continuation`/`retry` 决策保 cache；跨 turn 切模型丢 cache；`pi.registerVirtualModel()` 与 `/session` 按物理模型分列成本 | https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/docs/virtual-models.md | 2026-10-05 | Tier 1 |
-| 52 | 本仓库上轮调研报告 `docs/DEEP_RESEARCH_pi-vs-langgraph-agent.md`（基线 v0.87.1；正文未直接引用——本报告一律以一手复核为准，**未采用**其未经验证的事实陈述） | `E:\code\demo\langgraph-agent\docs\DEEP_RESEARCH_pi-vs-langgraph-agent.md` | 基线 2026-09-22 | Tier 2 |
+| 52 | 本仓库上轮调研报告 `docs/DEEP_RESEARCH_pi-vs-langgraph-agent.md`（基线 v0.87.1；正文未直接引用——本报告一律以一手复核为准，**未采用**其未经验证的事实陈述） | `docs/archive/DEEP_RESEARCH_pi-vs-langgraph-agent.md` | 基线 2026-09-22 | Tier 2 |
 | 36 | 检索：`packages/coding-agent/docs` 全文匹配 `planner\|planning agent\|plan agent` → **0 命中**（v1.0.4） | https://github.com/earendil-works/pi/tree/v1.0.4/packages/coding-agent/docs | 2026-10-07 查询 | Tier 1 |
 | 39 | 检索：`README.md` / `CONTRIBUTING.md` / `AGENTS.md` / `docs/index.md` / `docs/settings.md` 中 semver / API 稳定性 / 「1.0 = stable」声明 → **0 命中**（v1.0.4） | https://github.com/earendil-works/pi/tree/v1.0.4 | 2026-10-07 查询 | Tier 1 |
 | 40 | Mario Zechner 博客 posts 索引（维护者一手站点；用于反向确认「无 1.0 发布公告」，最新一篇 2026-05-30） | https://mariozechner.at/posts/ | 2026-10-07 查询 | Tier 1（站点） |

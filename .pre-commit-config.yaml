@@ -9,12 +9,13 @@
 #      不是闸门），配了等于把全部存量文件重排成噪声 diff。hook 只跑检查、
 #      不改文件——与 CI 同口径。
 #
-# Python 侧钩子一律 language: system + .venv311 绝对路径：配置里零版本号，
+# Python 侧钩子一律 language: system + 仓库相对的 `.venv311` 解释器：配置里零版本号，
 # ruff/mypy 仍只钉在 requirements-dev.txt 一处（该文件「抬版走人评估」红线
 # 不变）；worktree 里没有 .venv311 时指向主检出——与 docs/agents/workflow.md
 # 「并行实施」节的约定一致。另两个钩子（check:sse / tsc）走 node，版本由
 # frontend/package.json 钉——「零第二版本源」的承诺只覆盖 Python 侧。
-# 换位置克隆本仓：entry 里的绝对路径需同步改（安装说明见 README「质量门禁」）。
+# 本机绝对路径不进公开仓库：entry 一律用仓库相对路径；在 worktree 里跑需自备
+# `.venv311` 或改用主检出解释器（安装说明见 README「质量门禁」）。
 #
 # 实测（2026-10-07，本机，供后人调档位参考）：
 #   ruff ~1s · mypy 冷启 27s / 热 3s · check:sse 0.6s · tsc 1.7s ·
@@ -38,7 +39,7 @@ repos:
     hooks:
       - id: ruff
         name: ruff check（暂存 .py；与 CI 同命令）
-        entry: E:/code/demo/langgraph-agent/.venv311/Scripts/python.exe -m ruff check
+        entry: .venv311/Scripts/python.exe -m ruff check
         language: system
         types_or: [python]
         pass_filenames: true
@@ -46,7 +47,7 @@ repos:
 
       - id: mypy
         name: mypy（暂存触及 backend/ 时全量；files=backend）
-        entry: E:/code/demo/langgraph-agent/.venv311/Scripts/python.exe -m mypy
+        entry: .venv311/Scripts/python.exe -m mypy
         language: system
         files: ^backend/
         pass_filenames: false
@@ -67,7 +68,7 @@ repos:
 
       - id: commit-msg-format
         name: commit-msg 校验（前缀 / 长度阻断 + 票号提醒）
-        entry: E:/code/demo/langgraph-agent/.venv311/Scripts/python.exe scripts/validate_commit_msg.py
+        entry: .venv311/Scripts/python.exe scripts/validate_commit_msg.py
         language: system
         stages: [commit-msg]
         pass_filenames: true

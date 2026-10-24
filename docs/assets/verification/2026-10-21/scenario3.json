@@ -7,7 +7,7 @@
   "mode": "build",
   "model": "default",
   "plan_version": 0,
-  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "workspace": "<tmp>\\qianfan-c7-20261021\\A",
   "steps": [
     {
       "index": 1,
@@ -24,7 +24,7 @@
             "timeout": 60
           },
           "error": "command stopped: task stop requested",
-          "output_excerpt": "{\"stdout\": \"\", \"stderr\": \"\", \"exit_code\": 1, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": true, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"\", \"stderr\": \"\", \"exit_code\": 1, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": true, \"truncated\": false}"
         }
       ]
     },
@@ -39,7 +39,7 @@
             "content": "done-scenario-3"
           },
           "error": null,
-          "output_excerpt": "{\"path\": \"E:\\\\qianfan-c7-20261021\\\\A\\\\stop-continued.txt\", \"size\": 15}"
+          "output_excerpt": "{\"path\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\\\\stop-continued.txt\", \"size\": 15}"
         }
       ]
     },

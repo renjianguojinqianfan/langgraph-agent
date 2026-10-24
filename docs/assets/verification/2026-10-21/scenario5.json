@@ -7,7 +7,7 @@
   "mode": "build",
   "model": "default",
   "plan_version": 0,
-  "workspace": "E:\\qianfan-c7-20261021\\A",
+  "workspace": "<tmp>\\qianfan-c7-20261021\\A",
   "steps": [
     {
       "index": 1,
@@ -19,7 +19,7 @@
             "command": "printf 'scenario5-nine-bytes' > bash-made.txt && cat bash-made.txt && echo && wc -c < bash-made.txt"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"scenario5-nine-bytes\\n20\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"scenario5-nine-bytes\\n20\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
@@ -37,7 +37,7 @@
             "command": "printf 'a-continued' > a-continued.txt && cat a-continued.txt && echo"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"a-continued\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"a-continued\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
@@ -55,7 +55,7 @@
             "command": "pwd && ls -1 && printf 'done-scenario-7' > after-restart.txt && cat after-restart.txt && echo"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"/e/qianfan-c7-20261021/A\\na-continued.txt\\nbash-made.txt\\ncanary\\nhello.txt\\nlong-stop.txt\\nplan-demo.txt\\npolicy-blocked-ok.txt\\nstop-continued-3.txt\\nstop-continued.txt\\ndone-scenario-7\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"E:\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"/e/qianfan-c7-20261021/A\\na-continued.txt\\nbash-made.txt\\ncanary\\nhello.txt\\nlong-stop.txt\\nplan-demo.txt\\npolicy-blocked-ok.txt\\nstop-continued-3.txt\\nstop-continued.txt\\ndone-scenario-7\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },

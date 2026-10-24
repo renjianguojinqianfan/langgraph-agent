@@ -19,10 +19,10 @@
 
 | 触发词 | 不变量 | 权威源 |
 |---|---|---|
-| 危险动作拦截 | 危险动作由**设置里的规则表 + 一个钩子**当场拒：命中即不执行，把 `{block, reason}` 当该次调用的结果回给模型；**不弹框、不进图重入**。钩子**不改参数、不 terminate**（与 pi 的有意分歧） | `docs/adr/0008` + `backend/core/agent/policy.py`（规则表）与 `nodes.py::_handle_tool_calls`（钩子所在） |
+| 危险动作拦截 | 危险动作由**设置里的规则表 + 一个钩子**当场拒：命中即不执行，把 `{block, reason}` 当该次调用的结果回给模型；**不弹框、不进图重入**。钩子**不改参数、不 terminate**（与 pi 的有意分歧） | `docs/adr/0008` + `backend/core/agent/policy.py`（规则表）与 `nodes.py::_handle_tool_calls`（钩子所在）+ [docs/security.md](docs/security.md)（起步集与威胁模型） |
 | 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /api/tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源）；停下时可整份改（`PUT /api/tasks/{id}/plan` 写文件），改动随后续消息生效 | `docs/adr/0008`（决策 1–8）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/plan_file.py`（计划文件）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
 | 工具挂载与失败回传 | MCP 工具由 `task_manager` 显式追加（不经 `@register`）；工具每次调用**只执行一次**，失败原因原样回给模型——**无自动重试、无熔断**（ADR 0003 已退役） | `backend/services/task_manager.py`（MCP 追加）+ `backend/core/agent/nodes.py::tool_node` |
-| 密钥 | Key 只存在仓库外的 `~/.qianfan/credentials.json`（界面粘贴）或配置里写的环境变量（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）；不进仓库、日志、trace、SSE；接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无）；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文 | `backend/services/model_store.py` + `.env.example` 注释 |
+| 密钥 | Key 只存在仓库外的 `~/.qianfan/credentials.json`（界面粘贴）或配置里写的环境变量（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）；不进仓库、日志、trace、SSE；接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无）；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文 | `backend/services/model_store.py` + `.env.example` 注释 + [docs/security.md](docs/security.md)（明文决策 / 轮换 / 暴露面） |
 | 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
 | 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部覆盖块（`setdefault` 语义）保持原样；SDK **自读**的 LangSmith / LangChain 开关与 Key 另由同文件的 pop 块摘除（#84）——「离线全绿」不靠开发者 shell 恰好没设变量 | `backend/tests/conftest.py` 顶部两块（代码即权威）+ 复现测试 `test_langsmith_offline_guard.py` |
 | 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn / starlette 区间不动；`qianfan` 的安装入口只多一个 build 期 setuptools，运行期依赖仍只以 `requirements.txt` 为源，mcp 的 `uvicorn>=0.31.1` 元数据用根目录 `overrides.txt` 覆盖（区间不变） | `requirements.txt` 注释 + `pyproject.toml` 头注 |
@@ -65,7 +65,7 @@ npx tsc --noEmit     # 本地快检，0 错误
 npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面必跑，细则见 docs/architecture.md §3.4
 ```
 
-- 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。换位置克隆需同步改配置里的 `.venv311` 绝对路径 entry。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
+- 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。pre-commit entry 用仓库相对 `.venv311`，无本机绝对路径。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。
 - 既有测试只增不减、不得跳过或放宽；文档不写现役测试计数（数字必腐，以实跑为准）。
 - 改接口 / 配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
@@ -74,7 +74,7 @@ npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面�
 
 > 本节由 `setup-matt-pocock-skills` 技能生成（2026-09-15），供 mattpocock 工程技能组读取；
 > 下面四个 `###` 标题是它们的读取入口。细节改 `docs/agents/*.md` 即可，不必重跑技能。
-> 技能组来源 `mattpocock/skills`：本地克隆 `E:\code\mattpocock-skills`（HEAD `6fd9479`，
+> 技能组来源 `mattpocock/skills`：本地克隆（路径因机器而异；HEAD `6fd9479`，
 > 2026-10-07 同步）。上游有更新先 diff 克隆再改本仓文档，别照记忆改。
 
 ### Issue tracker

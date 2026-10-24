@@ -16,7 +16,7 @@
 - **LLM 抽象层**：OpenAI 兼容 `LLMClient`，支持 OpenAI / DeepSeek / Ollama + 可注入 Mock（便于离线测试）
 - **工具层（BaseTool 规范）**：web_search（DuckDuckGo 可插拔）、六个沙箱文件工具（`read`/`write`/`edit`/`glob`/`grep`/`ls`，各自独立 schema + 沙箱白名单）、code_exec（受限 subprocess 沙箱，子进程环境变量走白名单、不再继承父进程密钥）、http_api（写方法需确认）
 
-## 文件清单（工程根 `E:\code\demo\langgraph-agent\`）
+## 文件清单（工程根）
 - `backend/`（~31 文件）：`config.py`、`core/llm/`、`core/tools/`、`core/agent/`、`services/`、`api/`、`main.py`
 - `frontend/`：React 三栏可视化 UI（`src/components`、`src/store`、`src/api`、`src/hooks`）
 - `docs/`：`prd.md`、`architecture.md`、`class-diagram.mermaid`、`sequence-diagram.mermaid`

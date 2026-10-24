@@ -121,6 +121,7 @@ the same way — surface it, don't silently override.
 | spec / 实施方案 / 任务计划 | `docs/specs/` | `英文-kebab-case.md` |
 | 调研 / 对标 / 路线图 / 迁移评估 | `docs/` 根（过时后移入 `docs/archive/`）| 同上（沿用既有惯例）|
 | 设计基线（目标态 UI / 交互 / 组件规则；未交付） | `docs/` 根（先例：`architecture.md`）| 英文-kebab-case |
+| 安全基线（威胁模型 / 密钥与暴露面 / 危险动作规则） | `docs/` 根（先例：`security.md`）| 英文-kebab-case |
 | 过时 / 点-时文档 | `docs/archive/` | 原文件名（`git mv` 保历史；不作现役权威）|
 
 > **spec 例外**：`docs/specs/` 是冻结归档——**退役 spec 不移动**，只在原地加状态头（先例：`p1-b-rollback.md`、`second-tier-ci-guard-and-smoke.md`）；ADR 0010 决策 11 的「过时文档移 archive」不适用于 specs。

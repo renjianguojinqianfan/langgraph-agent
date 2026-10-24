@@ -3,7 +3,7 @@
 > 文档性质：**增量架构设计（仅描述 P0 四件套变更，不重写整份架构）**
 > 架构师：高见远（Gao）　|　版本：v0.1　|　日期：2025-08-24
 > 关联文档：`docs/architecture.md`（整体架构）、`docs/incremental-prd-p0.md`（增量 PRD）
-> 项目根目录：`E:\code\demo\langgraph-agent\`
+> 项目根目录：仓库根
 
 ---
 
