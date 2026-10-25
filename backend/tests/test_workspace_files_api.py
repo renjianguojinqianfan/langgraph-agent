@@ -83,10 +83,15 @@ def _dir_link(link, target) -> None:
             capture_output=True,
         )
         if result.returncode != 0:
-            pytest.skip(
+            message = (
                 "cannot create a junction: "
                 + result.stderr.decode("mbcs", errors="replace").strip()
             )
+            if os.environ.get("CI"):
+                # Windows smoke must not go green with the junction security
+                # face skipped; local dev without the privilege may still skip.
+                pytest.fail(message)
+            pytest.skip(message)
     else:
         link.symlink_to(target, target_is_directory=True)
 
