@@ -235,6 +235,32 @@ def test_mcp_killed_server_returns_failure_not_crash(tmp_path):
     mgr.cleanup()
 
 
+def test_mcp_tool_reports_exception_type_when_message_is_empty(tmp_path):
+    """A bare pipe-reset exception must still surface a non-empty reason.
+
+    GitHub's Windows runner can raise exceptions whose ``str()`` is empty;
+    ``McpTool.run`` falls back to the exception type name instead of handing a
+    blank ``error`` to the model / trace.
+    """
+
+    class _Manager:
+        def call_tool(self, server, tool, arguments):
+            raise ConnectionResetError()
+
+    s = _echo_settings(tmp_path, mcp_servers="[]")
+    tool = McpTool(
+        server_name="echo",
+        tool_name="echo",
+        description="echo",
+        input_schema={},
+        manager=_Manager(),
+        settings=s,
+    )
+    res = tool.run(text="after")
+    assert res.success is False
+    assert res.error == "ConnectionResetError"
+
+
 # ─────────────────── danger classification ───────────────────
 def test_mcp_self_reported_annotations_drive_the_danger_signal(tmp_path):
     """The server's self-reported annotations (via ``connect_all``) reach McpTool.

@@ -122,8 +122,11 @@ class McpTool(BaseTool):
             logger.warning("MCP tool %s timed out: %s", self.name, exc)
             return ToolResult(success=False, error=str(exc))
         except Exception as exc:
-            logger.warning("MCP tool %s failed: %s", self.name, exc)
-            return ToolResult(success=False, error=str(exc))
+            # Windows can raise pipe-reset exceptions whose str() is empty;
+            # fall back to the type name so the failure reason is never blank.
+            message = str(exc) or type(exc).__name__
+            logger.warning("MCP tool %s failed: %s", self.name, message)
+            return ToolResult(success=False, error=message)
 
         content = raw.get("content") or []
         text_parts: List[str] = []
