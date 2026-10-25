@@ -165,6 +165,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 > **守卫链**：`npm run check:sse`（前端 job）逐条比对「后端发布点 == 本表 == `EVENT_TYPES`」，并校验 `SSEventType` 联合 = `EVENT_TYPES ∪ trace 文件独有类型`；`backend/tests/test_sse_publish_ast.py`（backend job）用 AST 枚举发布调用，与上表第一列比对。两条路径都只认**字符串字面量**类型：经变量名传入的发布调用是共同盲区，必须手工同步四处。
 > **唯一不对称**：`trace_end` 只写 trace JSONL、不经 EventBus——进 `SSEventType` 联合、不进 `EVENT_TYPES` 订阅表。
 > 面板（`SubtaskList`）数据源是 REST 的 `Task.subtasks`，不吃 `subtask_*` 三条事件；事件只进 Trace 时间线。`subtask_*` 三条只发在**父频道**，子任务自己的频道不带。
+> **投递语义**：同一 task 的事件按发布顺序推送；晚订阅者先收到缓冲区回放，再继续实时流——`EventBus.subscribe` 在同一把锁里登记订阅并取回放快照，`backend/api/sse.py` 把 worker 线程的发布经 `call_soon_threadsafe` 投回事件循环，因此回放与实时之间**不丢不重**。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
