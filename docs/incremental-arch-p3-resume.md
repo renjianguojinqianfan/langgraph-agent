@@ -42,7 +42,8 @@ resume(task_id):
   ① join 原 worker（≤5s）            # stop 发布 INTERRUPTED 后 worker 仍在收尾写最后帧
   ② _has_checkpoint 双探测           # 0.3s grace 重试一次，规避首帧未落盘窗口
   ③ 锁内 CAS claim                   # status==INTERRUPTED 才翻转 RUNNING（并发双跑拦截）
-  ④ publish task_resumed + trace attach（append 同一 JSONL）
+  ④ 锁内 trace attach → publish task_resumed（append 同一 JSONL；先挂载才能把边界事件写入，
+     订阅快照仍丢弃，避免重放上一代）
   ⑤ 后台 _resume_run:
        get_state() 取回快照
        仅重置控制位（status/stop_requested/pending_confirm/_needs_confirm/_current_tool_calls）

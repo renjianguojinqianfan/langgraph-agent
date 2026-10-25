@@ -16,6 +16,7 @@ re-invokes with the same ``thread_id`` so checkpoint history keeps growing.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -61,6 +62,30 @@ def _wait(tm, task_id, statuses=("INTERRUPTED", "FAILED"), timeout=15):
             return t
         time.sleep(0.05)
     return tm.get_task(task_id)
+
+
+def _trace_events(path):
+    events = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            break  # mid-write tail; callers that race a writer retry
+    return events
+
+
+def _wait_trace_end(path, *, after_lines, timeout=10.0):
+    """Wait until the JSONL has grown past ``after_lines`` and ends with trace_end."""
+    deadline = time.time() + timeout
+    events = _trace_events(path)
+    while time.time() < deadline:
+        events = _trace_events(path)
+        if len(events) > after_lines and events[-1]["type"] == "trace_end":
+            return events
+        time.sleep(0.02)
+    return events
 
 
 def _interrupt_midway(settings, event_bus):
@@ -128,6 +153,55 @@ class TestBlackBoxResume:
 
         lines_after_resume = len(trace_file.read_text(encoding="utf-8").splitlines())
         assert lines_after_resume > lines_after_stop
+
+    def test_trace_captures_task_resumed_across_restart(self, tmp_path):
+        """The resumed era starts with exactly one ``task_resumed`` (#205).
+
+        ``resume`` used to publish the boundary event before reattaching the
+        recorder, so it reached SSE only. The whole previous era must also
+        stay un-replayed: the subscription snapshot is still dropped.
+        """
+        settings = _ckpt_settings(tmp_path)
+        tm1, task_id = _interrupt_midway(settings, EventBus())
+        tm1.shutdown()  # join era 1 so its trace_end is on disk before resume
+        trace_file = settings.trace_path / f"{task_id}.jsonl"
+        before = _wait_trace_end(trace_file, after_lines=0)
+        assert before[0]["type"] == "task_created"
+        assert "task_resumed" not in [e["type"] for e in before]
+
+        tm2 = make_manager(settings, _big_script(), event_bus=EventBus())
+        tm2.resume(task_id)
+        _wait(tm2, task_id)
+        after = _wait_trace_end(trace_file, after_lines=len(before))
+
+        assert after[: len(before)] == before  # append-only
+        tail = [e["type"] for e in after[len(before):]]
+        assert tail[0] == "task_resumed"  # a replayed snapshot would precede it
+        assert tail.count("task_resumed") == 1
+        assert tail[-1] == "trace_end"
+
+    def test_trace_captures_task_resumed_across_continuation(self, tmp_path):
+        """Same boundary guarantee for the continuation (send_message) path."""
+        settings = _ckpt_settings(tmp_path)
+        tm = make_manager(
+            settings, MockLLMClient(final_answer="round done"), event_bus=EventBus()
+        )
+        task_id = tm.create_task(title="continue", user_input="hi")
+        assert _wait(tm, task_id).status == TaskStatus.INTERRUPTED
+        trace_file = settings.trace_path / f"{task_id}.jsonl"
+        before = _wait_trace_end(trace_file, after_lines=0)
+        assert before[0]["type"] == "task_created"
+        assert "task_resumed" not in [e["type"] for e in before]
+
+        tm.send_message(task_id, "one more")
+        _wait(tm, task_id)
+        after = _wait_trace_end(trace_file, after_lines=len(before))
+
+        assert after[: len(before)] == before
+        tail = [e["type"] for e in after[len(before):]]
+        assert tail[0] == "task_resumed"  # a replayed snapshot would precede it
+        assert tail.count("task_resumed") == 1
+        assert tail[-1] == "trace_end"
 
     def test_resume_non_resumable_status_raises(self, tmp_path):
         settings = make_settings(tmp_path)

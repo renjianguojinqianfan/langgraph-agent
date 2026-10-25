@@ -17,6 +17,11 @@ const TYPE_META: Record<string, TraceMeta> = {
     badge: "bg-sky-500/15 text-sky-300 border-sky-500/40",
     category: "task",
   },
+  task_resumed: {
+    label: "续跑/续说",
+    badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
+    category: "task",
+  },
   step_start: {
     label: "步骤开始",
     badge: "bg-blue-500/15 text-blue-300 border-blue-500/40",
