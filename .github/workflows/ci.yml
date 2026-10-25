@@ -106,6 +106,7 @@ jobs:
   #   test_static_frontend.py        StaticFiles 挂载 e2e（Windows 上 get_path 用 \ 连接）
   #   test_gitignore_visibility.py   Windows-only 反斜杠 glob 用例（Linux 上被 skip）
   #   test_workspace_files_api.py    workspace 文件面（junction 逃逸 / 循环 / 预览截断；B1 首个实验文件）
+  #   test_workspace.py              workspace 归属 / 注入 / 续说 / 子代理继承（B1 第二个文件）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
     name: Backend Windows smoke
@@ -138,6 +139,7 @@ jobs:
           backend/tests/test_static_frontend.py
           backend/tests/test_gitignore_visibility.py
           backend/tests/test_workspace_files_api.py
+          backend/tests/test_workspace.py
           -q -rs
 
   # ── 前端：类型检查 + 生产构建 ─────────────────────────────────────────────
