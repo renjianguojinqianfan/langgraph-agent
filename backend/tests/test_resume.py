@@ -157,17 +157,16 @@ class TestBlackBoxResume:
     def test_trace_captures_task_resumed_across_restart(self, tmp_path):
         """The resumed era starts with exactly one ``task_resumed`` (#205).
 
-        ``resume`` publishes the boundary event before reattaching the
-        recorder, so it used to reach SSE only. The whole previous era must
-        also stay un-replayed: the subscription snapshot is still dropped.
+        ``resume`` used to publish the boundary event before reattaching the
+        recorder, so it reached SSE only. The whole previous era must also
+        stay un-replayed: the subscription snapshot is still dropped.
         """
         settings = _ckpt_settings(tmp_path)
         tm1, task_id = _interrupt_midway(settings, EventBus())
         tm1.shutdown()  # join era 1 so its trace_end is on disk before resume
         trace_file = settings.trace_path / f"{task_id}.jsonl"
-        before = _trace_events(trace_file)
+        before = _wait_trace_end(trace_file, after_lines=0)
         assert before[0]["type"] == "task_created"
-        assert before[-1]["type"] == "trace_end"
         assert "task_resumed" not in [e["type"] for e in before]
 
         tm2 = make_manager(settings, _big_script(), event_bus=EventBus())
@@ -175,8 +174,9 @@ class TestBlackBoxResume:
         _wait(tm2, task_id)
         after = _wait_trace_end(trace_file, after_lines=len(before))
 
-        assert after[: len(before)] == before  # append-only, no era-1 replay
+        assert after[: len(before)] == before  # append-only
         tail = [e["type"] for e in after[len(before):]]
+        assert tail[0] == "task_resumed"  # a replayed snapshot would precede it
         assert tail.count("task_resumed") == 1
         assert tail[-1] == "trace_end"
 
@@ -199,6 +199,7 @@ class TestBlackBoxResume:
 
         assert after[: len(before)] == before
         tail = [e["type"] for e in after[len(before):]]
+        assert tail[0] == "task_resumed"  # a replayed snapshot would precede it
         assert tail.count("task_resumed") == 1
         assert tail[-1] == "trace_end"
 

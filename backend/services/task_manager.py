@@ -1019,7 +1019,8 @@ class TaskManager:
             task.updated_at = _now()
             self.persistence.save_task(task)
             # Reopen the audit trail before the boundary event so the JSONL
-            # captures task_resumed; manager -> trace -> bus stays acyclic.
+            # captures task_resumed. This does the file open + subscribe under
+            # the claim lock, but manager -> trace -> bus stays acyclic.
             if self._trace is not None:
                 self._trace.attach(self.event_bus, task_id)
             self.event_bus.publish(
