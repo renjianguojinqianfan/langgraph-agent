@@ -1018,15 +1018,15 @@ class TaskManager:
             task.status = TaskStatus.RUNNING
             task.updated_at = _now()
             self.persistence.save_task(task)
+            # Reopen the audit trail before the boundary event so the JSONL
+            # captures task_resumed; manager -> trace -> bus stays acyclic.
+            if self._trace is not None:
+                self._trace.attach(self.event_bus, task_id)
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
                 {"task_id": task_id, "status": TaskStatus.RUNNING.value},
             )
-
-        # Reopen the audit trail for the continued era.
-        if self._trace is not None:
-            self._trace.attach(self.event_bus, task_id)
 
         t = threading.Thread(target=self._resume_run, args=(task_id,), daemon=True)
         self._threads[task_id] = t
@@ -1261,15 +1261,15 @@ class TaskManager:
             task.status = TaskStatus.RUNNING
             task.updated_at = _now()
             self.persistence.save_task(task)
+            # Same attach-before-publish contract as resume().
+            if self._trace is not None:
+                self._trace.attach(self.event_bus, task_id)
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
                 {"task_id": task_id, "status": TaskStatus.RUNNING.value},
             )
             snapshot = task.model_dump(mode="json")
-
-        if self._trace is not None:
-            self._trace.attach(self.event_bus, task_id)
 
         t = threading.Thread(
             target=self._continue_run,
