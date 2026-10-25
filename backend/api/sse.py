@@ -29,18 +29,26 @@ def sse_response(task_id: str, event_bus: EventBus, request: Request) -> Streami
     """
     queue: "asyncio.Queue[Event]" = asyncio.Queue()
 
-    def _on_event(event: Event) -> None:
-        try:
-            queue.put_nowait(event)
-        except Exception:  # pragma: no cover - queue full / closed
-            pass
-
     async def event_generator():
-        # Replay buffered history so a reconnecting client is consistent.
-        for ev in event_bus.replay(task_id):
-            yield sse_format(ev)
-        event_bus.subscribe(task_id, _on_event)
+        loop = asyncio.get_running_loop()
+
+        def on_event(event: Event) -> None:
+            # Publishers run on the task's worker thread and asyncio.Queue is
+            # not thread-safe: hand the event back to the loop explicitly,
+            # otherwise delivery waits for the loop's next wake-up (at worst
+            # the 15s heartbeat timeout).
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+            except RuntimeError:  # pragma: no cover - loop closed after disconnect
+                pass
+
+        # Subscribe before replaying: the bus registers the callback and
+        # snapshots its buffer atomically, so events published while history
+        # is flushed are queued live instead of being lost in between.
+        history = event_bus.subscribe(task_id, on_event)
         try:
+            for ev in history:
+                yield sse_format(ev)
             while True:
                 if await request.is_disconnected():
                     break
@@ -50,7 +58,7 @@ def sse_response(task_id: str, event_bus: EventBus, request: Request) -> Streami
                 except asyncio.TimeoutError:
                     yield sse_format({"type": "heartbeat", "data": {}, "ts": time.time()})
         finally:
-            event_bus.unsubscribe(task_id, _on_event)
+            event_bus.unsubscribe(task_id, on_event)
 
     return StreamingResponse(
         event_generator(),
