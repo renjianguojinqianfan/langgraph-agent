@@ -286,7 +286,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 
 | 面 | 现役钉版（详见源文件） |
 |---|---|
-| 存储/编排三包 | `langgraph>=1.2,<1.3` · `langgraph-checkpoint==4.2.0` · `langgraph-checkpoint-sqlite==3.1.1`（三包同钉，抬版须人工评估；理由见 [`requirements.txt`](../requirements.txt) 注释） |
+| 存储/编排三包 | `langgraph>=1.2,<1.3` · `langgraph-checkpoint==4.3.0` · `langgraph-checkpoint-sqlite==3.1.2`（三包同钉，抬版须人工评估；理由见 [`requirements.txt`](../requirements.txt) 注释） |
 | Web | `fastapi>=0.162,<0.163` · `starlette>=1.3.1,<2` · `uvicorn[standard]>=0.30,<0.31` · `pydantic>=2.7,<3` · `pydantic-settings>=2.3,<3` |
 | 其他 | `openai>=1.30,<2` · `httpx>=0.27,<0.29` · `duckduckgo-search>=4,<5` · `pyyaml>=6,<7` · `mcp>=1.2,<2`（`--no-deps` 安装 + overrides，防抬 uvicorn/starlette） |
 | 前端 | React 18 · Vite 8 · TS 5 · Tailwind 4 · zustand 4（`npm ci` 口径） |
