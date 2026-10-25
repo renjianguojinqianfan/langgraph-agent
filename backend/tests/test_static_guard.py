@@ -3,7 +3,7 @@
 CVE-2026-48818 (UNC path -> SMB / NTLM leak on Windows) is fixed upstream in
 starlette 1.1: ``lookup_path`` refuses a leading ``/`` or ``\\`` before calling
 ``os.path.realpath``. The repository used to ship its own subclass
-(``backend/api/static_guard.py``); with ``starlette>=1.1`` pinned, these tests
+(``backend/api/static_guard.py``); with ``starlette>=1.3.1`` pinned, these tests
 pin the upstream behaviour so a future range change cannot silently drop it.
 
 The dangerous forms are pure path decisions and never open an SMB connection.
