@@ -23,9 +23,16 @@ class EventBus:
         self._buffers: Dict[str, "deque[Event]"] = defaultdict(lambda: deque(maxlen=buffer_size))
         self._lock = threading.Lock()
 
-    def subscribe(self, task_id: str, callback: Callable[[Event], None]) -> None:
+    def subscribe(self, task_id: str, callback: Callable[[Event], None]) -> List[Event]:
+        """Register ``callback`` and return the events buffered so far.
+
+        Registration and snapshot happen under one lock so every event is
+        either replayed from the returned history or delivered live; an event
+        published in between cannot fall through the gap.
+        """
         with self._lock:
             self._subs[task_id].add(callback)
+            return list(self._buffers[task_id])
 
     def unsubscribe(self, task_id: str, callback: Callable[[Event], None]) -> None:
         with self._lock:
