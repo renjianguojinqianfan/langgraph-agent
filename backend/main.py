@@ -13,9 +13,9 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.staticfiles import StaticFiles
 
 from .api.routes import router
-from .api.static_guard import SafeStaticFiles
 from .config import get_settings
 from .services.auth import TokenIssuer
 from .services.event_bus import EventBus
@@ -95,12 +95,12 @@ def mount_frontend(app: FastAPI, dist: Path) -> bool:
     Registered after every API route so ``/api`` and ``/health`` keep
     precedence. Returns whether the build output was mounted.
 
-    ``SafeStaticFiles`` rejects UNC / drive-absolute / root-relative paths before
-    starlette resolves them (CVE-2026-48818 mitigation; see the module docstring).
+    ``StaticFiles`` refuses UNC / drive-absolute / root-relative paths before
+    resolving them (starlette>=1.1 fixes CVE-2026-48818; see docs/security.md §6).
     """
     if not (dist / "index.html").is_file():
         return False
-    app.mount("/", SafeStaticFiles(directory=str(dist), html=True), name="frontend")
+    app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
     return True
 
 

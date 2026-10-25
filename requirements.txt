@@ -24,7 +24,12 @@ langgraph-checkpoint-sqlite==3.1.1
 # 1.x 要求的 >=1.0 直接冲突，删除是升级的前置条件）。
 # aiosqlite / sqlite-vec / ormsgpack 同为 checkpoint(-sqlite) 自己声明的硬依赖，随正常
 # 安装到位；只有 mcp 需要 --no-deps（见文件末尾）。
-fastapi>=0.111.0,<0.113.0
+# Web 栈：starlette 1.1 起修复了 2026 同批 CVE 的静态路径问题（见 docs/security.md §6），
+# 本仓随 fastapi 0.162 抬到 1.x 后，SafeStaticFiles 缓解退役。starlette 必须显式钉下限：
+# fastapi 自身只要求 >=0.46，落到 0.4x 会重新进入未修复区间。fastapi 0.162 的硬依赖新增
+# opentelemetry-api 与 annotated-doc（传递安装，不在本文件重复列出）。
+fastapi>=0.162.0,<0.163.0
+starlette>=1.1,<2
 uvicorn[standard]>=0.30.0,<0.31.0
 pydantic>=2.7.0,<3.0.0
 pydantic-settings>=2.3.0,<3.0.0
@@ -38,6 +43,6 @@ mcp>=1.2,<2.0
 # mcp 由 --no-deps 安装（防其拉高 uvicorn/starlette），以下是其运行期必需的传递
 # 依赖；mcp 根包 __init__ 即导入 FastMCP，因此 sse-starlette/jsonschema 也必须显式列出。
 httpx-sse>=0.4,<1  # metadata dep of mcp (--no-deps install); ClientSession import chain
-sse-starlette>=1.8,<2  # metadata dep of mcp (--no-deps install); cap <2: 2.x/3.x 要求 starlette>fastapi 上限
+sse-starlette>=3.5,<4  # metadata dep of mcp (--no-deps install); 旧 <2 上限随旧 fastapi/starlette 区间退役
 jsonschema>=4.20,<5  # metadata dep of mcp (--no-deps install); FastMCP schema 校验
 pywin32>=310; sys_platform == "win32"  # metadata dep of mcp stdio on Windows (--no-deps install)

@@ -185,8 +185,10 @@ def test_sse_response_emits_replayed_event_frames(client):
 
 
 def test_sse_route_is_registered(client):
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/api/tasks/{task_id}/events" in paths
+    # FastAPI 0.162 keeps included routers nested instead of flattening them
+    # into ``app.routes``; the OpenAPI document is the public registration
+    # surface and does not depend on that internal representation.
+    assert "/api/tasks/{task_id}/events" in app.openapi()["paths"]
 
 
 def test_health_endpoint_reports_status(client):

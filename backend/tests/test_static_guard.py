@@ -1,94 +1,95 @@
-"""Static-file path guard (CVE-2026-48818 mitigation).
+"""Static-file path contract of starlette's own ``StaticFiles``.
 
-The frontend mount rejects UNC / drive-absolute paths before starlette's
-``lookup_path`` calls ``os.path.realpath`` — on Windows that call would open an
-SMB connection and leak the process account's NTLMv2 hash. No filesystem
-access here: all cases are pure path decisions, so the test runs on any
-platform.
+CVE-2026-48818 (UNC path -> SMB / NTLM leak on Windows) is fixed upstream in
+starlette 1.1: ``lookup_path`` refuses a leading ``/`` or ``\\`` before calling
+``os.path.realpath``. The repository used to ship its own subclass
+(``backend/api/static_guard.py``); with ``starlette>=1.1`` pinned, these tests
+pin the upstream behaviour so a future range change cannot silently drop it.
 
-The guard checks the **normalised** path (what ``StaticFiles.get_path``
-returns), which is also why a request like ``/C:/Windows/win.ini`` is caught.
+The dangerous forms are pure path decisions and never open an SMB connection.
+Normal nested assets must keep working on Windows, where ``get_path`` returns
+``assets\\app.js`` (the 2026-10-24 white-screen regression).
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+from pathlib import Path
 
 import pytest
 from starlette.exceptions import HTTPException
-
-from backend.api.static_guard import SafeStaticFiles, is_unsafe_static_path
+from starlette.staticfiles import StaticFiles
 
 
 def _scope(path: str, root_path: str = "") -> dict:
-    return {"type": "http", "path": path, "root_path": root_path, "headers": []}
+    return {"type": "http", "method": "GET", "path": path, "root_path": root_path, "headers": []}
+
+
+def _status(files: StaticFiles, path: str) -> int:
+    scope = _scope(path)
+    try:
+        asyncio.run(files.get_response(files.get_path(scope), scope))
+    except HTTPException as exc:
+        return exc.status_code
+    return 200
 
 
 @pytest.mark.parametrize(
     "path",
     [
-        r"\\attacker.example\share\x",  # UNC (decoded from %5C%5C...)
-        r"\attacker.example\share",  # drive-root-relative
-        r"C:\Windows\win.ini",  # drive-absolute
-        "//attacker.example/share",  # leading double slash
-        "x\x00y",  # NUL byte
-        r"\\?\C:\tmp",  # device namespace
+        r"/\\attacker.example\share\x",  # UNC behind a leading slash (real HTTP shape)
+        r"/\attacker.example\share",  # drive-root-relative
+        r"/C:\Windows\win.ini",  # drive-absolute
+        "//attacker.example/share",  # leading double slash normalises to a relative path
+        "/x\x00y",  # NUL byte
+        r"/\\?\C:\tmp",  # device namespace
         "",  # empty
     ],
 )
-def test_unsafe_paths_are_rejected(path: str) -> None:
-    assert is_unsafe_static_path(path)
+def test_unsafe_paths_get_404(path: str, tmp_path: Path) -> None:
+    (tmp_path / "index.html").write_text("ok", encoding="utf-8")
+    assert _status(StaticFiles(directory=str(tmp_path)), path) == 404
+
+
+def test_leading_separator_is_refused_before_realpath(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(path: str) -> str:  # pragma: no cover - only reached on regression
+        raise AssertionError("realpath must not run on a leading-separator path")
+
+    monkeypatch.setattr("starlette.staticfiles.os.path.realpath", boom)
+    files = StaticFiles(directory=".")
+    assert files.lookup_path(r"\\attacker.example\share\x") == ("", None)
+    assert files.lookup_path(r"\attacker.example\share") == ("", None)
 
 
 @pytest.mark.parametrize(
-    "path",
-    [
-        "index.html",
-        "assets/app-abc123.js",
-        "a/b/c.png",
-        "%5C%5Cnotdecoded",
-        # Windows: ``StaticFiles.get_path`` joins segments with the OS separator,
-        # so a perfectly normal nested asset arrives as ``assets\app.js``.
-        os.path.join("assets", "app.js"),
-        # The literal shape, so the regression test is red on every platform
-        # before the fix (CI only runs Linux, where get_path keeps "/").
-        r"assets\app.js",
-    ],
+    "rel",
+    ("index.html", "assets/app-abc123.js", "a/b/c.png", "%5C%5Cnotdecoded"),
 )
-def test_normal_paths_pass(path: str) -> None:
-    assert not is_unsafe_static_path(path)
+def test_normal_paths_are_served(rel: str, tmp_path: Path) -> None:
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("ok", encoding="utf-8")
+
+    files = StaticFiles(directory=str(tmp_path))
+    _, stat_result = files.lookup_path(os.path.join(*rel.split("/")))
+    assert stat_result is not None
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        r"/\\attacker.example\share\x",
-        "/C:/Windows/win.ini",  # leading-slash drive path: caught after normpath
-        "/x\x00y",
-    ],
-)
-def test_mount_refuses_unsafe_paths_before_resolution(path: str) -> None:
-    # `//host/share` is rejected by the helper, but on POSIX `StaticFiles.get_path`
-    # normalises it into a relative path first, so the mount test cannot use it.
-    files = SafeStaticFiles(directory=".")
-    with pytest.raises(HTTPException) as excinfo:
-        files.get_path(_scope(path))
-    assert excinfo.value.status_code == 404
+def test_nested_assets_keep_windows_separator(tmp_path: Path) -> None:
+    # Regression (2026-10-24 review): rejecting *any* backslash 404s every Vite
+    # asset under ``assets/`` on Windows (white screen).
+    target = tmp_path / "assets"
+    target.mkdir()
+    (target / "app.js").write_text("ok", encoding="utf-8")
 
-
-def test_mount_serves_normal_paths() -> None:
-    files = SafeStaticFiles(directory=".")
-    assert files.get_path(_scope("/index.html")) == "index.html"
-
-
-def test_mount_serves_nested_assets() -> None:
-    # Regression (2026-10-24 review): the guard first rejected *any* backslash,
-    # which on Windows 404s every Vite asset under ``assets/`` (white screen).
-    files = SafeStaticFiles(directory=".")
-    assert files.get_path(_scope("/assets/app.js")) == os.path.join("assets", "app.js")
+    files = StaticFiles(directory=str(tmp_path))
+    path = files.get_path(_scope("/assets/app.js"))
+    assert path == os.path.join("assets", "app.js")
+    assert files.lookup_path(path)[1] is not None
 
 
 def test_mount_honours_root_path() -> None:
-    files = SafeStaticFiles(directory=".")
-    # A prefixed mount (root_path) must be stripped before the guard decides.
+    files = StaticFiles(directory=".")
+    # A prefixed mount (root_path) is stripped before the path is resolved.
     assert files.get_path(_scope("/app/index.html", root_path="/app")) == "index.html"

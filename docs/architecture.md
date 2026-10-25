@@ -34,14 +34,13 @@
 ```text
 backend/
 ├── config.py            Settings（pydantic-settings；.env / 环境变量）
-├── main.py              FastAPI app：/health、/api 路由挂载、静态前端（SafeStaticFiles）、Host 检查、CORS
+├── main.py              FastAPI app：/health、/api 路由挂载、静态前端（StaticFiles）、Host 检查、CORS
 ├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
 ├── server_lock.py       单实例锁（一台机器只允许一个后台）
 ├── api/
 │   ├── routes.py        24 条 REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
 │   ├── sse.py           SSE 流组装（15s heartbeat）
-│   └── static_guard.py  静态挂载路径防护（CVE-2026-48818 缓解；见 security.md §6）
 ├── core/
 │   ├── agent/           graph.py 拓扑 · nodes.py 三节点 · state.py AgentState
 │   │                    prompts.py 两套 system · context.py 压缩/驱逐 · inject.py 两层注入
