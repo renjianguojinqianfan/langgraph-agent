@@ -105,8 +105,12 @@
   本仓原有的 `SafeStaticFiles` 缓解已删除，`backend/main.py` 直接用上游类；
   `backend/tests/test_static_guard.py` 断言该上游契约（含「前导分隔符路径不得触发
   `realpath`」、NUL 在解析阶段被拒）与 Windows 嵌套 `assets\app.js` 仍可服务。
-- 与本仓功能面无关、仍按不可达处理：mcp 的 StreamableHTTP 服务端 CVE 本仓不启用该服务端；
-  LangGraph Store CVE 本仓不使用 Store，对应包的抬版见 #197 A2。
+- **LangGraph Store namespace 校验（Dependabot alert #16，
+  [GHSA-6hmw-9432-67qq](https://github.com/advisories/GHSA-6hmw-9432-67qq) /
+  CVE-2026-115883）**：本仓不使用 Store，可达性低；两钉已抬到
+  `langgraph-checkpoint==4.3.0` / `langgraph-checkpoint-sqlite==3.1.2`，包含上游修复
+  （上游 #9217），2026-10-25 抬版（#204）。
+- 与本仓功能面无关、仍按不可达处理：mcp 的 StreamableHTTP 服务端 CVE 本仓不启用该服务端。
 - 依赖没有 lock / constraints：安装随 PyPI 浮动。建议开 Dependabot alerts + 定期
   `pip-audit` / `npm audit`（2026-10-24 用 OSV 对装好的 100 个 Python 包与 78 个 npm 包做过全量扫描）。
   前端 React 18 / Vite 8 当前无 advisory；RSC 类漏洞不适用于 Vite SPA。
@@ -134,3 +138,6 @@
   `sse-starlette` 同步抬到 3.5.x），§6 从「缓解」改为「已修复」；删除
   `backend/api/static_guard.py` 与 `main.py` 的特殊挂载，回归测试改为断言上游
   `StaticFiles` 契约。新增传递依赖：`opentelemetry-api`、`annotated-doc`。
+- 2026-10-25（A2）：`langgraph-checkpoint 4.2.0→4.3.0`、`langgraph-checkpoint-sqlite
+  3.1.1→3.1.2`（`langgraph` 行不动），§6 的 LangGraph Store 条目改为已修复；
+  旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。

@@ -17,6 +17,7 @@ MemorySaver so the on-disk format and connection semantics are exercised.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import sqlite3
@@ -50,6 +51,17 @@ def saver(tmp_path):
     conn_path = tmp_path / "checkpoints.sqlite"
     with SqliteSaver.from_conn_string(str(conn_path)) as saver:
         yield saver
+
+
+@dataclasses.dataclass
+class _ReplayTrap:
+    """Serializes fine; rebuilding it from the stored fields raises."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if self.value == "boom":
+            raise ValueError("stored fields rejected on replay")
 
 
 def _config(task_id: str) -> Dict[str, Any]:
@@ -264,6 +276,19 @@ class TestAgentStateSerde:
         # object it started as — never a corrupted re-hydrated copy.
         stored = snap.values.get("_secret_lock")
         assert stored is None or stored is lock
+
+    def test_unreconstructable_value_keeps_serialized_payload(self, saver):
+        """checkpoint 4.3.0 (#9251): a value that serializes but fails to
+        rebuild on load comes back as its serialized payload, not None.
+
+        Exercised at the serde layer: the graph drops undeclared channels
+        before they reach the checkpointer, so a graph-level write would not
+        hit this path. None would silently erase the value from resumed state.
+        """
+        trap = _ReplayTrap("payload")
+        trap.value = "boom"  # construction succeeded; these stored fields do not
+        restored = saver.serde.loads_typed(saver.serde.dumps_typed(trap))
+        assert restored == {"value": "boom"}
 
 
 # ── Issue #7：迁移前遗留 checkpoint 库的启动检测 ─────────────────────
