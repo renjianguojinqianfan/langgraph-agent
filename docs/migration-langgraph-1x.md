@@ -17,6 +17,9 @@
 | `langchain` / `langchain-openai` | 0.2.17 / 0.1.25（显式钉死） | **删除** |
 | `uvicorn` / `starlette` | 0.30.6 / 0.38.6 | 不动（AGENTS.md 硬约束） |
 
+> 本表是 2026-09 迁移当时的快照；2026-10-25 的 A1（#198）已把 fastapi / starlette 抬到
+> 0.162 / 1.x，当前区间以 `requirements.txt` 为准。
+
 依赖面变化（`pip freeze` 逐行对比，全部由上游声明，本项目不直接 import）：
 
 - **新增传递**：`langgraph-prebuilt 1.1.0`、`sqlite-vec 0.1.9`（checkpoint-sqlite 3.x

@@ -90,17 +90,19 @@
   - 更一般的漏拦仍是环境变量拼接，以及 argv 被拆成多段（后者的机制见 `.env.example` 的
     pattern 说明）。
 
-## 6. 依赖与已知 CVE（当前缓解）
+## 6. 依赖与已知 CVE（已修复）
 
-- **starlette 0.38.6**（`fastapi==0.112.4` 钉住 `<0.39`）命中 2026 年一批 CVE。其中
-  **CVE-2026-48818**（Windows `StaticFiles` UNC → SSRF / NTLM 凭证泄露）在本机可达：
-  现役用 `backend/api/static_guard.py::SafeStaticFiles` 在 `os.path.realpath` 之前拒掉
-  **前导分隔符**（UNC / drive-root-relative / 前导 `//`）、盘符路径与 NUL；普通嵌套路径
-  （Windows 上 `get_path` 返回的 `assets\app.js`）必须放行，否则前端 assets 全 404。前端挂载只走这个类。
-  **升级到 `fastapi>=0.162` + `starlette>=1.1` 的独立 chore 尚未执行**；升级落地后删除该 guard。
-- 其余同批 starlette CVE（Host 投毒 / `HTTPEndpoint` / `request.url.hostname` / form 限制）
-  在本仓不可达或已被 `TrustedHostMiddleware` 缓解；mcp 的 StreamableHTTP 服务端 CVE 与
-  LangGraph Store CVE 对应的功能面本仓不使用。
+- **fastapi 0.162.0 + starlette 1.10.0**（`requirements.txt` 钉 `fastapi>=0.162,<0.163`、
+  `starlette>=1.3.1,<2`）：2026 同批 starlette CVE 已由上游修复。CVE-2026-48818
+  （Windows `StaticFiles` UNC → SSRF / NTLM 凭证泄露，GHSA-wqp7-x3pw-xc5r）的修复点是
+  在 `lookup_path` 里**先拒前导分隔符**、再调 `os.path.realpath`，修复线 1.1.0；
+  下限取 1.3.1 是为覆盖同批其余条目（CVE-2026-48817 / 48710 / 54282 / 54283 等，
+  修复线均不高于 1.3.1）。2026-10-25 用 GitHub Advisory 数据库复核。
+  本仓原有的 `SafeStaticFiles` 缓解已删除，`backend/main.py` 直接用上游类；
+  `backend/tests/test_static_guard.py` 断言该上游契约（含「前导分隔符路径不得触发
+  `realpath`」、NUL 在解析阶段被拒）与 Windows 嵌套 `assets\app.js` 仍可服务。
+- 与本仓功能面无关、仍按不可达处理：mcp 的 StreamableHTTP 服务端 CVE 本仓不启用该服务端；
+  LangGraph Store CVE 本仓不使用 Store，对应包的抬版见 #197 A2。
 - 依赖没有 lock / constraints：安装随 PyPI 浮动。建议开 Dependabot alerts + 定期
   `pip-audit` / `npm audit`（2026-10-24 用 OSV 对装好的 100 个 Python 包与 78 个 npm 包做过全量扫描）。
   前端 React 18 / Vite 8 当前无 advisory；RSC 类漏洞不适用于 Vite SPA。
@@ -124,3 +126,7 @@
   规则起步集补 `rm --recursive`、`.env` 多段后缀（`.env.local` / `.env.production.local`）、
   `| sudo bash`、Linux 账户 / `systemctl` 持久化，`shutdown` / `reboot`、账户 / 服务命令改为
   命令位锚定消误伤；§5 记录已知边界。
+- 2026-10-25：升级 `fastapi 0.162.0` / `starlette 1.10.0`（`starlette` 显式钉 `>=1.3.1,<2`，
+  `sse-starlette` 同步抬到 3.5.x），§6 从「缓解」改为「已修复」；删除
+  `backend/api/static_guard.py` 与 `main.py` 的特殊挂载，回归测试改为断言上游
+  `StaticFiles` 契约。新增传递依赖：`opentelemetry-api`、`annotated-doc`。
