@@ -59,6 +59,7 @@ class TraceRecorder:
                 self._on_event(_tid, event)
 
             self._cbs[task_id] = _cb
+        # attach() precedes any publish, so the replay snapshot returned here is unused.
         event_bus.subscribe(task_id, self._cbs[task_id])
 
     def _on_event(self, task_id: str, event: Event) -> None:

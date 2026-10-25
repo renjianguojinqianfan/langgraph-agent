@@ -35,6 +35,10 @@ def _status(files: StaticFiles, path: str) -> int:
     return 200
 
 
+def _lookup(tmp_path: Path, path: str) -> tuple[str, os.stat_result | None]:
+    return StaticFiles(directory=str(tmp_path)).lookup_path(path)
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -64,25 +68,27 @@ def test_leading_separator_is_refused_before_realpath(monkeypatch: pytest.Monkey
 
 
 def test_nul_byte_is_refused_during_resolution(tmp_path: Path) -> None:
-    files = StaticFiles(directory=str(tmp_path))
     with pytest.raises(ValueError):
-        files.lookup_path("x\x00y")
+        _lookup(tmp_path, "x\x00y")
 
 
 def test_drive_absolute_path_never_escapes_the_mount(tmp_path: Path) -> None:
-    files = StaticFiles(directory=str(tmp_path))
     try:
-        _, stat_result = files.lookup_path(r"C:\Windows\win.ini")
-    except ValueError:  # Windows: commonpath refuses a path on another drive
-        return
-    assert stat_result is None
+        resolved, stat_result = _lookup(tmp_path, r"C:\Windows\win.ini")
+    except ValueError:
+        # Windows refuses paths on another drive inside commonpath; pin the
+        # precondition so an unrelated ValueError cannot pass this branch.
+        assert os.name == "nt"
+        assert tmp_path.drive.upper() != Path(r"C:\Windows\win.ini").drive.upper()
+    else:
+        assert (resolved, stat_result) == ("", None)
 
 
 def test_leading_double_slash_stays_relative(tmp_path: Path) -> None:
     files = StaticFiles(directory=str(tmp_path))
     path = files.get_path(_scope("//attacker.example/share"))
     assert path == os.path.join("attacker.example", "share")
-    assert files.lookup_path(path) == ("", None)
+    assert _lookup(tmp_path, path) == ("", None)
 
 
 @pytest.mark.parametrize(
@@ -94,8 +100,7 @@ def test_normal_paths_are_served(rel: str, tmp_path: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("ok", encoding="utf-8")
 
-    files = StaticFiles(directory=str(tmp_path))
-    _, stat_result = files.lookup_path(os.path.join(*rel.split("/")))
+    _, stat_result = _lookup(tmp_path, os.path.join(*rel.split("/")))
     assert stat_result is not None
 
 
@@ -109,7 +114,7 @@ def test_nested_assets_keep_windows_separator(tmp_path: Path) -> None:
     files = StaticFiles(directory=str(tmp_path))
     path = files.get_path(_scope("/assets/app.js"))
     assert path == os.path.join("assets", "app.js")
-    assert files.lookup_path(path)[1] is not None
+    assert _lookup(tmp_path, path)[1] is not None
 
 
 def test_mount_honours_root_path() -> None:

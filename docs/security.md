@@ -96,8 +96,10 @@
   `starlette>=1.3.1,<2`）：2026 同批 starlette CVE 已由上游修复。CVE-2026-48818
   （Windows `StaticFiles` UNC → SSRF / NTLM 凭证泄露，GHSA-wqp7-x3pw-xc5r）的修复点是
   在 `lookup_path` 里**先拒前导分隔符**、再调 `os.path.realpath`，修复线 1.1.0；
-  下限取 1.3.1 是为覆盖同批其余条目（CVE-2026-48817 / 48710 / 54282 / 54283 等，
-  修复线均不高于 1.3.1）。2026-10-25 用 GitHub Advisory 数据库复核。
+  下限取 1.3.1 是为覆盖同批其余条目（CVE-2026-48817
+  [GHSA-x746-7m8f-x49c](https://github.com/advisories/GHSA-x746-7m8f-x49c)、CVE-2026-48710
+  [GHSA-86qp-5c8j-p5mr](https://github.com/advisories/GHSA-86qp-5c8j-p5mr)、CVE-2026-54282 / 54283
+  等，修复线均不高于 1.3.1）。2026-10-25 用 GitHub Advisory 数据库复核。
   本仓原有的 `SafeStaticFiles` 缓解已删除，`backend/main.py` 直接用上游类；
   `backend/tests/test_static_guard.py` 断言该上游契约（含「前导分隔符路径不得触发
   `realpath`」、NUL 在解析阶段被拒）与 Windows 嵌套 `assets\app.js` 仍可服务。
