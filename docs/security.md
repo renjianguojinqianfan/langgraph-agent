@@ -98,7 +98,9 @@
   在 `lookup_path` 里**先拒前导分隔符**、再调 `os.path.realpath`，修复线 1.1.0；
   下限取 1.3.1 是为覆盖同批其余条目（CVE-2026-48817
   [GHSA-x746-7m8f-x49c](https://github.com/advisories/GHSA-x746-7m8f-x49c)、CVE-2026-48710
-  [GHSA-86qp-5c8j-p5mr](https://github.com/advisories/GHSA-86qp-5c8j-p5mr)、CVE-2026-54282 / 54283
+  [GHSA-86qp-5c8j-p5mr](https://github.com/advisories/GHSA-86qp-5c8j-p5mr)、CVE-2026-54282
+  [GHSA-jp82-jpqv-5vv3](https://github.com/advisories/GHSA-jp82-jpqv-5vv3)、CVE-2026-54283
+  [GHSA-82w8-qh3p-5jfq](https://github.com/advisories/GHSA-82w8-qh3p-5jfq)
   等，修复线均不高于 1.3.1）。2026-10-25 用 GitHub Advisory 数据库复核。
   本仓原有的 `SafeStaticFiles` 缓解已删除，`backend/main.py` 直接用上游类；
   `backend/tests/test_static_guard.py` 断言该上游契约（含「前导分隔符路径不得触发
