@@ -95,8 +95,9 @@ def mount_frontend(app: FastAPI, dist: Path) -> bool:
     Registered after every API route so ``/api`` and ``/health`` keep
     precedence. Returns whether the build output was mounted.
 
-    ``StaticFiles`` refuses UNC / drive-absolute / root-relative paths before
-    resolving them (starlette>=1.1 fixes CVE-2026-48818; see docs/security.md §6).
+    ``StaticFiles`` (starlette>=1.3.1) refuses leading-separator paths before
+    ``os.path.realpath`` and keeps resolution inside ``dist``; this replaces the
+    removed CVE-2026-48818 mitigation (see docs/security.md §6).
     """
     if not (dist / "index.html").is_file():
         return False

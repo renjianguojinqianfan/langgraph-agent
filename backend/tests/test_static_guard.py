@@ -56,10 +56,33 @@ def test_leading_separator_is_refused_before_realpath(monkeypatch: pytest.Monkey
     def boom(path: str) -> str:  # pragma: no cover - only reached on regression
         raise AssertionError("realpath must not run on a leading-separator path")
 
+    # Patched for this test only; the guard must return before touching the resolver.
     monkeypatch.setattr("starlette.staticfiles.os.path.realpath", boom)
     files = StaticFiles(directory=".")
     assert files.lookup_path(r"\\attacker.example\share\x") == ("", None)
     assert files.lookup_path(r"\attacker.example\share") == ("", None)
+
+
+def test_nul_byte_is_refused_during_resolution(tmp_path: Path) -> None:
+    files = StaticFiles(directory=str(tmp_path))
+    with pytest.raises(ValueError):
+        files.lookup_path("x\x00y")
+
+
+def test_drive_absolute_path_never_escapes_the_mount(tmp_path: Path) -> None:
+    files = StaticFiles(directory=str(tmp_path))
+    try:
+        _, stat_result = files.lookup_path(r"C:\Windows\win.ini")
+    except ValueError:  # Windows: commonpath refuses a path on another drive
+        return
+    assert stat_result is None
+
+
+def test_leading_double_slash_stays_relative(tmp_path: Path) -> None:
+    files = StaticFiles(directory=str(tmp_path))
+    path = files.get_path(_scope("//attacker.example/share"))
+    assert path == os.path.join("attacker.example", "share")
+    assert files.lookup_path(path) == ("", None)
 
 
 @pytest.mark.parametrize(

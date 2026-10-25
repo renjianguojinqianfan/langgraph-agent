@@ -93,14 +93,14 @@
 ## 6. 依赖与已知 CVE（已修复）
 
 - **fastapi 0.162.0 + starlette 1.10.0**（`requirements.txt` 钉 `fastapi>=0.162,<0.163`、
-  `starlette>=1.1,<2`）：2026 同批 starlette CVE 已由上游修复。CVE-2026-48818
-  （Windows `StaticFiles` UNC → SSRF / NTLM 凭证泄露）的修复点是在
-  `lookup_path` 里**先拒前导分隔符**、再调 `os.path.realpath`；修复线 1.1.0。
+  `starlette>=1.3.1,<2`）：2026 同批 starlette CVE 已由上游修复。CVE-2026-48818
+  （Windows `StaticFiles` UNC → SSRF / NTLM 凭证泄露，GHSA-wqp7-x3pw-xc5r）的修复点是
+  在 `lookup_path` 里**先拒前导分隔符**、再调 `os.path.realpath`，修复线 1.1.0；
+  下限取 1.3.1 是为覆盖同批其余条目（CVE-2026-48817 / 48710 / 54282 / 54283 等，
+  修复线均不高于 1.3.1）。2026-10-25 用 GitHub Advisory 数据库复核。
   本仓原有的 `SafeStaticFiles` 缓解已删除，`backend/main.py` 直接用上游类；
   `backend/tests/test_static_guard.py` 断言该上游契约（含「前导分隔符路径不得触发
-  `realpath`」）与 Windows 嵌套 `assets\app.js` 仍可服务。
-  同批其余 CVE（CVE-2026-48817 / 48710 / 54282 / 54283 等）的修复线均不高于 1.3.1，
-  1.10.0 已离开受影响区间（2026-10-25 用 GitHub Advisory 数据库复核）。
+  `realpath`」、NUL 在解析阶段被拒）与 Windows 嵌套 `assets\app.js` 仍可服务。
 - 与本仓功能面无关、仍按不可达处理：mcp 的 StreamableHTTP 服务端 CVE 本仓不启用该服务端；
   LangGraph Store CVE 本仓不使用 Store，对应包的抬版见 #197 A2。
 - 依赖没有 lock / constraints：安装随 PyPI 浮动。建议开 Dependabot alerts + 定期
@@ -126,6 +126,7 @@
   规则起步集补 `rm --recursive`、`.env` 多段后缀（`.env.local` / `.env.production.local`）、
   `| sudo bash`、Linux 账户 / `systemctl` 持久化，`shutdown` / `reboot`、账户 / 服务命令改为
   命令位锚定消误伤；§5 记录已知边界。
-- 2026-10-25：升级 `fastapi 0.162.0` / `starlette 1.10.0`（`sse-starlette` 同步抬到 3.5.x），
-  §6 从「缓解」改为「已修复」；删除 `backend/api/static_guard.py` 与 `main.py` 的特殊挂载，
-  回归测试改为断言上游 `StaticFiles` 契约。新增传递依赖：`opentelemetry-api`、`annotated-doc`。
+- 2026-10-25：升级 `fastapi 0.162.0` / `starlette 1.10.0`（`starlette` 显式钉 `>=1.3.1,<2`，
+  `sse-starlette` 同步抬到 3.5.x），§6 从「缓解」改为「已修复」；删除
+  `backend/api/static_guard.py` 与 `main.py` 的特殊挂载，回归测试改为断言上游
+  `StaticFiles` 契约。新增传递依赖：`opentelemetry-api`、`annotated-doc`。
