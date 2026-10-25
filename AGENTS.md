@@ -69,7 +69,7 @@ npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面�
 ```
 
 - 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。pre-commit entry 用仓库相对 `.venv311`，无本机绝对路径。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
-- **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单；**进程树 / 子进程类默认不入清单**（Windows runner 稳定性无数据）；B1 起按票逐个纳入并连跑观察（当前已纳入 `test_workspace_files_api.py`，一个文件一个 PR）。
+- **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单；**进程树 / 子进程类默认不入清单**（Windows runner 稳定性无数据）；B1（#197）起按票逐个纳入并连跑观察，一个文件一个 PR；当前清单以上面那条命令为准。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。
 - 既有测试只增不减、不得跳过或放宽；文档不写现役测试计数（数字必腐，以实跑为准）。
 - 改接口 / 配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
