@@ -8,7 +8,7 @@
 #   （2026-10-14：原 guard-protected-files 守卫已随 ADR 0008 删除——冻结区随确认闸门一并解除）
 #   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
 #                   + pytest 离线全量回归（backend/tests/，计数以实跑为准、不写进注释）
-#   backend-windows-smoke  windows-latest，只跑 Windows 敏感面的三个测试文件（清单见该 job 注释）
+#   backend-windows-smoke  windows-latest，只跑 Windows 敏感面的测试文件（清单见该 job 注释）
 #   frontend-build  npm ci + tsc 类型检查 + SSE 事件词汇表断言（#92）+ vite 生产构建（产物上传为 artifact）
 #
 # 硬约束遵循 AGENTS.md：
@@ -95,15 +95,16 @@ jobs:
           path: test-results/
           if-no-files-found: warn
 
-  # ── 后端：Windows 冒烟（静态挂载 / 路径面） ──────────────────────────────
+  # ── 后端：Windows 冒烟（静态挂载 / 路径 / 工作区文件面） ──────────────────
   # 为什么不是全量：Linux 全量已覆盖与 OS 无关的逻辑；这里只补「Linux 上根本跑不到」的面。
-  # 清单按「Windows-only 行为测试」维护——改 os.name / sys.platform / 路径分隔符时，
+  # 清单按「Windows 敏感面」维护——改 os.name / sys.platform / 路径分隔符时，
   # 把对应测试文件加进下面的 pytest 命令行（同步 AGENTS.md「验证入口」的同一条命令）。
-  # 例外：进程树 / 子进程类（test_bash_tool / test_p2_mcp / test_workspace*）暂不入清单——
-  # Windows runner 上稳定性无数据，需要时按票添加。
+  # 进程树 / 子进程类默认不入清单（Windows runner 稳定性无数据）；B1 起按票逐个纳入
+  # 并连跑观察——B1 第一个实验文件是 test_workspace_files_api.py。
   #   test_static_guard.py           路径判据（UNC / 盘符 / NUL / Windows 反斜杠形态）
   #   test_static_frontend.py        StaticFiles 挂载 e2e（Windows 上 get_path 用 \ 连接）
   #   test_gitignore_visibility.py   Windows-only 反斜杠 glob 用例（Linux 上被 skip）
+  #   test_workspace_files_api.py    workspace 文件面（junction 逃逸 / 循环 / 预览截断；B1 首个实验文件）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
     name: Backend Windows smoke (static mount / paths)
@@ -135,6 +136,7 @@ jobs:
           backend/tests/test_static_guard.py
           backend/tests/test_static_frontend.py
           backend/tests/test_gitignore_visibility.py
+          backend/tests/test_workspace_files_api.py
           -q
 
   # ── 前端：类型检查 + 生产构建 ─────────────────────────────────────────────
