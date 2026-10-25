@@ -3,15 +3,18 @@
 :class:`TraceRecorder` is a **resident EventBus subscriber**: every event
 published for a task is appended as a JSON line
 ``{"type": ..., "data": ..., "ts": ...}`` to
-``<trace_dir>/<task_id>.jsonl``, mirroring the SSE stream exactly (same order,
-same payloads) so a run can be replayed later for audit / debugging.
+``<trace_dir>/<task_id>.jsonl``, mirroring the SSE stream for each run era
+(same order, same payloads) so a run can be replayed later for audit /
+debugging. Resume/continue publish ``task_resumed`` before reattaching, so
+that boundary event stays on the bus/SSE and is not written to the JSONL.
 
 The recorder never modifies :class:`~backend.services.event_bus.EventBus` —
 it is simply another fan-out subscriber, so the existing SSE push logic stays
 untouched. Lifecycle:
 
 * :meth:`attach` — called from ``TaskManager.create_task`` *before* any event
-  is published (so ``task_created`` is captured);
+  is published (so ``task_created`` is captured); resume/continue reattach
+  after ``task_resumed`` is published;
 * :meth:`close` — called from ``TaskManager.run`` in a ``finally`` block; it
   appends a final ``trace_end`` line, unsubscribes, and closes the file handle
   (covers success / failure / interrupt alike).
@@ -59,6 +62,7 @@ class TraceRecorder:
                 self._on_event(_tid, event)
 
             self._cbs[task_id] = _cb
+        # Snapshot dropped: resume reattaches after task_resumed; replay would duplicate prior JSONL.
         event_bus.subscribe(task_id, self._cbs[task_id])
 
     def _on_event(self, task_id: str, event: Event) -> None:

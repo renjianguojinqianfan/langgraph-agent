@@ -32,7 +32,7 @@ class EventBus:
         """
         with self._lock:
             self._subs[task_id].add(callback)
-            return list(self._buffers[task_id])
+            return self._snapshot_locked(task_id)
 
     def unsubscribe(self, task_id: str, callback: Callable[[Event], None]) -> None:
         with self._lock:
@@ -52,4 +52,7 @@ class EventBus:
 
     def replay(self, task_id: str) -> List[Event]:
         with self._lock:
-            return list(self._buffers[task_id])
+            return self._snapshot_locked(task_id)
+
+    def _snapshot_locked(self, task_id: str) -> List[Event]:
+        return list(self._buffers[task_id])
