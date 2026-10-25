@@ -8,9 +8,9 @@ langgraph-checkpoint-sqlite==3.1.2
 # 三个包一起钉：它们是 resume 契约的完整存储面。
 # - langgraph 只放 1.2.x 补丁级（spec：1.2.x LTS 线），跨小版本重新走评估流程。
 # - langgraph-checkpoint 必须显式钉：serde（JsonPlusSerializer）住在这个包里，而它
-#   否则只被上游约束在 [4.1,5) 的浮动窗口里——一次普通 pip install 就能把它抬到
-#   4.5 并改掉快照语义，既过不了钉版也过不了 CHECKPOINT_FORMAT_VERSION（打标只
-#   区分迁移前/后，感知不到 4.x 内部漂移），而失败形态正是「静默腐蚀 resume」。
+#   否则只被上游约束在一个浮动窗口里（当前 [4.3,5)）——一次普通 pip install 就能把
+#   它抬到 4.5 并改掉快照语义，既过不了钉版也过不了 CHECKPOINT_FORMAT_VERSION（打标
+#   只区分迁移前/后，感知不到 4.x 内部漂移），而失败形态正是「静默腐蚀 resume」。
 # - langgraph-checkpoint-sqlite 钉死：存储格式直接决定 resume 契约。
 # 抬版必须由人评估后放行。上一钉 3.1.1 曾闭环了在 2.0.11 上被评估为 not_used 而
 # dismiss 的两条公告（GHSA-9rwj-6rc7-p77c / CVE-2025-67644 与 GHSA-47pj-3jcm-6whg /
@@ -23,8 +23,9 @@ langgraph-checkpoint-sqlite==3.1.2
 # sqlite 3.1.1→3.1.2。两包同批修 Store namespace 标签校验（上游 #9217）；4.3.0 另含
 # serde 回建失败时保留序列化数据（上游 #9251）与 delta 重放顺序（上游 #8544/#9114），
 # 3.1.2 另含空 checkpoint_id（上游 #9262）与 delta 祖先按 parent 指针遍历（上游 #8557）。
-# langgraph 行不动：1.2.11 起即接受 checkpoint >=4.1,<5，CI 按区间解析到 1.2.x 最新
-# 补丁；sqlite 3.1.2 要求 checkpoint >=4.3.0,<5，两钉同抬。本仓结论：磁盘格式未变
+# langgraph 行不动：1.2.11 接受 checkpoint >=4.1,<5，但 CI 解析到的 1.2.x 最新补丁
+# 要求 checkpoint >=4.3.0,<5；sqlite 3.1.2 同样要求 >=4.3.0,<5，故两钉同抬。旧组合
+# 4.2.0 不能配新 langgraph。本仓结论：磁盘格式未变
 # （CHECKPOINT_FORMAT_VERSION 仍为 2），旧库（4.2.0/3.1.1 写入）实测 16/16 线程读回
 # 无损，无需迁移或拒绝；resume / serde 回归全绿（证据见 #204 关联 PR）。
 #
