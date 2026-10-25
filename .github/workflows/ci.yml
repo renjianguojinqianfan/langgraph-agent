@@ -95,7 +95,7 @@ jobs:
           path: test-results/
           if-no-files-found: warn
 
-  # ── 后端：Windows 冒烟（静态挂载 / 路径 / 工作区文件面） ──────────────────
+  # ── 后端：Windows 冒烟（静态挂载 / 路径 / 工作区 / MCP 客户端） ────────────
   # 为什么不是全量：Linux 全量已覆盖与 OS 无关的逻辑；这里只补 Windows 上表现不同 /
   # 只在 Windows 跑的分支（同一文件在 Linux 上仍由全量覆盖）。
   # 清单按「Windows 敏感面」维护——改 os.name / sys.platform / 路径分隔符时，
@@ -107,6 +107,7 @@ jobs:
   #   test_gitignore_visibility.py   Windows-only 反斜杠 glob 用例（Linux 上被 skip）
   #   test_workspace_files_api.py    workspace 文件面（junction 逃逸 / 循环 / 预览截断；B1 首个实验文件）
   #   test_workspace.py              workspace 归属 / 注入 / 续说 / 子代理继承（B1 第二个文件）
+  #   test_p2_mcp.py                 MCP 客户端 / 回声服务器 / 子进程清理（B1 第三个文件）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
     name: Backend Windows smoke
@@ -140,6 +141,7 @@ jobs:
           backend/tests/test_gitignore_visibility.py
           backend/tests/test_workspace_files_api.py
           backend/tests/test_workspace.py
+          backend/tests/test_p2_mcp.py
           -q -rs
 
   # ── 前端：类型检查 + 生产构建 ─────────────────────────────────────────────
