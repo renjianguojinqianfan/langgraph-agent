@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cx } from "../../lib/cx";
 import { Icon, type IconName } from "./Icon";
 
-export type ButtonVariant = "quiet" | "outline" | "danger";
+export type ButtonVariant = "quiet" | "outline" | "danger" | "primary";
 export type ButtonSize = "sm" | "md";
 
 const BASE =
@@ -13,6 +13,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
   outline: "border border-rule-strong text-primary hover:bg-surface-hover",
   danger:
     "border border-state-danger/40 text-state-danger hover:bg-state-danger/10",
+  primary: "bg-signal-now text-on-signal hover:bg-signal-now/90",
 };
 
 const SIZES: Record<ButtonSize, string> = {
