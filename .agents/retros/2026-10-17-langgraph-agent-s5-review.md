@@ -22,6 +22,17 @@
   `git diff <base>...HEAD > <tmp>/review.diff`，工作树脏时再加 `git diff <base>`（含未提交改动）
   与 `git log <base>..HEAD --oneline`，把**文件路径**连同「你是只读的」一起交给两个子代理。
   不再把命令本身当提交物。
+- **复现 2（2026-10-26，#214/#215 双 PR 评审会话，独立会话）**：编排者仍把「diff 命令」递进
+  子代理简报——标准轴开局原样退回「在拿到 diff 之前我不会开工」，需求轴首轮只能交
+  「PR A 未评审（内容不可达）」；补救是把两个 diff 物化到 `%TEMP%\opencode\pr{A,B}.diff`
+  后续派，多耗一整轮往返 + 一份首轮残报告。**修法方向自 10-17 记录后未实施，本次即复发。**
+  计数 2/2，提请用户决断。证据：本会话两场子代理往返 + 物化后的续派。
+- **已决：已实施（用户 2026-10-26 拍板，双侧闭环）**——agent 本体
+  （`~/.config/opencode/agents/code-reviewer.md`）删「read the changed files
+  directly」后路、新增 `## Diff Contract`（缺 diff 文件路径即报缺并停，禁
+  `git diff`、禁工作树顶替）；skill 本体（`~/.agents/skills/code-review/SKILL.md`）
+  第 1 步改为编排者物化 diff 到文件、第 4 步递路径而非命令。C17 同批落地：
+  两轴都明写派只读 `code-reviewer`，description 补双轴与 spec 符合度。
 
 ### C17. 双轴评审没指定子代理类型，混用了可写的 `general` · Tool economy / 评审纪律 · 中高
 
@@ -39,6 +50,9 @@
   需求轴把 spec 路径 / 抓来的正文一起递进去；不要用 `general` 做评审」。第 2 步已经要求
   编排者自己抓 issue/spec（`docs/agents/issue-tracker.md`），所以不需要一个能跑命令的评审代理。
   可选：把 `code-reviewer.md` 的 catalog description 补上「spec/issue conformance」，让映射没有歧义。
+- **已决：已实施（用户 2026-10-26 拍板，与 C16 同批）**——skill 第 4 步明写「两轴都派只读
+  `code-reviewer`，禁用 general 做评审」；agent description 改中文并补「需求轴（issue 或
+  spec 的验收逐条对账）」，映射歧义消除。
 
 ### C18. 评审后的返工没有再评审就差点推送 · 评审纪律 · 中
 
