@@ -1,6 +1,6 @@
 # 前端设计基线（Frontend Design）
 
-> **状态**：设计权威，**未交付**（2026-10-23 创建；实施按 #54 四期；#189 仍 open）。现役代码不是这样，别读成 as-built。
+> **状态**：设计权威，**未交付**（2026-10-23 创建；实施按 [`docs/specs/frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 的 F1–F9 + B1 分片；#189 由 F1 修复，F9 再走查）。现役代码不是这样，别读成 as-built。
 > **权威顺序**：功能范围 → #54（含 2026-10-19 / 2026-10-23 校准段）；视觉与交互规则 → 本文；接口契约 → `architecture.md` §3.3 / §3.4（SSE 词汇表有 `npm run check:sse` 守卫）。
 > 本文只写规则与判据：实现步骤写进 PR，需求原文留在 #54，不在此复制。
 
@@ -51,7 +51,7 @@
 - 数字一律 `tabular-nums`；用于比较的数字不做截断。
 - 标题 `text-wrap: balance`；正文段落 `text-wrap: pretty`；除标题 `-0.01em` 外不加字距、不拉宽标签、不全大写。
 - 标题层级：页面唯一 `h1`（任务标题）；回答标题 `h2`；计划文档从 `h2` 起（`h3` 小节）；对话框自成一级。
-- **实施前置（依赖）**：Inter / JetBrains Mono 是目标字，未装前用系统栈兜底（视觉有差异，不是等价替代），不静默换成其他字族；实施 PR 补依赖并记录。`@fontsource/jetbrains-mono` 已批但仓库未装；`react-markdown` + `remark-gfm` 仍待批（#54 §7）——未批前 Markdown 走纯文本兜底并单独报批，不静默加依赖。
+- **实施前置（依赖）**：Inter / JetBrains Mono 是目标字，未装前用系统栈兜底（视觉有差异，不是等价替代），不静默换成其他字族；实施 PR 补依赖并记录。`@fontsource-variable/inter`、`@fontsource/jetbrains-mono`、`react-markdown` + `remark-gfm`、`vitest ^5.0.5` 已批（2026-10-26），UI 层零新增依赖；未装前 Markdown 走纯文本兜底，不静默加依赖。
 
 ## 3. 布局与三栏职责
 
@@ -183,3 +183,4 @@
 - 2026-10-23：创建。来自 #54 设计 grilling；原型经六个前端设计 skill（frontend-design / web-design-guidelines / accessibility / break-ui / emil-design-eng / performance）打磨后沉淀。
 - 2026-10-23：按 PR #192 评审修订：`PUT /plan` 放宽列入 §9、provenance 来源点名、Trace 归宿（`TraceFace`）、状态改为「未交付」+ 现役→目标组件映射、发送键对比度（深色字形）、ToolRow 三值、状态色点列、纸面口径（对话框不算纸面）、#54 旧 token 作废、字体/Markdown 依赖登记、原型指针改指存档分支。
 - 2026-10-23：按 PR #192 第二轮复审修订：PlanPane 只给「已停下」编辑（失败待 §9）、SubagentStrip 状态词归 Inter、机器事实改短 id + 产物数、AA 旧值依据纠正（`#63676D` 不足、`#9BA0A6` 为统一色阶）、`--text-on-signal` token、`TaskRail` 组件规则、`--state-ok` 用途收窄、ToolRow 改「终态三值」、依赖措辞改「兜底（非等价替代）+ 实施 PR 补记录」、AnswerSheet 补「空则全局默认」。
+- 2026-10-27：按 [`frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 分片定稿：实施指针从「#54 四期」改为 F1–F9 + B1；依赖状态更新为已批；`--radius-control: 6` 待 F2 补入 §1；D1–D11 实现裁决见计划 §4.2。
