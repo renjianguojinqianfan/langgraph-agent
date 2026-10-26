@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { HistoryPanel } from "../components/HistoryPanel";
+import { TaskRail } from "../components/rail/TaskRail";
 import { StepDetail } from "../components/StepDetail";
 import { TaskPanel } from "../components/TaskPanel";
 import { IconButton } from "../components/ui/Button";
@@ -122,7 +122,7 @@ export function TaskView() {
           leftOpen ? "max-[860px]:translate-x-0" : "max-[860px]:-translate-x-full"
         )}
       >
-        <HistoryPanel />
+        <TaskRail />
       </aside>
 
       <main className="relative flex min-w-0 flex-1 flex-col">
