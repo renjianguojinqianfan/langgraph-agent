@@ -64,7 +64,7 @@ export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) 
         aria-expanded={rightOpen}
         icon="panel"
         onClick={onToggleRight}
-        className="max-[1180px]:inline-flex hidden"
+        className="min-[1181px]:hidden"
       />
     </header>
   );
