@@ -21,7 +21,9 @@ untouched. Lifecycle:
   (covers success / failure / interrupt alike).
 
 Concurrency: all file access is guarded by a lock; writes use ``append +
-flush`` so the on-disk order matches the publish order.
+flush`` so the on-disk order matches the publish order. ``attach`` registers
+its callback outside the lock — the bus is never called while holding it —
+and removes it again if a concurrent :meth:`close` won the race.
 """
 
 from __future__ import annotations
@@ -51,7 +53,11 @@ class TraceRecorder:
         self._lock = threading.Lock()
 
     def attach(self, event_bus: EventBus, task_id: str) -> None:
-        """Subscribe to ``event_bus`` for ``task_id`` and open its JSONL file."""
+        """Subscribe to ``event_bus`` for ``task_id`` and open its JSONL file.
+
+        A concurrent :meth:`close` may win the race; the stale subscription is
+        then removed before returning, so no callback outlives the closed era.
+        """
         with self._lock:
             if task_id in self._files:
                 return  # already attached (idempotent)
@@ -63,9 +69,19 @@ class TraceRecorder:
                 self._on_event(_tid, event)
 
             self._cbs[task_id] = _cb
-        # Snapshot dropped: reattaching before task_resumed keeps the boundary
-        # event live, while replaying the snapshot would duplicate prior eras.
-        event_bus.subscribe(task_id, self._cbs[task_id])
+        # Subscribe outside the lock: close() deliberately never calls the bus
+        # while holding it, and keeping that rule avoids a new trace -> bus
+        # nesting. Snapshot dropped: reattaching before task_resumed keeps the
+        # boundary event live, while replaying the snapshot would duplicate
+        # prior eras.
+        event_bus.subscribe(task_id, _cb)
+        # close() or a newer era's attach may have won while we subscribed; a
+        # callback registered after that point is stale and must not stay on
+        # the bus (it would double-write into the next era's trace).
+        with self._lock:
+            stale = self._cbs.get(task_id) is not _cb
+        if stale:
+            event_bus.unsubscribe(task_id, _cb)
 
     def _on_event(self, task_id: str, event: Event) -> None:
         with self._lock:

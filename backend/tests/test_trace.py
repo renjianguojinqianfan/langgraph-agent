@@ -9,7 +9,9 @@ REST endpoint (raw NDJSON, ``?format=json`` envelope, 404 for missing file,
 from __future__ import annotations
 
 import json
+import threading
 import time
+from typing import Callable
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +20,7 @@ from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.main import app
-from backend.services.event_bus import EventBus
+from backend.services.event_bus import Event, EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
@@ -113,6 +115,100 @@ def test_trace_recorder_attach_is_idempotent(tmp_path):
     rec.close("t1")
     events = [json.loads(ln) for ln in _read_lines(rec.file_path("t1"))]
     assert [e["type"] for e in events] == ["x", "trace_end"]
+
+
+class _CloseOnSubscribeBus:
+    """Lands a ``close()`` in the middle of ``attach()``'s subscribe call."""
+
+    def __init__(self, rec: TraceRecorder) -> None:
+        self._rec = rec
+        self.subscribed: list[Callable[[Event], None]] = []
+
+    def subscribe(self, task_id, callback):
+        self._rec.close(task_id)
+        self.subscribed.append(callback)
+        return []
+
+    def unsubscribe(self, task_id, callback):
+        if callback in self.subscribed:
+            self.subscribed.remove(callback)
+
+
+def test_attach_does_not_leak_callback_when_close_races_subscribe(tmp_path):
+    """#213: close() during attach() must not leave a live callback behind.
+
+    A leaked callback is not merely memory: after a later re-attach it writes
+    every event into the new era's trace a second time.
+    """
+    rec = TraceRecorder(make_settings(tmp_path))
+    bus = _CloseOnSubscribeBus(rec)
+
+    rec.attach(bus, "t1")  # must not raise
+
+    assert bus.subscribed == []
+
+
+class _GateBus:
+    """Holds the first ``subscribe`` until the test releases it, then fans out."""
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self._calls = 0
+        self.callbacks: list[Callable[[Event], None]] = []
+
+    def subscribe(self, task_id, callback):
+        self._calls += 1
+        if self._calls == 1:
+            self.entered.set()
+            assert self.release.wait(5), "test never released the first subscribe"
+        self.callbacks.append(callback)
+        return []
+
+    def unsubscribe(self, task_id, callback):
+        if callback in self.callbacks:
+            self.callbacks.remove(callback)
+
+    def publish(self, task_id, event_type, data):
+        event = {"type": event_type, "data": data, "ts": time.time()}
+        for callback in list(self.callbacks):
+            callback(event)
+        return event
+
+
+def test_late_attach_does_not_duplicate_events_after_reattach(tmp_path):
+    """#213: an attach that lost to close+re-attach must not double-write.
+
+    The first attach is paused inside subscribe; close() and a second attach
+    then finish. When the first attach finally registers, it is stale and must
+    be removed instead of sharing the new era's callback set.
+    """
+    rec = TraceRecorder(make_settings(tmp_path))
+    bus = _GateBus()
+    errors = []
+
+    def slow_attach() -> None:
+        try:
+            rec.attach(bus, "t1")
+        except BaseException as exc:  # surfaced by the assertion below
+            errors.append(exc)
+
+    thread = threading.Thread(target=slow_attach, daemon=True)
+    thread.start()
+    assert bus.entered.wait(5), "first attach never reached subscribe"
+
+    rec.close("t1")  # era 1 closes while attach 1 is mid-subscribe
+    rec.attach(bus, "t1")  # era 2 registers immediately
+    bus.release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert errors == []
+
+    bus.publish("t1", "step_start", {})
+    rec.close("t1")
+
+    events = [json.loads(ln) for ln in _read_lines(rec.file_path("t1"))]
+    assert [e["type"] for e in events].count("step_start") == 1
 
 
 # ── GET /api/tasks/{id}/trace ─────────────────────────────────
