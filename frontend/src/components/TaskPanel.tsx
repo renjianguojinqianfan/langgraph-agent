@@ -1,11 +1,11 @@
 import { WorkspaceFiles } from "./WorkspaceFiles";
-import { InputBar } from "./InputBar";
 import { MessageStream } from "./MessageStream";
 import { PlanPanel } from "./PlanPanel";
 import { StepTimeline } from "./StepTimeline";
 import { SubtaskList } from "./SubtaskList";
-import { TaskHeader } from "./TaskHeader";
 import { TraceTab } from "./TraceTab";
+import { Composer } from "./center/Composer";
+import { TaskHeader } from "./center/TaskHeader";
 import { Task, TaskViewTab } from "../types";
 
 interface TaskPanelProps {
@@ -32,7 +32,7 @@ export function TaskPanel({
           onToggleRight={onToggleRight}
         />
       ) : (
-        <header className="px-4 py-3 border-b border-slate-800 font-semibold">
+        <header className="flex h-[52px] shrink-0 items-center border-b border-rule px-4 text-title text-primary">
           新任务
         </header>
       )}
@@ -99,7 +99,7 @@ export function TaskPanel({
         )}
       </div>
 
-      {tab === "run" && <InputBar />}
+      <Composer />
     </section>
   );
 }
