@@ -109,6 +109,7 @@ jobs:
   #   test_workspace.py              workspace 归属 / 注入 / 续说 / 子代理继承（B1 第二个文件）
   #   test_p2_mcp.py                 MCP 客户端 / 回声服务器 / 子进程清理（B1 第三个文件）
   #   test_bash_tool.py              bash 路径解析 / 命令执行 / 后台进程树（B1 第四个文件）
+  #   test_strict_msgpack_guard.py   langgraph 自读开关的离线守卫（子进程探针；#216）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
     name: Backend Windows smoke
@@ -144,6 +145,7 @@ jobs:
           backend/tests/test_workspace.py
           backend/tests/test_p2_mcp.py
           backend/tests/test_bash_tool.py
+          backend/tests/test_strict_msgpack_guard.py
           -q -rs
 
   # ── 前端：类型检查 + 生产构建 ─────────────────────────────────────────────
