@@ -9,7 +9,7 @@
 #   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
 #                   + pytest 离线全量回归（backend/tests/，计数以实跑为准、不写进注释）
 #   backend-windows-smoke  windows-latest，只跑 Windows 敏感面的测试文件（清单见该 job 注释）
-#   frontend-build  npm ci + tsc 类型检查 + SSE 事件词汇表断言（#92）+ vite 生产构建（产物上传为 artifact）
+#   frontend-build  npm ci + tsc 类型检查 + 单元测试（vitest）+ SSE 事件词汇表断言（#92）+ vite 生产构建（产物上传为 artifact）
 #
 # 硬约束遵循 AGENTS.md：
 #   - mcp 依赖用 --no-deps 单独安装，避免升级 uvicorn/starlette
@@ -170,6 +170,9 @@ jobs:
 
       - name: TypeScript typecheck
         run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
 
       # #92：SSE 事件词汇表防漂移。EventSource 只派发注册过的类型，漂了不报错、
       # 只是前端静默收不到，所以拿后端发布点 / §3.4 表 / 前端两处注册表逐条比一次。

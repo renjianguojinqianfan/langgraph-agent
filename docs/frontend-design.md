@@ -1,6 +1,6 @@
 # 前端设计基线（Frontend Design）
 
-> **状态**：设计权威，**未交付**（2026-10-23 创建；实施按 [`docs/specs/frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 的 F1–F9 + B1 分片；#189 由 F1 修复，F9 再走查）。现役代码不是这样，别读成 as-built。
+> **状态**：设计权威，**未交付**（2026-10-23 创建；实施按 [`docs/specs/frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 的 F1–F9 + B1 分片；#189 已由 F1 修复（B + step_start 重取快照），F9 再走查）。现役代码不是这样，别读成 as-built。
 > **权威顺序**：功能范围 → #54（含 2026-10-19 / 2026-10-23 校准段）；视觉与交互规则 → 本文；接口契约 → `architecture.md` §3.3 / §3.4（SSE 词汇表有 `npm run check:sse` 守卫）。
 > 本文只写规则与判据：实现步骤写进 PR，需求原文留在 #54，不在此复制。
 

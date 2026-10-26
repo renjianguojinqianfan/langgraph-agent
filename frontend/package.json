@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
     "check:sse": "node scripts/check-sse-event-registry.mjs"
   },
   "dependencies": {

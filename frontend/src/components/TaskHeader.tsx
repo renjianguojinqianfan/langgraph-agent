@@ -11,14 +11,15 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
 };
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
-  PENDING: "等待中",
+  PENDING: "启动中",
   RUNNING: "运行中",
   FAILED: "失败",
   INTERRUPTED: "停下",
 };
 
 export function TaskHeader({ task }: { task: Task }) {
-  const running = task.status === "RUNNING";
+  // #189: PENDING is the startup transient — it is stoppable like RUNNING.
+  const stoppable = task.status === "RUNNING" || task.status === "PENDING";
   const authEnabled = useAuthStore((s) => s.authEnabled);
   const logout = useAuthStore((s) => s.logout);
   const models = useModelStore((s) => s.models);
@@ -52,7 +53,7 @@ export function TaskHeader({ task }: { task: Task }) {
       >
         {STATUS_LABEL[task.status] || task.status}
       </span>
-      {running && (
+      {stoppable && (
         <button
           onClick={onStop}
           className="text-xs px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white"

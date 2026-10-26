@@ -62,6 +62,6 @@
 > 证据根：`docs/assets/verification/2026-10-21/`；JSON 只留任务/步骤/工具状态与脱敏摘录，不含 Key 与完整对话。
 > 场景 6 的 A/B 路径按后端记录的绝对路径核对（Windows 反斜杠），写入位置以文件系统实际落点为准。
 > 场景 9 的搜索使用 `SEARCH_PROVIDER=exa`（本机 DuckDuckGo 不可达，见 S2 #175）。
-> 场景 3 / 8 的「停止」在续说轮点击网页端按钮：首次运行期间 SSE 回放会把头部状态显示成「等待中」，停止按钮不可见。**2026-10-22 复核：仍存在**——首轮回放里唯一携带任务状态的事件是 `task_created`（`status=PENDING`，创建时发出）；后端开工时把任务改成 `RUNNING` 但不发事件（`backend/services/task_manager.py:698`），前端只有 `task_resumed`（续说 / 续跑）会把任务置 `RUNNING`（`frontend/src/store/taskStore.ts:66-73,124-126`）。SSE 自动重连（页面不重新挂载）时必现；首次挂载取决于 GET 快照与回放的先后（竞态）。停止按钮仅在 `RUNNING` 时渲染（`frontend/src/components/TaskHeader.tsx:55`）。未修，待开票。
+> 场景 3 / 8 的「停止」在续说轮点击网页端按钮：首次运行期间 SSE 回放会把头部状态显示成「等待中」，停止按钮不可见。**2026-10-22 复核：仍存在**——首轮回放里唯一携带任务状态的事件是 `task_created`（`status=PENDING`，创建时发出）；后端开工时把任务改成 `RUNNING` 但不发事件（`backend/services/task_manager.py:698`），前端只有 `task_resumed`（续说 / 续跑）会把任务置 `RUNNING`（`frontend/src/store/taskStore.ts:66-73,124-126`）。SSE 自动重连（页面不重新挂载）时必现；首次挂载取决于 GET 快照与回放的先后（竞态）。停止按钮仅在 `RUNNING` 时渲染（`frontend/src/components/TaskHeader.tsx:55`）。**2026-10-27：F1 已修**——`task_created` 回放不再覆盖已有快照；`step_start` 遇 PENDING 时重取一次快照且只合并状态字段。回归测试见 `frontend/src/store/reduceTask.test.ts`；F9 再走查。
 > 场景 6 的交接步骤在 2026-10-22（#180 F1 修复后）用真实 CLI 复跑：第二进程在退出前同步调用浏览器，URL 落在 `docs/assets/verification/2026-10-22/scenario6-handoff.json`。
 > 场景 8 原命令只回显随机标记而非 PID；时间戳与心跳数据在 JSON 里，表格如实记为「部分」。
