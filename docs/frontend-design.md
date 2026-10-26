@@ -31,7 +31,7 @@
 
 - 选中态（页签、模式、任务行、文件行）用墨色 + 2px 内嵌脊线；**信号蓝不参与选中**。
 - 光从上方来，只上一级：页 → 栏 → 纸。发丝线只做分隔；无渐变、无辉光、无网格、无装饰边框。
-- 圆角 token：`--radius-sheet 11`、`--radius-dialog 14`、`--radius-well 8`、`--radius-composer 12`、胶囊 999；**行与页签 0**。
+- 圆角 token：`--radius-sheet 11`、`--radius-dialog 14`、`--radius-well 8`、`--radius-composer 12`、`--radius-control 6`（2026-10-27 补全，D3）、胶囊 999；**行与页签 0**。
 - 状态色分工：`--state-ok` 只用于工具「成功」与产物/成功标记；任务状态用 `--signal-now`（运行）/ `--state-warn`（停下）/ `--state-danger`（失败）/ `--text-tertiary`（启动）。
 
 > **本文值为准**：旧 `#63676D`（3.26:1）不足 AA；`#9BA0A6` 与 `--rule` .06/.11 一并提亮，是为统一色阶（不改变其对比度结论）。本文用 `#A6ABB2` / `#8B9097`、`.07` / `.12`。
@@ -51,7 +51,7 @@
 - 数字一律 `tabular-nums`；用于比较的数字不做截断。
 - 标题 `text-wrap: balance`；正文段落 `text-wrap: pretty`；除标题 `-0.01em` 外不加字距、不拉宽标签、不全大写。
 - 标题层级：页面唯一 `h1`（任务标题）；回答标题 `h2`；计划文档从 `h2` 起（`h3` 小节）；对话框自成一级。
-- **实施前置（依赖）**：Inter / JetBrains Mono 是目标字，未装前用系统栈兜底（视觉有差异，不是等价替代），不静默换成其他字族；实施 PR 补依赖并记录。`@fontsource-variable/inter`、`@fontsource/jetbrains-mono`、`react-markdown` + `remark-gfm`、`vitest ^5.0.5` 已批（2026-10-26），UI 层零新增依赖；未装前 Markdown 走纯文本兜底，不静默加依赖。
+- **依赖（2026-10-26 批，F2 已安装并使用）**：`@fontsource-variable/inter`、`@fontsource/jetbrains-mono` 已在 F2 装入 `main.tsx`；`react-markdown` + `remark-gfm` 与 `vitest ^5.0.5` 同批批准，UI 层零新增依赖；Markdown 未接前走纯文本兜底，不静默加依赖。
 
 ## 3. 布局与三栏职责
 

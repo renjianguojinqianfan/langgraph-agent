@@ -12,13 +12,25 @@ interface TaskPanelProps {
   task: Task | null;
   tab: TaskViewTab;
   onTabChange: (tab: TaskViewTab) => void;
+  rightOpen: boolean;
+  onToggleRight: () => void;
 }
 
-export function TaskPanel({ task, tab, onTabChange }: TaskPanelProps) {
+export function TaskPanel({
+  task,
+  tab,
+  onTabChange,
+  rightOpen,
+  onToggleRight,
+}: TaskPanelProps) {
   return (
     <section className="flex-1 flex flex-col min-w-0">
       {task ? (
-        <TaskHeader task={task} />
+        <TaskHeader
+          task={task}
+          rightOpen={rightOpen}
+          onToggleRight={onToggleRight}
+        />
       ) : (
         <header className="px-4 py-3 border-b border-slate-800 font-semibold">
           新任务

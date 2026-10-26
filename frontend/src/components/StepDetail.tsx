@@ -57,7 +57,7 @@ export function StepDetail({ task }: { task: Task | null }) {
       : null;
 
   return (
-    <aside className="w-96 shrink-0 bg-panel border-l border-slate-800 flex flex-col">
+    <aside className="w-full shrink-0 bg-panel border-l border-slate-800 flex flex-col">
       <div className="px-3 py-3 border-b border-slate-800 font-semibold">
         Step 详情
       </div>

@@ -1,23 +1,17 @@
 import { stopTask } from "../api/client";
 import { useAuthStore } from "../store/authStore";
 import { profileName, useModelStore } from "../store/modelStore";
-import { Task, TaskStatus } from "../types";
+import { Task } from "../types";
+import { IconButton } from "./ui/Button";
+import { Status } from "./ui/Status";
 
-const STATUS_STYLE: Record<TaskStatus, string> = {
-  PENDING: "bg-slate-500",
-  RUNNING: "bg-blue-500",
-  FAILED: "bg-red-600",
-  INTERRUPTED: "bg-amber-500",
-};
+interface TaskHeaderProps {
+  task: Task;
+  rightOpen: boolean;
+  onToggleRight: () => void;
+}
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  PENDING: "启动中",
-  RUNNING: "运行中",
-  FAILED: "失败",
-  INTERRUPTED: "停下",
-};
-
-export function TaskHeader({ task }: { task: Task }) {
+export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) {
   // #189: PENDING is the startup transient — it is stoppable like RUNNING.
   const stoppable = task.status === "RUNNING" || task.status === "PENDING";
   const authEnabled = useAuthStore((s) => s.authEnabled);
@@ -46,13 +40,7 @@ export function TaskHeader({ task }: { task: Task }) {
           模型：{modelLabel}
         </div>
       </div>
-      <span
-        className={`text-xs px-2 py-1 rounded text-white ${
-          STATUS_STYLE[task.status] || "bg-slate-600"
-        }`}
-      >
-        {STATUS_LABEL[task.status] || task.status}
-      </span>
+      <Status status={task.status} />
       {stoppable && (
         <button
           onClick={onStop}
@@ -69,6 +57,15 @@ export function TaskHeader({ task }: { task: Task }) {
           登出
         </button>
       )}
+      <IconButton
+        type="button"
+        aria-label="打开工作区"
+        aria-controls="task-dash"
+        aria-expanded={rightOpen}
+        icon="panel"
+        onClick={onToggleRight}
+        className="max-[1180px]:inline-flex hidden"
+      />
     </header>
   );
 }
