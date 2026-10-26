@@ -5,12 +5,12 @@ import { Task } from "../types";
 /**
  * The plan area (C6): the task's plan is one Markdown file in its workspace.
  *
- * Read-only while the task runs; a parked task can edit the whole text and
- * save it back to the file. The raw Markdown is shown, not rendered, and an
- * external edit to the file is picked up on the next round.
+ * Read-only while the task runs; a parked or failed task can edit the whole
+ * text and save it back to the file (B1 #219). The raw Markdown is shown, not
+ * rendered, and an external edit to the file is picked up on the next round.
  */
 export function PlanPanel({ task }: { task: Task }) {
-  const parked = task.status === "INTERRUPTED";
+  const parked = task.status === "INTERRUPTED" || task.status === "FAILED";
   const [text, setText] = useState("");
   const [version, setVersion] = useState(0);
   const [editing, setEditing] = useState(false);

@@ -32,7 +32,9 @@ export function InputBar() {
   const defaultModelId = useModelStore((s) => s.defaultId);
 
   const running = task?.status === "RUNNING" || task?.status === "PENDING";
-  const parked = task?.status === "INTERRUPTED";
+  // B1 (#219): a failed task is parked too — its checkpoint is intact, so the
+  // next message continues the same conversation (resume() stays INTERRUPTED).
+  const parked = task?.status === "INTERRUPTED" || task?.status === "FAILED";
   const failed = task?.status === "FAILED";
   // A selected task whose snapshot has not arrived yet must not be treated as
   // "new task": sending would silently create a second task.
@@ -130,12 +132,12 @@ export function InputBar() {
     ? "正在加载任务…"
     : !task
       ? "用自然语言描述一个任务，例如：联网查资料并写一份报告…"
-      : parked
-        ? "接着说一句，任务从这里继续…"
-        : running
-          ? "任务运行中…"
-          : failed
-            ? "任务出错，无法继续；请新建任务"
+      : failed
+        ? "任务出错，可以接着说一句继续…"
+        : parked
+          ? "接着说一句，任务从这里继续…"
+          : running
+            ? "任务运行中…"
             : "…";
 
   return (
@@ -172,7 +174,7 @@ export function InputBar() {
       </div>
       <div className="text-[11px] text-slate-500 mt-1">
         {failed
-          ? "任务出错后不能续说；新建任务重新开始"
+          ? "任务出错，可以接着说一句继续"
           : "Ctrl/⌘ + Enter 发送"}
         {currentTaskId ? "　·　这一轮没有工具调用即停下，之后可以继续说" : ""}
       </div>
