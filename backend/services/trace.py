@@ -63,9 +63,19 @@ class TraceRecorder:
                 self._on_event(_tid, event)
 
             self._cbs[task_id] = _cb
-        # Snapshot dropped: reattaching before task_resumed keeps the boundary
-        # event live, while replaying the snapshot would duplicate prior eras.
-        event_bus.subscribe(task_id, self._cbs[task_id])
+        # Subscribe outside the lock: close() deliberately never calls the bus
+        # while holding it, and keeping that rule avoids a new trace -> bus
+        # nesting. Snapshot dropped: reattaching before task_resumed keeps the
+        # boundary event live, while replaying the snapshot would duplicate
+        # prior eras.
+        event_bus.subscribe(task_id, _cb)
+        # close() or a newer era's attach may have won while we subscribed; a
+        # callback registered after that point is stale and must not stay on
+        # the bus (it would double-write into the next era's trace).
+        with self._lock:
+            stale = self._cbs.get(task_id) is not _cb
+        if stale:
+            event_bus.unsubscribe(task_id, _cb)
 
     def _on_event(self, task_id: str, event: Event) -> None:
         with self._lock:
