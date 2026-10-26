@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HistoryPanel } from "../components/HistoryPanel";
 import { StepDetail } from "../components/StepDetail";
 import { TaskPanel } from "../components/TaskPanel";
 import { getTask, listTasks } from "../api/client";
 import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
+import { needsStatusRefetch } from "../store/reduceTask";
 import { useTaskStore } from "../store/taskStore";
-import { TaskViewTab } from "../types";
+import { SSEvent, TaskViewTab } from "../types";
 import { currentDir } from "../workspace";
 
 export function TaskView() {
@@ -15,6 +16,7 @@ export function TaskView() {
     currentTaskId ? s.detail[currentTaskId] : undefined
   );
   const applyEvent = useTaskStore((s) => s.applyEvent);
+  const mergeTaskStatus = useTaskStore((s) => s.mergeTaskStatus);
   const upsertTask = useTaskStore((s) => s.upsertTask);
   const setTasks = useTaskStore((s) => s.setTasks);
   const historyFilter = useTaskStore((s) => s.historyFilter);
@@ -41,8 +43,31 @@ export function TaskView() {
     };
   }, [setTasks, historyFilter, listRevision, currentTaskId]);
 
+  // #189: a step_start can arrive while the snapshot still says PENDING (no
+  // event carries the RUNNING status). Refetch the snapshot once per task and
+  // merge its status fields only — the live steps / conversation stay put.
+  const statusRefetched = useRef<Set<string>>(new Set());
+  const onEvent = useCallback(
+    (ev: SSEvent) => {
+      applyEvent(ev);
+      const state = useTaskStore.getState();
+      const id = ev.data?.task_id ?? state.currentTaskId ?? undefined;
+      if (!id) return;
+      const task = state.detail[id];
+      if (!task || !needsStatusRefetch(task, ev)) return;
+      if (statusRefetched.current.has(id)) return;
+      statusRefetched.current.add(id);
+      getTask(id)
+        .then((r) => {
+          if (r.data) mergeTaskStatus(r.data);
+        })
+        .catch(() => {});
+    },
+    [applyEvent, mergeTaskStatus]
+  );
+
   // Live SSE for the current task.
-  useSSE(currentTaskId, applyEvent);
+  useSSE(currentTaskId, onEvent);
 
   // Fetch a fresh snapshot when the selected task changes.
   useEffect(() => {
