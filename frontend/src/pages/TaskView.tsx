@@ -133,7 +133,7 @@ export function TaskView() {
           aria-expanded={leftOpen}
           icon="panel"
           onClick={() => setLeftOpen((v) => !v)}
-          className="max-[860px]:inline-flex hidden absolute left-3 top-3 z-20"
+          className="min-[861px]:hidden absolute left-3 top-3 z-20"
         />
         <div className="mx-auto flex h-full w-full max-w-[760px] min-h-0 flex-col">
           <TaskPanel
