@@ -100,8 +100,8 @@ jobs:
   # 只在 Windows 跑的分支（同一文件在 Linux 上仍由全量覆盖）。
   # 清单按「Windows 敏感面」维护——改 os.name / sys.platform / 路径分隔符时，
   # 把对应测试文件加进下面的 pytest 命令行（同步 AGENTS.md「验证入口」的同一条命令）。
-  # 进程树 / 子进程类默认不入清单（Windows runner 稳定性无数据）；B1（#197）起按票
-  # 逐个纳入并连跑观察，一个文件一个 PR。
+  # 进程树 / 子进程类按 AGENTS.md「Windows 敏感面」规则逐个纳入：一个文件一个 PR，
+  # 连跑 3 次稳定才进清单；当前已纳入 workspace / p2_mcp / bash_tool。
   #   test_static_guard.py           路径判据（UNC / 盘符 / NUL / Windows 反斜杠形态）
   #   test_static_frontend.py        StaticFiles 挂载 e2e（Windows 上 get_path 用 \ 连接）
   #   test_gitignore_visibility.py   Windows-only 反斜杠 glob 用例（Linux 上被 skip）

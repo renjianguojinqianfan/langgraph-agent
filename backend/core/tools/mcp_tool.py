@@ -119,8 +119,9 @@ class McpTool(BaseTool):
         try:
             raw = self._manager.call_tool(self._server_name, self._tool_name, kwargs)
         except TimeoutError as exc:
-            logger.warning("MCP tool %s timed out: %s", self.name, exc)
-            return ToolResult(success=False, error=str(exc))
+            message = str(exc) or type(exc).__name__
+            logger.warning("MCP tool %s timed out: %s", self.name, message)
+            return ToolResult(success=False, error=message)
         except Exception as exc:
             # Windows can raise pipe-reset exceptions whose str() is empty;
             # fall back to the type name so the failure reason is never blank.
