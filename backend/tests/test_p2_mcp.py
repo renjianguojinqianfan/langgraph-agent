@@ -261,6 +261,27 @@ def test_mcp_tool_reports_exception_type_when_message_is_empty(tmp_path):
     assert res.error == "ConnectionResetError"
 
 
+def test_mcp_tool_reports_exception_type_when_timeout_message_is_empty(tmp_path):
+    """A bare TimeoutError must surface a non-empty reason too (#212)."""
+
+    class _Manager:
+        def call_tool(self, server, tool, arguments):
+            raise TimeoutError()
+
+    s = _echo_settings(tmp_path, mcp_servers="[]")
+    tool = McpTool(
+        server_name="echo",
+        tool_name="echo",
+        description="echo",
+        input_schema={},
+        manager=_Manager(),
+        settings=s,
+    )
+    res = tool.run(text="after")
+    assert res.success is False
+    assert res.error == "TimeoutError"
+
+
 # ─────────────────── danger classification ───────────────────
 def test_mcp_self_reported_annotations_drive_the_danger_signal(tmp_path):
     """The server's self-reported annotations (via ``connect_all``) reach McpTool.

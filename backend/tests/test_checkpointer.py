@@ -286,7 +286,7 @@ class TestAgentStateSerde:
         hit this path. None would silently erase the value from resumed state.
         """
         trap = _ReplayTrap("payload")
-        trap.value = "boom"  # construction succeeded; these stored fields do not
+        trap.value = "boom"  # construction succeeded; rebuilding from the stored fields raises
         restored = saver.serde.loads_typed(saver.serde.dumps_typed(trap))
         assert restored == {"value": "boom"}
 

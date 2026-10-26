@@ -62,6 +62,14 @@ for _k in (
 ):
     os.environ.pop(_k, None)
 
+# ── langgraph's own serde switch (Part of #212) ──
+# langgraph.checkpoint.serde._msgpack reads LANGGRAPH_STRICT_MSGPACK **at
+# import time**, so a per-test monkeypatch cannot undo it. Popping it here —
+# before any backend import — keeps the serde sentinel on the permissive path
+# that actually exercises the #9251 reconstruction fallback. pop, not
+# setdefault: an inherited "true" must lose.
+os.environ.pop("LANGGRAPH_STRICT_MSGPACK", None)
+
 # Ensure `import backend...` works regardless of the current working directory.
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
