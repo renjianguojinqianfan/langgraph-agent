@@ -1,6 +1,6 @@
 # 前端设计基线（Frontend Design）
 
-> **状态**：设计权威，**未交付**（2026-10-23 创建；实施按 [`docs/specs/frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 的 F1–F9 + B1 分片；#189 已由 F1 修复（B + step_start 重取快照），F9 再走查）。现役代码不是这样，别读成 as-built。
+> **状态**：设计权威，**已交付**（2026-10-23 创建；2026-10-27 按 [`docs/specs/frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 的 F1–F9 + B1 落地；#189 已由 F1 修复）。现役代码按本基线交付，视觉与交互以本文为准。
 > **权威顺序**：功能范围 → #54（含 2026-10-19 / 2026-10-23 校准段）；视觉与交互规则 → 本文；接口契约 → `architecture.md` §3.3 / §3.4（SSE 词汇表有 `npm run check:sse` 守卫）。
 > 本文只写规则与判据：实现步骤写进 PR，需求原文留在 #54，不在此复制。
 
@@ -184,3 +184,4 @@
 - 2026-10-23：按 PR #192 评审修订：`PUT /plan` 放宽列入 §9、provenance 来源点名、Trace 归宿（`TraceFace`）、状态改为「未交付」+ 现役→目标组件映射、发送键对比度（深色字形）、ToolRow 三值、状态色点列、纸面口径（对话框不算纸面）、#54 旧 token 作废、字体/Markdown 依赖登记、原型指针改指存档分支。
 - 2026-10-23：按 PR #192 第二轮复审修订：PlanPane 只给「已停下」编辑（失败待 §9）、SubagentStrip 状态词归 Inter、机器事实改短 id + 产物数、AA 旧值依据纠正（`#63676D` 不足、`#9BA0A6` 为统一色阶）、`--text-on-signal` token、`TaskRail` 组件规则、`--state-ok` 用途收窄、ToolRow 改「终态三值」、依赖措辞改「兜底（非等价替代）+ 实施 PR 补记录」、AnswerSheet 补「空则全局默认」。
 - 2026-10-27：按 [`frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 分片定稿：实施指针从「#54 四期」改为 F1–F9 + B1；依赖状态更新为已批；`--radius-control: 6` 待 F2 补入 §1；D1–D11 实现裁决见计划 §4.2。
+- 2026-10-27：**已交付**（F1–F9 + B1 全部合入）。实际落地与本文的差异只在实现细节：计划页编辑含失败态（B1）、事件页时间用到达时间（SSE 帧不带 ts）、文件预览用槽底而非第二张纸面；axe（默认规则）在空态 / 任务 / 文件 / 事件 / 计划 / Trace / 设置七种状态下 0 违规。

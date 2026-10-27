@@ -117,6 +117,7 @@ export function TaskView() {
     >
       <aside
         id="task-rail"
+        aria-label="任务历史"
         className={cx(
           "w-[264px] shrink-0 bg-surface-column border-r border-rule",
           "max-[860px]:fixed max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:z-30 max-[860px]:w-[264px] max-[860px]:max-w-[80vw] max-[860px]:transition-transform max-[860px]:duration-[220ms] max-[860px]:ease-[cubic-bezier(.32,.72,0,1)]",
@@ -158,6 +159,7 @@ export function TaskView() {
 
       <aside
         id="task-dash"
+        aria-label="工作区"
         className={cx(
           "w-[420px] shrink-0 bg-surface-column border-l border-rule",
           "max-[1180px]:fixed max-[1180px]:inset-y-0 max-[1180px]:right-0 max-[1180px]:z-30 max-[1180px]:w-[420px] max-[1180px]:max-w-[calc(100vw_-_2rem)] max-[1180px]:transition-transform max-[1180px]:duration-[220ms] max-[1180px]:ease-[cubic-bezier(.32,.72,0,1)]",

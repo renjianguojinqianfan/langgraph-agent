@@ -281,11 +281,11 @@ export function TraceTab({ taskId }: TraceTabProps) {
       </div>
 
       {events.length === 0 ? (
-        <div className="text-sm text-slate-500 py-8 text-center">
+        <div className="text-sm text-tertiary py-8 text-center">
           暂无 Trace 事件。
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-sm text-slate-500 py-8 text-center">
+        <div className="text-sm text-tertiary py-8 text-center">
           当前筛选条件下没有事件。
         </div>
       ) : (
@@ -307,7 +307,7 @@ export function TraceTab({ taskId }: TraceTabProps) {
                   onClick={() => toggle(index)}
                   className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-xs hover:bg-panelMuted/40"
                 >
-                  <span className="text-slate-500 w-4 shrink-0">
+                  <span className="text-tertiary w-4 shrink-0">
                     {isOpen ? "▾" : "▸"}
                   </span>
                   <span
@@ -315,7 +315,7 @@ export function TraceTab({ taskId }: TraceTabProps) {
                   >
                     {meta.label}
                   </span>
-                  <span className="shrink-0 font-mono text-[11px] text-slate-500">
+                  <span className="shrink-0 font-mono text-[11px] text-tertiary">
                     {fmtTime(event.ts)}
                   </span>
                   <span className="flex-1 truncate text-slate-400">

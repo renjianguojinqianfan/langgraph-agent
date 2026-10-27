@@ -210,6 +210,7 @@ export function Composer() {
       </div>
       <div className="flex items-end gap-2">
         <textarea
+          aria-label="任务输入"
           className="min-h-[64px] flex-1 resize-none overscroll-contain rounded-composer border border-rule-strong bg-surface-well px-3 py-2.5 text-body text-primary placeholder:text-tertiary focus-visible:border-signal-now disabled:opacity-50"
           rows={2}
           placeholder={placeholder}

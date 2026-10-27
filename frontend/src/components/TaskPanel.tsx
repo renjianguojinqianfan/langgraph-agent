@@ -44,8 +44,8 @@ export function TaskPanel({
           onToggleRight={onToggleRight}
         />
       ) : (
-        <header className="flex h-[52px] shrink-0 items-center border-b border-rule px-4 text-title text-primary">
-          新任务
+        <header className="flex h-[52px] shrink-0 items-center border-b border-rule px-4">
+          <h1 className="text-title text-primary">新任务</h1>
         </header>
       )}
 
@@ -57,8 +57,13 @@ export function TaskPanel({
         {task ? (
           <Conversation task={task} onOpenPlan={onOpenPlan} />
         ) : (
-          <div className="flex flex-1 items-center justify-center p-4 text-body text-tertiary">
-            在下方输入任务开始，或在左侧选择历史任务。
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4">
+            <p className="text-invite text-primary">
+              想在这个目录做点什么？
+            </p>
+            <p className="text-body text-tertiary">
+              在下方描述任务，或在左侧选择历史任务。
+            </p>
           </div>
         )}
       </div>
