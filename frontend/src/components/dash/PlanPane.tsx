@@ -42,6 +42,7 @@ export function PlanPane({ task }: { task: Task }) {
   const [loaded, setLoaded] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [note, setNote] = useState<string | null>(null);
   const [conflict, setConflict] = useState<{
     text: string;
@@ -57,11 +58,13 @@ export function PlanPane({ task }: { task: Task }) {
     setText("");
     setVersion(0);
     setLoaded("");
+    setLoading(true);
   }, [task.id]);
 
   useEffect(() => {
     if (editing) return;
     let cancelled = false;
+    setLoading(true);
     getPlan(task.id)
       .then((r) => {
         if (cancelled || !r.data) return;
@@ -69,7 +72,10 @@ export function PlanPane({ task }: { task: Task }) {
         setVersion(r.data.version);
         setLoaded(r.data.text);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -235,9 +241,11 @@ export function PlanPane({ task }: { task: Task }) {
         </>
       ) : (
         <p className="text-body text-tertiary">
-          {task.mode === "plan" && task.status === "RUNNING"
-            ? "计划生成中…"
-            : "还没有计划。停下后可以手动写一份，或切到计划模式问一次。"}
+          {loading
+            ? "加载中…"
+            : task.mode === "plan" && task.status === "RUNNING"
+              ? "计划生成中…"
+              : "还没有计划。停下后可以手动写一份，或切到计划模式问一次。"}
         </p>
       )}
     </div>

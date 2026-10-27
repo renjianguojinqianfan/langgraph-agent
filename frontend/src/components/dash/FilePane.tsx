@@ -15,6 +15,7 @@ export function FilePane({ task }: { task: Task }) {
     truncated: boolean;
   } | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const requestSeq = useRef(0);
   const taskIdRef = useRef(task.id);
 
@@ -23,13 +24,20 @@ export function FilePane({ task }: { task: Task }) {
     requestSeq.current += 1;
   }, [task.id]);
 
+  // A different task starts from a clean pane; a status change must not close
+  // a preview the user is reading.
   useEffect(() => {
-    let cancelled = false;
     setSelected(null);
     setPreview(null);
     setNote(null);
     setFiles([]);
     setTruncated(false);
+    setLoading(true);
+  }, [task.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
 
     const load = () =>
       listFiles(task.id)
@@ -44,6 +52,9 @@ export function FilePane({ task }: { task: Task }) {
         })
         .catch(() => {
           if (!cancelled) setNote("无法读取工作区文件");
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
         });
 
     load();
@@ -87,9 +98,11 @@ export function FilePane({ task }: { task: Task }) {
 
       {files.length === 0 ? (
         <p className="text-body text-tertiary">
-          {task.status === "RUNNING"
-            ? "任务运行中；写入工作区的文件会出现在这里。"
-            : "工作区还没有文件。任务写下文件后会出现在这里。"}
+          {loading
+            ? "加载中…"
+            : task.status === "RUNNING"
+              ? "任务运行中；写入工作区的文件会出现在这里。"
+              : "工作区还没有文件。任务写下文件后会出现在这里。"}
         </p>
       ) : (
         groups.map((group) => (
