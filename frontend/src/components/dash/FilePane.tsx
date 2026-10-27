@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { fileDownloadUrl, listFiles, previewFile } from "../../api/client";
 import { cx } from "../../lib/cx";
 import { formatBytes } from "../../lib/format";
+import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
 import { Icon } from "../ui/Icon";
 import { fileName, groupFiles } from "./fileGroup";
 
-export function FilePane({ task }: { task: Task }) {
+/** Refresh cadence while a running task keeps writing files. */
+const POLL_MS = 2000;
+
+export function FilePane({ task, visible }: { task: Task; visible: boolean }) {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -57,15 +61,18 @@ export function FilePane({ task }: { task: Task }) {
           if (!cancelled) setLoading(false);
         });
 
-    load();
+    // #230: a closed drawer (narrow screens) must not fetch. Reopening re-runs
+    // this effect (visible flips), so the first load happens immediately then.
+    if (visible) load();
     // Files appear while the task is still running; refresh until it parks.
-    const timer =
-      task.status === "RUNNING" ? window.setInterval(load, 2000) : null;
+    const timer = shouldPollFiles(task.status, visible)
+      ? window.setInterval(load, POLL_MS)
+      : null;
     return () => {
       cancelled = true;
       if (timer !== null) window.clearInterval(timer);
     };
-  }, [task.id, task.status]);
+  }, [task.id, task.status, visible]);
 
   const open = async (path: string) => {
     const seq = ++requestSeq.current;

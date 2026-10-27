@@ -18,6 +18,8 @@ const BASE_ID = "dash";
 interface DashTabsProps {
   task: Task | null;
   tab: DashTab;
+  /** #230: false while the narrow-screen drawer is closed — panes must not poll. */
+  visible: boolean;
   onTabChange: (tab: DashTab) => void;
   onOpenTrace: () => void;
 }
@@ -25,6 +27,7 @@ interface DashTabsProps {
 export function DashTabs({
   task,
   tab,
+  visible,
   onTabChange,
   onOpenTrace,
 }: DashTabsProps) {
@@ -53,7 +56,7 @@ export function DashTabs({
             {t.id === tab &&
               (task ? (
                 t.id === "files" ? (
-                  <FilePane task={task} />
+                  <FilePane task={task} visible={visible} />
                 ) : t.id === "plan" ? (
                   <PlanPane task={task} />
                 ) : (
