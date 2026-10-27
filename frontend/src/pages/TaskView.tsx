@@ -214,6 +214,7 @@ export function TaskView() {
         <DashTabs
           task={task}
           tab={dashTab}
+          visible={!dashInert}
           onTabChange={setDashTab}
           onOpenTrace={() => setTraceOpen(true)}
         />
