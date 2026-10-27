@@ -56,7 +56,7 @@ repos:
         name: SSE 事件词汇表四址对齐（#92 的机械门；npm 包装在 git-bash 不可靠，直调同一脚本）
         entry: node frontend/scripts/check-sse-event-registry.mjs
         language: system
-        files: ^(backend/.*\.py|frontend/src/hooks/useSSE\.ts|frontend/src/types/index\.ts|docs/architecture\.md)$
+        files: ^(backend/.*\.py|frontend/src/hooks/useSSE\.ts|frontend/src/types/index\.ts|frontend/src/lib/eventLabels\.ts|docs/architecture\.md)$
         pass_filenames: false
 
       - id: frontend-tsc

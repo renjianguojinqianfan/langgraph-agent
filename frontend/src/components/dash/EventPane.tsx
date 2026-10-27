@@ -1,22 +1,6 @@
 import { useTaskStore } from "../../store/taskStore";
 import { compressFaceParts, type SSEvent, type Task } from "../../types";
-
-const TYPE_LABEL: Record<string, string> = {
-  task_created: "任务创建",
-  task_resumed: "任务续跑",
-  step_start: "步骤开始",
-  tool_call: "工具调用",
-  tool_result: "工具结果",
-  tool_result_evicted: "结果被驱逐",
-  context_compressed: "上下文压缩",
-  final_answer: "最终回答",
-  task_failed: "任务失败",
-  task_interrupted: "任务停下",
-  subtask_start: "子任务开始",
-  subtask_result: "子任务结果",
-  subtask_failed: "子任务失败",
-  heartbeat: "心跳",
-};
+import { eventLabel } from "../../lib/eventLabels";
 
 function summary(ev: SSEvent): string {
   const d = ev.data as Record<string, unknown> | null | undefined;
@@ -82,7 +66,7 @@ export function EventPane({ task }: { task: Task | null }) {
       ) : (
         <ol className="flex flex-col">
           {shown.map((ev, i) => {
-            const label = TYPE_LABEL[ev.type] ?? ev.type;
+            const label = eventLabel(ev.type);
             const detail = summary(ev);
             return (
               <li

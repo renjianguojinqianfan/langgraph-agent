@@ -167,7 +167,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 > ⚠️ **本表是现役事件清单的唯一权威，不写计数。**
 > v0.1 时只有 12 种；此后新增/退役都在下表行内标了来源。
 > **改本表的 PR 会触发全套 CI**（`ci.yml` 的 `paths` 白名单用末尾正模式把本文件单独收回）。
-> **守卫链**：`npm run check:sse`（前端 job）逐条比对「后端发布点 == 本表 == `EVENT_TYPES`」，并校验 `SSEventType` 联合 = `EVENT_TYPES ∪ trace 文件独有类型`；`backend/tests/test_sse_publish_ast.py`（backend job）用 AST 枚举发布调用，与上表第一列比对。两条路径都只认**字符串字面量**类型：经变量名传入的发布调用是共同盲区，必须手工同步四处。
+> **守卫链**：`npm run check:sse`（前端 job）逐条比对「后端发布点 == 本表 == `EVENT_TYPES`」，并校验 `SSEventType` 联合 = `EVENT_TYPES ∪ trace 文件独有类型`、事件页中文标签表（`frontend/src/lib/eventLabels.ts`）的键集 = `EVENT_TYPES`；`backend/tests/test_sse_publish_ast.py`（backend job）用 AST 枚举发布调用，与上表第一列比对。两条路径都只认**字符串字面量**类型：经变量名传入的发布调用是共同盲区，必须手工同步四处。
 > **唯一不对称**：`trace_end` 只写 trace JSONL、不经 EventBus——进 `SSEventType` 联合、不进 `EVENT_TYPES` 订阅表。
 > 子智能体快照仍以 REST 的 `Task.subtasks` 为准；F7 起前端 reducer 同时消费父频道的 `subtask_*` 三条事件做实时态（`SubagentStrip`），两者只影响子智能体条，不进对话/步骤语义。`subtask_*` 三条只发在**父频道**，子任务自己的频道不带。
 > **投递语义**：单个发布者内的事件按发布顺序推送；跨发布者（worker 线程与 `stop()` 的 HTTP 线程）不保证顺序，但回放与实时之间**不丢不重**。晚订阅者先收到缓冲区回放，再继续实时流——`EventBus.subscribe` 在同一把锁里登记订阅并取回放快照，`backend/api/sse.py` 把 worker 线程的发布经 `call_soon_threadsafe` 投回事件循环。

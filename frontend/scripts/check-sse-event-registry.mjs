@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * #92 防回归断言：SSE 事件词汇表四处必须逐条相等。
+ * #92 防回归断言：SSE 事件词汇表四处必须逐条相等。事件页的中文标签是这份词汇的
+ * **显示投影**（不是第五个权威源），另由下面的断言 4 钉在 `EVENT_TYPES` 上。
  *
  * 为什么要有这个脚本：EventSource 只把带 `event:` 字段的消息派发给 `addEventListener`
  * 注册过的类型，没注册的类型浏览器直接丢。所以注册表漂了不报错、不告警，只是时间线
@@ -18,7 +19,10 @@
  *   3. `frontend/src/types/index.ts` 的 `SSEventType` 联合 == `EVENT_TYPES` ∪ trace 文件独有类型
  *      —— `trace_end` 由 `TraceRecorder.close()` 直写 JSONL、不经 EventBus，所以它进联合
  *         （trace 回放面要认它）、不进订阅表（SSE 流上永远不会出现它）。
- *   4. 两张表各自无重复条目 —— 挂两次就派发两次，时间线里会出现两行，正踩「出现一次」；
+ *   4. `frontend/src/lib/eventLabels.ts` 的 `EVENT_LABELS` 键集 == `EVENT_TYPES`
+ *      —— 事件页的中文标签是显示投影、不是第五个权威源，但漏了同样静默：事件页会显示
+ *         英文类型名而 CI 不报（#229）。少了 = 漏改标签；多了 = 订阅面上没有的类型。
+ *   5. 两张表各自无重复条目 —— 挂两次就派发两次，时间线里会出现两行，正踩「出现一次」；
  *      Set 与 tsc 都会静默去重，只能在这儿明说。
  *
  * 发布点怎么认：grep 三种现役写法的字符串字面量——
@@ -115,6 +119,14 @@ function unionTypes() {
   return [...block[1].matchAll(/\|\s*"([a-z_]+)"/g)].map((m) => m[1]);
 }
 
+/** 事件页中文标签表的键（EventPane 的显示投影；#229）。 */
+function eventLabelTypes() {
+  const src = stripLineComments(read("frontend/src/lib/eventLabels.ts"));
+  const block = /const EVENT_LABELS[^=]*= \{([\s\S]*?)\};/.exec(src);
+  if (!block) fail("frontend/src/lib/eventLabels.ts 里找不到 EVENT_LABELS 表");
+  return [...block[1].matchAll(/^\s*([a-z_]+):/gm)].map((m) => m[1]);
+}
+
 const onlyIn = (a, b) => [...a].filter((x) => !b.has(x)).sort();
 
 /**
@@ -154,10 +166,11 @@ const doc = unique("§3.4 表", docTableTypes());
 const listen = unique("EVENT_TYPES", subscribedTypes());
 const union = unique("SSEventType 联合", unionTypes());
 const traceOnly = unique("trace 文件独有类型", traceFileOnlyTypes());
+const labels = unique("EVENT_LABELS", eventLabelTypes());
 
 console.log(`后端 SSE 发布点 ${backend.size} 条 / §3.4 表 ${doc.size} 条 / ` +
   `EVENT_TYPES ${listen.size} 条 / SSEventType 联合 ${union.size} 条 / ` +
-  `trace 文件独有 ${traceOnly.size} 条`);
+  `trace 文件独有 ${traceOnly.size} 条 / 事件页标签 ${labels.size} 条`);
 
 // 取证表：后端在发的每一条，前端两处是否都认。注册了才会派发给 handler，
 // handler 直通 store.applyEvent（不按类型过滤）进 state.events 时间线。
@@ -181,6 +194,8 @@ const checks = [
   diff("断言 3 EVENT_TYPES ∪ trace 独有 vs SSEventType 联合",
     new Set([...listen, ...traceOnly]), union, "EVENT_TYPES ∪ trace 独有", "SSEventType 联合",
     "两处前端注册表必须同一份词汇，否则订阅面与类型面各漂各的。"),
+  diff("断言 4 事件页标签 vs EVENT_TYPES", labels, listen, "EVENT_LABELS", "EVENT_TYPES",
+    "标签缺 = 事件页静默显示英文类型名（#229）；标签多 = 订阅面上没有的类型。"),
 ];
 
 if (checks.some((ok) => !ok)) {
