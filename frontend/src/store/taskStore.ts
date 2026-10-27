@@ -9,7 +9,6 @@ interface TaskState {
   events: SSEvent[];
   /** Per-task live markers (context compressed) for the flow view. */
   markers: Record<string, TraceMarker[]>;
-  selectedStep: number | null;
   /** History filter (ADR 0010 decision 2): this directory, or every task. */
   historyFilter: "current" | "all";
   /** M2: the model settings overlay. */
@@ -24,7 +23,6 @@ interface TaskState {
   /** #189: merge a refetched snapshot's status fields into the live detail. */
   mergeTaskStatus: (snapshot: Task) => void;
   applyEvent: (ev: SSEvent) => void;
-  setSelectedStep: (index: number | null) => void;
   setHistoryFilter: (filter: "current" | "all") => void;
 }
 
@@ -34,7 +32,6 @@ export const useTaskStore = create<TaskState>((set) => ({
   detail: {},
   events: [],
   markers: {},
-  selectedStep: null,
   historyFilter: "current",
   settingsOpen: false,
   listRevision: 0,
@@ -43,11 +40,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 
-  setCurrentTask: (id) =>
-    set({
-      currentTaskId: id,
-      selectedStep: null,
-    }),
+  setCurrentTask: (id) => set({ currentTaskId: id }),
 
   upsertTask: (task) =>
     set((state) => {
@@ -103,6 +96,4 @@ export const useTaskStore = create<TaskState>((set) => ({
           ev.type === "task_created" ? state.listRevision + 1 : state.listRevision,
       };
     }),
-
-  setSelectedStep: (index) => set({ selectedStep: index }),
 }));

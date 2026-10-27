@@ -31,7 +31,6 @@ beforeEach(() => {
     detail: {},
     events: [],
     markers: {},
-    selectedStep: null,
     historyFilter: "current",
     settingsOpen: false,
     listRevision: 0,

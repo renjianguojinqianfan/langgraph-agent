@@ -125,7 +125,7 @@ export function TaskView() {
         <TaskRail />
       </aside>
 
-      <main className="relative flex min-w-0 flex-1 flex-col">
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <IconButton
           type="button"
           aria-label="打开任务列表"

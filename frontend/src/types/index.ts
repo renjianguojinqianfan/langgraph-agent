@@ -194,7 +194,7 @@ export interface ContextCompressedData {
 
 export type TraceMarkerType = "context_compressed";
 
-/** Live marker rendered in the task flow (MessageStream). */
+/** Live marker rendered in the task flow (Conversation). */
 export interface TraceMarker {
   type: TraceMarkerType;
   ts?: number;

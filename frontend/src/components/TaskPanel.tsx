@@ -1,10 +1,9 @@
 import { WorkspaceFiles } from "./WorkspaceFiles";
-import { MessageStream } from "./MessageStream";
 import { PlanPanel } from "./PlanPanel";
-import { StepTimeline } from "./StepTimeline";
 import { SubtaskList } from "./SubtaskList";
 import { TraceTab } from "./TraceTab";
 import { Composer } from "./center/Composer";
+import { Conversation } from "./center/Conversation";
 import { TaskHeader } from "./center/TaskHeader";
 import { Task, TaskViewTab } from "../types";
 
@@ -24,7 +23,7 @@ export function TaskPanel({
   onToggleRight,
 }: TaskPanelProps) {
   return (
-    <section className="flex-1 flex flex-col min-w-0">
+    <section className="flex min-h-0 flex-1 flex-col min-w-0">
       {task ? (
         <TaskHeader
           task={task}
@@ -38,33 +37,33 @@ export function TaskPanel({
       )}
 
       {task && (
-        <div className="flex items-center border-b border-slate-800 px-4">
+        <div className="flex items-center border-b border-rule px-4">
           <button
             onClick={() => onTabChange("run")}
-            className={`px-3 py-2 -mb-px border-b-2 text-sm transition ${
+            className={`px-3 py-2 -mb-px border-b-2 text-meta transition ${
               tab === "run"
-                ? "border-sky-500 text-sky-300"
-                : "border-transparent text-slate-500 hover:text-slate-300"
+                ? "border-signal-now text-primary"
+                : "border-transparent text-tertiary hover:text-secondary"
             }`}
           >
             运行
           </button>
           <button
             onClick={() => onTabChange("subtask")}
-            className={`px-3 py-2 -mb-px border-b-2 text-sm transition ${
+            className={`px-3 py-2 -mb-px border-b-2 text-meta transition ${
               tab === "subtask"
-                ? "border-sky-500 text-sky-300"
-                : "border-transparent text-slate-500 hover:text-slate-300"
+                ? "border-signal-now text-primary"
+                : "border-transparent text-tertiary hover:text-secondary"
             }`}
           >
             子任务
           </button>
           <button
             onClick={() => onTabChange("trace")}
-            className={`px-3 py-2 -mb-px border-b-2 text-sm transition ${
+            className={`px-3 py-2 -mb-px border-b-2 text-meta transition ${
               tab === "trace"
-                ? "border-sky-500 text-sky-300"
-                : "border-transparent text-slate-500 hover:text-slate-300"
+                ? "border-signal-now text-primary"
+                : "border-transparent text-tertiary hover:text-secondary"
             }`}
           >
             Trace / 运行日志
@@ -72,28 +71,30 @@ export function TaskPanel({
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <div className="flex min-h-0 flex-1 flex-col">
         {task ? (
           tab === "trace" ? (
-            <TraceTab taskId={task.id} />
+            <div className="flex-1 overflow-auto p-4">
+              <TraceTab taskId={task.id} />
+            </div>
           ) : tab === "subtask" ? (
-            <>
-              <div className="text-xs text-slate-400 mb-1">子任务</div>
+            <div className="flex-1 space-y-3 overflow-auto p-4">
+              <div className="text-meta text-secondary">子任务</div>
               <SubtaskList subtasks={task.subtasks ?? []} />
-            </>
+            </div>
           ) : (
-            <>
-              <MessageStream task={task} />
-              <PlanPanel key={task.id} task={task} />
-              <div>
-                <div className="text-xs text-slate-400 mb-1">步骤时间线</div>
-                <StepTimeline task={task} />
-              </div>
-              <WorkspaceFiles taskId={task?.id ?? null} status={task?.status} />
-            </>
+            <Conversation
+              task={task}
+              after={
+                <>
+                  <PlanPanel key={task.id} task={task} />
+                  <WorkspaceFiles taskId={task.id} status={task.status} />
+                </>
+              }
+            />
           )
         ) : (
-          <div className="text-slate-500 text-sm">
+          <div className="flex flex-1 items-center justify-center p-4 text-body text-tertiary">
             在下方输入任务开始，或在左侧选择历史任务。
           </div>
         )}

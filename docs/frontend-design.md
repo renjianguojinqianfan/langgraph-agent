@@ -51,7 +51,7 @@
 - 数字一律 `tabular-nums`；用于比较的数字不做截断。
 - 标题 `text-wrap: balance`；正文段落 `text-wrap: pretty`；除标题 `-0.01em` 外不加字距、不拉宽标签、不全大写。
 - 标题层级：页面唯一 `h1`（任务标题）；回答标题 `h2`；计划文档从 `h2` 起（`h3` 小节）；对话框自成一级。
-- **依赖（2026-10-26 批，F2 已安装并使用）**：`@fontsource-variable/inter`、`@fontsource/jetbrains-mono` 已在 F2 装入 `main.tsx`；`react-markdown` + `remark-gfm` 与 `vitest ^5.0.5` 同批批准，UI 层零新增依赖；Markdown 未接前走纯文本兜底，不静默加依赖。
+- **依赖（2026-10-26 批，F2 已安装并使用）**：`@fontsource-variable/inter`、`@fontsource/jetbrains-mono` 已在 F2 装入 `main.tsx`；`react-markdown` + `remark-gfm` 与 `vitest ^5.0.5` 同批批准，UI 层零新增依赖。Markdown 已接（F5，`lib/markdown.tsx`）：不开原始 HTML（`skipHtml`、无 `rehype-raw`），标题从 h2 起（h1 映射为 h2）。
 
 ## 3. 布局与三栏职责
 
