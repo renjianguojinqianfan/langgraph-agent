@@ -202,7 +202,7 @@ export interface TraceMarker {
 }
 
 /** Tabs shown on the task detail page. */
-export type TaskViewTab = "run" | "trace" | "subtask";
+export type TaskViewTab = "run" | "subtask";
 
 /** #85：`compressed=true` 现在可在 `dropped=0` 时仅靠带内挤压成立——
  *  两个计数必须分开说，否则视图会显示「上下文已压缩：丢弃 0 条」而把真实工作（带内挤压）藏起来。 */

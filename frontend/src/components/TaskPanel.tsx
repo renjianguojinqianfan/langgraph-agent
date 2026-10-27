@@ -1,18 +1,20 @@
-import { WorkspaceFiles } from "./WorkspaceFiles";
-import { PlanPanel } from "./PlanPanel";
 import { SubtaskList } from "./SubtaskList";
-import { TraceTab } from "./TraceTab";
 import { Composer } from "./center/Composer";
 import { Conversation } from "./center/Conversation";
 import { TaskHeader } from "./center/TaskHeader";
-import { Task, TaskViewTab } from "../types";
+import { TraceFace } from "./dash/TraceFace";
+import { Task } from "../types";
 
 interface TaskPanelProps {
   task: Task | null;
-  tab: TaskViewTab;
-  onTabChange: (tab: TaskViewTab) => void;
+  /** Run / subagent tabs; F7 moves the subagent face to a strip. */
+  tab: "run" | "subtask";
+  onTabChange: (tab: "run" | "subtask") => void;
   rightOpen: boolean;
   onToggleRight: () => void;
+  onOpenPlan: () => void;
+  traceOpen: boolean;
+  onCloseTrace: () => void;
 }
 
 export function TaskPanel({
@@ -21,7 +23,23 @@ export function TaskPanel({
   onTabChange,
   rightOpen,
   onToggleRight,
+  onOpenPlan,
+  traceOpen,
+  onCloseTrace,
 }: TaskPanelProps) {
+  if (task && traceOpen) {
+    return (
+      <section className="flex min-h-0 flex-1 flex-col min-w-0">
+        <TaskHeader
+          task={task}
+          rightOpen={rightOpen}
+          onToggleRight={onToggleRight}
+        />
+        <TraceFace taskId={task.id} onClose={onCloseTrace} />
+      </section>
+    );
+  }
+
   return (
     <section className="flex min-h-0 flex-1 flex-col min-w-0">
       {task ? (
@@ -58,40 +76,18 @@ export function TaskPanel({
           >
             子任务
           </button>
-          <button
-            onClick={() => onTabChange("trace")}
-            className={`px-3 py-2 -mb-px border-b-2 text-meta transition ${
-              tab === "trace"
-                ? "border-signal-now text-primary"
-                : "border-transparent text-tertiary hover:text-secondary"
-            }`}
-          >
-            Trace / 运行日志
-          </button>
         </div>
       )}
 
       <div className="flex min-h-0 flex-1 flex-col">
         {task ? (
-          tab === "trace" ? (
-            <div className="flex-1 overflow-auto p-4">
-              <TraceTab taskId={task.id} />
-            </div>
-          ) : tab === "subtask" ? (
+          tab === "subtask" ? (
             <div className="flex-1 space-y-3 overflow-auto p-4">
               <div className="text-meta text-secondary">子任务</div>
               <SubtaskList subtasks={task.subtasks ?? []} />
             </div>
           ) : (
-            <Conversation
-              task={task}
-              after={
-                <>
-                  <PlanPanel key={task.id} task={task} />
-                  <WorkspaceFiles taskId={task.id} status={task.status} />
-                </>
-              }
-            />
+            <Conversation task={task} onOpenPlan={onOpenPlan} />
           )
         ) : (
           <div className="flex flex-1 items-center justify-center p-4 text-body text-tertiary">

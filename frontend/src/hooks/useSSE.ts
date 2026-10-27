@@ -38,10 +38,16 @@ export function useSSE(taskId: string | null, onEvent: (ev: SSEvent) => void) {
     const es = new EventSource(eventsUrl(taskId));
     const handler = (e: MessageEvent) => {
       try {
+        // The wire frame carries only `type` and `data` (backend/api/sse.py), so
+        // the event page's clock is the arrival time, not a publisher timestamp.
         // wire → `SSEvent` 的唯一折点：EventSource 只给字符串 `type` 与未校验的 JSON，
         // 判别联合保证的是消费侧，这里保证不了——显式断言一次；事件词汇表本身由
         // `npm run check:sse` 在发布点 / 注册表 / 类型 / 文档四处对齐。
-        onEvent({ type: e.type as SSEventType, data: JSON.parse(e.data) } as SSEvent);
+        onEvent({
+          type: e.type as SSEventType,
+          data: JSON.parse(e.data),
+          ts: Date.now() / 1000,
+        } as SSEvent);
       } catch {
         /* ignore malformed frames */
       }

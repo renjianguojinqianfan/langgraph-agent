@@ -6,7 +6,8 @@ interface TaskState {
   tasks: Task[];
   currentTaskId: string | null;
   detail: Record<string, Task>;
-  events: SSEvent[];
+  /** Per-task SSE events for the event pane (memory only; lost on reload). */
+  eventsByTask: Record<string, SSEvent[]>;
   /** Per-task live markers (context compressed) for the flow view. */
   markers: Record<string, TraceMarker[]>;
   /** History filter (ADR 0010 decision 2): this directory, or every task. */
@@ -30,7 +31,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   tasks: [],
   currentTaskId: null,
   detail: {},
-  events: [],
+  eventsByTask: {},
   markers: {},
   historyFilter: "current",
   settingsOpen: false,
@@ -87,11 +88,16 @@ export const useTaskStore = create<TaskState>((set) => ({
         markers = { ...markers, [id]: [...list, marker].slice(-200) };
       }
 
+      const events = state.eventsByTask[id] ?? [];
+
       return {
         detail: { ...state.detail, [id]: next },
         tasks,
         markers,
-        events: [...state.events, ev].slice(-500),
+        eventsByTask: {
+          ...state.eventsByTask,
+          [id]: [...events, ev].slice(-500),
+        },
         listRevision:
           ev.type === "task_created" ? state.listRevision + 1 : state.listRevision,
       };

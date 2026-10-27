@@ -1,9 +1,9 @@
-import type { ReactNode } from "react";
 import { useTaskStore } from "../../store/taskStore";
 import { compressFaceParts, type Task, type TraceMarker } from "../../types";
 import { isPlanNotice, splitRounds, stepsRoundIndex } from "../../lib/rounds";
 import { AnswerSheet } from "./AnswerSheet";
 import { FailureBlock } from "./FailureBlock";
+import { PlanAnchor } from "./PlanAnchor";
 import { RoundDivider } from "./RoundDivider";
 import { StepRow } from "./StepRow";
 import { UserBubble } from "./UserBubble";
@@ -54,11 +54,10 @@ function StepsBlock({ task }: { task: Task }) {
 
 interface ConversationProps {
   task: Task;
-  /** Temporary F5 slot for the plan / file faces; F6 moves them to the dash. */
-  after?: ReactNode;
+  onOpenPlan?: () => void;
 }
 
-export function Conversation({ task, after }: ConversationProps) {
+export function Conversation({ task, onOpenPlan }: ConversationProps) {
   const conversation = task.conversation.length
     ? task.conversation
     : task.user_input
@@ -85,6 +84,9 @@ export function Conversation({ task, after }: ConversationProps) {
           <div key={round.index} className="flex flex-col gap-3">
             <RoundDivider n={round.index} />
             {round.user && <UserBubble text={round.user.content} />}
+            {i === stepsAt && onOpenPlan && (
+              <PlanAnchor task={task} onOpenPlan={onOpenPlan} />
+            )}
             {i === stepsAt && <StepsBlock task={task} />}
             {round.answers.map((turn, j) =>
               isPlanNotice(turn.content) ? (
@@ -101,7 +103,6 @@ export function Conversation({ task, after }: ConversationProps) {
         {rounds.length === 0 && task.steps.length > 0 && <StepsBlock task={task} />}
 
         <FailureBlock task={task} />
-        {after}
       </div>
     </div>
   );

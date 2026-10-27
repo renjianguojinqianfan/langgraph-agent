@@ -29,7 +29,7 @@ beforeEach(() => {
     tasks: [],
     currentTaskId: null,
     detail: {},
-    events: [],
+    eventsByTask: {},
     markers: {},
     historyFilter: "current",
     settingsOpen: false,

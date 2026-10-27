@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TaskRail } from "../components/rail/TaskRail";
-import { StepDetail } from "../components/StepDetail";
 import { TaskPanel } from "../components/TaskPanel";
+import { DashTabs, type DashTab } from "../components/dash/DashTabs";
 import { IconButton } from "../components/ui/Button";
 import { getTask, listTasks } from "../api/client";
 import { useSSE } from "../hooks/useSSE";
@@ -25,6 +25,8 @@ export function TaskView() {
   const refreshModels = useModelStore((s) => s.refresh);
   const listRevision = useTaskStore((s) => s.listRevision);
   const [tab, setTab] = useState<TaskViewTab>("run");
+  const [dashTab, setDashTab] = useState<DashTab>("files");
+  const [traceOpen, setTraceOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
 
@@ -100,6 +102,7 @@ export function TaskView() {
   // Switching tasks starts on the live run view by default.
   useEffect(() => {
     setTab("run");
+    setTraceOpen(false);
   }, [currentTaskId]);
 
   const task = currentTaskId ? detail ?? null : null;
@@ -135,13 +138,24 @@ export function TaskView() {
           onClick={() => setLeftOpen((v) => !v)}
           className="min-[861px]:hidden absolute left-3 top-3 z-20"
         />
-        <div className="mx-auto flex h-full w-full max-w-[760px] min-h-0 flex-col">
+        <div
+          className={cx(
+            "mx-auto flex h-full w-full min-h-0 flex-col",
+            traceOpen ? "" : "max-w-[760px]"
+          )}
+        >
           <TaskPanel
             task={task}
             tab={tab}
             onTabChange={setTab}
             rightOpen={rightOpen}
             onToggleRight={() => setRightOpen((v) => !v)}
+            onOpenPlan={() => {
+              setDashTab("plan");
+              setRightOpen(true);
+            }}
+            traceOpen={traceOpen}
+            onCloseTrace={() => setTraceOpen(false)}
           />
         </div>
       </main>
@@ -154,7 +168,12 @@ export function TaskView() {
           rightOpen ? "max-[1180px]:translate-x-0" : "max-[1180px]:translate-x-full"
         )}
       >
-        <StepDetail task={task} />
+        <DashTabs
+          task={task}
+          tab={dashTab}
+          onTabChange={setDashTab}
+          onOpenTrace={() => setTraceOpen(true)}
+        />
       </aside>
 
       {(leftOpen || rightOpen) && (
