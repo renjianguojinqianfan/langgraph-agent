@@ -62,12 +62,14 @@
 | 3 | 2026-10-27 | 默认 | 通过（bash 受本机限制，见下）：运行中点停止 → 已停下；同一任务续说创建 `continued3.txt`，最终回答 198 字；SSE 重连后头部仍「运行中」、停止按钮在（#189） | `scenario2-3.json` / `scenario3-reconnect.png` / `scenario3-stopped.png` / `scenario3-final.png`，任务 `e46f194f` |
 | 6 | 2026-10-27 | 默认 | 通过（UI 部分）：A / B 两个工作区各自列表；「全部」按目录分组；从「全部」打开 A 续说，`a2.txt` 落在 A。CLI 交接步骤沿用 2026-10-22 证据，未重跑 | `scenario6.json` / `scenario6-*.png`，任务 `25c55dcc` / `f1477ef0` |
 | 7 | 2026-10-27 | 默认 | 通过：重启后历史仍在；停下任务续说 `a3.txt`；RUNNING 孤儿重启后转 INTERRUPTED，续说被接受并完成（6 步，回答 7 字） | `scenario7.json` / `scenario7-*.png`，任务 `25c55dcc` / `a940d160` |
+| B1 | 2026-10-27 | 坏 Key 档案（`B1_BAD_KEY`，env）→ 默认 | 通过：401 `invalid_api_key` → FAILED；失败态计划可编辑；切默认档案续说，同一任务完成、`error` 清空 | `b1-failed-continue.json` / `b1-failed.png` / `b1-plan-editable.png` / `b1-continued.png`，任务 `1da34aa6` |
 
-> 证据根：`docs/assets/verification/2026-10-21/`；JSON 只留任务/步骤/工具状态与脱敏摘录，不含 Key 与完整对话。
+> 证据根：2026-10-21 及更早轮次在 `docs/assets/verification/2026-10-21/`；2026-10-22 在 `2026-10-22/`；2026-10-27（新版界面 + B1）在 `docs/assets/verification/2026-10-27/`。JSON 只留任务/步骤/工具状态与脱敏摘录，不含 Key 与完整对话。
 > 场景 6 的 A/B 路径按后端记录的绝对路径核对（Windows 反斜杠），写入位置以文件系统实际落点为准。
 > 场景 9 的搜索使用 `SEARCH_PROVIDER=exa`（本机 DuckDuckGo 不可达，见 S2 #175）。
 > 场景 3 / 8 的「停止」在续说轮点击网页端按钮：首次运行期间 SSE 回放会把头部状态显示成「等待中」，停止按钮不可见。**2026-10-22 复核：仍存在**——首轮回放里唯一携带任务状态的事件是 `task_created`（`status=PENDING`，创建时发出）；后端开工时把任务改成 `RUNNING` 但不发事件（`backend/services/task_manager.py:698`），前端只有 `task_resumed`（续说 / 续跑）会把任务置 `RUNNING`（`frontend/src/store/taskStore.ts:66-73,124-126`）。SSE 自动重连（页面不重新挂载）时必现；首次挂载取决于 GET 快照与回放的先后（竞态）。停止按钮仅在 `RUNNING` 时渲染（`frontend/src/components/TaskHeader.tsx:55`）。**2026-10-27：F1 已修**——`task_created` 回放不再覆盖已有快照；`step_start` 遇 PENDING 时重取一次快照且只合并状态字段。回归测试见 `frontend/src/store/reduceTask.test.ts`；**F9 已于 2026-10-27 在网页端重连复测：头部保持「运行中」、停止按钮在**（证据 `docs/assets/verification/2026-10-27/scenario3-reconnect.png`）。
 > 场景 6 的交接步骤在 2026-10-22（#180 F1 修复后）用真实 CLI 复跑：第二进程在退出前同步调用浏览器，URL 落在 `docs/assets/verification/2026-10-22/scenario6-handoff.json`。
 > 场景 8 原命令只回显随机标记而非 PID；时间戳与心跳数据在 JSON 里，表格如实记为「部分」。
 > 2026-10-27 轮次（新版界面）：本机 Git Bash 被安全软件拦截（`msys-2.0 … NtCreateDirectoryObject … 0xC0000022`），`bash` 调用失败，停止时记为 `skipped`；场景 3 的停止-续说判据不依赖 bash 成功执行，场景 7 的孤儿任务在首步前被杀、续跑沿用轮首 checkpoint。UI 面（停止、续说、任务头状态、SSE 重连）均按判据通过。
+> B1 轮次的坏 Key 用环境变量注入（`B1_BAD_KEY`）：本机 `~/.qianfan/credentials.json.tmp` 写入被 ACL 拒绝，界面「粘贴 Key」会报「保存 Key 失败」——这是本机权限限制，不改变 B1 的失败-续说判据。
 > 场景 6 的 A/B 工作区建在 `.qoder/tmp/qa2026-*`（仓库内、gitignored）；文件落点用文件系统核对——W3 忽略规则下工作区文件面不会列出被 ignore 的路径。

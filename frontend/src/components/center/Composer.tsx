@@ -8,6 +8,7 @@ import {
   sendMessage,
 } from "../../api/client";
 import { shouldSendOnEnter } from "../../lib/keys";
+import { isParked, isStoppable } from "../../lib/taskState";
 import { profileName, useModelStore } from "../../store/modelStore";
 import { useTaskStore } from "../../store/taskStore";
 import { TaskMode } from "../../types";
@@ -52,9 +53,9 @@ export function Composer() {
 
   // B1 (#219): a failed task is parked too — its checkpoint is intact, so the
   // next message continues the same conversation (resume() stays INTERRUPTED).
-  const parked = task?.status === "INTERRUPTED" || task?.status === "FAILED";
+  const parked = task ? isParked(task.status) : false;
   const failed = task?.status === "FAILED";
-  const running = task?.status === "RUNNING" || task?.status === "PENDING";
+  const running = task ? isStoppable(task.status) : false;
   // A selected task whose snapshot has not arrived yet must not be treated as
   // "new task": sending would silently create a second task.
   const loading = !!currentTaskId && !task;

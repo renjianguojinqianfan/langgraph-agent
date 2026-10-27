@@ -34,7 +34,7 @@ function SubagentDetail({ subtask }: { subtask: SubTask }) {
         产物{subtask.artifacts.length ? `（${subtask.artifacts.length}）` : ""}
       </div>
       {subtask.artifacts.length ? (
-        <ul className="mt-0.5 space-y-0.5">
+        <ul className="mt-0.5 flex flex-col gap-0.5">
           {subtask.artifacts.map((artifact) => (
             <li
               key={artifact}

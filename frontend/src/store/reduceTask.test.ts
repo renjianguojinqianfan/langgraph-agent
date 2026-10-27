@@ -65,6 +65,20 @@ describe("#189 回放不覆盖任务快照", () => {
     expect(task.title).toBe("新任务");
   });
 
+  it("列表已有行、detail 无快照时，回放 task_created 不覆写列表行", () => {
+    useTaskStore.setState({ tasks: [snapshot()], currentTaskId: "t1" });
+
+    useTaskStore.getState().applyEvent({
+      type: "task_created",
+      data: { task_id: "t1", title: "回放里的旧标题", status: "PENDING" },
+    });
+
+    const state = useTaskStore.getState();
+    expect(state.detail["t1"].status).toBe("RUNNING");
+    expect(state.detail["t1"].title).toBe("任务");
+    expect(state.tasks[0].status).toBe("RUNNING");
+  });
+
   it("重取快照只合并状态字段，不清空 steps / conversation", () => {
     useTaskStore.setState({
       currentTaskId: "t1",

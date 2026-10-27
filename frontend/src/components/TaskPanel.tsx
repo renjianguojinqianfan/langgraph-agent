@@ -44,7 +44,7 @@ export function TaskPanel({
           onToggleRight={onToggleRight}
         />
       ) : (
-        <header className="flex h-[52px] shrink-0 items-center border-b border-rule px-4">
+        <header className="flex h-[52px] shrink-0 items-center border-b border-rule px-4 max-[860px]:pl-12">
           <h1 className="text-title text-primary">新任务</h1>
         </header>
       )}

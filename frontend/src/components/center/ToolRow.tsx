@@ -82,7 +82,7 @@ export function ToolRow({ tc }: { tc: ToolCallRecord }) {
       </button>
 
       {open && (
-        <div className="space-y-2 border-t border-rule px-2 py-2">
+        <div className="flex flex-col gap-2 border-t border-rule px-2 py-2">
           <div>
             <div className="mb-1 text-meta text-tertiary">入参</div>
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-well bg-surface-page/60 p-2 font-mono text-code text-secondary">

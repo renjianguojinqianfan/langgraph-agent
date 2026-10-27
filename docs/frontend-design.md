@@ -80,7 +80,7 @@
 | `ToolRow` | 槽底；工具名与参数 mono、可截断 + `title`；结果词只用**终态**三值：成功 / 失败 / 未执行（`success / failed / skipped`；`pending` 是进行中，不改结果词。原因写进 `error`；不新增 `blocked` 状态）。 |
 | `PlanAnchor` | 对话里一行入口：「计划 v3 · 状态」（版本 = `Task.plan_version`；状态词由 `Task.status` 派生，不是计划自己的字段）；点开切右栏计划页；不复制全文。 |
 | `AnswerSheet` | **内容区唯一纸面**（11 圆角、唯一阴影）；头部只放 provenance：模型 = `Task.model` 的档案名（空则全局默认），工具次数 = `steps[].tool_calls` 全任务累计（写「累计」，不是本轮），不放「回答」标签；正文 Markdown（标题 / 列表 / 代码 / 行内代码）。 |
-| `Composer` | 模式段 + 模型 chip + 输入 + 发送（蓝底 + `--text-on-signal` 字形，6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
+| `Composer` | 模式段 + 模型控件（原生 `<select>`，chip 形态、不新做浮层）+ 输入 + 发送（蓝底 + `--text-on-signal` 字形，6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
 | `FilePane` | 平铺清单由客户端按 `/` 分组；文本预览 ≤200KB；二进制给下载；>2000 条明示截断。 |
 | `PlanPane` | 渲染 Markdown + 标题目录；版本 / 状态徽标；**编辑在「已停下」或「失败」（B1 已放宽，见 §9）可用**；运行中点编辑给出原因而不是藏按钮；保存提示「下一条消息生效」。 |
 | `EventPane` | 时间 mono + 类型词 + 摘要；不做可点假象；注明事件只做旁证、状态以快照为准。 |
@@ -185,3 +185,4 @@
 - 2026-10-23：按 PR #192 第二轮复审修订：PlanPane 只给「已停下」编辑（失败待 §9）、SubagentStrip 状态词归 Inter、机器事实改短 id + 产物数、AA 旧值依据纠正（`#63676D` 不足、`#9BA0A6` 为统一色阶）、`--text-on-signal` token、`TaskRail` 组件规则、`--state-ok` 用途收窄、ToolRow 改「终态三值」、依赖措辞改「兜底（非等价替代）+ 实施 PR 补记录」、AnswerSheet 补「空则全局默认」。
 - 2026-10-27：按 [`frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 分片定稿：实施指针从「#54 四期」改为 F1–F9 + B1；依赖状态更新为已批；`--radius-control: 6` 待 F2 补入 §1；D1–D11 实现裁决见计划 §4.2。
 - 2026-10-27：**已交付**（F1–F9 + B1 全部合入）。实际落地与本文的差异只在实现细节：计划页编辑含失败态（B1）、事件页时间用到达时间（SSE 帧不带 ts）、文件预览用槽底而非第二张纸面；axe（默认规则）在空态 / 任务 / 文件 / 事件 / 计划 / Trace / 设置七种状态下 0 违规。
+- 2026-10-27（评审返工）：模型控件保留原生 `<select>`（F4 票面允许「原生 select 做 chip」，不自绘浮层，仅收窄为 chip 形态）；事件页按载荷去重并限 100 条；运行中的计划保留禁用「编辑」按钮并用原因行说明（`aria-describedby`）；抽屉关闭时用 `inert` + `aria-hidden` 退出 Tab 序；≤860 标题给浮动按钮让位；≤1400 路径收窄、中文标签回归 Inter、新样式不再使用 `space-y`。

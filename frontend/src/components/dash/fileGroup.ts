@@ -1,4 +1,5 @@
 import type { WorkspaceFile } from "../../types";
+import { basename } from "../../lib/format";
 
 export interface FileGroup {
   /** Full directory path; empty means files at the workspace root. */
@@ -6,11 +7,6 @@ export interface FileGroup {
   /** Directory basename for the group header; "根目录" in the root group. */
   label: string;
   files: WorkspaceFile[];
-}
-
-function basename(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
-  return trimmed.split("/").pop() ?? trimmed;
 }
 
 /** Flat server list grouped by parent directory, first-seen order preserved. */

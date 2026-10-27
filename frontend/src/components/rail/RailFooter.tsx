@@ -10,7 +10,7 @@ export function RailFooter() {
   return (
     <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-rule px-3 py-2">
       <span
-        className="truncate font-mono text-machine text-tertiary"
+        className="truncate text-meta text-tertiary"
         title="单后台；交接提示本期不做"
       >
         共享后台

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiErrorText, getPlan, putPlan } from "../../api/client";
 import { Markdown } from "../../lib/markdown";
+import { isParked } from "../../lib/taskState";
 import type { Task } from "../../types";
 import { Button } from "../ui/Button";
 import { Status } from "../ui/Status";
@@ -13,7 +14,7 @@ function PlanToc({ items }: { items: TocItem[] }) {
       aria-label="计划目录"
       className="rounded-well bg-surface-well px-3 py-2"
     >
-      <ul className="space-y-0.5">
+      <ul className="flex flex-col gap-0.5">
         {items.map((item) => (
           <li key={item.line} className={item.level === 3 ? "pl-3" : undefined}>
             <a
@@ -49,7 +50,7 @@ export function PlanPane({ task }: { task: Task }) {
     version: number;
   } | null>(null);
 
-  const editable = task.status === "INTERRUPTED" || task.status === "FAILED";
+  const editable = isParked(task.status);
 
   useEffect(() => {
     setEditing(false);
@@ -170,12 +171,14 @@ export function PlanPane({ task }: { task: Task }) {
       <div className="flex min-w-0 items-center gap-2">
         <span className="shrink-0 text-meta text-secondary">计划 v{version}</span>
         <Status status={task.status} live={false} />
-        {editable && !editing && (
+        {!editing && (
           <Button
             variant="outline"
             size="sm"
             className="ml-auto shrink-0"
             onClick={startEdit}
+            disabled={!editable}
+            aria-describedby={!editable ? "plan-edit-reason" : undefined}
           >
             {text.trim() ? "编辑" : "编写计划"}
           </Button>
@@ -199,7 +202,7 @@ export function PlanPane({ task }: { task: Task }) {
       </div>
 
       {!editable && (
-        <p className="text-meta text-tertiary">
+        <p id="plan-edit-reason" className="text-meta text-tertiary">
           {task.status === "PENDING"
             ? "任务启动中；停下后可编辑计划。"
             : "任务运行中；停下后可编辑计划，改动在下一条消息生效。"}

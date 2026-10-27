@@ -1,4 +1,14 @@
 const MINUTE = 60_000;
+
+/** Last path segment; workspace paths arrive with either separator. A path
+ * made only of separators keeps its trimmed form ("/" stays "/"). */
+export function basename(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return "";
+  const stripped = trimmed.replace(/[\\/]+$/, "");
+  if (!stripped) return trimmed;
+  return stripped.split(/[\\/]+/).pop() ?? stripped;
+}
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 

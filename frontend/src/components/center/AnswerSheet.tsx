@@ -15,8 +15,10 @@ export function AnswerSheet({ task, content }: { task: Task; content: string }) 
         <span className="min-w-0 truncate" title={modelLabel}>
           {modelLabel}
         </span>
-        <span className="shrink-0 font-mono text-machine tabular-nums">
-          累计工具 {toolCount} 次
+        <span className="flex shrink-0 items-center gap-1">
+          累计工具
+          <span className="font-mono text-machine tabular-nums">{toolCount}</span>
+          次
         </span>
       </div>
       {empty ? (

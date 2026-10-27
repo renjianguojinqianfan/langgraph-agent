@@ -62,11 +62,10 @@ const GLYPHS: Record<IconName, ReactElement> = {
 interface IconProps {
   name: IconName;
   size?: number;
-  label?: string;
   className?: string;
 }
 
-export function Icon({ name, size = 16, label, className }: IconProps) {
+export function Icon({ name, size = 16, className }: IconProps) {
   return (
     <svg
       width={size}
@@ -78,9 +77,7 @@ export function Icon({ name, size = 16, label, className }: IconProps) {
       strokeLinecap="round"
       strokeLinejoin="round"
       className={cx("shrink-0", className)}
-      {...(label
-        ? { role: "img", "aria-label": label }
-        : { "aria-hidden": true })}
+      aria-hidden="true"
     >
       {GLYPHS[name]}
     </svg>

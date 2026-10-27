@@ -77,7 +77,10 @@ export const useTaskStore = create<TaskState>((set) => ({
       if (!id) return {};
       // `applyToTask` ignores a replayed `task_created` once a snapshot exists
       // (#189): the persisted snapshot, not event replay, is authoritative.
-      const next = applyToTask(state.detail[id], id, ev);
+      // A list row is a full Task snapshot too, so it seeds a missing detail
+      // instead of letting the stale replay replace the row.
+      const known = state.tasks.find((t) => t.id === id);
+      const next = applyToTask(state.detail[id] ?? known, id, ev);
 
       const existing = state.tasks.find((t) => t.id === id);
       const tasks = existing

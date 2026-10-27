@@ -148,7 +148,9 @@ jobs:
           backend/tests/test_strict_msgpack_guard.py
           -q -rs
 
-  # ── 前端：类型检查 + 生产构建 ─────────────────────────────────────────────
+  # ── 前端：类型检查 + 单元测试 + 生产构建 ─────────────────────────────────
+  # job 显示名不要改名：「Frontend typecheck & build (Node 22)」是分支保护的
+  # required check 字符串；单测已包含在内，见下方 Unit tests 步骤。
   frontend-build:
     name: Frontend typecheck & build (Node 22)
     runs-on: ubuntu-latest

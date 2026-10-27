@@ -1,4 +1,5 @@
 import { stopTask } from "../../api/client";
+import { isStoppable } from "../../lib/taskState";
 import { Task, TaskMode } from "../../types";
 import { Button, IconButton } from "../ui/Button";
 import { Status } from "../ui/Status";
@@ -16,7 +17,7 @@ const MODE_LABEL: Record<TaskMode, string> = {
 
 export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) {
   // #189: PENDING is the startup transient — it is stoppable like RUNNING.
-  const stoppable = task.status === "RUNNING" || task.status === "PENDING";
+  const stoppable = isStoppable(task.status);
   const heading = task.title || task.user_input || "未命名任务";
   const workspace = task.workspace || "默认";
 
@@ -29,7 +30,7 @@ export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) 
   };
 
   return (
-    <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-rule px-4">
+    <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-rule px-4 max-[860px]:pl-12">
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-title text-primary" title={heading}>
           {heading}
@@ -39,7 +40,7 @@ export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) 
             {MODE_LABEL[task.mode]}
           </span>
           <span
-            className="truncate font-mono text-machine text-tertiary"
+            className="truncate font-mono text-machine text-tertiary max-[1400px]:max-w-[150px]"
             title={workspace}
           >
             {workspace}

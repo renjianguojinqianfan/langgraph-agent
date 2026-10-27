@@ -4,12 +4,14 @@ import { TaskPanel } from "../components/TaskPanel";
 import { DashTabs, type DashTab } from "../components/dash/DashTabs";
 import { IconButton } from "../components/ui/Button";
 import { getTask, listTasks } from "../api/client";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
 import { needsStatusRefetch } from "../store/reduceTask";
 import { useTaskStore } from "../store/taskStore";
 import { SSEvent } from "../types";
 import { cx } from "../lib/cx";
+import { isParked } from "../lib/taskState";
 import { currentDir } from "../workspace";
 
 export function TaskView() {
@@ -29,6 +31,30 @@ export function TaskView() {
   const [traceOpen, setTraceOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
+  const railRef = useRef<HTMLElement>(null);
+  const dashRef = useRef<HTMLElement>(null);
+  const narrowRail = useMediaQuery("(max-width: 860px)");
+  const narrowDash = useMediaQuery("(max-width: 1180px)");
+  const railInert = narrowRail && !leftOpen;
+  const dashInert = narrowDash && !rightOpen;
+
+  // A translated drawer is still in the tab order; inert removes it from focus
+  // and the accessibility tree while the visual slide animation stays intact.
+  useEffect(() => {
+    const el = railRef.current;
+    if (!el) return;
+    el.inert = railInert;
+    if (railInert) el.setAttribute("aria-hidden", "true");
+    else el.removeAttribute("aria-hidden");
+  }, [railInert]);
+
+  useEffect(() => {
+    const el = dashRef.current;
+    if (!el) return;
+    el.inert = dashInert;
+    if (dashInert) el.setAttribute("aria-hidden", "true");
+    else el.removeAttribute("aria-hidden");
+  }, [dashInert]);
 
   useEffect(() => {
     refreshModels();
@@ -96,7 +122,7 @@ export function TaskView() {
   const status = detail?.status;
   useEffect(() => {
     if (!currentTaskId) return;
-    if (status !== "INTERRUPTED" && status !== "FAILED") return;
+    if (!status || !isParked(status)) return;
     getTask(currentTaskId)
       .then((r) => {
         if (r.data) upsertTask(r.data);
@@ -121,15 +147,20 @@ export function TaskView() {
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
-      <a
-        href="#conversation"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-control focus:bg-surface-sheet focus:px-3 focus:py-1.5 focus:text-meta focus:text-primary"
-      >
-        跳到对话记录
-      </a>
+      {task && !traceOpen && (
+        <nav aria-label="跳到对话记录">
+          <a
+            href="#conversation"
+            className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-control focus:bg-surface-sheet focus:px-3 focus:py-1.5 focus:text-meta focus:text-primary"
+          >
+            跳到对话记录
+          </a>
+        </nav>
+      )}
 
       <aside
         id="task-rail"
+        ref={railRef}
         aria-label="任务历史"
         className={cx(
           "w-[264px] shrink-0 bg-surface-column border-r border-rule",
@@ -172,6 +203,7 @@ export function TaskView() {
 
       <aside
         id="task-dash"
+        ref={dashRef}
         aria-label="工作区"
         className={cx(
           "w-[420px] shrink-0 bg-surface-column border-l border-rule",

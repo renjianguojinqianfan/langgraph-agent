@@ -1,4 +1,5 @@
 import type { Task } from "../../types";
+import { basename } from "../../lib/format";
 
 export type RailFilter = "current" | "all";
 
@@ -8,15 +9,6 @@ export interface TaskGroup {
   /** Directory basename for the group header; empty in the ungrouped view. */
   label: string;
   tasks: Task[];
-}
-
-/** Workspace paths are machine facts from either platform, so both slashes split. */
-export function basename(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) return "";
-  const stripped = trimmed.replace(/[\\/]+$/, "");
-  if (!stripped) return trimmed;
-  return stripped.split(/[\\/]+/).pop() ?? stripped;
 }
 
 export function workspaceName(workspace: string): string {

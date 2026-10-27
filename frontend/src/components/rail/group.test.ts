@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "../../types";
 import {
-  basename,
   filterByQuery,
   groupByWorkspace,
   railGroups,
   workspaceName,
 } from "./group";
+import { basename } from "../../lib/format";
 
 function task(id: string, workspace: string, overrides: Partial<Task> = {}): Task {
   return {

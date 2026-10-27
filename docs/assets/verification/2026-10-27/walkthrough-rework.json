@@ -1,0 +1,64 @@
+{
+  "axe": {
+    "empty": [],
+    "task": [],
+    "plan": [],
+    "files": [],
+    "events": [],
+    "trace": [],
+    "settings": []
+  },
+  "inert": {
+    "rightClosed1100": {
+      "inert": true,
+      "ariaHidden": "true",
+      "tabbable": 6,
+      "tabHits": []
+    },
+    "rightOpen1100": {
+      "inert": false,
+      "ariaHidden": null,
+      "tabbable": 6
+    },
+    "leftClosed800": {
+      "inert": true,
+      "ariaHidden": "true",
+      "tabbable": 9,
+      "tabHits": []
+    },
+    "leftOpen800": {
+      "inert": false,
+      "ariaHidden": null,
+      "tabbable": 9
+    }
+  },
+  "checks": {
+    "emptyH1": "新任务",
+    "planEdit": {
+      "present": true,
+      "disabled": true,
+      "describedBy": "plan-edit-reason",
+      "reason": "任务运行中；停下后可编辑计划，改动在下一条消息生效。"
+    },
+    "workspaceWidth1399": 150,
+    "narrowHeader": {
+      "toggle": {
+        "left": 12,
+        "right": 44
+      },
+      "h1": {
+        "left": 68,
+        "top": 5
+      },
+      "overlap": false
+    },
+    "reducedMotion": [
+      "0s",
+      "0s",
+      "0s",
+      "0s",
+      "0s",
+      "0s"
+    ]
+  }
+}

@@ -60,7 +60,7 @@ export function StepRow({ step }: { step: StepRecord }) {
       </button>
 
       {open && (
-        <div className="space-y-1.5 pb-2 pl-5 pr-1">
+        <div className="flex flex-col gap-1.5 pb-2 pl-5 pr-1">
           {toolCount === 0 ? (
             <div className="text-meta text-tertiary">本步骤未调用工具。</div>
           ) : (

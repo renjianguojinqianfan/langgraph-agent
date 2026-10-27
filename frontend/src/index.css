@@ -1,13 +1,9 @@
 /* #122 v3→v4：三条 @tailwind 指令并成一句 @import "tailwindcss"。
    tailwind.config.js 的 content 数组同时退役——v4 自动探测源文件，实测扫描根是构建
    cwd（CI 里 = frontend/，仓库根的杂项文件不被扫），产物里没有多出一个 src 之外的 utility。
-   自定义色由 config 的 theme.extend.colors 迁到 CSS-first 的 @theme：键名保留 panelMuted
-   （v4 认它，bg-panelMuted 与 bg-panelMuted/60 照常生成），字面值不动——它们是设计值，
-   不跟 v4 重绘后的默认调色板走。
 
-   #54 F2：@theme 写入 docs/frontend-design.md §1 的全套 token。旧 --color-panel /
-   --color-panelMuted 先按新值保留，等 HistoryPanel / StepDetail / PlanPanel / TraceTab /
-   LoginPage / SettingsPage 的消费者迁完再删。 */
+   #54 F2：@theme 写入 docs/frontend-design.md §1 的全套 token；旧 --color-panel /
+   --color-panelMuted 已在 F9 评审收尾迁完删除（TraceTab 的 hover 改用 surface-hover）。 */
 @import "tailwindcss";
 
 @theme {
@@ -33,10 +29,6 @@
   --color-state-ok: #3fb97f;
   --color-state-warn: #d9a441;
   --color-state-danger: #e5534b;
-
-  /* 旧 token：先按新值保留，等消费者迁完再删 */
-  --color-panel: #131316;
-  --color-panelMuted: #202027;
 
   --radius-sheet: 11px;
   --radius-dialog: 14px;
@@ -68,12 +60,6 @@
   --text-invite--line-height: 1.35;
   --text-invite--font-weight: 500;
 }
-
-/* F2 地基守卫：text-title / text-machine 由 F3–F8 消费，本片还没有消费者。
-   v4 只为源码里出现的 class 生成 utility（未知 class 静默无样式），这里显式保留，
-   构建后 grep dist 才能证明 @theme 的字号键真的编译成了 class。 */
-@source inline("text-title");
-@source inline("text-machine");
 
 @layer base {
   :root {

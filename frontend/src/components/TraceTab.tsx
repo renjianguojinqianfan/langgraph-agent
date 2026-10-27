@@ -305,7 +305,7 @@ export function TraceTab({ taskId }: TraceTabProps) {
               >
                 <button
                   onClick={() => toggle(index)}
-                  className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-xs hover:bg-panelMuted/40"
+                  className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-xs hover:bg-surface-hover"
                 >
                   <span className="text-tertiary w-4 shrink-0">
                     {isOpen ? "▾" : "▸"}

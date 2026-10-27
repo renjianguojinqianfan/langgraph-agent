@@ -1,0 +1,57 @@
+{
+  "profile": {
+    "id": "59d4f67852c9",
+    "key_set": true,
+    "key_source": "env",
+    "uses_env": "B1_BAD_KEY"
+  },
+  "failure_kind": "auth/key",
+  "planEditableOnFailed": true,
+  "task": {
+    "id": "1da34aa6795e4c4793dc851c319af744",
+    "failed": {
+      "id": "1da34aa6795e4c4793dc851c319af744",
+      "status": "FAILED",
+      "model": "59d4f67852c9",
+      "error": "Build-mode LLM error: Error code: 401 - {'error': {'message': 'Invalid API-key provided. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#apikey-error', 'id': 'bf552a48-a0d1-9275-8350-7be165cdcabc', 'type': 'invalid_request_error', 'code': 'invalid_api_key'}}",
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 10,
+          "head": "请只回答一句：你好。"
+        }
+      ],
+      "final_answer_chars": 275
+    },
+    "resume_reply": {
+      "ok": true,
+      "status": "RUNNING"
+    },
+    "continued": {
+      "id": "1da34aa6795e4c4793dc851c319af744",
+      "status": "INTERRUPTED",
+      "model": "default",
+      "error": null,
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 10,
+          "head": "请只回答一句：你好。"
+        },
+        {
+          "role": "user",
+          "chars": 29,
+          "head": "刚才失败了，换个可用模型继续；只回答一句：B1 续说成功。"
+        },
+        {
+          "role": "assistant",
+          "chars": 8,
+          "head": "B1 续说成功。"
+        }
+      ],
+      "final_answer_chars": 8
+    },
+    "error_cleared": true
+  },
+  "profileDeleted": true
+}

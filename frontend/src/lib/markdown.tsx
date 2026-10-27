@@ -41,12 +41,12 @@ function buildComponents(headingIds?: Map<number, string>): Components {
     ),
     p: ({ children }) => <p className="my-2 text-body text-primary">{children}</p>,
     ul: ({ children }) => (
-      <ul className="my-2 list-disc space-y-0.5 pl-5 text-body text-primary">
+      <ul className="my-2 list-disc pl-5 text-body text-primary [&>li+li]:mt-0.5">
         {children}
       </ul>
     ),
     ol: ({ children }) => (
-      <ol className="my-2 list-decimal space-y-0.5 pl-5 text-body text-primary">
+      <ol className="my-2 list-decimal pl-5 text-body text-primary [&>li+li]:mt-0.5">
         {children}
       </ol>
     ),
