@@ -1,4 +1,4 @@
-import { SSEvent, StepRecord, Task, ToolCallRecord } from "../types";
+import { SSEvent, StepRecord, SubTask, Task, ToolCallRecord } from "../types";
 
 function makeStep(index: number): StepRecord {
   return { index, thought: "", tool_calls: [], status: "running" };
@@ -94,6 +94,51 @@ export function applyToTask(
         };
       });
       return { ...task, steps };
+    }
+    case "subtask_start":
+    case "subtask_result":
+    case "subtask_failed": {
+      const data = ev.data as {
+        subtask_id?: string;
+        name?: string;
+        status?: string;
+        summary?: string;
+        artifacts?: string[];
+        error?: string;
+      };
+      const subtaskId = data.subtask_id;
+      if (!subtaskId) return task;
+
+      const list = task.subtasks ?? [];
+      const existing = list.find((s) => s.subtask_id === subtaskId);
+      const base: SubTask = existing ?? {
+        subtask_id: subtaskId,
+        name: data.name ?? "",
+        status: "pending",
+        summary: "",
+        artifacts: [],
+      };
+      const next: SubTask = { ...base };
+      if (data.name !== undefined) next.name = data.name;
+
+      if (ev.type === "subtask_start") {
+        next.status = data.status ?? "running";
+        next.summary = "";
+        next.artifacts = [];
+        next.error = null;
+      } else if (ev.type === "subtask_result") {
+        next.status = data.status ?? "completed";
+        if (data.summary !== undefined) next.summary = data.summary;
+        if (data.artifacts !== undefined) next.artifacts = data.artifacts;
+      } else {
+        next.status = "failed";
+        if (data.error !== undefined) next.error = data.error;
+      }
+
+      const subtasks = existing
+        ? list.map((s) => (s.subtask_id === subtaskId ? next : s))
+        : [...list, next];
+      return { ...task, subtasks };
     }
     case "final_answer":
       // The conversation itself is refreshed from REST when the round parks

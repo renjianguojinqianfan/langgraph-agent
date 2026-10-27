@@ -112,3 +112,74 @@ describe("#189 step_start 的状态重取判定", () => {
     ).toBe(false);
   });
 });
+
+describe("子智能体事件只动 subtasks", () => {
+  const seed = () =>
+    useTaskStore.setState({
+      currentTaskId: "t1",
+      detail: { t1: snapshot({ subtasks: [] }) },
+    });
+
+  it("subtask_start 插入等待→运行态，摘要与产物清空，steps/conversation 不动", () => {
+    seed();
+    useTaskStore.getState().applyEvent({
+      type: "subtask_start",
+      data: { task_id: "t1", subtask_id: "s1", name: "写报告", status: "running" },
+    });
+
+    const task = useTaskStore.getState().detail["t1"];
+    expect(task.subtasks).toEqual([
+      {
+        subtask_id: "s1",
+        name: "写报告",
+        status: "running",
+        summary: "",
+        artifacts: [],
+        error: null,
+      },
+    ]);
+    expect(task.steps).toHaveLength(1);
+    expect(task.conversation).toHaveLength(1);
+  });
+
+  it("subtask_result 更新状态、摘要与产物", () => {
+    seed();
+    useTaskStore.getState().applyEvent({
+      type: "subtask_start",
+      data: { task_id: "t1", subtask_id: "s1", name: "写报告", status: "running" },
+    });
+    useTaskStore.getState().applyEvent({
+      type: "subtask_result",
+      data: {
+        task_id: "t1",
+        subtask_id: "s1",
+        name: "写报告",
+        status: "completed",
+        summary: "三段结论",
+        artifacts: ["reports/a.md"],
+      },
+    });
+
+    const sub = useTaskStore.getState().detail["t1"].subtasks?.[0];
+    expect(sub?.status).toBe("completed");
+    expect(sub?.summary).toBe("三段结论");
+    expect(sub?.artifacts).toEqual(["reports/a.md"]);
+  });
+
+  it("subtask_failed 置失败并保留原因，不重建 steps", () => {
+    seed();
+    useTaskStore.getState().applyEvent({
+      type: "subtask_failed",
+      data: { task_id: "t1", subtask_id: "s2", name: "抓数据", error: "超时" },
+    });
+
+    const task = useTaskStore.getState().detail["t1"];
+    expect(task.subtasks?.[0]).toMatchObject({
+      subtask_id: "s2",
+      status: "failed",
+      error: "超时",
+    });
+    expect(task.steps).toHaveLength(1);
+    expect(task.conversation).toHaveLength(1);
+  });
+});

@@ -8,7 +8,7 @@ import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
 import { needsStatusRefetch } from "../store/reduceTask";
 import { useTaskStore } from "../store/taskStore";
-import { SSEvent, TaskViewTab } from "../types";
+import { SSEvent } from "../types";
 import { cx } from "../lib/cx";
 import { currentDir } from "../workspace";
 
@@ -24,7 +24,6 @@ export function TaskView() {
   const historyFilter = useTaskStore((s) => s.historyFilter);
   const refreshModels = useModelStore((s) => s.refresh);
   const listRevision = useTaskStore((s) => s.listRevision);
-  const [tab, setTab] = useState<TaskViewTab>("run");
   const [dashTab, setDashTab] = useState<DashTab>("files");
   const [traceOpen, setTraceOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(false);
@@ -99,9 +98,8 @@ export function TaskView() {
       .catch(() => {});
   }, [currentTaskId, status, detail?.final_answer, upsertTask]);
 
-  // Switching tasks starts on the live run view by default.
+  // Switching tasks closes the replay face.
   useEffect(() => {
-    setTab("run");
     setTraceOpen(false);
   }, [currentTaskId]);
 
@@ -146,8 +144,6 @@ export function TaskView() {
         >
           <TaskPanel
             task={task}
-            tab={tab}
-            onTabChange={setTab}
             rightOpen={rightOpen}
             onToggleRight={() => setRightOpen((v) => !v)}
             onOpenPlan={() => {
