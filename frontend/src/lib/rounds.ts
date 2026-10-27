@@ -36,7 +36,16 @@ export function stepsRoundIndex(rounds: Round[]): number {
   return rounds.length - 1;
 }
 
-/** Plan updates are plumbing, not an answer: render them as a muted line. */
+/**
+ * Plan updates are plumbing, not an answer: render them as a muted line.
+ *
+ * The note is a protocol line, not a prefix: the backend's only producer is
+ * `_plan_note_text(version)` (backend/core/agent/nodes.py), which always emits
+ * ``计划已更新到第 N 版。``. Matching the whole sentence keeps a model answer that
+ * merely starts with the same words on the AnswerSheet (#231).
+ */
+const PLAN_NOTE_RE = /^计划已更新到第 \d+ 版。$/;
+
 export function isPlanNotice(content: string): boolean {
-  return content.trimStart().startsWith("计划已更新到");
+  return PLAN_NOTE_RE.test(content.trim());
 }
