@@ -6,7 +6,7 @@
 
 **离线测试全绿**（零网络、零 Key、MockLLM）· CI 两个 job · 发布前按 [9 个真模型场景](docs/manual-verification.md) 在网页端跑一遍。
 
-![qianfan 任务界面：计划 / 执行、模型下拉、子任务与工作区文件](docs/assets/qianfan-ui.png)
+![qianfan 任务界面：左侧任务历史、中间对话与 Composer、右侧文件 / 计划 / 事件三页签](docs/assets/qianfan-ui.png)
 
 ## 快速开始
 

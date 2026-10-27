@@ -1,6 +1,6 @@
 # #54 前端重设计「安静的监控台」：分片实施计划
 
-> **状态：实施中**（2026-10-27 落库；开工基线 `a6bcfe7`，仅在 `15d64cf` 之上补了一篇 `docs/retros/`，代码未动）。
+> **状态：已交付**（2026-10-27 落库；开工基线 `a6bcfe7`，仅在 `15d64cf` 之上补了一篇 `docs/retros/`，代码未动；F1–F9 + B1 全部合入，PR 见 #228）。
 > 设计权威是 [`docs/frontend-design.md`](../frontend-design.md)（目标态，交付前标「未交付」）；需求与范围权威是 #54（含 2026-10-23 校准段与本文件 §9 的 2026-10-26 审计段）。
 > 本文只管**切片、判据、风险与文档面**，不重复设计理由。实施按 [`docs/agents/workflow.md`](../agents/workflow.md)：qoder 实施 + `code-review` 自评审 + `neat-freak` 收尾 + PR；opencode 独立评审；评审侧 / 用户合并。
 > 单集成分支交付（workflow.md「并行实施」2026-10-28 起的 `implement-spec` 形态）；每片在独立 worktree 分支完成后合入集成分支，最后统一评审、提一个 PR。

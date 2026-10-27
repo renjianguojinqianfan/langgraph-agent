@@ -1,0 +1,191 @@
+{
+  "scenario2": {
+    "task": {
+      "id": "665b68cba7504762a29e2f901555a777",
+      "status": "INTERRUPTED",
+      "mode": "build",
+      "plan_version": 2,
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 92,
+          "head": "先写一份简短计划并停下：在当前工作区用 write 工具创建 plan-manual.txt，内容写 hello。执行阶段只用 write 工具，不要用 bash。等我改完计划再执行。"
+        },
+        {
+          "role": "user",
+          "chars": 30,
+          "head": "按改后的计划执行，只用 write 工具，不要用 bash。"
+        },
+        {
+          "role": "assistant",
+          "chars": 12,
+          "head": "计划已更新到第 2 版。"
+        },
+        {
+          "role": "assistant",
+          "chars": 668,
+          "head": "## 执行结果\n\n**计划来源**：以 `[qianfan-plan]` 计划文件当前内容为准；末尾「补充：文件名改为 human-edit2.txt」覆盖了标题里的 `plan-manual.txt"
+        }
+      ],
+      "final_answer_chars": 668,
+      "step_count": 5,
+      "tools": [
+        {
+          "index": 1,
+          "status": "done",
+          "tools": [
+            {
+              "name": "ls",
+              "status": "success"
+            },
+            {
+              "name": "glob",
+              "status": "success"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "status": "done",
+          "tools": []
+        },
+        {
+          "index": 3,
+          "status": "done",
+          "tools": [
+            {
+              "name": "write",
+              "status": "success"
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "status": "done",
+          "tools": [
+            {
+              "name": "read",
+              "status": "success"
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "status": "done",
+          "tools": []
+        }
+      ],
+      "error": null
+    },
+    "plan_v1": {
+      "version": 1,
+      "chars": 560
+    },
+    "plan_v2_version": 2,
+    "files": [
+      "human-edit2.txt"
+    ],
+    "qianfan_in_git_status": []
+  },
+  "scenario3": {
+    "task_id": "e46f194f6b3f496bb9e4968b276c44a3",
+    "running_first_seen": "RUNNING",
+    "afterReconnect": {
+      "h1": "现在只做一件事：用 bash 运行命令 `sleep 60` 并等它结束。在它结",
+      "status": "运行中",
+      "stop": true
+    },
+    "stopped_status": "INTERRUPTED",
+    "continue_reply": {
+      "ok": true,
+      "status": "RUNNING"
+    },
+    "final": {
+      "id": "e46f194f6b3f496bb9e4968b276c44a3",
+      "status": "INTERRUPTED",
+      "mode": "build",
+      "plan_version": 0,
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 58,
+          "head": "现在只做一件事：用 bash 运行命令 `sleep 60` 并等它结束。在它结束之前不要调用其他工具，也不要回答。"
+        },
+        {
+          "role": "user",
+          "chars": 53,
+          "head": "继续：只创建 continued3.txt，内容写 continued，然后回答一句。不要再 sleep。"
+        },
+        {
+          "role": "assistant",
+          "chars": 198,
+          "head": "已创建 `continued3.txt`（内容 `continued`，9 字节）并读回校验通过；另外提醒一下：上一步的 `sleep 60` 实际没能执行——本机 bash 启动即报 MSYS 致命"
+        }
+      ],
+      "final_answer_chars": 198,
+      "step_count": 6,
+      "tools": [
+        {
+          "index": 1,
+          "status": "done",
+          "tools": [
+            {
+              "name": "bash",
+              "status": "failed"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "status": "done",
+          "tools": [
+            {
+              "name": "bash",
+              "status": "failed"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "status": "failed",
+          "tools": [
+            {
+              "name": "bash",
+              "status": "skipped"
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "status": "done",
+          "tools": [
+            {
+              "name": "write",
+              "status": "success"
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "status": "done",
+          "tools": [
+            {
+              "name": "read",
+              "status": "success"
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "status": "done",
+          "tools": []
+        }
+      ],
+      "error": null
+    },
+    "files": [
+      "continued3.txt"
+    ],
+    "same_task": true
+  }
+}

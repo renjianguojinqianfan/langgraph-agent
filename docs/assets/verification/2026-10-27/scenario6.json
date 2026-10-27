@@ -1,0 +1,64 @@
+{
+  "scenario6": {
+    "a": {
+      "id": "25c55dcccfa14bedb6a9df20242ff8d8",
+      "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-a",
+      "status": "INTERRUPTED",
+      "files": [],
+      "answer_chars": 28
+    },
+    "b": {
+      "id": "f1477ef0355b4f60a925dc9f68f26651",
+      "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-b",
+      "status": "INTERRUPTED",
+      "files": []
+    },
+    "b_current_rows": [
+      "用 write 工具在这个目录创建 b.txt，内容写 b，然后回答一句。已停下刚刚"
+    ],
+    "groups": [
+      "qa2026-b",
+      "qa2026-a",
+      "langgraph-agent",
+      "m1-demo",
+      "c6-demo",
+      "c5-demo",
+      "w1-ui-demo",
+      "artifacts"
+    ],
+    "list_dir_a": [
+      {
+        "id": "25c55dcccfa14bedb6a9df20242ff8d8",
+        "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-a",
+        "status": "INTERRUPTED"
+      }
+    ],
+    "list_dir_b": [
+      {
+        "id": "f1477ef0355b4f60a925dc9f68f26651",
+        "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-b",
+        "status": "INTERRUPTED"
+      }
+    ],
+    "continue_reply": {
+      "ok": true,
+      "status": "RUNNING"
+    },
+    "row_workspaces_in_all": [
+      "qa2026-b",
+      "qa2026-a",
+      "langgraph-agent",
+      "m1-demo",
+      "c6-demo",
+      "c5-demo",
+      "w1-ui-demo",
+      "artifacts"
+    ],
+    "files_on_disk": {
+      "a": true,
+      "a2": true,
+      "b": true
+    },
+    "ignore_note": "scratch workspaces live under .qoder/ (gitignored), so GET /files lists nothing by design (W3 ignore rules); file landing is verified on disk."
+  }
+}

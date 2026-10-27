@@ -1,0 +1,125 @@
+{
+  "scenario7a": {
+    "history_after_restart": [
+      "25c55dcccfa14bedb6a9df20242ff8d8"
+    ],
+    "still_there": true,
+    "before": {
+      "id": "25c55dcccfa14bedb6a9df20242ff8d8",
+      "status": "INTERRUPTED",
+      "step_count": 4,
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 37
+        },
+        {
+          "role": "assistant",
+          "chars": 30
+        },
+        {
+          "role": "user",
+          "chars": 25
+        },
+        {
+          "role": "assistant",
+          "chars": 28
+        }
+      ],
+      "final_answer_chars": 28,
+      "error": null
+    },
+    "continue_reply": {
+      "ok": true,
+      "status": "RUNNING"
+    },
+    "after": {
+      "id": "25c55dcccfa14bedb6a9df20242ff8d8",
+      "status": "INTERRUPTED",
+      "step_count": 6,
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 37
+        },
+        {
+          "role": "assistant",
+          "chars": 30
+        },
+        {
+          "role": "user",
+          "chars": 25
+        },
+        {
+          "role": "assistant",
+          "chars": 28
+        },
+        {
+          "role": "user",
+          "chars": 28
+        },
+        {
+          "role": "assistant",
+          "chars": 31
+        }
+      ],
+      "final_answer_chars": 31,
+      "error": null
+    },
+    "a3_on_disk": true
+  },
+  "scenario7b": {
+    "task_id": "a940d160336746f88453d4d7e0241ded",
+    "running_snapshot": {
+      "id": "a940d160336746f88453d4d7e0241ded",
+      "status": "RUNNING",
+      "step_count": 0
+    },
+    "parked_after_restart": {
+      "id": "a940d160336746f88453d4d7e0241ded",
+      "status": "INTERRUPTED",
+      "step_count": 6,
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 151
+        },
+        {
+          "role": "user",
+          "chars": 21
+        },
+        {
+          "role": "assistant",
+          "chars": 7
+        }
+      ],
+      "final_answer_chars": 7,
+      "error": null
+    },
+    "resume_reply": {
+      "ok": true,
+      "status": "RUNNING"
+    },
+    "resumed": {
+      "id": "a940d160336746f88453d4d7e0241ded",
+      "status": "INTERRUPTED",
+      "step_count": 6,
+      "conversation": [
+        {
+          "role": "user",
+          "chars": 151
+        },
+        {
+          "role": "user",
+          "chars": 21
+        },
+        {
+          "role": "assistant",
+          "chars": 7
+        }
+      ],
+      "final_answer_chars": 7,
+      "error": null
+    }
+  }
+}
