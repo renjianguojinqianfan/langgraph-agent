@@ -67,11 +67,19 @@ describe("stepsRoundIndex", () => {
 });
 
 describe("isPlanNotice", () => {
+  // 协议：后端 _plan_note_text 恒为「计划已更新到第 N 版。」（nodes.py:75-79）。
   it("计划更新提示走静音行", () => {
-    expect(isPlanNotice("  计划已更新到 v3")).toBe(true);
+    expect(isPlanNotice("计划已更新到第 3 版。")).toBe(true);
+    expect(isPlanNotice("  计划已更新到第 2 版。\n")).toBe(true);
+  });
+
+  // #231：前缀相同但后面还有正文，是回答而不是提示，不能被静音行吞掉。
+  it("同前缀的正文不误判为提示", () => {
+    expect(isPlanNotice("计划已更新到第 3 版后，建议先跑测试。")).toBe(false);
   });
 
   it("普通回答不误判", () => {
     expect(isPlanNotice("计划如下：先做 A")).toBe(false);
+    expect(isPlanNotice("计划已更新到 v3")).toBe(false);
   });
 });
