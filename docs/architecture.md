@@ -65,8 +65,9 @@ frontend/src/
 │   ├── dash/            DashTabs · FilePane · PlanPane · EventPane · TraceFace
 │   ├── settings/        SettingsDialog · ModelRow · FormField
 │   └── ui/              Button · Icon · Status · Segmented · Tabs
-├── store/               taskStore · modelStore · authStore
-├── hooks/useSSE.ts      EventSource 订阅表 EVENT_TYPES（§3.4 的四处之一）
+├── store/               taskStore · reduceTask · modelStore · authStore
+├── hooks/               useSSE.ts EventSource 订阅表 EVENT_TYPES（§3.4 的四处之一）· useMediaQuery.ts 断点
+├── lib/                 format · taskState · rounds · markdown · keys · cx · eventLabels.ts
 ├── api/client.ts        后端调用
 └── types/index.ts       与 schemas.py 字段对齐；SSEventType 联合
 

@@ -27,6 +27,7 @@
       "ok": true,
       "status": "RUNNING"
     },
+    "resume_reply_note": "字段名沿用记录时的叫法，但它实为续说 POST /api/tasks/{id}/messages 的返回（#233）；不是 POST /tasks/{id}/resume。",
     "continued": {
       "id": "1da34aa6795e4c4793dc851c319af744",
       "status": "INTERRUPTED",

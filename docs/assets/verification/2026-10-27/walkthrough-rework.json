@@ -1,4 +1,5 @@
 {
+  "inertMetricNote": "tabbable 记录的是本次走查统计的 tab 停靠点计数；右 6 / 左 9 在关、开两态相同，说明这个计数不随抽屉开关变化，单凭它不能证明焦点面。关闭态判据以 inert=true / aria-hidden=true 与 tabHits（空 = 没有停靠点落进抽屉）为准，见 #233。",
   "axe": {
     "empty": [],
     "task": [],

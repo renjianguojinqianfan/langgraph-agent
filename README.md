@@ -4,7 +4,7 @@
 
 重点是运行时：多轮续说、checkpoint、模式切换、危险动作拦截、工具生态与可观测性，而不是一个 demo 界面。
 
-**离线测试全绿**（零网络、零 Key、MockLLM）· CI 两个 job · 发布前按 [9 个真模型场景](docs/manual-verification.md) 在网页端跑一遍。
+**离线测试全绿**（零网络、零 Key、MockLLM）· CI 三个 job · 发布前按 [9 个真模型场景](docs/manual-verification.md) 在网页端跑一遍。
 
 ![qianfan 任务界面：左侧任务历史、中间对话与 Composer、右侧文件 / 计划 / 事件三页签](docs/assets/qianfan-ui.png)
 
