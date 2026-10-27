@@ -9,10 +9,10 @@ export type SseDeliveredType = Exclude<SSEventType, "trace_end">;
 /**
  * 事件页（`EventPane`）的中文标签：SSE 事件词汇表的**显示投影**，不是独立权威源。
  *
- * - 键集必须与 `frontend/src/hooks/useSSE.ts` 的 `EVENT_TYPES` 逐条相等（14 条）：
- *   `Record<SseDeliveredType, string>` 让 tsc 抓住缺项/多项，`npm run check:sse` 的
- *   「断言 4」再机械比对一次——增删事件类型时漏改这里会直接变红，而不是让事件页
- *   静默显示英文类型名（#229）。
+ * - 键集必须与 `frontend/src/hooks/useSSE.ts` 的 `EVENT_TYPES` 逐条相等（条数以那张表为准，
+ *   这里不写计数——数字会腐）：`Record<SseDeliveredType, string>` 让 tsc 抓住缺项/多项，
+ *   `npm run check:sse` 的「断言 4」再机械比对一次——增删事件类型时漏改这里会直接变红，
+ *   而不是让事件页静默显示英文类型名（#229）。
  */
 export const EVENT_LABELS: Record<SseDeliveredType, string> = {
   task_created: "任务创建",
