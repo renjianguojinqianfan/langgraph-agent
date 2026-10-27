@@ -6,7 +6,7 @@
 
 **离线测试全绿**（零网络、零 Key、MockLLM）· CI 两个 job · 发布前按 [9 个真模型场景](docs/manual-verification.md) 在网页端跑一遍。
 
-![qianfan 任务界面：计划 / 执行、模型下拉、子任务与工作区文件](docs/assets/qianfan-ui.png)
+![qianfan 任务界面：左侧任务历史、中间对话与 Composer、右侧文件 / 计划 / 事件三页签](docs/assets/qianfan-ui.png)
 
 ## 快速开始
 
@@ -16,7 +16,7 @@
 ```bash
 cp .env.example .env                             # LLM_API_KEY 走环境变量；或 use_mock_llm=true 离线
 uv tool install -e . --overrides overrides.txt   # 每台机器一次
-cd frontend && npm ci && npm run build && cd ..  # 前端产物；改前端后重跑
+cd frontend && npm ci && npm test && npm run build && cd ..  # 前端产物；改前端后重跑
 qianfan                                          # 自动开浏览器；--port / --no-browser 可选
 ```
 
@@ -94,11 +94,11 @@ agent ──有 tool call──> tool ──> agent
 .\.venv311\Scripts\python.exe -m pytest backend/tests/ -q
 .\.venv311\Scripts\python.exe -m ruff check backend scripts
 .\.venv311\Scripts\python.exe -m mypy
-cd frontend; npx tsc --noEmit; npm run check:sse; npm run build
+cd frontend; npx tsc --noEmit; npm test; npm run check:sse; npm run build
 ```
 
 提交前钩子每台机器装一次：`.\.venv311\Scripts\python.exe -m pre_commit install`。
-CI 跑后端 lint / 类型 / 测试、前端类型 / 构建。发布前 / 换供应商：启服务在网页端手动跑一遍（不记模型与时间）。
+CI 跑后端 lint / 类型 / 测试、前端类型 / 单元测试 / 构建。发布前 / 换供应商：启服务在网页端手动跑一遍（不记模型与时间）。
 
 ## 文档
 

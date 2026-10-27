@@ -1,38 +1,124 @@
 /* #122 v3→v4：三条 @tailwind 指令并成一句 @import "tailwindcss"。
    tailwind.config.js 的 content 数组同时退役——v4 自动探测源文件，实测扫描根是构建
    cwd（CI 里 = frontend/，仓库根的杂项文件不被扫），产物里没有多出一个 src 之外的 utility。
-   自定义色由 config 的 theme.extend.colors 迁到 CSS-first 的 @theme：键名保留 panelMuted
-   （v4 认它，bg-panelMuted 与 bg-panelMuted/60 照常生成），字面值不动——它们是设计值，
-   不跟 v4 重绘后的默认调色板走。 */
+
+   #54 F2：@theme 写入 docs/frontend-design.md §1 的全套 token；旧 --color-panel /
+   --color-panelMuted 已在 F9 评审收尾迁完删除（TraceTab 的 hover 改用 surface-hover）。 */
 @import "tailwindcss";
 
 @theme {
-  --color-panel: #0f172a;
-  --color-panelMuted: #1e293b;
+  /* 面 */
+  --color-surface-page: #0a0a0b;
+  --color-surface-column: #131316;
+  --color-surface-sheet: #17171b;
+  --color-surface-well: #121215;
+  --color-surface-hover: #202027;
+
+  /* 字 */
+  --color-primary: #e8e8ea;
+  --color-secondary: #a6abb2;
+  --color-tertiary: #8b9097;
+
+  /* 线 */
+  --color-rule: rgba(255, 255, 255, 0.07);
+  --color-rule-strong: rgba(255, 255, 255, 0.12);
+
+  /* 信号与状态 */
+  --color-signal-now: #4c8dff;
+  --color-on-signal: #0a0a0b;
+  --color-state-ok: #3fb97f;
+  --color-state-warn: #d9a441;
+  --color-state-danger: #e5534b;
+
+  --radius-sheet: 11px;
+  --radius-dialog: 14px;
+  --radius-well: 8px;
+  --radius-composer: 12px;
+  --radius-control: 6px; /* D3 补全 */
+
+  /* 唯一的纸面阴影（AnswerSheet / PlanPane 的成品面） */
+  --shadow-sheet: 0 18px 48px -28px rgba(0, 0, 0, 0.85);
+
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  --text-title: 15.5px;
+  --text-title--line-height: 1.4;
+  --text-title--font-weight: 600;
+  --text-title--letter-spacing: -0.01em;
+  --text-body: 13px;
+  --text-body--line-height: 1.85;
+  --text-meta: 12px;
+  --text-meta--line-height: 1.6;
+  --text-machine: 11px;
+  --text-machine--line-height: 1.5;
+  --text-code: 12px;
+  --text-code--line-height: 1.7;
+  --text-invite: 21px;
+  --text-invite--line-height: 1.35;
+  --text-invite--font-weight: 500;
 }
 
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-}
-
-body {
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
-  background-color: #0b1120;
-  color: #e2e8f0;
-}
-
-/* #122 v4 preflight 删掉了 v3 的 `button,[role=button]{cursor:pointer}` 与
-   `:disabled{cursor:default}` 两条（实测整个 v4 产物 CSS 里 cursor 出现 0 次，落回浏览器默认）。
-   本仓三栏界面整屏都是可点的 button（历史任务项 / Tab / 筛选 chip / 确认框两个按钮 / 登出），
-   指针手势是最基本的可供性，按官方升级指南原样恢复。放 @layer base 而不是裸写：base 层优先级
-   低于 utilities 层，cursor-* utility 才盖得住它。删掉这一段 = 接受「按钮没有手型」。 */
 @layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: var(--color-surface-page);
+    color: var(--color-primary);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-signal-now);
+    outline-offset: 2px;
+  }
+
+  /* #122 v4 preflight 删掉了 v3 的 `button,[role=button]{cursor:pointer}` 与
+     `:disabled{cursor:default}` 两条（实测整个 v4 产物 CSS 里 cursor 出现 0 次，落回浏览器默认）。
+     本仓三栏界面整屏都是可点的 button（历史任务项 / Tab / 筛选 chip / 确认框两个按钮 / 登出），
+     指针手势是最基本的可供性，按官方升级指南原样恢复。放 @layer base 而不是裸写：base 层优先级
+     低于 utilities 层，cursor-* utility 才盖得住它。删掉这一段 = 接受「按钮没有手型」。 */
   button:not(:disabled) {
     cursor: pointer;
+  }
+
+  button,
+  [role="button"],
+  a {
+    touch-action: manipulation;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0s !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0s !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
@@ -42,6 +128,9 @@ body {
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: var(--color-rule-strong);
   border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }

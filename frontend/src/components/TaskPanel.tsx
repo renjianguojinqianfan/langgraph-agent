@@ -1,93 +1,74 @@
-import { WorkspaceFiles } from "./WorkspaceFiles";
-import { InputBar } from "./InputBar";
-import { MessageStream } from "./MessageStream";
-import { PlanPanel } from "./PlanPanel";
-import { StepTimeline } from "./StepTimeline";
-import { SubtaskList } from "./SubtaskList";
-import { TaskHeader } from "./TaskHeader";
-import { TraceTab } from "./TraceTab";
-import { Task, TaskViewTab } from "../types";
+import { Composer } from "./center/Composer";
+import { Conversation } from "./center/Conversation";
+import { SubagentStrip } from "./center/SubagentStrip";
+import { TaskHeader } from "./center/TaskHeader";
+import { TraceFace } from "./dash/TraceFace";
+import { Task } from "../types";
 
 interface TaskPanelProps {
   task: Task | null;
-  tab: TaskViewTab;
-  onTabChange: (tab: TaskViewTab) => void;
+  rightOpen: boolean;
+  onToggleRight: () => void;
+  onOpenPlan: () => void;
+  traceOpen: boolean;
+  onCloseTrace: () => void;
 }
 
-export function TaskPanel({ task, tab, onTabChange }: TaskPanelProps) {
+export function TaskPanel({
+  task,
+  rightOpen,
+  onToggleRight,
+  onOpenPlan,
+  traceOpen,
+  onCloseTrace,
+}: TaskPanelProps) {
+  if (task && traceOpen) {
+    return (
+      <section className="flex min-h-0 flex-1 flex-col min-w-0">
+        <TaskHeader
+          task={task}
+          rightOpen={rightOpen}
+          onToggleRight={onToggleRight}
+        />
+        <TraceFace taskId={task.id} onClose={onCloseTrace} />
+      </section>
+    );
+  }
+
   return (
-    <section className="flex-1 flex flex-col min-w-0">
+    <section className="flex min-h-0 flex-1 flex-col min-w-0">
       {task ? (
-        <TaskHeader task={task} />
+        <TaskHeader
+          task={task}
+          rightOpen={rightOpen}
+          onToggleRight={onToggleRight}
+        />
       ) : (
-        <header className="px-4 py-3 border-b border-slate-800 font-semibold">
-          新任务
+        <header className="flex h-[52px] shrink-0 items-center border-b border-rule px-4 max-[860px]:pl-12">
+          <h1 className="text-title text-primary">新任务</h1>
         </header>
       )}
 
-      {task && (
-        <div className="flex items-center border-b border-slate-800 px-4">
-          <button
-            onClick={() => onTabChange("run")}
-            className={`px-3 py-2 -mb-px border-b-2 text-sm transition ${
-              tab === "run"
-                ? "border-sky-500 text-sky-300"
-                : "border-transparent text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            运行
-          </button>
-          <button
-            onClick={() => onTabChange("subtask")}
-            className={`px-3 py-2 -mb-px border-b-2 text-sm transition ${
-              tab === "subtask"
-                ? "border-sky-500 text-sky-300"
-                : "border-transparent text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            子任务
-          </button>
-          <button
-            onClick={() => onTabChange("trace")}
-            className={`px-3 py-2 -mb-px border-b-2 text-sm transition ${
-              tab === "trace"
-                ? "border-sky-500 text-sky-300"
-                : "border-transparent text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            Trace / 运行日志
-          </button>
-        </div>
+      {task && task.mode === "build" && (
+        <SubagentStrip subtasks={task.subtasks ?? []} />
       )}
 
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <div className="flex min-h-0 flex-1 flex-col">
         {task ? (
-          tab === "trace" ? (
-            <TraceTab taskId={task.id} />
-          ) : tab === "subtask" ? (
-            <>
-              <div className="text-xs text-slate-400 mb-1">子任务</div>
-              <SubtaskList subtasks={task.subtasks ?? []} />
-            </>
-          ) : (
-            <>
-              <MessageStream task={task} />
-              <PlanPanel key={task.id} task={task} />
-              <div>
-                <div className="text-xs text-slate-400 mb-1">步骤时间线</div>
-                <StepTimeline task={task} />
-              </div>
-              <WorkspaceFiles taskId={task?.id ?? null} status={task?.status} />
-            </>
-          )
+          <Conversation task={task} onOpenPlan={onOpenPlan} />
         ) : (
-          <div className="text-slate-500 text-sm">
-            在下方输入任务开始，或在左侧选择历史任务。
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4">
+            <p className="text-invite text-primary">
+              想在这个目录做点什么？
+            </p>
+            <p className="text-body text-tertiary">
+              在下方描述任务，或在左侧选择历史任务。
+            </p>
           </div>
         )}
       </div>
 
-      {tab === "run" && <InputBar />}
+      <Composer />
     </section>
   );
 }

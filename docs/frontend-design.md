@@ -1,6 +1,6 @@
 # 前端设计基线（Frontend Design）
 
-> **状态**：设计权威，**未交付**（2026-10-23 创建；实施按 #54 四期；#189 仍 open）。现役代码不是这样，别读成 as-built。
+> **状态**：设计权威，**已交付**（2026-10-23 创建；2026-10-27 按 [`docs/specs/frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 的 F1–F9 + B1 落地；#189 已由 F1 修复）。现役代码按本基线交付，视觉与交互以本文为准。
 > **权威顺序**：功能范围 → #54（含 2026-10-19 / 2026-10-23 校准段）；视觉与交互规则 → 本文；接口契约 → `architecture.md` §3.3 / §3.4（SSE 词汇表有 `npm run check:sse` 守卫）。
 > 本文只写规则与判据：实现步骤写进 PR，需求原文留在 #54，不在此复制。
 
@@ -31,7 +31,7 @@
 
 - 选中态（页签、模式、任务行、文件行）用墨色 + 2px 内嵌脊线；**信号蓝不参与选中**。
 - 光从上方来，只上一级：页 → 栏 → 纸。发丝线只做分隔；无渐变、无辉光、无网格、无装饰边框。
-- 圆角 token：`--radius-sheet 11`、`--radius-dialog 14`、`--radius-well 8`、`--radius-composer 12`、胶囊 999；**行与页签 0**。
+- 圆角 token：`--radius-sheet 11`、`--radius-dialog 14`、`--radius-well 8`、`--radius-composer 12`、`--radius-control 6`（2026-10-27 补全，D3）、胶囊 999；**行与页签 0**。
 - 状态色分工：`--state-ok` 只用于工具「成功」与产物/成功标记；任务状态用 `--signal-now`（运行）/ `--state-warn`（停下）/ `--state-danger`（失败）/ `--text-tertiary`（启动）。
 
 > **本文值为准**：旧 `#63676D`（3.26:1）不足 AA；`#9BA0A6` 与 `--rule` .06/.11 一并提亮，是为统一色阶（不改变其对比度结论）。本文用 `#A6ABB2` / `#8B9097`、`.07` / `.12`。
@@ -51,7 +51,7 @@
 - 数字一律 `tabular-nums`；用于比较的数字不做截断。
 - 标题 `text-wrap: balance`；正文段落 `text-wrap: pretty`；除标题 `-0.01em` 外不加字距、不拉宽标签、不全大写。
 - 标题层级：页面唯一 `h1`（任务标题）；回答标题 `h2`；计划文档从 `h2` 起（`h3` 小节）；对话框自成一级。
-- **实施前置（依赖）**：Inter / JetBrains Mono 是目标字，未装前用系统栈兜底（视觉有差异，不是等价替代），不静默换成其他字族；实施 PR 补依赖并记录。`@fontsource/jetbrains-mono` 已批但仓库未装；`react-markdown` + `remark-gfm` 仍待批（#54 §7）——未批前 Markdown 走纯文本兜底并单独报批，不静默加依赖。
+- **依赖（2026-10-26 批，F2 已安装并使用）**：`@fontsource-variable/inter`、`@fontsource/jetbrains-mono` 已在 F2 装入 `main.tsx`；`react-markdown` + `remark-gfm` 与 `vitest ^5.0.5` 同批批准，UI 层零新增依赖。Markdown 已接（F5，`lib/markdown.tsx`）：不开原始 HTML（`skipHtml`、无 `rehype-raw`），标题从 h2 起（h1 映射为 h2）。
 
 ## 3. 布局与三栏职责
 
@@ -80,9 +80,9 @@
 | `ToolRow` | 槽底；工具名与参数 mono、可截断 + `title`；结果词只用**终态**三值：成功 / 失败 / 未执行（`success / failed / skipped`；`pending` 是进行中，不改结果词。原因写进 `error`；不新增 `blocked` 状态）。 |
 | `PlanAnchor` | 对话里一行入口：「计划 v3 · 状态」（版本 = `Task.plan_version`；状态词由 `Task.status` 派生，不是计划自己的字段）；点开切右栏计划页；不复制全文。 |
 | `AnswerSheet` | **内容区唯一纸面**（11 圆角、唯一阴影）；头部只放 provenance：模型 = `Task.model` 的档案名（空则全局默认），工具次数 = `steps[].tool_calls` 全任务累计（写「累计」，不是本轮），不放「回答」标签；正文 Markdown（标题 / 列表 / 代码 / 行内代码）。 |
-| `Composer` | 模式段 + 模型 chip + 输入 + 发送（蓝底 + `--text-on-signal` 字形，6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
+| `Composer` | 模式段 + 模型控件（原生 `<select>`，chip 形态、不新做浮层）+ 输入 + 发送（蓝底 + `--text-on-signal` 字形，6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
 | `FilePane` | 平铺清单由客户端按 `/` 分组；文本预览 ≤200KB；二进制给下载；>2000 条明示截断。 |
-| `PlanPane` | 渲染 Markdown + 标题目录；版本 / 状态徽标；**编辑仅「已停下」可用；失败待后端放宽（见 §9）**，未放宽前禁用并写明原因；保存提示「下一条消息生效」。 |
+| `PlanPane` | 渲染 Markdown + 标题目录；版本 / 状态徽标；**编辑在「已停下」或「失败」（B1 已放宽，见 §9）可用**；运行中点编辑给出原因而不是藏按钮；保存提示「下一条消息生效」。 |
 | `EventPane` | 时间 mono + 类型词 + 摘要；不做可点假象；注明事件只做旁证、状态以快照为准。 |
 | `TraceFace` | 保留现役 `TraceTab` 能力（`GET /trace`，NDJSON 回放 / 导出）；入口在右栏事件页底部，打开时中栏临时全宽显示并带返回；本期不重构。 |
 | `SettingsDialog` | 原生 `<dialog>`（焦点圈定 / Esc / 归还焦点）；模型 CRUD 与 Key 状态；删除 / 清除 Key 二次确认。 |
@@ -115,12 +115,12 @@
 | 启动中 | `--text-tertiary` | 禁用 | 显示 | — |
 | 运行中 | `--signal-now` | 禁用 | 显示 | — |
 | 已停下 | `--state-warn` | 可用 | 不显示 | 续说 |
-| 失败 | `--state-danger` | 可用（需后端放宽，见 §9） | 不显示 | 续说 |
+| 失败 | `--state-danger` | 可用（B1 已放宽，见 §9） | 不显示 | 续说 |
 | 未选任务 | 无 | 可用 | 不显示 | 新建 |
 
 ## 5. 交互规则
 
-- **计划**：对话一行入口 + 右栏计划页；展示 Markdown 与标题目录；**不做打勾清单**（无状态源）。编辑仅在停下 / 失败（失败需后端把 `PUT /plan` 放宽到 FAILED，见 §9；后端未放宽前 UI 在失败态禁用并说明原因）；运行中点编辑给出原因而不是藏按钮。保存 = 整份 PUT；提示「下一条消息生效」；发现外部改动提示「载入新版 / 覆盖保存」。可选非阻断动作「切到执行并继续」= 切模式 + 聚焦输入框，不发送。
+- **计划**：对话一行入口 + 右栏计划页；展示 Markdown 与标题目录；**不做打勾清单**（无状态源）。编辑仅在停下 / 失败（B1 已放宽 `PUT /plan`，见 §9）；运行中点编辑给出原因而不是藏按钮。保存 = 整份 PUT；提示「下一条消息生效」；发现外部改动提示「载入新版 / 覆盖保存」。可选非阻断动作「切到执行并继续」= 切模式 + 聚焦输入框，不发送。
 - **模式 / 模型**：都在 composer（下一轮生效）；任务头只读显示模式词。不引入确认闸门（ADR 0008）。
 - **停止 / 续说**：停止在任务头；不设独立「继续」按钮——发下一条消息即续说；placeholder 与状态词承接语义。
 - **文件**：不承诺目录懒加载、mtime、新旧标记（后端没有）；只承诺平铺清单 + 文本预览 + 下载 + 截断提示。
@@ -155,7 +155,7 @@
 
 ## 9. 需要后端支持的开放项（实现前先开票）
 
-1. **失败可续说 / 可改计划**：`POST /tasks/{id}/messages` 与 `PUT /tasks/{id}/plan` 现仅接受 `INTERRUPTED`；两者一并放宽到 `FAILED`（需 checkpoint），同步 `architecture.md` §3.3（与前端规则「失败可续说、可编辑计划」配套）。
+1. **失败可续说 / 可改计划**：**2026-10-27 B1（#219）已落地**——`POST /tasks/{id}/messages` 与 `PUT /tasks/{id}/plan` 接受 `FAILED`（续说需 checkpoint；`resume` 仍只接受 `INTERRUPTED`），`architecture.md` §3.3 已同步。
 2. **计划 / 模式 / 模型变更事件**：三个 setter 不发事件，多标签页会脏；需 `plan_updated` 类事件或轮询。
 3. **文件面增强**：目录级列表、mtime、新增标记。
 4. **任务列表摘要投影**：现在返回完整 Task（含 steps / conversation），长列表重；需要摘要字段。
@@ -183,3 +183,6 @@
 - 2026-10-23：创建。来自 #54 设计 grilling；原型经六个前端设计 skill（frontend-design / web-design-guidelines / accessibility / break-ui / emil-design-eng / performance）打磨后沉淀。
 - 2026-10-23：按 PR #192 评审修订：`PUT /plan` 放宽列入 §9、provenance 来源点名、Trace 归宿（`TraceFace`）、状态改为「未交付」+ 现役→目标组件映射、发送键对比度（深色字形）、ToolRow 三值、状态色点列、纸面口径（对话框不算纸面）、#54 旧 token 作废、字体/Markdown 依赖登记、原型指针改指存档分支。
 - 2026-10-23：按 PR #192 第二轮复审修订：PlanPane 只给「已停下」编辑（失败待 §9）、SubagentStrip 状态词归 Inter、机器事实改短 id + 产物数、AA 旧值依据纠正（`#63676D` 不足、`#9BA0A6` 为统一色阶）、`--text-on-signal` token、`TaskRail` 组件规则、`--state-ok` 用途收窄、ToolRow 改「终态三值」、依赖措辞改「兜底（非等价替代）+ 实施 PR 补记录」、AnswerSheet 补「空则全局默认」。
+- 2026-10-27：按 [`frontend-redesign-plan.md`](specs/frontend-redesign-plan.md) 分片定稿：实施指针从「#54 四期」改为 F1–F9 + B1；依赖状态更新为已批；`--radius-control: 6` 待 F2 补入 §1；D1–D11 实现裁决见计划 §4.2。
+- 2026-10-27：**已交付**（F1–F9 + B1 全部合入）。实际落地与本文的差异只在实现细节：计划页编辑含失败态（B1）、事件页时间用到达时间（SSE 帧不带 ts）、文件预览用槽底而非第二张纸面；axe（默认规则）在空态 / 任务 / 文件 / 事件 / 计划 / Trace / 设置七种状态下 0 违规。
+- 2026-10-27（评审返工）：模型控件保留原生 `<select>`（F4 票面允许「原生 select 做 chip」，不自绘浮层，仅收窄为 chip 形态）；事件页按载荷去重并限 100 条；运行中的计划保留禁用「编辑」按钮并用原因行说明（`aria-describedby`）；抽屉关闭时用 `inert` + `aria-hidden` 退出 Tab 序；≤860 标题给浮动按钮让位；≤1400 路径收窄、中文标签回归 Inter、新样式不再使用 `space-y`。

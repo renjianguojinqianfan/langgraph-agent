@@ -374,8 +374,8 @@ def test_default_mode_is_build_and_sticky(tmp_path: Path) -> None:
 
 
 # ── REST wiring ─────────────────────────────────────────────────────────────
-def _api_client(tmp_path: Path):
-    settings = make_settings(tmp_path, checkpoint_enabled=True)
+def _api_client(tmp_path: Path, *, checkpoint_enabled: bool = True):
+    settings = make_settings(tmp_path, checkpoint_enabled=checkpoint_enabled)
     eb = EventBus()
     persistence = Persistence(settings)
     tm = make_manager(
@@ -420,9 +420,7 @@ def test_rest_mode_plan_messages(tmp_path: Path) -> None:
     assert "step" in tm.get_plan(task_id)["text"]
 
 
-@pytest.mark.parametrize(
-    "status", [TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.FAILED]
-)
+@pytest.mark.parametrize("status", [TaskStatus.RUNNING, TaskStatus.PENDING])
 def test_rest_plan_edit_is_refused_when_not_parked(
     tmp_path: Path, status: TaskStatus
 ) -> None:
@@ -437,6 +435,90 @@ def test_rest_plan_edit_is_refused_when_not_parked(
 
     r = client.put(f"/api/tasks/{task_id}/plan", json={"text": "# x"})
     assert r.status_code == 409
+
+
+def test_rest_plan_edit_is_allowed_when_failed(tmp_path: Path) -> None:
+    """B1 (#219): FAILED is a parked state — the plan stays editable."""
+    client, tm = _api_client(tmp_path)
+    task_id = tm.create_task(title="api3", user_input="hi")
+    _wait_parked(tm, task_id)
+    task = tm.get_task(task_id)
+    assert task is not None
+    task.status = TaskStatus.FAILED
+    task.error = "provider 401"
+    tm.persistence.save_task(task)
+
+    r = client.put(
+        f"/api/tasks/{task_id}/plan",
+        json={"text": "# Plan\n\n1. written after the failure"},
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["version"] == 1
+    assert "after the failure" in tm.get_plan(task_id)["text"]
+
+
+def test_rest_message_continues_a_failed_task_with_a_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """B1 (#219): a failed task can be spoken to; the new round starts clean."""
+    client, tm = _api_client(tmp_path)
+    task_id = tm.create_task(title="api4", user_input="hi")
+    _wait_parked(tm, task_id)
+    task = tm.get_task(task_id)
+    assert task is not None
+    task.status = TaskStatus.FAILED
+    task.error = "provider 401"
+    tm.persistence.save_task(task)
+
+    r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "try again"})
+    assert r.status_code == 200
+    claimed = r.json()["data"]
+    assert claimed["status"] == "RUNNING"
+    assert claimed["task"]["error"] is None
+    assert claimed["task"]["status"] == "RUNNING"
+
+    parked = _wait_parked(tm, task_id)
+    assert parked is not None
+    assert parked.status == TaskStatus.INTERRUPTED
+    assert parked.error is None
+    assert [t.content for t in parked.conversation][-2:] == ["try again", "ok"]
+
+
+def test_rest_message_refuses_a_failed_task_without_a_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """FAILED still needs a durable checkpoint to continue (no checkpoint → 409)."""
+    client, tm = _api_client(tmp_path, checkpoint_enabled=False)
+    task_id = tm.create_task(title="api5", user_input="hi")
+    _wait_parked(tm, task_id)
+    task = tm.get_task(task_id)
+    assert task is not None
+    task.status = TaskStatus.FAILED
+    task.error = "provider 401"
+    tm.persistence.save_task(task)
+
+    r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "try again"})
+    assert r.status_code == 409
+    assert "no checkpoint" in r.json()["detail"]
+
+    after = tm.get_task(task_id)
+    assert after is not None
+    assert after.status == TaskStatus.FAILED
+    assert [t.content for t in after.conversation][-1] != "try again"
+
+
+def test_rest_message_is_refused_while_running(tmp_path: Path) -> None:
+    client, tm = _api_client(tmp_path)
+    task_id = tm.create_task(title="api6", user_input="hi")
+    _wait_parked(tm, task_id)
+    task = tm.get_task(task_id)
+    assert task is not None
+    task.status = TaskStatus.RUNNING
+    tm.persistence.save_task(task)
+
+    r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "again"})
+    assert r.status_code == 409
+    assert "RUNNING" in r.json()["detail"]
 
 
 # ── retired terminal value ──────────────────────────────────────────────────

@@ -1188,7 +1188,11 @@ class TaskManager:
         return {"text": text, "version": task.plan_version if text.strip() else 0}
 
     def set_plan(self, task_id: str, text: str) -> Dict[str, Any]:
-        """Replace the plan file of a parked task; the next round rereads it."""
+        """Replace the plan file of a parked task; the next round rereads it.
+
+        A failed task counts as parked (B1): its checkpoint is intact and the
+        next message can continue from it, so the plan stays editable.
+        """
         # Same window as resume: stop() settles the record before the worker
         # commits its last state. Wait the worker out rather than racing it.
         thread = self._threads.get(task_id)
@@ -1200,11 +1204,11 @@ class TaskManager:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
-            if task.status != TaskStatus.INTERRUPTED:
+            if task.status not in (TaskStatus.INTERRUPTED, TaskStatus.FAILED):
                 raise RuntimeError(
                     f"task {task_id} is {task.status.value}; "
                     "the plan can only be edited while the task is parked "
-                    "(INTERRUPTED)"
+                    "(INTERRUPTED or FAILED)"
                 )
             self._require_workspace(task)
             try:
@@ -1227,6 +1231,11 @@ class TaskManager:
         under the manager lock so two concurrent senders can never both spawn a
         worker on one thread_id. A continuation always needs a durable
         checkpoint — that is what "接着跑，含进程重启后" is built on.
+
+        A failed task counts as parked (B1 #219): its record keeps the
+        checkpoint of the failed round, so one more message continues the same
+        conversation instead of forcing a new task. ``resume`` stays
+        INTERRUPTED-only; only this message path admits FAILED.
         """
         thread = self._threads.get(task_id)
         if thread is not None and thread.is_alive():
@@ -1239,10 +1248,10 @@ class TaskManager:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
-            if task.status != TaskStatus.INTERRUPTED:
+            if task.status not in (TaskStatus.INTERRUPTED, TaskStatus.FAILED):
                 raise RuntimeError(
                     f"task {task_id} is {task.status.value}; "
-                    "only a parked (INTERRUPTED) task can continue"
+                    "only a parked (INTERRUPTED or FAILED) task can continue"
                 )
             self._require_workspace(task)
             # Precheck the plan file for the same reason as resume(): the API
@@ -1260,6 +1269,9 @@ class TaskManager:
             if user_text is not None:
                 task.conversation.append(ChatTurn(role="user", content=user_text))
             task.status = TaskStatus.RUNNING
+            # B1 (#219): a new round starts clean; the previous failure reason
+            # must not linger on a task that is running again.
+            task.error = None
             task.updated_at = _now()
             self.persistence.save_task(task)
             # Same attach-before-publish contract as resume().

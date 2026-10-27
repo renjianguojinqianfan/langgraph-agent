@@ -56,10 +56,15 @@ backend/
 └── utils/               logging.py · sandbox.py（bash 进程组/超时）· winjob.py（Windows Job Object）
 
 frontend/src/
-├── pages/               TaskView · SettingsPage · LoginPage
-├── components/          TaskPanel · MessageStream · StepTimeline · StepDetail · PlanPanel · ModeSwitch
-│                        InputBar · HistoryPanel · TaskHeader · SubtaskList · WorkspaceFiles · TraceTab
-│                        ModelSelect · AuthGuard
+├── pages/               TaskView · LoginPage
+├── components/          TaskPanel · AuthGuard · TraceTab
+│   ├── center/          TaskHeader · Composer · Conversation · RoundDivider · UserBubble
+│   │                    StepRow · ToolRow · AnswerSheet · FailureBlock · PlanAnchor
+│   │                    SubagentStrip · SubagentPlate
+│   ├── rail/            TaskRail · RailSearch · TaskRow · RailFooter · group.ts
+│   ├── dash/            DashTabs · FilePane · PlanPane · EventPane · TraceFace
+│   ├── settings/        SettingsDialog · ModelRow · FormField
+│   └── ui/              Button · Icon · Status · Segmented · Tabs
 ├── store/               taskStore · modelStore · authStore
 ├── hooks/useSSE.ts      EventSource 订阅表 EVENT_TYPES（§3.4 的四处之一）
 ├── api/client.ts        后端调用
@@ -137,9 +142,9 @@ START → agent ──有 tool call──→ tool ──→ agent
 | POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 |
 | PUT | `/api/tasks/{id}/model` | 换任务模型（下一条消息生效） | `{model}` | `TaskManager.set_model` 结果；不能改 → 409 |
 | PUT | `/api/tasks/{id}/mode` | 切计划/执行模式（黏性，下一轮生效） | `{mode}` | `TaskManager.set_mode` 结果；不能切 → 409 |
-| POST | `/api/tasks/{id}/messages` | 停下后续说（同一 thread，多轮对话入口） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 |
+| POST | `/api/tasks/{id}/messages` | 停下 / 失败后续说（同一 thread，多轮对话入口；需 checkpoint） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 |
 | GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；读不到 → 404/409 |
-| PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下时） | `{text}` | `{ok, version}`；非停下 → 409 |
+| PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 |
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4） | — | `text/event-stream` |
 | GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认原始 NDJSON；`?format=json` 走信封 `{data:[Event...]}`；无 trace → 404 |
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
@@ -164,7 +169,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 > **改本表的 PR 会触发全套 CI**（`ci.yml` 的 `paths` 白名单用末尾正模式把本文件单独收回）。
 > **守卫链**：`npm run check:sse`（前端 job）逐条比对「后端发布点 == 本表 == `EVENT_TYPES`」，并校验 `SSEventType` 联合 = `EVENT_TYPES ∪ trace 文件独有类型`；`backend/tests/test_sse_publish_ast.py`（backend job）用 AST 枚举发布调用，与上表第一列比对。两条路径都只认**字符串字面量**类型：经变量名传入的发布调用是共同盲区，必须手工同步四处。
 > **唯一不对称**：`trace_end` 只写 trace JSONL、不经 EventBus——进 `SSEventType` 联合、不进 `EVENT_TYPES` 订阅表。
-> 面板（`SubtaskList`）数据源是 REST 的 `Task.subtasks`，不吃 `subtask_*` 三条事件；事件只进 Trace 时间线。`subtask_*` 三条只发在**父频道**，子任务自己的频道不带。
+> 子智能体快照仍以 REST 的 `Task.subtasks` 为准；F7 起前端 reducer 同时消费父频道的 `subtask_*` 三条事件做实时态（`SubagentStrip`），两者只影响子智能体条，不进对话/步骤语义。`subtask_*` 三条只发在**父频道**，子任务自己的频道不带。
 > **投递语义**：单个发布者内的事件按发布顺序推送；跨发布者（worker 线程与 `stop()` 的 HTTP 线程）不保证顺序，但回放与实时之间**不丢不重**。晚订阅者先收到缓冲区回放，再继续实时流——`EventBus.subscribe` 在同一把锁里登记订阅并取回放快照，`backend/api/sse.py` 把 worker 线程的发布经 `call_soon_threadsafe` 投回事件循环。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
@@ -316,7 +321,7 @@ uvicorn backend.main:app --port 8000 --reload   # 手工起后端
 
 ### 6.4 CI 与验证入口
 
-- CI 两个 job（[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）：`backend-test`（ruff + mypy + pytest 离线全量）、`frontend-build`（`npm ci` → typecheck → `check:sse` → build）。
+- CI 三个 job（[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）：`backend-test`（ruff + mypy + pytest 离线全量）、`backend-windows-smoke`（Windows 敏感面）、`frontend-build`（`npm ci` → typecheck → `npm test` → `check:sse` → build；job 显示名沿用「Frontend typecheck & build」——分支保护锁定了这个 required check 的字符串）。
 - 本地权威命令：`.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q`、`-m ruff check backend scripts`、`-m mypy`；前端 `npm run typecheck` / `npm run check:sse` / `npm run build`。
 - 文档链接门：`python scripts/check_doc_links.py`（只校验 tracked Markdown 的相对链接）。
 - 发布前 / 换供应商：按 [`docs/manual-verification.md`](manual-verification.md) 的 9 个场景启服务、在网页端手动跑一遍（CI 不跑真模型）。
