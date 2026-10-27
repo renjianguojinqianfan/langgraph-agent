@@ -31,6 +31,7 @@ function summarizeInput(input: Record<string, unknown>): string {
 
 function outputText(tc: ToolCallRecord): string {
   const out = tc.output;
+  if (out == null) return "（尚无输出）";
   if (
     out &&
     typeof out === "object" &&

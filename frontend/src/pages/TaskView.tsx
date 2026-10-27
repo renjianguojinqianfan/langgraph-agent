@@ -21,6 +21,7 @@ export function TaskView() {
   const mergeTaskStatus = useTaskStore((s) => s.mergeTaskStatus);
   const upsertTask = useTaskStore((s) => s.upsertTask);
   const setTasks = useTaskStore((s) => s.setTasks);
+  const setListError = useTaskStore((s) => s.setListError);
   const historyFilter = useTaskStore((s) => s.historyFilter);
   const refreshModels = useModelStore((s) => s.refresh);
   const listRevision = useTaskStore((s) => s.listRevision);
@@ -40,13 +41,18 @@ export function TaskView() {
     const dir = historyFilter === "all" ? "all" : currentDir() ?? "current";
     listTasks(50, dir)
       .then((r) => {
-        if (!cancelled && r.data?.tasks) setTasks(r.data.tasks);
+        if (!cancelled && r.data?.tasks) {
+          setTasks(r.data.tasks);
+          setListError("");
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setListError("无法连接后台；确认服务在运行后再试。");
+      });
     return () => {
       cancelled = true;
     };
-  }, [setTasks, historyFilter, listRevision, currentTaskId]);
+  }, [setTasks, setListError, historyFilter, listRevision, currentTaskId]);
 
   // #189: a step_start can arrive while the snapshot still says PENDING (no
   // event carries the RUNNING status). Refetch the snapshot once per task and
@@ -115,6 +121,13 @@ export function TaskView() {
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
+      <a
+        href="#conversation"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-control focus:bg-surface-sheet focus:px-3 focus:py-1.5 focus:text-meta focus:text-primary"
+      >
+        跳到对话记录
+      </a>
+
       <aside
         id="task-rail"
         aria-label="任务历史"

@@ -24,7 +24,7 @@ function PlanToc({ items }: { items: TocItem[] }) {
                   .getElementById(item.slug)
                   ?.scrollIntoView({ block: "start" });
               }}
-              className="text-meta text-secondary hover:text-primary"
+              className="flex min-h-6 items-center text-meta text-secondary hover:text-primary"
             >
               {item.text}
             </a>

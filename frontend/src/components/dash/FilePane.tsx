@@ -126,7 +126,7 @@ export function FilePane({ task }: { task: Task }) {
                       href={fileDownloadUrl(task.id, file.path)}
                       download
                       aria-label={`下载 ${file.path}`}
-                      className="shrink-0 rounded-control p-1 text-tertiary hover:bg-surface-hover hover:text-primary"
+                      className="shrink-0 rounded-control p-1.5 text-tertiary hover:bg-surface-hover hover:text-primary"
                     >
                       <Icon name="download" size={14} />
                     </a>
@@ -158,7 +158,7 @@ export function FilePane({ task }: { task: Task }) {
                 setSelected(null);
                 setPreview(null);
               }}
-              className="shrink-0 rounded-control p-1 text-tertiary hover:bg-surface-hover hover:text-primary"
+              className="shrink-0 rounded-control p-1.5 text-tertiary hover:bg-surface-hover hover:text-primary"
               aria-label="关闭预览"
             >
               <Icon name="close" size={14} />

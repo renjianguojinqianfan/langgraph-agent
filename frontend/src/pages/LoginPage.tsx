@@ -27,6 +27,7 @@ export function LoginPage() {
         <p className="mb-4 text-body text-secondary">请输入访问口令以继续</p>
         <input
           type="password"
+          aria-label="访问口令"
           value={secret}
           onChange={(e) => setSecret(e.target.value)}
           className="mb-3 w-full rounded-control border border-rule bg-surface-well px-3 py-2 text-body text-primary placeholder:text-tertiary"

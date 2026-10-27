@@ -34,6 +34,7 @@ beforeEach(() => {
     historyFilter: "current",
     settingsOpen: false,
     listRevision: 0,
+    listError: "",
   });
 });
 
@@ -181,5 +182,27 @@ describe("子智能体事件只动 subtasks", () => {
     });
     expect(task.steps).toHaveLength(1);
     expect(task.conversation).toHaveLength(1);
+  });
+});
+
+describe("压缩标记按回放去重", () => {
+  it("同一 context_compressed 帧重放两次，只留一条标记", () => {
+    useTaskStore.setState({ currentTaskId: "t1", detail: { t1: snapshot() } });
+    const ev: SSEvent = {
+      type: "context_compressed",
+      data: {
+        task_id: "t1",
+        step_index: 1,
+        dropped: 0,
+        band_evicted: 2,
+        context_tokens: 1000,
+        strategy: "summary",
+      },
+    };
+
+    useTaskStore.getState().applyEvent(ev);
+    useTaskStore.getState().applyEvent(ev);
+
+    expect(useTaskStore.getState().markers["t1"]).toHaveLength(1);
   });
 });

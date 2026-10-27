@@ -15,6 +15,7 @@ const FILTER_OPTIONS: Array<{ value: RailFilter; label: string }> = [
 
 export function TaskRail() {
   const tasks = useTaskStore((s) => s.tasks);
+  const listError = useTaskStore((s) => s.listError);
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
   const filter = useTaskStore((s) => s.historyFilter);
@@ -41,6 +42,11 @@ export function TaskRail() {
           onChange={setFilter}
           label="任务范围"
         />
+        {listError && (
+          <p role="status" className="text-meta text-state-danger">
+            {listError}
+          </p>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">

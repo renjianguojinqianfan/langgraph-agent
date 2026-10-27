@@ -16,6 +16,8 @@ interface TaskState {
   settingsOpen: boolean;
   /** Bumped by `task_created`; the history list refetches (membership is the server's). */
   listRevision: number;
+  /** Non-empty when the last history load failed (backend unreachable). */
+  listError: string;
 
   setTasks: (tasks: Task[]) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -25,6 +27,7 @@ interface TaskState {
   mergeTaskStatus: (snapshot: Task) => void;
   applyEvent: (ev: SSEvent) => void;
   setHistoryFilter: (filter: "current" | "all") => void;
+  setListError: (message: string) => void;
 }
 
 export const useTaskStore = create<TaskState>((set) => ({
@@ -36,10 +39,12 @@ export const useTaskStore = create<TaskState>((set) => ({
   historyFilter: "current",
   settingsOpen: false,
   listRevision: 0,
+  listError: "",
 
   setTasks: (tasks) => set({ tasks }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setListError: (listError) => set({ listError }),
 
   setCurrentTask: (id) => set({ currentTaskId: id }),
 
@@ -80,12 +85,16 @@ export const useTaskStore = create<TaskState>((set) => ({
         : state.tasks;
 
       // Track flow markers (context compressed) per task so the message stream
-      // can render them without losing cross-task isolation.
+      // can render them without losing cross-task isolation. Reconnect replays
+      // the same frame; keep each payload once (latest arrival wins).
       let markers = state.markers;
       if (ev.type === "context_compressed") {
-        const list = markers[id] ?? [];
         const marker: TraceMarker = { type: ev.type, ts: ev.ts, data: ev.data };
-        markers = { ...markers, [id]: [...list, marker].slice(-200) };
+        const key = `${marker.type}:${JSON.stringify(marker.data)}`;
+        const kept = (markers[id] ?? []).filter(
+          (m) => `${m.type}:${JSON.stringify(m.data)}` !== key
+        );
+        markers = { ...markers, [id]: [...kept, marker].slice(-200) };
       }
 
       const events = state.eventsByTask[id] ?? [];

@@ -69,6 +69,8 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
 
   return (
     <div
+      id="conversation"
+      tabIndex={-1}
       role="region"
       aria-label="对话记录"
       className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4"
