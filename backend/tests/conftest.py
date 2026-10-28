@@ -15,11 +15,69 @@ that exports them cannot make the suite dial out.
 
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
 import sys
+import tempfile
+import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Optional
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# ── Throwaway runtime directories (MUST run before any `backend.config` import) ──
+# ``backend.main`` builds a module-level app whose lifespan enters the
+# production TaskManager; tests use that app directly. Relative paths resolve
+# against PROJECT_ROOT, so without this block every such TestClient writes the
+# checkout's ``data/`` (finding TEST-01 / #252). Assign, not setdefault: a
+# developer shell that exported DATA_DIR must not move the suite back onto real
+# state. ``make_settings`` still gives individual tests their own tmp_path.
+#
+# Prefer an absolute TEMP/TMP or LOCALAPPDATA\Temp. A sandboxed interpreter can
+# be denied mkdir there even though the shell may write files; probing with a
+# single mkdir avoids ``tempfile.mkdtemp``'s 10k-name PermissionError loop.
+# When OS temp is unavailable, a sibling of the checkout is the next safest
+# place: writable, but outside both the repository and its ``data/``.
+_TEST_ROOT_CANDIDATES: list[Path] = []
+if os.name == "nt":
+    for _env_name in ("TEMP", "TMP"):
+        _raw = os.environ.get(_env_name, "")
+        if _raw and Path(_raw).is_absolute():
+            _TEST_ROOT_CANDIDATES.append(Path(_raw))
+    _local_app_data = os.environ.get("LOCALAPPDATA")
+    if _local_app_data:
+        _TEST_ROOT_CANDIDATES.append(Path(_local_app_data) / "Temp")
+else:
+    _TEST_ROOT_CANDIDATES.append(Path(tempfile.gettempdir()))
+_TEST_ROOT_CANDIDATES.append(_PROJECT_ROOT.parent)
+
+
+def _try_runtime_root(parent: Path) -> Optional[Path]:
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        root = parent / f"qianfan-tests-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        os.mkdir(root, 0o700)
+    except OSError:
+        return None
+    return root
+
+
+_TEST_RUNTIME_ROOT: Optional[Path] = None
+for _candidate in _TEST_ROOT_CANDIDATES:
+    _TEST_RUNTIME_ROOT = _try_runtime_root(_candidate)
+    if _TEST_RUNTIME_ROOT is not None:
+        break
+if _TEST_RUNTIME_ROOT is None:
+    raise RuntimeError(
+        "could not create an isolated test runtime directory outside the checkout"
+    )
+os.environ["DATA_DIR"] = str(_TEST_RUNTIME_ROOT / "data")
+os.environ["ARTIFACTS_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "artifacts")
+os.environ["TRACE_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "traces")
+os.environ["QIANFAN_TEST_DATA_ROOT"] = str(_TEST_RUNTIME_ROOT)
+atexit.register(shutil.rmtree, _TEST_RUNTIME_ROOT, ignore_errors=True)
 
 # ── Offline isolation (MUST run before any `backend.config` import) ──
 os.environ.setdefault("USE_MOCK_LLM", "true")
@@ -108,12 +166,15 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
 
     Checkpoint persistence defaults OFF (env setdefault above); pass
     ``checkpoint_enabled=True`` to opt a test into the sqlite checkpoint
-    store — it then lives under ``tmp_path / "data" / "checkpoints"``.
+    store — it then lives under ``tmp_path / "checkpoints"``.
     """
     base: dict[str, Any] = dict(
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         trace_dir=str(tmp_path / "traces"),
+        # Explicit: a developer's CHECKPOINT_DIR must not leak one sqlite file
+        # into every test that opts into checkpoints.
+        checkpoint_dir="",
         llm_provider="deepseek",
         llm_base_url="",
         llm_model="deepseek-chat",

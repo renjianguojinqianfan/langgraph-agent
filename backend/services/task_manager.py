@@ -49,7 +49,7 @@ from ..utils.logging import get_logger
 from . import plan_file
 from .event_bus import EventBus
 from .model_store import ModelStore
-from .persistence import Persistence
+from .persistence import Persistence, PersistenceError
 from .trace import TraceRecorder
 
 if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
@@ -279,17 +279,41 @@ class TaskManager:
         from langgraph.checkpoint.sqlite import SqliteSaver
 
         ckpt_dir = settings.checkpoint_path
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
         db_path = ckpt_dir / "checkpoints.sqlite"
+        try:
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.error(
+                "Checkpoint directory %s is unusable (%s: %s); checkpointing is "
+                "disabled for this process. Fix the path (it must be a writable "
+                "directory); do NOT delete snapshots for this. Resume and "
+                "continuation stay disabled until the directory is usable.",
+                ckpt_dir,
+                type(exc).__name__,
+                exc,
+            )
+            return
         usable, kind, detail = _inspect_checkpoint_store(db_path)
         if not usable:
             self._log_refused_store(db_path, kind, detail)
             return
-        conn = sqlite3.connect(
-            str(db_path),
-            check_same_thread=False,
-            timeout=10.0,  # tolerate the predecessor's in-flight writes
-        )
+        try:
+            conn = sqlite3.connect(
+                str(db_path),
+                check_same_thread=False,
+                timeout=10.0,  # tolerate the predecessor's in-flight writes
+            )
+        except Exception as exc:
+            logger.error(
+                "Checkpoint store %s could not be opened (%s: %s); checkpointing "
+                "is disabled for this process. Check permissions / disk space / "
+                "locks and restart; do NOT delete snapshots for this. Resume and "
+                "continuation stay disabled until the store is usable.",
+                db_path,
+                type(exc).__name__,
+                exc,
+            )
+            return
         # Stamp before the saver writes anything, so a store created by this
         # version is never again mistaken for a pre-migration one. A failed
         # stamp must degrade to "not mounted": letting it escape would turn a
@@ -351,6 +375,53 @@ class TaskManager:
             _CHECKPOINT_FORMAT_DOC,
         )
 
+    def _save_task(self, task: Task, *, strict: bool) -> bool:
+        """Persist via :class:`Persistence` and make a failed dump visible.
+
+        Request paths pass ``strict=True`` so the API reports the failure;
+        worker/teardown paths log and continue because raising there would turn
+        a disk problem into an unhandled thread exception.
+        """
+        if self.persistence.save_task(task):
+            return True
+        message = (
+            f"could not persist task {task.id} ({task.status.value}); "
+            "tasks.json was left unchanged"
+        )
+        if strict:
+            raise PersistenceError(message)
+        logger.error("%s; continuing without a durable record", message)
+        return False
+
+    def _attach_trace(self, task_id: str, *, required: bool) -> bool:
+        """Attach the trace recorder; a file error must not fake a live run."""
+        if self._trace is None:
+            return False
+        try:
+            self._trace.attach(self.event_bus, task_id)
+        except OSError as exc:
+            if required:
+                raise RuntimeError(
+                    f"trace is unavailable for task {task_id} "
+                    f"({type(exc).__name__}: {exc}); fix the trace directory and retry"
+                ) from exc
+            logger.warning(
+                "trace attach failed for %s (%s: %s); continuing without trace",
+                task_id,
+                type(exc).__name__,
+                exc,
+            )
+            return False
+        return True
+
+    def _close_trace_quietly(self, task_id: str) -> None:
+        if self._trace is None:
+            return
+        try:
+            self._trace.close(task_id)
+        except Exception:  # pragma: no cover - defensive cleanup
+            logger.exception("trace cleanup failed for %s", task_id)
+
     def _reconcile_orphans(self) -> None:
         """Mark persisted RUNNING/PENDING tasks as INTERRUPTED on startup.
 
@@ -368,7 +439,8 @@ class TaskManager:
                 orphan_status = task.status.value
                 task.status = TaskStatus.INTERRUPTED
                 task.updated_at = _now()
-                self.persistence.save_task(task)
+                if not self._save_task(task, strict=False):
+                    continue
                 reconciled += 1
                 logger.warning(
                     "Orphaned %s task %s reconciled to INTERRUPTED",
@@ -471,9 +543,20 @@ class TaskManager:
         # Let in-flight workers finish committing their checkpoints BEFORE the
         # sqlite connection goes away — closing under a writing thread is what
         # corrupted the shared WAL file and crashed native sqlite3.
+        alive = 0
         for th in list(getattr(self, "_threads", {}).values()):
             if th is not threading.current_thread() and th.is_alive():
                 th.join(timeout=5.0)
+                if th.is_alive():
+                    alive += 1
+        if alive:
+            logger.warning(
+                "shutdown: %d worker thread(s) still alive after 5s; leaving the "
+                "checkpoint connection open so they can finish writing. Process "
+                "exit will close it.",
+                alive,
+            )
+            return
         conn = getattr(self, "_checkpoint_conn", None)
         if conn is not None:
             try:
@@ -562,9 +645,16 @@ class TaskManager:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
+            previous_model = task.model
+            previous_updated_at = task.updated_at
             task.model = model_id
             task.updated_at = _now()
-            self.persistence.save_task(task)
+            try:
+                self._save_task(task, strict=True)
+            except PersistenceError:
+                task.model = previous_model
+                task.updated_at = previous_updated_at
+                raise
         return {"ok": True, "model": model_id}
 
     # Profile mutations go through the manager so the per-profile client cache
@@ -668,11 +758,11 @@ class TaskManager:
             created_at=now,
             updated_at=now,
         )
-        # P0 item 4: attach the trace recorder before any event is published so
-        # the JSONL captures task_created onwards.
-        if self._trace is not None:
-            self._trace.attach(self.event_bus, task_id)
-        self.persistence.save_task(task)
+        # Persist before attaching the trace: a failed dump must abort creation
+        # (no worker, no trace file, no in-memory ghost). The trace itself is
+        # observability, so a file error degrades instead of blocking the task.
+        self._save_task(task, strict=True)
+        self._attach_trace(task_id, required=False)
         self.event_bus.publish(
             task_id,
             "task_created",
@@ -793,7 +883,7 @@ class TaskManager:
 
         task.status = TaskStatus.RUNNING
         task.updated_at = _now()
-        self.persistence.save_task(task)
+        self._save_task(task, strict=False)
 
         try:
             # The directory may have disappeared while the task was queued.
@@ -842,7 +932,7 @@ class TaskManager:
             task.error = self.redact(str(exc))
             logger.error("run() crashed for task %s: %s", task_id, task.error)
             task.updated_at = _now()
-            self.persistence.save_task(task)
+            self._save_task(task, strict=False)
             self.event_bus.publish(
                 task_id, "task_failed", {"task_id": task_id, "error": task.error}
             )
@@ -891,9 +981,16 @@ class TaskManager:
             self._stop_flags[task_id] = True
 
         if live and task is not None:
+            previous_status = task.status
+            previous_updated_at = task.updated_at
             task.status = TaskStatus.INTERRUPTED
             task.updated_at = _now()
-            self.persistence.save_task(task)
+            try:
+                self._save_task(task, strict=True)
+            except PersistenceError:
+                task.status = previous_status
+                task.updated_at = previous_updated_at
+                raise
             # Claim the announcement before publishing: _finalize_terminal will
             # see the claim and stay quiet, so a human stop is one event, not two.
             if self._claim_interrupt(task_id):
@@ -1030,7 +1127,7 @@ class TaskManager:
                 "task_interrupted",
                 {"task_id": task.id, "status": status},
             )
-        self.persistence.save_task(task)
+        self._save_task(task, strict=False)
 
     @staticmethod
     def _conversation_from(messages: Any) -> List[ChatTurn]:
@@ -1101,14 +1198,20 @@ class TaskManager:
             # Flip to RUNNING inside the lock: any second resume() now sees
             # RUNNING and is rejected; a concurrent stop() flips it back and
             # _resume_run re-checks before proceeding.
+            # Open the trace BEFORE flipping the record: a trace-file failure
+            # must leave the task parked, never RUNNING without a worker.
+            self._attach_trace(task_id, required=True)
+            previous_status = task.status
+            previous_updated_at = task.updated_at
             task.status = TaskStatus.RUNNING
             task.updated_at = _now()
-            self.persistence.save_task(task)
-            # Reopen the audit trail before the boundary event so the JSONL
-            # captures task_resumed. This does the file open + subscribe under
-            # the claim lock, but manager -> trace -> bus stays acyclic.
-            if self._trace is not None:
-                self._trace.attach(self.event_bus, task_id)
+            try:
+                self._save_task(task, strict=True)
+            except PersistenceError:
+                task.status = previous_status
+                task.updated_at = previous_updated_at
+                self._close_trace_quietly(task_id)
+                raise
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
@@ -1222,7 +1325,7 @@ class TaskManager:
                 task.status = TaskStatus.FAILED
                 task.error = message
                 task.updated_at = _now()
-                self.persistence.save_task(task)
+                self._save_task(task, strict=False)
             self.event_bus.publish(
                 task_id, "task_failed", {"task_id": task_id, "error": message}
             )
@@ -1261,9 +1364,16 @@ class TaskManager:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
+            previous_mode = task.mode
+            previous_updated_at = task.updated_at
             task.mode = chosen
             task.updated_at = _now()
-            self.persistence.save_task(task)
+            try:
+                self._save_task(task, strict=True)
+            except PersistenceError:
+                task.mode = previous_mode
+                task.updated_at = previous_updated_at
+                raise
         return {"ok": True, "mode": chosen.value}
 
     def get_plan(self, task_id: str) -> Dict[str, Any]:
@@ -1306,7 +1416,7 @@ class TaskManager:
                 task.plan_version += 1
             task.plan_hash = digest
             task.updated_at = _now()
-            self.persistence.save_task(task)
+            self._save_task(task, strict=True)
             version = task.plan_version
         return {"ok": True, "version": version}
 
@@ -1352,6 +1462,13 @@ class TaskManager:
                     "(checkpoints disabled, this task predates them, or the "
                     "store was refused for its format — see the startup log)"
                 )
+            # Same attach-before-flip contract as resume(): a trace-file error
+            # must leave the task parked with no worker and no user turn added.
+            self._attach_trace(task_id, required=True)
+            previous_status = task.status
+            previous_error = task.error
+            previous_updated_at = task.updated_at
+            previous_turns = len(task.conversation)
             if user_text is not None:
                 task.conversation.append(ChatTurn(role="user", content=user_text))
             task.status = TaskStatus.RUNNING
@@ -1359,10 +1476,15 @@ class TaskManager:
             # must not linger on a task that is running again.
             task.error = None
             task.updated_at = _now()
-            self.persistence.save_task(task)
-            # Same attach-before-publish contract as resume().
-            if self._trace is not None:
-                self._trace.attach(self.event_bus, task_id)
+            try:
+                self._save_task(task, strict=True)
+            except PersistenceError:
+                task.status = previous_status
+                task.error = previous_error
+                task.updated_at = previous_updated_at
+                del task.conversation[previous_turns:]
+                self._close_trace_quietly(task_id)
+                raise
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
@@ -1443,7 +1565,7 @@ class TaskManager:
                 task.status = TaskStatus.FAILED
                 task.error = message
                 task.updated_at = _now()
-                self.persistence.save_task(task)
+                self._save_task(task, strict=False)
             self.event_bus.publish(
                 task_id, "task_failed", {"task_id": task_id, "error": message}
             )

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 
@@ -19,7 +20,7 @@ from .api.routes import router
 from .config import get_settings
 from .services.auth import TokenIssuer
 from .services.event_bus import EventBus
-from .services.persistence import Persistence
+from .services.persistence import Persistence, PersistenceError
 from .services.task_manager import TaskManager
 
 settings = get_settings()
@@ -58,6 +59,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="LangGraph Autonomous Task Agent", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(PersistenceError)
+async def _persistence_error_handler(
+    _request: Request, exc: PersistenceError
+) -> JSONResponse:
+    """A failed tasks.json write is a server-side failure, not a silent 200."""
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 app.add_middleware(
     CORSMiddleware,
