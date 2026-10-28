@@ -34,6 +34,11 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
+/** Network/transport failures carry no server envelope; keep the cause visible. */
+function requestFailure(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? `${fallback}：${err.message}` : fallback;
+}
+
 /**
  * Modal settings surface (design §4 SettingsDialog). Behaviour is the retired
  * `SettingsPage` verbatim: model CRUD, write-only keys, connection test and
@@ -130,8 +135,8 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       } else {
         note(id, apiErrorText(r));
       }
-    } catch {
-      note(id, "保存 Key 失败");
+    } catch (err) {
+      note(id, requestFailure(err, "保存 Key 失败"));
     }
   };
 
@@ -145,8 +150,8 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       } else {
         note(id, apiErrorText(r));
       }
-    } catch {
-      note(id, "清除 Key 失败");
+    } catch (err) {
+      note(id, requestFailure(err, "清除 Key 失败"));
     }
   };
 

@@ -27,6 +27,14 @@ DEFAULT_MODEL_ID = "default"
 _DEEPSEEK_FALLBACK = "https://api.deepseek.com/v1"
 
 
+class CredentialsError(RuntimeError):
+    """The credential file outside the repo could not be written (#244).
+
+    Written as a domain error so the API can answer 4xx with the path and a
+    next step, instead of leaking an ``OSError`` as a 500 with no reason.
+    """
+
+
 @dataclass
 class ModelProfile:
     id: str
@@ -216,14 +224,16 @@ class ModelStore:
             raise KeyError(model_id)
         if len(self.models) == 1:
             raise ValueError("cannot delete the last model profile")
+        # Revoke the pasted key BEFORE dropping the profile: if the credential
+        # file is not writable, raising here keeps the profile (and its key
+        # reference) intact instead of leaving an orphaned secret on disk.
+        credentials = self._credentials()
+        if credentials.pop(model_id, None) is not None:
+            self._save_credentials(credentials)
         del self.models[model_id]
         if self.default_id == model_id:
             self.default_id = next(iter(self.models))
         self._save()
-        # A deleted profile must not leave its pasted key behind.
-        credentials = self._credentials()
-        if credentials.pop(model_id, None) is not None:
-            self._save_credentials(credentials)
 
     def set_default(self, model_id: str) -> None:
         if model_id not in self.models:
@@ -245,14 +255,35 @@ class ModelStore:
         return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
 
     def _save_credentials(self, data: Dict[str, str]) -> None:
-        self.credentials_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.credentials_file.with_suffix(".json.tmp")
-        # Create the file with 0600 from the start on POSIX; Windows ignores the
-        # mode, where the file lives under the user profile ACL instead.
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-        os.replace(tmp, self.credentials_file)
+        try:
+            self.credentials_file.parent.mkdir(parents=True, exist_ok=True)
+            # Create the file with 0600 from the start on POSIX; Windows ignores
+            # the mode, where the file lives under the user profile ACL instead.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, self.credentials_file)
+        except OSError as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:  # pragma: no cover - defensive
+                pass
+            # AC (#244): the reason must also reach the log, not only the HTTP
+            # detail — a 4xx without a server-side trace is still hard to debug.
+            logger.warning(
+                "credentials write failed for %s: %s",
+                self.credentials_file,
+                exc,
+                exc_info=True,
+            )
+            raise CredentialsError(
+                f"cannot write credentials file {self.credentials_file}: "
+                f"{exc.strerror or exc}. Grant this process write access to the "
+                "user profile directory, start qianfan outside a restricted "
+                "sandbox, or set the environment variable this profile uses "
+                "instead of pasting the key."
+            ) from exc
 
     def set_key(self, model_id: str, key: str) -> None:
         if model_id not in self.models:
