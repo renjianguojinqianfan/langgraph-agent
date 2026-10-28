@@ -149,8 +149,9 @@ def delete_task_history(
     """Delete one task's history + checkpoint + trace (#241).
 
     The worker of a live task keeps writing those artifacts, so PENDING/RUNNING
-    (or a still-alive worker thread) is a 409; the record is removed last, so a
-    partial artifact cleanup never leaves the UI pointing at a deleted task.
+    (or a still-alive worker thread) is a 409. The record is removed under the
+    manager lock *before* the expensive cleanup, so a continuation that loses
+    the claim race finds no task instead of resurrecting a half-deleted one.
     """
     if _tm(request).get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
