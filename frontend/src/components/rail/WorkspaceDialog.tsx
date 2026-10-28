@@ -128,7 +128,7 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
                     type="button"
                     title={path}
                     onClick={() => setDraft(path)}
-                    className="max-w-full truncate rounded-full border border-rule px-2 py-0.5 font-mono text-machine text-secondary hover:bg-surface-hover hover:text-primary"
+                    className="min-h-6 max-w-full truncate rounded-full border border-rule px-2 py-0.5 font-mono text-machine text-secondary hover:bg-surface-hover hover:text-primary"
                   >
                     {basename(path) || path}
                   </button>
