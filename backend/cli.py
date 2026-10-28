@@ -11,6 +11,7 @@ import argparse
 import os
 import socket
 import threading
+import time
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
@@ -45,15 +46,62 @@ def _stale_build(dist: Path) -> bool:
         return False
 
 
-def _open_browser_now(url: str) -> None:
-    """Handoff path: the process exits right after ``main()`` returns."""
+def _open_browser(url: str) -> None:
     webbrowser.open(url)
 
 
-def _schedule_browser(url: str) -> None:
-    timer = threading.Timer(1.0, webbrowser.open, args=(url,))
-    timer.daemon = True
-    timer.start()
+def _open_browser_now(url: str) -> None:
+    """Handoff path: the process exits right after ``main()`` returns."""
+    _open_browser(url)
+
+
+def _open_when_ready(
+    url: str,
+    port: int,
+    *,
+    browser: Callable[[str], None],
+    probe: Callable[[int, float], Optional[dict[str, Any]]],
+    wait: float = 15.0,
+    interval: float = 0.2,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Open ``url`` only after ``/health`` answers; timeout prints instead (#245).
+
+    A fixed timer lost the race with checkpoint mounting on a cold start (the
+    browser hit the port before uvicorn was ready and never retried). Polling
+    the same health endpoint the handoff path uses keeps the two paths honest.
+    """
+    deadline = clock() + wait
+    while True:
+        if probe(port, 0.5) is not None:
+            try:
+                browser(url)
+            except Exception as exc:  # pragma: no cover - OS/browser-facing
+                print(f"[qianfan] 打开浏览器失败（{exc}）；请手动打开 {url}")
+                return False
+            return True
+        if clock() >= deadline:
+            print(f"[qianfan] 服务未在 {wait:g}s 内就绪，未自动打开浏览器；请手动打开 {url}")
+            return False
+        sleep(interval)
+
+
+def _start_ready_watcher(
+    url: str,
+    port: int,
+    browser: Callable[[str], None],
+    probe: Callable[[int, float], Optional[dict[str, Any]]],
+) -> None:
+    """Watch /health in a daemon thread; ``serve`` blocks the main thread."""
+    thread = threading.Thread(
+        target=_open_when_ready,
+        args=(url, port),
+        kwargs={"browser": browser, "probe": probe},
+        name="qianfan-browser-ready",
+        daemon=True,
+    )
+    thread.start()
 
 
 def _serve(host: str, port: int) -> None:
@@ -86,10 +134,11 @@ def main(
     serve: Callable[[str, int], None] | None = None,
     open_browser: Callable[[str], None] | None = None,
     probe: Optional[Callable[[int, float], Optional[dict[str, Any]]]] = None,
+    when_ready: Optional[Callable[[str, int], None]] = None,
 ) -> int:
     settings = get_settings()
     dist: Path = settings.frontend_dist_path
-    browser = open_browser or _schedule_browser
+    browser: Callable[[str], None] = open_browser or _open_browser
     handoff_browser = open_browser or _open_browser_now
     probe_health = probe or server_lock.probe_health
     lock_file = server_lock.lock_path(settings)
@@ -141,7 +190,12 @@ def main(
 
         url = f"http://{HOST}:{args.port}/?dir={quote(os.getcwd())}"
         if not args.no_browser:
-            browser(url)
+            opener = when_ready or (
+                lambda target, port: _start_ready_watcher(
+                    target, port, browser, probe_health
+                )
+            )
+            opener(url, args.port)
         (serve or _serve)(HOST, args.port)
     finally:
         server_lock.release_lock(lock_file, instance)

@@ -7,6 +7,7 @@ means no plan, and a model write to the file is picked up next call.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -48,6 +49,16 @@ def _plan_messages(transcript):
         for m in transcript
         if m.get("role") == "user" and plan_file.is_plan_message(m.get("content"))
     ]
+
+
+#: The one gray note is a protocol line, not a prefix (#236): keep the sampling
+#: assertions exact so a model answer that merely starts with the same words is
+#: never mistaken for it.
+_PLAN_NOTE_RE = re.compile(r"^计划已更新到第 \d+ 版。$")
+
+
+def _is_plan_note_text(content) -> bool:
+    return bool(_PLAN_NOTE_RE.fullmatch(str(content or "").strip()))
 
 
 def test_plan_mode_writes_the_file_and_git_ignores_it(tmp_path):
@@ -171,7 +182,7 @@ def test_a_non_plan_reply_keeps_the_previous_plan_note(tmp_path):
         m
         for m in state["messages"]
         if m.get("role") == "assistant"
-        and str(m.get("content") or "").startswith("计划已更新到")
+        and _is_plan_note_text(m.get("content"))
     ]
     assert len(notes) == 1
     assert notes[0]["content"] == "计划已更新到第 1 版。"
@@ -199,7 +210,7 @@ def test_edited_file_is_what_the_next_round_sends(tmp_path):
     notes = [
         t
         for t in conversation
-        if t.role == "assistant" and t.content.startswith("计划已更新到")
+        if t.role == "assistant" and _is_plan_note_text(t.content)
     ]
     assert len(notes) == 1
     assert "第 1 版" in notes[0].content
@@ -319,7 +330,7 @@ def test_compression_refreshes_a_mid_round_plan(tmp_path):
         m
         for m in built
         if m.get("role") == "assistant"
-        and str(m.get("content") or "").startswith("计划已更新到")
+        and _is_plan_note_text(m.get("content"))
     ]
     assert len(notes) == 1
     assert "第 2 版" in notes[0]["content"]
@@ -331,6 +342,26 @@ def test_a_user_message_that_merely_starts_with_the_prefix_is_kept(tmp_path):
     contents = [m["content"] for m in messages]
     assert "[qianfan-plan] I typed this" in contents
     assert len([c for c in contents if plan_file.is_plan_message(c)]) == 1
+
+
+def test_a_normal_answer_that_starts_with_the_prefix_is_kept():
+    """#236: only the generated sentence is the note; a same-prefix answer stays."""
+    from backend.core.agent.nodes import _drop_plan_notes, _ensure_plan_note
+
+    answer = {"role": "assistant", "content": "计划已更新到第 3 版后，建议先跑测试。"}
+    messages = [{"role": "user", "content": "go"}, answer]
+
+    _ensure_plan_note(messages, 4)
+
+    assert answer in messages
+    notes = [m for m in messages if _is_plan_note_text(m.get("content"))]
+    assert len(notes) == 1
+    assert notes[0]["content"] == "计划已更新到第 4 版。"
+
+    _drop_plan_notes(messages)
+
+    assert answer in messages
+    assert not any(_is_plan_note_text(m.get("content")) for m in messages)
 
 
 def test_deleted_file_means_no_plan(tmp_path):
@@ -406,7 +437,7 @@ def test_model_write_to_the_plan_file_is_used_next_round(tmp_path):
     assert _plan_messages(llm.transcripts[-1]) == []
     assert not any(
         m.get("role") == "assistant"
-        and str(m.get("content") or "").startswith("计划已更新到")
+        and _is_plan_note_text(m.get("content"))
         for m in state["messages"]
     )
 
@@ -418,7 +449,7 @@ def test_model_write_to_the_plan_file_is_used_next_round(tmp_path):
         m
         for m in state["messages"]
         if m.get("role") == "assistant"
-        and str(m.get("content") or "").startswith("计划已更新到")
+        and _is_plan_note_text(m.get("content"))
     ]
     assert len(notes) == 1
     assert "第 1 版" in notes[0]["content"]
