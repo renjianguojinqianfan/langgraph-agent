@@ -12,7 +12,6 @@ import { useTaskStore } from "../store/taskStore";
 import { SSEvent } from "../types";
 import { cx } from "../lib/cx";
 import { isParked } from "../lib/taskState";
-import { currentDir } from "../workspace";
 
 export function TaskView() {
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
@@ -25,6 +24,7 @@ export function TaskView() {
   const setTasks = useTaskStore((s) => s.setTasks);
   const setListError = useTaskStore((s) => s.setListError);
   const historyFilter = useTaskStore((s) => s.historyFilter);
+  const workspaceDir = useTaskStore((s) => s.workspaceDir);
   const refreshModels = useModelStore((s) => s.refresh);
   const listRevision = useTaskStore((s) => s.listRevision);
   const [dashTab, setDashTab] = useState<DashTab>("files");
@@ -65,11 +65,12 @@ export function TaskView() {
     refreshModels();
   }, [refreshModels]);
 
-  // History load: this page's directory by default, or every task (ADR 0010).
-  // Membership is the server GET's answer; refetch on filter, create and select.
+  // History load: this page's workspace by default, or every task (ADR 0010).
+  // Membership is the server GET's answer; refetch on filter, create, select
+  // and workspace switch (#242).
   useEffect(() => {
     let cancelled = false;
-    const dir = historyFilter === "all" ? "all" : currentDir() ?? "current";
+    const dir = historyFilter === "all" ? "all" : workspaceDir || "current";
     listTasks(50, dir)
       .then((r) => {
         if (!cancelled && r.data?.tasks) {
@@ -83,7 +84,14 @@ export function TaskView() {
     return () => {
       cancelled = true;
     };
-  }, [setTasks, setListError, historyFilter, listRevision, currentTaskId]);
+  }, [
+    setTasks,
+    setListError,
+    historyFilter,
+    listRevision,
+    currentTaskId,
+    workspaceDir,
+  ]);
 
   // #189: a step_start can arrive while the snapshot still says PENDING (no
   // event carries the RUNNING status). Refetch the snapshot once per task and

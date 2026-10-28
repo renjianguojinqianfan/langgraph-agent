@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { SSEvent, Task, TraceMarker } from "../types";
+import { currentDir, setDirParam } from "../workspace";
 import { applyToTask, mergeStatusSnapshot } from "./reduceTask";
 
 interface TaskState {
@@ -12,6 +13,8 @@ interface TaskState {
   markers: Record<string, TraceMarker[]>;
   /** History filter (ADR 0010 decision 2): this directory, or every task. */
   historyFilter: "current" | "all";
+  /** Page's workspace (`?dir=`); empty means the backend's launch directory. */
+  workspaceDir: string;
   /** M2: the model settings overlay. */
   settingsOpen: boolean;
   /** Bumped by `task_created`; the history list refetches (membership is the server's). */
@@ -22,6 +25,8 @@ interface TaskState {
   setTasks: (tasks: Task[]) => void;
   setSettingsOpen: (open: boolean) => void;
   setCurrentTask: (id: string | null) => void;
+  /** #242: update URL + history/creation target; not a backend restart. */
+  switchWorkspace: (dir: string) => void;
   upsertTask: (task: Task) => void;
   /** #189: merge a refetched snapshot's status fields into the live detail. */
   mergeTaskStatus: (snapshot: Task) => void;
@@ -37,6 +42,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   eventsByTask: {},
   markers: {},
   historyFilter: "current",
+  workspaceDir: currentDir() ?? "",
   settingsOpen: false,
   listRevision: 0,
   listError: "",
@@ -47,6 +53,16 @@ export const useTaskStore = create<TaskState>((set) => ({
   setListError: (listError) => set({ listError }),
 
   setCurrentTask: (id) => set({ currentTaskId: id }),
+
+  switchWorkspace: (workspaceDir) => {
+    setDirParam(workspaceDir);
+    set((state) => ({
+      workspaceDir,
+      // The old selection belongs to the old directory's history.
+      currentTaskId: null,
+      listRevision: state.listRevision + 1,
+    }));
+  },
 
   upsertTask: (task) =>
     set((state) => {

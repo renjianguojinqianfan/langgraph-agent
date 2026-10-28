@@ -78,6 +78,10 @@ export const createTask = (body: CreateTaskRequest) =>
 export const listTasks = (limit = 50, dir = "current") =>
   req<{ tasks: Task[] }>(`/tasks?limit=${limit}&dir=${encodeURIComponent(dir)}`);
 
+/** #242: canonicalize + existence-check a directory before switching to it. */
+export const validateWorkspace = (path: string) =>
+  req<{ path: string }>(`/workspaces/validate?path=${encodeURIComponent(path)}`);
+
 export const getTask = (id: string) => req<Task>(`/tasks/${id}`);
 
 export const stopTask = (id: string) =>

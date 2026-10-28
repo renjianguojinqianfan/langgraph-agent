@@ -38,7 +38,7 @@ backend/
 ├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
 ├── server_lock.py       单实例锁（一台机器只允许一个后台）
 ├── api/
-│   ├── routes.py        24 条 REST 路由（§3.3）；统一 {code,data,message} 信封
+│   ├── routes.py        25 条 REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
 │   ├── sse.py           SSE 流组装（15s heartbeat）
 ├── core/
@@ -138,6 +138,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
 | POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
+| GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
 | GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |
 | POST | `/api/tasks/{id}/stop` | 停止任务 | — | `{ok, status}` |
 | POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 |
