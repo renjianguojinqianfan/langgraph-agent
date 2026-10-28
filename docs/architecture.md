@@ -136,19 +136,19 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 `data` |
 |---|---|---|---|---|
 | GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
-| POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 |
+| POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
 | GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
 | DELETE | `/api/tasks` | 删除某目录下全部任务历史（#241；`dir` 必填，不提供「全部」） | `?dir=<路径>` | `{deleted}`；400 / 任一运行中 → 409（不删）/ 落盘失败 → 500（整批回滚） |
 | DELETE | `/api/tasks/{id}` | 删除任务历史：记录 + checkpoint + trace（不改磁盘文件；任务名下后台进程一并终止，#241） | — | `{ok, cleanup:{checkpoint,trace}}`；404 / 运行中 → 409 / 落盘失败 → 500（不清理） |
 | GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |
-| POST | `/api/tasks/{id}/stop` | 停止任务 | — | `{ok, status}` |
-| POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 |
-| PUT | `/api/tasks/{id}/model` | 换任务模型（下一条消息生效） | `{model}` | `TaskManager.set_model` 结果；不能改 → 409 |
-| PUT | `/api/tasks/{id}/mode` | 切计划/执行模式（黏性，下一轮生效） | `{mode}` | `TaskManager.set_mode` 结果；不能切 → 409 |
-| POST | `/api/tasks/{id}/messages` | 停下 / 失败后续说（同一 thread，多轮对话入口；需 checkpoint） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 |
+| POST | `/api/tasks/{id}/stop` | 停止任务 | — | `{ok, status}`；落盘失败 → 500（`{detail}`） |
+| POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 / 落盘失败 → 500（`{detail}`） |
+| PUT | `/api/tasks/{id}/model` | 换任务模型（下一条消息生效） | `{model}` | `TaskManager.set_model` 结果；不能改 → 409 / 落盘失败 → 500（`{detail}`） |
+| PUT | `/api/tasks/{id}/mode` | 切计划/执行模式（黏性，下一轮生效） | `{mode}` | `TaskManager.set_mode` 结果；不能切 → 409 / 落盘失败 → 500（`{detail}`） |
+| POST | `/api/tasks/{id}/messages` | 停下 / 失败后续说（同一 thread，多轮对话入口；需 checkpoint） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；读不到 → 404/409 |
-| PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 |
+| PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4） | — | `text/event-stream` |
 | GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认原始 NDJSON；`?format=json` 走信封 `{data:[Event...]}`；无 trace → 404 |
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |

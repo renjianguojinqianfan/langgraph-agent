@@ -107,7 +107,7 @@ resilience 层零改动的前提下，Persistence 补齐续跑承诺的地基：
 3. **live_e2e 场景 2**：真模型两步→杀停→重建→resume→完成（需 API Key 时执行）
 
 工程边界备忘：
-- conftest 顶部追加 `CHECKPOINT_ENABLED=false` setdefault（隔离段既有行未动）；checkpoint 用例经 `make_settings(checkpoint_enabled=True)` 显式 opt-in，且 make_manager 自动注册 shutdown finalizer
+- conftest 顶部追加 `CHECKPOINT_ENABLED=false` setdefault；#252 起隔离段又追加 `CHECKPOINT_DIR` 赋值、pytest 临时根钉根与会话级 `data/` 守卫（权威以 AGENTS.md「测试隔离」行为准）；checkpoint 用例经 `make_settings(checkpoint_enabled=True)` 显式 opt-in，且 make_manager 自动注册 shutdown finalizer
 - 子代理（subtask 图）不接入 checkpointer——子图 invoke 不带 config 的 recursion_limit 缺口已单独修复
 
 ## 7. 配置面

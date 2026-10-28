@@ -23,7 +23,7 @@ def _sample_task(task_id="abc") -> Task:
 def test_save_and_load_round_trip(settings):
     p = Persistence(settings)
     task = _sample_task()
-    p.save_task(task)
+    assert p.save_task(task) is True
 
     loaded = p.load_task(task.id)
     assert loaded is not None
@@ -55,5 +55,29 @@ def test_tasks_persisted_to_disk_and_reloadable(settings):
     # A brand new Persistence instance should read it back from tasks.json.
     p2 = Persistence(settings)
     assert p2.load_task("disk1") is not None
+
+
+def test_failed_dump_is_reported_and_new_record_is_not_kept(settings, monkeypatch):
+    """REL-02: a failed dump must not look like a successful save."""
+    p = Persistence(settings)
+    task = _sample_task("t-undurable")
+    monkeypatch.setattr(p, "_dump", lambda: False)
+
+    assert p.save_task(task) is False
+    assert p.load_task(task.id) is None
+
+
+def test_failed_dump_restores_the_previous_record(settings, monkeypatch):
+    p = Persistence(settings)
+    original = _sample_task("t-keep")
+    assert p.save_task(original)
+
+    replacement = original.model_copy(deep=True)
+    replacement.status = TaskStatus.FAILED
+    monkeypatch.setattr(p, "_dump", lambda: False)
+
+    assert p.save_task(replacement) is False
+    assert p.load_task("t-keep") is original
+    assert p.load_task("t-keep").status == TaskStatus.INTERRUPTED
 
 

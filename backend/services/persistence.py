@@ -111,10 +111,27 @@ class Persistence:
         return True
 
     # ── tasks ──
-    def save_task(self, task: Task) -> None:
+    def save_task(self, task: Task) -> bool:
+        """Persist ``task``; return False when the disk was left untouched.
+
+        A new record is removed again on failure, so a caller cannot observe a
+        task that was never durable. Existing records are mutated in place by
+        most callers, so they must restore their own fields before treating a
+        False return as a rolled-back update.
+        """
         with self._lock:
+            previous = self._tasks.get(task.id)
             self._tasks[task.id] = task
-            self._dump()
+            if self._dump():
+                return True
+            if previous is None:
+                self._tasks.pop(task.id, None)
+            else:
+                self._tasks[task.id] = previous
+            logger.error(
+                "Task %s was not persisted; tasks.json was left unchanged", task.id
+            )
+            return False
 
     def load_task(self, task_id: str) -> Optional[Task]:
         with self._lock:
