@@ -84,4 +84,25 @@ describe("removeWorkspaceTasks (#241)", () => {
     expect(state.detail.b1).toBeDefined();
     expect(state.currentTaskId).toBeNull();
   });
+
+  it("clears a selected task that already slid out of the visible list", () => {
+    useTaskStore.setState({
+      // The 50-row list no longer contains the selected task; only its detail
+      // snapshot remembers which directory it belongs to.
+      tasks: [task("b1", "E:\\b")],
+      currentTaskId: "old",
+      detail: { old: task("old", "E:\\a") },
+      eventsByTask: { old: [] },
+      markers: { old: [] },
+    });
+
+    useTaskStore.getState().removeWorkspaceTasks("E:\\a");
+
+    const state = useTaskStore.getState();
+    expect(state.detail.old).toBeUndefined();
+    expect(state.eventsByTask.old).toBeUndefined();
+    expect(state.markers.old).toBeUndefined();
+    expect(state.currentTaskId).toBeNull();
+    expect(state.tasks.map((row) => row.id)).toEqual(["b1"]);
+  });
 });

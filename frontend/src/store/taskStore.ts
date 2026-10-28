@@ -78,16 +78,19 @@ export const useTaskStore = create<TaskState>((set) => ({
   removeTask: (id) => set((state) => dropTasks(state, new Set([id]))),
 
   removeWorkspaceTasks: (workspace) =>
-    set((state) =>
-      dropTasks(
-        state,
-        new Set(
-          state.tasks
-            .filter((task) => task.workspace === workspace)
-            .map((task) => task.id)
-        )
-      )
-    ),
+    set((state) => {
+      // Also scan `detail`: a selected task can slide out of the 50-row list
+      // while its snapshot (and selection) stays in memory, and it must not
+      // survive its directory's delete (评审 MEDIUM, #251).
+      const ids = new Set<string>();
+      for (const task of state.tasks) {
+        if (task.workspace === workspace) ids.add(task.id);
+      }
+      for (const task of Object.values(state.detail)) {
+        if (task.workspace === workspace) ids.add(task.id);
+      }
+      return dropTasks(state, ids);
+    }),
 
   upsertTask: (task) =>
     set((state) => {
