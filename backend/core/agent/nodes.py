@@ -71,8 +71,12 @@ def _is_tool_markup_only(text: str) -> bool:
     return bool(_TOOL_MARKUP_ONLY.fullmatch(text or ""))
 
 
-#: The one gray line G-34 allows when the plan version moves.
+#: The one gray line G-34 allows when the plan version moves. It is a protocol
+#: line, not a prefix (#236): the frontend matches the whole sentence too
+#: (``frontend/src/lib/rounds.ts``), so a model answer that merely starts with
+#: these words must not be mistaken for the note and dropped.
 _PLAN_NOTE_PREFIX = "计划已更新到"
+_PLAN_NOTE_RE = re.compile(r"^计划已更新到第 \d+ 版。$")
 
 
 def _plan_note_text(version: int) -> str:
@@ -80,9 +84,9 @@ def _plan_note_text(version: int) -> str:
 
 
 def _is_plan_note(message: Dict[str, Any]) -> bool:
-    return message.get("role") == "assistant" and str(
-        message.get("content") or ""
-    ).startswith(_PLAN_NOTE_PREFIX)
+    return message.get("role") == "assistant" and bool(
+        _PLAN_NOTE_RE.fullmatch(str(message.get("content") or "").strip())
+    )
 
 
 def _drop_plan_notes(messages: List[Dict[str, Any]]) -> None:
