@@ -33,10 +33,12 @@ export function TaskView() {
   const [rightOpen, setRightOpen] = useState(false);
   const railRef = useRef<HTMLElement>(null);
   const dashRef = useRef<HTMLElement>(null);
-  const narrowRail = useMediaQuery("(max-width: 860px)");
-  // Tailwind v4 把 `max-[1180px]:` 编译成 `width < 1180px`（不含 1180），JS 必须同界：
-  // 恰好 1180px 时 CSS 仍是宽屏、右栏可见，判成窄屏会让 visible=false 把可见面板停在
-  // 「加载中…」且不轮询。左栏 860px 的同类口径问题留 #240。
+  // Tailwind v4 把 `max-[860px]:` 编译成 `width < 860px`（不含 860），JS 必须同界：
+  // 恰好 860px 时 CSS 仍是宽屏、左栏可见，判成窄屏会让 railInert 把可见面板 `inert`。
+  // 与右栏 1179.98px 同一口径（#238 / #240）。
+  const narrowRail = useMediaQuery("(max-width: 859.98px)");
+  // 右栏：`max-[1180px]:` = `width < 1180`，同理对齐到 1179.98px；否则恰好 1180px 时
+  // visible=false 会把可见面板停在「加载中…」且不轮询（#238）。
   const narrowDash = useMediaQuery("(max-width: 1179.98px)");
   const railInert = narrowRail && !leftOpen;
   const dashInert = narrowDash && !rightOpen;
