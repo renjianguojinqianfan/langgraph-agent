@@ -1,8 +1,9 @@
 """C4: the ``qianfan`` launcher (ADR 0010).
 
-The launcher is tested at its entry seam: ``serve`` and ``open_browser`` are
-substituted, so no port is actually bound and neither uvicorn nor a browser is
-started.
+The launcher is tested at its entry seams: ``serve`` is substituted, and the
+browser side is injected through ``when_ready`` (main) or ``probe`` / ``browser``
+(_open_when_ready), so no port is actually bound and neither uvicorn nor a
+browser is started.
 """
 
 from __future__ import annotations
