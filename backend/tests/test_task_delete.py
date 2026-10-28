@@ -210,3 +210,88 @@ def test_delete_takes_the_record_before_artifact_cleanup(tmp_path, monkeypatch):
         release.set()
         worker.join(5)
     assert result["result"]["ok"] is True
+
+
+def test_delete_persist_failure_keeps_record_checkpoint_and_trace(tmp_path, monkeypatch):
+    """F1: a failed tasks.json write must not clean up the artifacts.
+
+    Before: the API answered 200 and dropped checkpoint/trace anyway; after a
+    restart the history reappeared, but the continuation data was gone. Now the
+    in-memory removal is rolled back and the request fails with 500.
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True, trace_enabled=True)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = _parked_task(tm, tmp_path / "ws")
+    trace_file = settings.trace_path / f"{task_id}.jsonl"
+    assert tm._has_checkpoint(task_id) is True
+    assert trace_file.is_file()
+
+    monkeypatch.setattr(tm.persistence, "_dump", lambda: False)
+    client = _client(tm)
+    try:
+        response = client.delete(f"/api/tasks/{task_id}")
+        assert response.status_code == 500, response.text
+        assert "could not persist" in response.json()["detail"]
+        # Assert while the client session is open: exiting TestClient shuts the
+        # manager down, which closes (and unloads) the checkpoint store.
+        assert tm.get_task(task_id) is not None
+        assert tm._has_checkpoint(task_id) is True
+    finally:
+        client.__exit__(None, None, None)
+
+    stored = json.loads((settings.data_path / "tasks.json").read_text(encoding="utf-8"))
+    assert any(item["id"] == task_id for item in stored)
+    assert trace_file.is_file()
+
+
+def test_bulk_delete_persist_failure_keeps_every_record(tmp_path, monkeypatch):
+    """F1 (bulk): a failed dump rolls back the whole batch, artifacts included."""
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    workspace = tmp_path / "ws"
+    first = _parked_task(tm, workspace, "first")
+    second = _parked_task(tm, workspace, "second")
+
+    monkeypatch.setattr(tm.persistence, "_dump", lambda: False)
+    client = _client(tm)
+    try:
+        response = client.delete("/api/tasks", params={"dir": str(workspace)})
+        assert response.status_code == 500, response.text
+        assert "could not persist" in response.json()["detail"]
+    finally:
+        client.__exit__(None, None, None)
+
+    assert tm.get_task(first) is not None
+    assert tm.get_task(second) is not None
+    stored = json.loads((settings.data_path / "tasks.json").read_text(encoding="utf-8"))
+    assert {item["id"] for item in stored} >= {first, second}
+
+
+def test_trace_cleanup_closes_recorder_before_unlink(tmp_path, monkeypatch):
+    """LOW: Windows refuses unlink while the JSONL handle is open.
+
+    The worker pops ``_threads`` before closing its trace, so delete may win
+    that window. The cleanup therefore closes the recorder first (idempotent)
+    and only then unlinks; this test pins the call order.
+    """
+    settings = make_settings(tmp_path, trace_enabled=True)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = _parked_task(tm, tmp_path / "ws")
+
+    calls = []
+
+    class FakeTrace:
+        def close(self, tid):
+            calls.append(f"close:{tid}")
+
+        def file_path(self, tid):
+            class FakePath:
+                def unlink(self, missing_ok=False):
+                    calls.append(f"unlink:{tid}")
+
+            return FakePath()
+
+    monkeypatch.setattr(tm, "_trace", FakeTrace())
+    result = tm.delete_task(task_id)
+    assert result["cleanup"]["trace"] is True
+    assert calls == [f"close:{task_id}", f"unlink:{task_id}"]

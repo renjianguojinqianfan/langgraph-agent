@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, Response
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
+from ..services.persistence import PersistenceError
 from ..services.plan_file import PlanError
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
@@ -116,6 +117,7 @@ def delete_workspace_tasks(
 
     ``dir`` is required: there is intentionally no "delete everything" spelling.
     Any live task in the directory refuses the whole batch (409, nothing deleted).
+    Background processes still owned by the deleted tasks are reaped.
     """
     if not dir.strip():
         raise HTTPException(status_code=400, detail="`dir` is required.")
@@ -125,6 +127,8 @@ def delete_workspace_tasks(
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    except PersistenceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
     return _envelope(data={"deleted": deleted})
 
 
@@ -152,6 +156,8 @@ def delete_task_history(
     (or a still-alive worker thread) is a 409. The record is removed under the
     manager lock *before* the expensive cleanup, so a continuation that loses
     the claim race finds no task instead of resurrecting a half-deleted one.
+    Background processes the task still owns are reaped during cleanup. If the
+    record cannot be persisted, nothing is cleaned up and the API answers 500.
     """
     if _tm(request).get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
@@ -161,6 +167,8 @@ def delete_task_history(
         raise HTTPException(status_code=404, detail="task not found") from None
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    except PersistenceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
     return _envelope(data=result)
 
 

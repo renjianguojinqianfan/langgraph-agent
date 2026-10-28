@@ -167,7 +167,8 @@ export function TaskRail() {
           <p className="text-body text-secondary">
             只删除「{pendingDelete?.label}」目录的全部历史记录（记录 + checkpoint
             + trace；当前列表显示 {pendingDelete?.count} 条），
-            <strong>不会删除磁盘文件</strong>；运行中的任务会让整批删除被拒绝。
+            <strong>不会删除磁盘文件</strong>；这些任务名下的后台进程会一并终止，
+            运行中的任务会让整批删除被拒绝。
           </p>
           {deleteNote && (
             <p role="alert" className="text-meta text-state-danger">

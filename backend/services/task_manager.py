@@ -741,7 +741,13 @@ class TaskManager:
         return deleted
 
     def _cleanup_task_artifacts(self, task_id: str) -> Dict[str, bool]:
-        """Best-effort checkpoint/trace removal; the record is the source of truth."""
+        """Best-effort checkpoint/trace removal; the record is the source of truth.
+
+        The trace recorder is closed before the unlink: on Windows an open JSONL
+        handle makes unlink fail, and the worker teardown pops ``_threads``
+        *before* closing the trace, so a delete in that window used to leave the
+        file behind with no retry. ``TraceRecorder.close`` is idempotent.
+        """
         self.kill_background(task_id)
         checkpoint_removed = False
         if self._checkpointer is not None:
@@ -752,6 +758,10 @@ class TaskManager:
                 logger.exception("checkpoint cleanup failed for %s", task_id)
         trace_removed = False
         if self._trace is not None:
+            try:
+                self._trace.close(task_id)
+            except OSError:
+                logger.warning("trace close failed for %s", task_id, exc_info=True)
             try:
                 self._trace.file_path(task_id).unlink(missing_ok=True)
                 trace_removed = True

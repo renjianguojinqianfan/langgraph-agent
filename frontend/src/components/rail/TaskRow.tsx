@@ -81,15 +81,15 @@ export function TaskRow({ task, selected, showWorkspace, onSelect }: TaskRowProp
           size="sm"
           icon="trash"
           aria-label={`删除任务：${title}`}
-          title="删除历史（不动磁盘文件）"
+          title="删除历史（终止后台进程，不动磁盘文件）"
           onClick={() => setArmed(true)}
           className="mt-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-visible:opacity-100"
         />
       </div>
       {armed && (
         <div className="mx-1 mt-1 flex items-center gap-2 rounded-control border border-rule bg-surface-well px-2 py-1">
-          <span className="min-w-0 flex-1 truncate text-meta text-secondary">
-            只删历史记录？
+          <span className="min-w-0 flex-1 text-meta leading-snug text-secondary">
+            删除历史，并终止该任务的后台进程？
           </span>
           <Button size="sm" variant="danger" onClick={remove} disabled={busy}>
             {busy ? "删除中…" : "删除"}
