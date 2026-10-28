@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.main import app
-from backend.services.model_store import ModelStore
+from backend.services.model_store import CredentialsError, ModelStore
 from backend.tests.conftest import make_manager, make_settings
 
 SENTINEL = "model-key-sentinel-do-not-leak"
@@ -575,5 +575,58 @@ def test_unknown_model_on_task_create_is_rejected(tmp_path):
     try:
         r = client.post("/api/tasks", json={"input": "hi", "model": "nope"})
         assert r.status_code == 400
+    finally:
+        client.__exit__(None, None, None)
+
+
+# ── #244: a locked-down credentials directory is a readable 4xx, not a 500 ──
+def _deny_credentials_write(monkeypatch):
+    import backend.services.model_store as model_store_module
+
+    def deny(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(model_store_module.os, "open", deny)
+
+
+def test_credentials_write_failure_is_readable_and_keeps_the_profile(tmp_path, monkeypatch):
+    store, _ = _store(tmp_path)
+    second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
+    store.set_key(second.id, SENTINEL)
+
+    _deny_credentials_write(monkeypatch)
+
+    with pytest.raises(CredentialsError) as excinfo:
+        store.set_key(second.id, "sk-new")
+    message = str(excinfo.value)
+    assert str(store.credentials_file) in message
+    assert "environment variable" in message
+    # The failed write left the previous pasted key intact.
+    assert store.key_for(second.id) == SENTINEL
+
+    # Revoking a key is part of deleting a profile; failing to revoke must not
+    # drop the profile (which would leave an orphaned secret on disk).
+    with pytest.raises(CredentialsError):
+        store.delete(second.id)
+    assert store.get(second.id) is not None
+
+
+def test_key_write_failure_returns_409_with_reason(tmp_path, monkeypatch):
+    client, tm = _client(tmp_path, None)
+    try:
+        created = client.post(
+            "/api/models",
+            json={"name": "Temp", "base_url": "https://example.test/v1", "model": "m1"},
+        )
+        model_id = created.json()["data"]["id"]
+
+        _deny_credentials_write(monkeypatch)
+
+        response = client.put(f"/api/models/{model_id}/key", json={"key": "sk-test"})
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert str(tm.models.credentials_file) in detail
+        assert "environment variable" in detail
+        assert tm.models.get(model_id) is not None
     finally:
         client.__exit__(None, None, None)

@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, Response
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
+from ..services.model_store import CredentialsError
 from ..services.plan_file import PlanError
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
@@ -215,6 +216,8 @@ def delete_model(
         _tm(request).delete_model_profile(model_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
+    except CredentialsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data={"ok": True})
@@ -245,6 +248,8 @@ def set_model_key(
         _tm(request).set_model_key(model_id, payload.key)
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
+    except CredentialsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     store = _tm(request).models
     return _envelope(
         data={

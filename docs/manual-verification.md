@@ -71,5 +71,5 @@
 > 场景 6 的交接步骤在 2026-10-22（#180 F1 修复后）用真实 CLI 复跑：第二进程在退出前同步调用浏览器，URL 落在 `docs/assets/verification/2026-10-22/scenario6-handoff.json`。
 > 场景 8 原命令只回显随机标记而非 PID；时间戳与心跳数据在 JSON 里，表格如实记为「部分」。
 > 2026-10-27 轮次（新版界面）：本机 Git Bash 被安全软件拦截（`msys-2.0 … NtCreateDirectoryObject … 0xC0000022`），`bash` 调用失败，停止时记为 `skipped`；场景 3 的停止-续说判据不依赖 bash 成功执行，场景 7 的孤儿任务在首步前被杀、续跑沿用轮首 checkpoint。UI 面（停止、续说、任务头状态、SSE 重连）均按判据通过。
-> B1 轮次的坏 Key 用环境变量注入（`B1_BAD_KEY`）：本机 `~/.qianfan/credentials.json.tmp` 写入被 ACL 拒绝，界面「粘贴 Key」会报「保存 Key 失败」——这是本机权限限制，不改变 B1 的失败-续说判据。
+> B1 轮次的坏 Key 用环境变量注入（`B1_BAD_KEY`）：本机 `~/.qianfan/credentials.json.tmp` 写入被**进程权限边界**拒绝——沙箱外写同一目录成功、目录 ACL 实测正常（owner FullControl），因此这是「受限进程/沙箱」而不是 ACL 损坏（归因已于 #244 更正）。qianfan 侧现在把该失败转成 4xx + 可读原因；这不改变 B1 的失败-续说判据。
 > 场景 6 的 A/B 工作区建在 `.qoder/tmp/qa2026-*`（仓库内、gitignored）；文件落点用文件系统核对——W3 忽略规则下工作区文件面不会列出被 ignore 的路径。
