@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { apiErrorText, validateWorkspace } from "../../api/client";
 import { basename } from "../../lib/format";
+import { createRequestGate } from "../../lib/requestGate";
 import { readRecentWorkspaces, rememberWorkspace } from "../../lib/workspaces";
 import { useTaskStore } from "../../store/taskStore";
 import { FormField } from "../settings/FormField";
@@ -25,12 +26,23 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
   const [recent, setRecent] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  // #250: a validation answer that arrives after the dialog closed must be
+  // dropped instead of switching the workspace behind the user's cancel.
+  const gate = useRef(createRequestGate());
+
+  const close = () => {
+    gate.current.invalidate();
+    dialogRef.current?.close();
+  };
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (open && !dialog.open) dialog.showModal();
-    else if (!open && dialog.open) dialog.close();
+    else if (!open && dialog.open) {
+      gate.current.invalidate();
+      dialog.close();
+    }
   }, [open]);
 
   // Fresh state on every open; the current directory may have changed meanwhile.
@@ -46,10 +58,12 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
     event?.preventDefault();
     const target = draft.trim();
     if (!target || busy) return;
+    const token = gate.current.begin();
     setBusy(true);
     setNote("");
     try {
       const response = await validateWorkspace(target);
+      if (!gate.current.isCurrent(token)) return;
       const path = response.data?.path;
       if (!path) {
         setNote(apiErrorText(response));
@@ -57,11 +71,13 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
       }
       setRecent(rememberWorkspace(path));
       switchWorkspace(path);
-      dialogRef.current?.close();
+      close();
     } catch {
+      if (!gate.current.isCurrent(token)) return;
       setNote("无法连接后台；确认 qianfan 在运行。");
     } finally {
-      setBusy(false);
+      // A stale request must not clear the busy flag of a newer one.
+      if (gate.current.isCurrent(token)) setBusy(false);
     }
   };
 
@@ -69,9 +85,12 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
     <dialog
       ref={dialogRef}
       aria-labelledby="workspace-dialog-title"
-      onClose={onClose}
+      onClose={() => {
+        gate.current.invalidate();
+        onClose();
+      }}
       onClick={(event) => {
-        if (event.target === dialogRef.current) dialogRef.current?.close();
+        if (event.target === dialogRef.current) close();
       }}
       className="m-auto w-[min(560px,calc(100vw-2rem))] rounded-dialog border border-rule bg-surface-column p-0 text-primary backdrop:bg-surface-page/80"
     >
@@ -83,7 +102,7 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
           <IconButton
             icon="close"
             aria-label="关闭工作区选择"
-            onClick={() => dialogRef.current?.close()}
+            onClick={close}
           />
         </header>
 
@@ -125,7 +144,7 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-rule px-5 py-3">
-          <Button size="sm" onClick={() => dialogRef.current?.close()}>
+          <Button size="sm" onClick={close}>
             取消
           </Button>
           <Button
