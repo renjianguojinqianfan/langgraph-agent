@@ -702,34 +702,43 @@ class TaskManager:
     def delete_task(self, task_id: str) -> Dict[str, Any]:
         """Delete one task's history; never touches the workspace files.
 
-        A live task is refused (status or a running worker thread): its worker
-        would keep writing checkpoints/trace after the record disappeared.
+        The live check and the record removal share ``self._lock`` with the
+        resume()/continue() claim: a concurrent continuation either wins the
+        lock first (we then see RUNNING and 409) or losses it and re-loads a
+        missing record (it 409s). The worker can therefore never start after
+        the record is gone and "resurrect" a deleted task.
         """
-        task = self.persistence.load_task(task_id)
-        if task is None:
-            raise KeyError(task_id)
-        if self._task_is_live(task_id, task):
-            raise RuntimeError(f"task {task_id} is still running; stop it first")
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if self._task_is_live(task_id, task):
+                raise RuntimeError(f"task {task_id} is still running; stop it first")
+            # Remove the record before any irreversible cleanup: the UI is
+            # consistent as soon as this returns, and the loser of a claim race
+            # can no longer find a task to start.
+            self.persistence.delete_task(task_id)
         cleanup = self._cleanup_task_artifacts(task_id)
-        self.persistence.delete_task(task_id)
         return {"ok": True, "cleanup": cleanup}
 
     def delete_workspace_tasks(self, workspace: str) -> int:
         """Delete every task record under one workspace; disk files stay."""
         target = workspace_key(workspace)
-        tasks = [
-            task
-            for task in self.persistence.list_all()
-            if workspace_key(task.workspace) == target
-        ]
-        live = [task.id for task in tasks if self._task_is_live(task.id, task)]
-        if live:
-            raise RuntimeError(
-                f"{len(live)} task(s) in {workspace} are still running; stop them first"
-            )
+        with self._lock:
+            tasks = [
+                task
+                for task in self.persistence.list_all()
+                if workspace_key(task.workspace) == target
+            ]
+            live = [task.id for task in tasks if self._task_is_live(task.id, task)]
+            if live:
+                raise RuntimeError(
+                    f"{len(live)} task(s) in {workspace} are still running; stop them first"
+                )
+            deleted = self.persistence.delete_tasks([task.id for task in tasks])
         for task in tasks:
             self._cleanup_task_artifacts(task.id)
-        return self.persistence.delete_tasks([task.id for task in tasks])
+        return deleted
 
     def _cleanup_task_artifacts(self, task_id: str) -> Dict[str, bool]:
         """Best-effort checkpoint/trace removal; the record is the source of truth."""

@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.schemas import TaskStatus
@@ -174,3 +175,38 @@ def test_bulk_delete_requires_a_local_directory(tmp_path):
         assert "local path" in unc.json()["detail"]
     finally:
         client.__exit__(None, None, None)
+
+
+def test_delete_takes_the_record_before_artifact_cleanup(tmp_path, monkeypatch):
+    """F1: a continuation racing the delete must not find a task to start.
+
+    The record is removed under the manager lock *before* the expensive
+    checkpoint/trace cleanup; a caller that loses the claim race sees "not
+    found" instead of starting a worker that would resurrect the history.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = _parked_task(tm, tmp_path / "ws")
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_cleanup = tm._cleanup_task_artifacts
+
+    def slow_cleanup(cleaned_id):
+        entered.set()
+        release.wait(5)
+        return real_cleanup(cleaned_id)
+
+    monkeypatch.setattr(tm, "_cleanup_task_artifacts", slow_cleanup)
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault("result", tm.delete_task(task_id)))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(RuntimeError, match="not found"):
+            tm.send_message(task_id, "continue")
+        assert tm.get_task(task_id) is None
+    finally:
+        release.set()
+        worker.join(5)
+    assert result["result"]["ok"] is True

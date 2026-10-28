@@ -36,6 +36,13 @@ export function TaskRail() {
 
   const visible = filterByQuery(tasks, query);
   const groups = railGroups(visible, filter);
+  // Count from the unfiltered list: the dialog describes the whole directory,
+  // not just the rows the search box currently shows (F2).
+  const directoryCounts = new Map<string, number>();
+  for (const task of tasks) {
+    const workspace = task.workspace.trim();
+    directoryCounts.set(workspace, (directoryCounts.get(workspace) ?? 0) + 1);
+  }
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -119,7 +126,8 @@ export function TaskRail() {
                       armDirectoryDelete(
                         group.workspace,
                         group.label,
-                        group.tasks.length
+                        directoryCounts.get(group.workspace.trim()) ??
+                          group.tasks.length
                       )
                     }
                   />
@@ -157,9 +165,9 @@ export function TaskRail() {
             删除目录历史
           </h2>
           <p className="text-body text-secondary">
-            只删除「{pendingDelete?.label}」的 {pendingDelete?.count} 条任务历史
-            （记录 + checkpoint + trace），<strong>不会删除磁盘文件</strong>；
-            运行中的任务会让整批删除被拒绝。
+            只删除「{pendingDelete?.label}」目录的全部历史记录（记录 + checkpoint
+            + trace；当前列表显示 {pendingDelete?.count} 条），
+            <strong>不会删除磁盘文件</strong>；运行中的任务会让整批删除被拒绝。
           </p>
           {deleteNote && (
             <p role="alert" className="text-meta text-state-danger">
