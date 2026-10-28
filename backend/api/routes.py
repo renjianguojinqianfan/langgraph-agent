@@ -22,6 +22,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
+from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
@@ -105,6 +106,31 @@ def list_tasks(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
     return _envelope(data={"tasks": [t.model_dump(mode="json") for t in tasks]})
+
+
+@router.get("/workspaces/validate")
+def validate_workspace_path(
+    path: str = "",
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Resolve a directory for the page's workspace switcher (#242).
+
+    Read-only: no listing, no creation. The same normalization the task layer
+    uses rejects UNC / device / NUL paths before any filesystem call, and the
+    caller gets the canonical spelling back so the URL stays shareable.
+    """
+    if not path.strip():
+        raise HTTPException(status_code=400, detail="`path` is required.")
+    try:
+        normalized = normalize_workspace(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    target = Path(normalized)
+    if not target.exists():
+        raise HTTPException(status_code=400, detail=f"directory does not exist: {normalized}")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"not a directory: {normalized}")
+    return _envelope(data={"path": normalized})
 
 
 @router.delete("/tasks")

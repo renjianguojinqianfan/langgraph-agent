@@ -6,15 +6,17 @@ interface FormFieldProps {
   value: string;
   placeholder: string;
   onChange: (value: string) => void;
+  autoFocus?: boolean;
 }
 
-/** Labelled text input for the model form (design §6: every control has a name). */
+/** Labelled text input for forms (design §6: every control has a name). */
 export function FormField({
   label,
   name,
   value,
   placeholder,
   onChange,
+  autoFocus = false,
 }: FormFieldProps) {
   const id = useId();
   return (
@@ -30,6 +32,7 @@ export function FormField({
         name={name}
         type="text"
         autoComplete="off"
+        autoFocus={autoFocus}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}

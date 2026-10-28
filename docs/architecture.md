@@ -38,7 +38,7 @@ backend/
 ├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
 ├── server_lock.py       单实例锁（一台机器只允许一个后台）
 ├── api/
-│   ├── routes.py        24 条 REST 路由（§3.3）；统一 {code,data,message} 信封
+│   ├── routes.py        27 条 REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
 │   ├── sse.py           SSE 流组装（15s heartbeat）
 ├── core/
@@ -138,6 +138,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
 | POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
+| GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
 | DELETE | `/api/tasks` | 删除某目录下全部任务历史（#241；`dir` 必填，不提供「全部」） | `?dir=<路径>` | `{deleted}`；400 / 任一运行中 → 409（不删）/ 落盘失败 → 500（整批回滚） |
 | DELETE | `/api/tasks/{id}` | 删除任务历史：记录 + checkpoint + trace（不改磁盘文件；任务名下后台进程一并终止，#241） | — | `{ok, cleanup:{checkpoint,trace}}`；404 / 运行中 → 409 / 落盘失败 → 500（不清理） |
 | GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |

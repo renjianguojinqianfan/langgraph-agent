@@ -12,7 +12,6 @@ import { isParked, isStoppable } from "../../lib/taskState";
 import { profileName, useModelStore } from "../../store/modelStore";
 import { useTaskStore } from "../../store/taskStore";
 import { TaskMode } from "../../types";
-import { currentDir } from "../../workspace";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Segmented } from "../ui/Segmented";
@@ -41,6 +40,7 @@ export function Composer() {
   );
   const setCurrent = useTaskStore((s) => s.setCurrentTask);
   const upsert = useTaskStore((s) => s.upsertTask);
+  const workspaceDir = useTaskStore((s) => s.workspaceDir);
   const models = useModelStore((s) => s.models);
   const defaultModelId = useModelStore((s) => s.defaultId);
 
@@ -130,7 +130,7 @@ export function Composer() {
         const res = await createTask({
           input,
           mode: draftMode,
-          workspace: currentDir() ?? undefined,
+          workspace: workspaceDir || undefined,
           model: draftModel || defaultModelId || undefined,
         });
         const id = res.data?.task_id;
