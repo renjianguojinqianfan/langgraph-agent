@@ -138,6 +138,8 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
 | POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
+| DELETE | `/api/tasks` | 删除某目录下全部任务历史（#241；`dir` 必填，不提供「全部」） | `?dir=<路径>` | `{deleted}`；400 / 任一运行中 → 409（不删） |
+| DELETE | `/api/tasks/{id}` | 删除任务历史：记录 + checkpoint + trace（不改磁盘文件，#241） | — | `{ok, cleanup:{checkpoint,trace}}`；404 / 运行中 → 409 |
 | GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |
 | POST | `/api/tasks/{id}/stop` | 停止任务 | — | `{ok, status}` |
 | POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 |

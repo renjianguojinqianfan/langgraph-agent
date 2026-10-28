@@ -131,3 +131,21 @@ class Persistence:
         with self._lock:
             return sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
 
+    # ── deletion (#241): history only, never the workspace files ──
+    def delete_task(self, task_id: str) -> bool:
+        with self._lock:
+            removed = self._tasks.pop(task_id, None) is not None
+            if removed:
+                self._dump()
+            return removed
+
+    def delete_tasks(self, task_ids: List[str]) -> int:
+        with self._lock:
+            removed = 0
+            for task_id in task_ids:
+                if self._tasks.pop(task_id, None) is not None:
+                    removed += 1
+            if removed:
+                self._dump()
+            return removed
+

@@ -22,12 +22,39 @@ interface TaskState {
   setTasks: (tasks: Task[]) => void;
   setSettingsOpen: (open: boolean) => void;
   setCurrentTask: (id: string | null) => void;
+  /** #241: drop a deleted task from lists/detail/caches. */
+  removeTask: (id: string) => void;
+  /** #241: drop every task of one workspace after a directory delete. */
+  removeWorkspaceTasks: (workspace: string) => void;
   upsertTask: (task: Task) => void;
   /** #189: merge a refetched snapshot's status fields into the live detail. */
   mergeTaskStatus: (snapshot: Task) => void;
   applyEvent: (ev: SSEvent) => void;
   setHistoryFilter: (filter: "current" | "all") => void;
   setListError: (message: string) => void;
+}
+
+/** Remove ids from every per-task cache; clear the selection if it was removed. */
+function dropTasks(state: TaskState, ids: Set<string>): Partial<TaskState> {
+  const detail = { ...state.detail };
+  const eventsByTask = { ...state.eventsByTask };
+  const markers = { ...state.markers };
+  for (const id of ids) {
+    delete detail[id];
+    delete eventsByTask[id];
+    delete markers[id];
+  }
+  return {
+    tasks: state.tasks.filter((task) => !ids.has(task.id)),
+    detail,
+    eventsByTask,
+    markers,
+    currentTaskId:
+      state.currentTaskId && ids.has(state.currentTaskId)
+        ? null
+        : state.currentTaskId,
+    listRevision: state.listRevision + 1,
+  };
 }
 
 export const useTaskStore = create<TaskState>((set) => ({
@@ -47,6 +74,20 @@ export const useTaskStore = create<TaskState>((set) => ({
   setListError: (listError) => set({ listError }),
 
   setCurrentTask: (id) => set({ currentTaskId: id }),
+
+  removeTask: (id) => set((state) => dropTasks(state, new Set([id]))),
+
+  removeWorkspaceTasks: (workspace) =>
+    set((state) =>
+      dropTasks(
+        state,
+        new Set(
+          state.tasks
+            .filter((task) => task.workspace === workspace)
+            .map((task) => task.id)
+        )
+      )
+    ),
 
   upsertTask: (task) =>
     set((state) => {

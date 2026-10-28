@@ -106,6 +106,28 @@ def list_tasks(
     return _envelope(data={"tasks": [t.model_dump(mode="json") for t in tasks]})
 
 
+@router.delete("/tasks")
+def delete_workspace_tasks(
+    request: Request,
+    dir: str = "",
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Delete one workspace's task history (#241); never touches disk files.
+
+    ``dir`` is required: there is intentionally no "delete everything" spelling.
+    Any live task in the directory refuses the whole batch (409, nothing deleted).
+    """
+    if not dir.strip():
+        raise HTTPException(status_code=400, detail="`dir` is required.")
+    try:
+        deleted = _tm(request).delete_workspace_tasks(dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _envelope(data={"deleted": deleted})
+
+
 @router.get("/tasks/{task_id}")
 def get_task(
     task_id: str,
@@ -116,6 +138,29 @@ def get_task(
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     return _envelope(data=task.model_dump(mode="json"))
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task_history(
+    task_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Delete one task's history + checkpoint + trace (#241).
+
+    The worker of a live task keeps writing those artifacts, so PENDING/RUNNING
+    (or a still-alive worker thread) is a 409; the record is removed last, so a
+    partial artifact cleanup never leaves the UI pointing at a deleted task.
+    """
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).delete_task(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="task not found") from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _envelope(data=result)
 
 
 @router.post("/tasks/{task_id}/stop")
