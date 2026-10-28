@@ -10,6 +10,7 @@ settings the module-level app actually uses.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 from backend.config import PROJECT_ROOT, get_settings
@@ -40,6 +41,19 @@ def test_default_runtime_paths_are_outside_the_checkout():
         settings.checkpoint_path,
     ):
         assert not _is_within(path, PROJECT_ROOT), f"{path} points into the checkout"
+
+
+def test_checkpoint_path_follows_the_test_root():
+    root = Path(os.environ["QIANFAN_TEST_DATA_ROOT"])
+    assert _is_within(get_settings().checkpoint_path, root)
+
+
+def test_pytest_tmp_and_tempfile_fallback_stay_outside_the_checkout(tmp_path):
+    """pytest's own basetemp must not land in the checkout when OS temp is denied."""
+    root = Path(os.environ["QIANFAN_TEST_DATA_ROOT"])
+    assert not _is_within(tmp_path, PROJECT_ROOT)
+    assert _is_within(tmp_path, root)
+    assert _is_within(Path(tempfile.gettempdir()), root)
 
 
 def test_module_level_app_lifespan_uses_isolated_paths():

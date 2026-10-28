@@ -27,6 +27,25 @@ from typing import Any, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+
+def _snapshot_tree(root: Path) -> dict[str, tuple[str, int, int]]:
+    """Content + mtime snapshot of a directory tree (dirs included)."""
+    if not root.is_dir():
+        return {}
+    snapshot: dict[str, tuple[str, int, int]] = {}
+    for path in root.rglob("*"):
+        stat = path.stat()
+        snapshot[path.relative_to(root).as_posix()] = (
+            "dir" if path.is_dir() else "file",
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
+    return snapshot
+
+
+# #252 AC1: taken before any backend import, so collection-time writes count too.
+_REPO_DATA_AT_START = _snapshot_tree(_PROJECT_ROOT / "data")
+
 # ── Throwaway runtime directories (MUST run before any `backend.config` import) ──
 # ``backend.main`` builds a module-level app whose lifespan enters the
 # production TaskManager; tests use that app directly. Relative paths resolve
@@ -76,7 +95,17 @@ if _TEST_RUNTIME_ROOT is None:
 os.environ["DATA_DIR"] = str(_TEST_RUNTIME_ROOT / "data")
 os.environ["ARTIFACTS_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "artifacts")
 os.environ["TRACE_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "traces")
+# A developer's absolute CHECKPOINT_DIR must not let the module-level lifespan
+# stamp a real store during the suite (#252 residual gap). CHECKPOINT_ENABLED
+# keeps its setdefault semantics: a shell that turns it on mounts the throwaway
+# store below, never the developer's.
+os.environ["CHECKPOINT_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "checkpoints")
 os.environ["QIANFAN_TEST_DATA_ROOT"] = str(_TEST_RUNTIME_ROOT)
+# pytest derives its ``tmp_path`` base from ``tempfile.gettempdir()``. A sandbox
+# that denies writes under OS temp makes Python fall back to the CWD (the
+# checkout), leaving ``pytest-of-*`` in the repository. Pin the fallback to the
+# throwaway root so every fixture temp dir stays outside the checkout too.
+tempfile.tempdir = str(_TEST_RUNTIME_ROOT)
 atexit.register(shutil.rmtree, _TEST_RUNTIME_ROOT, ignore_errors=True)
 
 # ── Offline isolation (MUST run before any `backend.config` import) ──
@@ -154,6 +183,28 @@ def _capture_request(request):
     token = _current_request.set(request)
     yield
     _current_request.reset(token)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _guard_repo_data_untouched():
+    """#252 AC1: the whole session leaves the checkout's ``data/`` intact.
+
+    Per-test tmp_path isolation is covered elsewhere; this session-level guard
+    catches the aggregate case — any file or directory the suite creates, edits
+    or deletes under the checkout's data/ between collection and the last test.
+    """
+    yield
+    after = _snapshot_tree(_PROJECT_ROOT / "data")
+    changed = sorted(
+        name
+        for name in set(_REPO_DATA_AT_START) | set(after)
+        if _REPO_DATA_AT_START.get(name) != after.get(name)
+    )
+    assert not changed, (
+        "the test session modified the checkout's data/: "
+        + ", ".join(changed[:20])
+        + (" ..." if len(changed) > 20 else "")
+    )
 
 
 def make_settings(tmp_path: Path, **overrides) -> Settings:

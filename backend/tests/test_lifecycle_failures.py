@@ -83,6 +83,9 @@ def test_checkpoint_dir_that_is_a_file_degrades(tmp_path):
     tm = make_manager(settings, MockLLMClient())
 
     assert tm._checkpointer is None
+    assert tm.checkpoint_degraded_reason is not None
+    assert str(blocker) in tm.checkpoint_degraded_reason
+    assert "do NOT delete snapshots" in tm.checkpoint_degraded_reason
 
 
 def test_checkpoint_connect_failure_degrades(tmp_path, monkeypatch):
@@ -99,6 +102,33 @@ def test_checkpoint_connect_failure_degrades(tmp_path, monkeypatch):
     tm = make_manager(settings, MockLLMClient())
 
     assert tm._checkpointer is None
+    assert "could not be opened" in (tm.checkpoint_degraded_reason or "")
+
+
+def test_resume_and_continue_report_the_checkpoint_degradation(tmp_path):
+    """#253 AC2: the 409 quotes the startup cause, not a contradictory hint."""
+    blocker = tmp_path / "checkpoint-file"
+    blocker.write_text("not a directory", encoding="utf-8")
+    settings = make_settings(
+        tmp_path, checkpoint_enabled=True, checkpoint_dir=str(blocker)
+    )
+    _parked_task(settings)
+    tm = make_manager(settings, MockLLMClient())
+
+    with pytest.raises(RuntimeError, match="checkpointing is degraded"):
+        tm.resume("t-parked")
+    with pytest.raises(RuntimeError, match="checkpointing is degraded"):
+        tm.send_message("t-parked", "next")
+
+
+def test_resume_without_checkpoint_keeps_the_generic_remedy(tmp_path):
+    settings = make_settings(tmp_path)  # checkpointing switched off
+    _parked_task(settings)
+    tm = make_manager(settings, MockLLMClient())
+
+    with pytest.raises(RuntimeError, match="checkpoints disabled"):
+        tm.resume("t-parked")
+    assert tm.checkpoint_degraded_reason is None
 
 
 def test_shutdown_keeps_connection_when_worker_is_alive(tmp_path):
@@ -106,11 +136,27 @@ def test_shutdown_keeps_connection_when_worker_is_alive(tmp_path):
     conn = _Conn()
     tm._checkpoint_conn = conn
     tm._threads["t-live"] = _AliveThread()
+    tm._known_secrets.add("sk-live")
+    tm._round_models["t-live"] = ("profile", object())
 
     tm.shutdown()
 
     assert conn.closed is False
     assert tm._checkpoint_conn is conn
+    # Credential hygiene must not be skipped by the early return.
+    assert tm._known_secrets == set()
+    assert tm._round_models == {}
+
+
+def test_shutdown_clears_secrets_without_a_checkpoint_connection(tmp_path):
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    tm._known_secrets.add("sk-idle")
+    tm._round_models["t-idle"] = ("profile", object())
+
+    tm.shutdown()
+
+    assert tm._known_secrets == set()
+    assert tm._round_models == {}
 
 
 def test_shutdown_closes_connection_when_idle(tmp_path):
