@@ -269,6 +269,14 @@ class ModelStore:
                 tmp.unlink(missing_ok=True)
             except OSError:  # pragma: no cover - defensive
                 pass
+            # AC (#244): the reason must also reach the log, not only the HTTP
+            # detail — a 4xx without a server-side trace is still hard to debug.
+            logger.warning(
+                "credentials write failed for %s: %s",
+                self.credentials_file,
+                exc,
+                exc_info=True,
+            )
             raise CredentialsError(
                 f"cannot write credentials file {self.credentials_file}: "
                 f"{exc.strerror or exc}. Grant this process write access to the "

@@ -589,18 +589,24 @@ def _deny_credentials_write(monkeypatch):
     monkeypatch.setattr(model_store_module.os, "open", deny)
 
 
-def test_credentials_write_failure_is_readable_and_keeps_the_profile(tmp_path, monkeypatch):
+def test_credentials_write_failure_is_readable_and_keeps_the_profile(
+    tmp_path, monkeypatch, caplog
+):
     store, _ = _store(tmp_path)
     second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
     store.set_key(second.id, SENTINEL)
 
     _deny_credentials_write(monkeypatch)
 
-    with pytest.raises(CredentialsError) as excinfo:
-        store.set_key(second.id, "sk-new")
+    with caplog.at_level("WARNING"):
+        with pytest.raises(CredentialsError) as excinfo:
+            store.set_key(second.id, "sk-new")
     message = str(excinfo.value)
     assert str(store.credentials_file) in message
     assert "environment variable" in message
+    # AC (#244): the detail reaches the log as well as the HTTP response.
+    assert "credentials write failed" in caplog.text
+    assert str(store.credentials_file) in caplog.text
     # The failed write left the previous pasted key intact.
     assert store.key_for(second.id) == SENTINEL
 
