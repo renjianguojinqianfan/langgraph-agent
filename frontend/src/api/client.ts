@@ -84,6 +84,19 @@ export const validateWorkspace = (path: string) =>
 
 export const getTask = (id: string) => req<Task>(`/tasks/${id}`);
 
+/** #241: delete one task's history (record + checkpoint + trace; disk stays). */
+export const deleteTask = (id: string) =>
+  req<{ ok: boolean; cleanup: { checkpoint: boolean; trace: boolean } }>(
+    `/tasks/${id}`,
+    { method: "DELETE" }
+  );
+
+/** #241: delete one directory's history; `dir` is required (no "all"). */
+export const deleteWorkspaceTasks = (dir: string) =>
+  req<{ deleted: number }>(`/tasks?dir=${encodeURIComponent(dir)}`, {
+    method: "DELETE",
+  });
+
 export const stopTask = (id: string) =>
   req<{ ok: boolean; status: string }>(`/tasks/${id}/stop`, { method: "POST" });
 

@@ -54,5 +54,11 @@ class EventBus:
         with self._lock:
             return self._snapshot_locked(task_id)
 
+    def drop(self, task_id: str) -> None:
+        """Forget a deleted task's subscribers and replay buffer (#241)."""
+        with self._lock:
+            self._subs.pop(task_id, None)
+            self._buffers.pop(task_id, None)
+
     def _snapshot_locked(self, task_id: str) -> List[Event]:
         return list(self._buffers[task_id])

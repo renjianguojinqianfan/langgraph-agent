@@ -27,6 +27,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class PersistenceError(OSError):
+    """A mutation could not be written to tasks.json and was rolled back."""
+
+
 class Persistence:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -78,8 +82,10 @@ class Persistence:
             else:
                 return  # file moved away; do not fall through to re-read it
 
-    def _dump(self) -> None:
+    def _dump(self) -> bool:
         # Atomic replace so a crash mid-write can never tear tasks.json.
+        # Returns False when the disk was left untouched, so callers whose
+        # success promise depends on durability (deletion) can roll back.
         tmp_file = self._tasks_file.with_suffix(".json.tmp")
         try:
             data = [
@@ -101,6 +107,8 @@ class Persistence:
                 tmp_file.unlink(missing_ok=True)
             except OSError:
                 pass
+            return False
+        return True
 
     # ── tasks ──
     def save_task(self, task: Task) -> None:
@@ -130,4 +138,34 @@ class Persistence:
         """
         with self._lock:
             return sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True)
+
+    # ── deletion (#241): history only, never the workspace files ──
+    def _delete_locked(self, task_ids: List[str]) -> int:
+        """Remove records and persist; roll the memory back if the dump fails.
+
+        Callers must hold ``self._lock``. A deletion is only reported as done
+        when the disk agrees: otherwise the record would reappear after a
+        restart while its checkpoint/trace had already been cleaned up.
+        """
+        removed = {
+            task_id: self._tasks.pop(task_id)
+            for task_id in task_ids
+            if task_id in self._tasks
+        }
+        if not removed:
+            return 0
+        if not self._dump():
+            self._tasks.update(removed)
+            raise PersistenceError(
+                "could not persist the history deletion; tasks.json was left unchanged"
+            )
+        return len(removed)
+
+    def delete_task(self, task_id: str) -> bool:
+        with self._lock:
+            return self._delete_locked([task_id]) == 1
+
+    def delete_tasks(self, task_ids: List[str]) -> int:
+        with self._lock:
+            return self._delete_locked(task_ids)
 

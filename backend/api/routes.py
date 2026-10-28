@@ -27,6 +27,7 @@ from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
 from ..services.model_store import CredentialsError
+from ..services.persistence import PersistenceError
 from ..services.plan_file import PlanError
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
@@ -133,6 +134,31 @@ def validate_workspace_path(
     return _envelope(data={"path": normalized})
 
 
+@router.delete("/tasks")
+def delete_workspace_tasks(
+    request: Request,
+    dir: str = "",
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Delete one workspace's task history (#241); never touches disk files.
+
+    ``dir`` is required: there is intentionally no "delete everything" spelling.
+    Any live task in the directory refuses the whole batch (409, nothing deleted).
+    Background processes still owned by the deleted tasks are reaped.
+    """
+    if not dir.strip():
+        raise HTTPException(status_code=400, detail="`dir` is required.")
+    try:
+        deleted = _tm(request).delete_workspace_tasks(dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except PersistenceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return _envelope(data={"deleted": deleted})
+
+
 @router.get("/tasks/{task_id}")
 def get_task(
     task_id: str,
@@ -143,6 +169,34 @@ def get_task(
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     return _envelope(data=task.model_dump(mode="json"))
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task_history(
+    task_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Delete one task's history + checkpoint + trace (#241).
+
+    The worker of a live task keeps writing those artifacts, so PENDING/RUNNING
+    (or a still-alive worker thread) is a 409. The record is removed under the
+    manager lock *before* the expensive cleanup, so a continuation that loses
+    the claim race finds no task instead of resurrecting a half-deleted one.
+    Background processes the task still owns are reaped during cleanup. If the
+    record cannot be persisted, nothing is cleaned up and the API answers 500.
+    """
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = _tm(request).delete_task(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="task not found") from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except PersistenceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return _envelope(data=result)
 
 
 @router.post("/tasks/{task_id}/stop")

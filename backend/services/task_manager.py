@@ -39,6 +39,7 @@ from ..core.runtime_context import (
     normalize_workspace,
     reset_runtime_context,
     set_runtime_context,
+    workspace_key,
 )
 from ..core.tools.base import BaseTool
 from ..core.tools.bash import BashTool
@@ -689,6 +690,91 @@ class TaskManager:
 
     def list_all_tasks(self, limit: int = 50) -> List[Task]:
         return self.persistence.list_tasks(limit)
+
+    # ── delete history (#241) ──
+    def _task_is_live(self, task_id: str, task: Task) -> bool:
+        """Status alone is not enough: stop() flips the record while unwinding."""
+        if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+            return True
+        thread = self._threads.get(task_id)
+        return thread is not None and thread.is_alive()
+
+    def delete_task(self, task_id: str) -> Dict[str, Any]:
+        """Delete one task's history; never touches the workspace files.
+
+        The live check and the record removal share ``self._lock`` with the
+        resume()/continue() claim: a concurrent continuation either wins the
+        lock first (we then see RUNNING and 409) or losses it and re-loads a
+        missing record (it 409s). The worker can therefore never start after
+        the record is gone and "resurrect" a deleted task.
+        """
+        with self._lock:
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if self._task_is_live(task_id, task):
+                raise RuntimeError(f"task {task_id} is still running; stop it first")
+            # Remove the record before any irreversible cleanup: the UI is
+            # consistent as soon as this returns, and the loser of a claim race
+            # can no longer find a task to start.
+            self.persistence.delete_task(task_id)
+        cleanup = self._cleanup_task_artifacts(task_id)
+        return {"ok": True, "cleanup": cleanup}
+
+    def delete_workspace_tasks(self, workspace: str) -> int:
+        """Delete every task record under one workspace; disk files stay."""
+        target = workspace_key(workspace)
+        with self._lock:
+            tasks = [
+                task
+                for task in self.persistence.list_all()
+                if workspace_key(task.workspace) == target
+            ]
+            live = [task.id for task in tasks if self._task_is_live(task.id, task)]
+            if live:
+                raise RuntimeError(
+                    f"{len(live)} task(s) in {workspace} are still running; stop them first"
+                )
+            deleted = self.persistence.delete_tasks([task.id for task in tasks])
+        for task in tasks:
+            self._cleanup_task_artifacts(task.id)
+        return deleted
+
+    def _cleanup_task_artifacts(self, task_id: str) -> Dict[str, bool]:
+        """Best-effort checkpoint/trace removal; the record is the source of truth.
+
+        The trace recorder is closed before the unlink: on Windows an open JSONL
+        handle makes unlink fail, and the worker teardown pops ``_threads``
+        *before* closing the trace, so a delete in that window used to leave the
+        file behind with no retry. ``TraceRecorder.close`` is idempotent.
+        """
+        self.kill_background(task_id)
+        checkpoint_removed = False
+        if self._checkpointer is not None:
+            try:
+                self._checkpointer.delete_thread(task_id)
+                checkpoint_removed = True
+            except Exception:
+                logger.exception("checkpoint cleanup failed for %s", task_id)
+        trace_removed = False
+        if self._trace is not None:
+            try:
+                self._trace.close(task_id)
+            except OSError:
+                logger.warning("trace close failed for %s", task_id, exc_info=True)
+            try:
+                self._trace.file_path(task_id).unlink(missing_ok=True)
+                trace_removed = True
+            except OSError:
+                logger.warning("trace cleanup failed for %s", task_id, exc_info=True)
+        self.event_bus.drop(task_id)
+        with self._lock:
+            self._active_states.pop(task_id, None)
+            self._stop_flags.pop(task_id, None)
+            self._round_models.pop(task_id, None)
+            self._interrupt_announced.discard(task_id)
+            self._threads.pop(task_id, None)
+        return {"checkpoint": checkpoint_removed, "trace": trace_removed}
 
     # ── run loop ──
     def _start_run(self, task_id: str) -> None:

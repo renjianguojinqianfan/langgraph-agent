@@ -145,6 +145,7 @@ jobs:
           backend/tests/test_workspace.py
           backend/tests/test_p2_mcp.py
           backend/tests/test_bash_tool.py
+          backend/tests/test_task_delete.py
           backend/tests/test_strict_msgpack_guard.py
           -q -rs
 

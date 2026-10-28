@@ -11,6 +11,7 @@ export type IconName =
   | "close"
   | "file"
   | "folder"
+  | "trash"
   | "gear";
 
 const GLYPHS: Record<IconName, ReactElement> = {
@@ -50,6 +51,14 @@ const GLYPHS: Record<IconName, ReactElement> = {
   ),
   folder: (
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+  ),
+  trash: (
+    <>
+      <path d="M4 7h16" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+      <path d="M9 7V4h6v3" />
+    </>
   ),
   gear: (
     <>
