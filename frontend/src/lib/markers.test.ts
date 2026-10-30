@@ -25,7 +25,7 @@ function step(index: number, round?: number): StepRecord {
 }
 
 describe("groupMarkers", () => {
-  it("按步骤认领标记，同一歩可有多条", () => {
+  it("按步骤认领标记，同一步可有多条", () => {
     const groups = groupMarkers(
       [marker(2), marker(1), marker(2, 3)],
       [step(1, 1), step(2, 2)]

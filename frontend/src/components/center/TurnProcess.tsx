@@ -1,23 +1,12 @@
 import { useEffect, useState } from "react";
-import { compressFaceParts, type StepRecord, type TraceMarker } from "../../types";
-import { cx } from "../../lib/cx";
+import type { StepRecord, TraceMarker } from "../../types";
+import { CompressMarker } from "./CompressMarker";
 import { DisclosureHead } from "./DisclosureHead";
 import { StepRow } from "./StepRow";
 
-function CompressMarker({ marker }: { marker: TraceMarker }) {
-  const d = marker.data;
-  return (
-    <div className="px-1 py-1 text-machine text-tertiary">
-      上下文已压缩：{compressFaceParts(d)}
-      {d.strategy ? `，策略 ${d.strategy}` : ""}
-      {d.context_tokens != null ? `（剩余 ${d.context_tokens} tokens）` : ""}
-    </div>
-  );
-}
-
 interface TurnProcessProps {
   steps: StepRecord[];
-  /** Markers this block owns; markers no step owns render once at the end. */
+  /** Markers owned by these steps; ownership is resolved in Conversation. */
   markers: TraceMarker[];
   /** The round currently running: opens by itself and keeps live status. */
   live?: boolean;
@@ -45,16 +34,11 @@ export function TurnProcess({
   }, [live]);
 
   const byStep = new Map<number, TraceMarker[]>();
-  const loose: TraceMarker[] = [];
   for (const marker of markers) {
     const index = marker.data.step_index;
-    if (steps.some((step) => step.index === index)) {
-      byStep.set(index, [...(byStep.get(index) ?? []), marker]);
-    } else {
-      loose.push(marker);
-    }
+    byStep.set(index, [...(byStep.get(index) ?? []), marker]);
   }
-  if (!steps.length && !loose.length) return null;
+  if (!steps.length) return null;
 
   const failed = steps.some((step) => step.status === "failed");
   const running = live || steps.some((step) => step.status === "running");
@@ -90,9 +74,6 @@ export function TurnProcess({
                 <CompressMarker key={i} marker={marker} />
               ))}
             </div>
-          ))}
-          {loose.map((marker, i) => (
-            <CompressMarker key={i} marker={marker} />
           ))}
         </div>
       )}

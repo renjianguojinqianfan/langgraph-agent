@@ -59,8 +59,8 @@ frontend/src/
 ├── pages/               TaskView · LoginPage
 ├── components/          TaskPanel · AuthGuard · TraceTab
 │   ├── center/          TaskHeader · Composer · Conversation · TurnProcess · UserBubble
-│   │                    DisclosureHead · StepRow · ToolRow · AnswerSheet · FailureBlock · PlanAnchor
-│   │                    SubagentStrip · SubagentPlate
+│   │                    DisclosureHead · CompressMarker · StepRow · ToolRow · AnswerSheet
+│   │                    FailureBlock · PlanAnchor · SubagentStrip · SubagentPlate
 │   ├── rail/            TaskRail · RailSearch · TaskRow · RailFooter · group.ts
 │   ├── dash/            DashTabs · FilePane · PlanPane · EventPane · TraceFace
 │   ├── settings/        SettingsDialog · ModelRow · FormField

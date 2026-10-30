@@ -436,7 +436,10 @@ class AgentRuntime:
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
-        answer = self._redact(resp.content or "(no content)")
+        # Strip before the ledger comparison: `_conversation_from` strips the
+        # persisted message, so a trailing newline used to make the answer
+        # never match `final_answer` and silently drop it from the ledger.
+        answer = self._redact(resp.content or "").strip() or "(no content)"
         state["final_answer"] = answer
         final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn

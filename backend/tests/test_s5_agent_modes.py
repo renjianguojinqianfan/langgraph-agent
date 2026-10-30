@@ -379,6 +379,95 @@ def test_a_round_that_ended_without_an_answer_appends_nothing(
     ]
 
 
+def test_a_trailing_newline_answer_still_lands_in_the_ledger(tmp_path: Path) -> None:
+    """Build mode strips before the ledger comparison (#265 review).
+
+    ``_conversation_from`` strips the persisted message; an unstripped
+    ``final_answer`` therefore never matched it, and the round's answer was
+    silently missing from the conversation.
+    """
+
+    class _NewlineLLM(MockLLMClient):
+        def complete(self, messages, tools=None, **kwargs):
+            return LLMResponse(content="Done\n")
+
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, _NewlineLLM())
+    task_id = tm.create_task(title="newline", user_input="hello")
+    task = _wait_parked(tm, task_id)
+
+    assert task.final_answer == "Done"
+    assert [t.content for t in task.conversation] == ["hello", "Done"]
+
+
+def _merged(
+    tm,
+    settled: List[tuple[str, str]],
+    rebuilt: List[tuple[str, str]],
+    final_answer: str,
+) -> List[str]:
+    turns = tm._merge_round_turns(
+        [ChatTurn(role=role, content=content) for role, content in settled],
+        [ChatTurn(role=role, content=content) for role, content in rebuilt],
+        final_answer,
+    )
+    return [turn.content for turn in turns]
+
+
+def test_merge_round_turns_dedupes_notes_and_answers_already_in_the_ledger(
+    tmp_path: Path,
+) -> None:
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(
+        tm,
+        [("user", "u1"), ("assistant", "计划已更新到第 1 版。"), ("user", "u2")],
+        [
+            ("user", "u2"),
+            ("assistant", "计划已更新到第 1 版。"),
+            ("assistant", "a2"),
+        ],
+        "a2",
+    ) == ["u1", "计划已更新到第 1 版。", "u2", "a2"]
+
+
+def test_merge_round_turns_carries_a_build_rounds_injected_note(
+    tmp_path: Path,
+) -> None:
+    """An external plan edit injects a note mid-round; it precedes the answer."""
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(
+        tm,
+        [("user", "u1"), ("assistant", "a1"), ("user", "u2")],
+        [
+            ("user", "u2"),
+            ("assistant", "计划已更新到第 1 版。"),
+            ("assistant", "a2"),
+        ],
+        "a2",
+    ) == ["u1", "a1", "u2", "计划已更新到第 1 版。", "a2"]
+
+
+def test_merge_round_turns_does_not_repeat_a_resumed_answer(tmp_path: Path) -> None:
+    """A resume finalize sees the settled answer again; it must not duplicate."""
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(
+        tm,
+        [("user", "u1"), ("assistant", "a1")],
+        [("user", "u1"), ("assistant", "a1")],
+        "a1",
+    ) == ["u1", "a1"]
+
+
+def test_merge_round_turns_with_an_empty_rebuild_keeps_the_ledger(
+    tmp_path: Path,
+) -> None:
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(tm, [("user", "u1"), ("assistant", "a1")], [], "") == [
+        "u1",
+        "a1",
+    ]
+
+
 def test_stop_on_a_parked_task_does_not_poison_the_next_round(tmp_path: Path) -> None:
     """A second 停止 click (or a stop against a parked task) must be a no-op.
 

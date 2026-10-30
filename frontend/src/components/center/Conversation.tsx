@@ -3,6 +3,7 @@ import { groupMarkers } from "../../lib/markers";
 import { isPlanNotice, legacySteps, splitRounds, stepsForRound } from "../../lib/rounds";
 import { useTaskStore } from "../../store/taskStore";
 import { AnswerSheet } from "./AnswerSheet";
+import { CompressMarker } from "./CompressMarker";
 import { FailureBlock } from "./FailureBlock";
 import { PlanAnchor } from "./PlanAnchor";
 import { TurnProcess } from "./TurnProcess";
@@ -24,12 +25,9 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
   const markers = useTaskStore((s) => s.markers[task.id] ?? []);
   // Ownership is resolved once here; each block receives only its own markers.
   const { byStep, loose } = groupMarkers(markers, task.steps);
-  const legacyMarkers = [
-    ...legacy.flatMap((step) => byStep.get(step.index) ?? []),
-    ...loose,
-  ];
+  const legacyMarkers = legacy.flatMap((step) => byStep.get(step.index) ?? []);
   const empty =
-    rounds.length === 0 && task.steps.length === 0 && markers.length === 0;
+    rounds.length === 0 && task.steps.length === 0 && loose.length === 0;
   const running = task.status === "RUNNING";
 
   return (
@@ -47,7 +45,7 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
           </p>
         )}
 
-        {(legacy.length > 0 || legacyMarkers.length > 0) && (
+        {legacy.length > 0 && (
           <TurnProcess
             steps={legacy}
             markers={legacyMarkers}
@@ -85,6 +83,14 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
 
         {rounds.length > 0 && onOpenPlan && (
           <PlanAnchor task={task} onOpenPlan={onOpenPlan} />
+        )}
+
+        {loose.length > 0 && (
+          <section aria-label="上下文压缩记录" className="flex flex-col">
+            {loose.map((marker, i) => (
+              <CompressMarker key={i} marker={marker} />
+            ))}
+          </section>
         )}
 
         <FailureBlock task={task} />

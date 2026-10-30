@@ -1175,23 +1175,23 @@ class TaskManager:
         are — each one is its round's answer.
         """
         kept = list(settled)
-        note = next(
-            (
-                turn
-                for turn in reversed(rebuilt)
-                if turn.role == "assistant" and plan_file.is_plan_note(turn.content)
-            ),
-            None,
-        )
-        if note is not None and not any(
-            turn.role == "assistant" and turn.content == note.content for turn in kept
+        note: Optional[ChatTurn] = None
+        answer: Optional[ChatTurn] = None
+        for turn in reversed(rebuilt):
+            if turn.role != "assistant":
+                continue
+            if answer is None:
+                answer = turn
+            if note is None and plan_file.is_plan_note(turn.content):
+                note = turn
+            if answer is not None and note is not None:
+                break
+        note_text = self.redact(note.content) if note is not None else ""
+        if note_text and not any(
+            turn.role == "assistant" and turn.content == note_text for turn in kept
         ):
-            kept.append(note)
+            kept.append(ChatTurn(role="assistant", content=note_text))
 
-        answer = next(
-            (turn for turn in reversed(rebuilt) if turn.role == "assistant"),
-            None,
-        )
         # A provider error settles without appending an assistant message; the
         # last rebuilt assistant is then an earlier round's answer.
         if answer is None or self.redact(answer.content) != final_answer:
