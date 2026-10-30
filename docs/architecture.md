@@ -58,16 +58,16 @@ backend/
 frontend/src/
 ├── pages/               TaskView · LoginPage
 ├── components/          TaskPanel · AuthGuard · TraceTab
-│   ├── center/          TaskHeader · Composer · Conversation · RoundDivider · UserBubble
-│   │                    StepRow · ToolRow · AnswerSheet · FailureBlock · PlanAnchor
-│   │                    SubagentStrip · SubagentPlate
+│   ├── center/          TaskHeader · Composer · Conversation · TurnProcess · UserBubble
+│   │                    DisclosureHead · CompressMarker · StepRow · ToolRow · AnswerSheet
+│   │                    FailureBlock · PlanAnchor · SubagentStrip · SubagentPlate
 │   ├── rail/            TaskRail · RailSearch · TaskRow · RailFooter · group.ts
 │   ├── dash/            DashTabs · FilePane · FilePreviewTab · FileDownloadLink · PlanPane · EventPane · TraceFace
 │   ├── settings/        SettingsDialog · ModelRow · FormField
 │   └── ui/              Button · Icon · Status · Segmented · Tabs
 ├── store/               taskStore · reduceTask · modelStore · authStore
 ├── hooks/               useSSE.ts EventSource 订阅表 EVENT_TYPES（§3.4 的四处之一）· useMediaQuery.ts 断点
-├── lib/                 format · taskState · rounds · markdown · keys · cx · eventLabels.ts · dashTabs · preview
+├── lib/                 format · taskState · rounds · markers · markdown · keys · cx · eventLabels.ts · dashTabs · preview
 ├── api/client.ts        后端调用
 └── types/index.ts       与 schemas.py 字段对齐；SSEventType 联合
 
@@ -100,7 +100,7 @@ data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>
 | `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；旧记录里的 `COMPLETED` 在加载时映射成 `INTERRUPTED` |
 | `TaskMode` | `plan` \| `build`（黏性任务开关，默认 `build`） |
 | `ToolCallRecord` | `id` / `tool_name` / `input` / `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
-| `StepRecord` | `index` / `thought` / `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
+| `StepRecord` | `index` / `round`（1 起的对话轮次，`0` = #265 前的旧记录）/ `thought` / `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
 | `SubTask` | `subtask_id` / `name` / `status`（`pending \| running \| completed \| failed`）/ `summary` / `artifacts[]` / `error`。`artifacts` 是**现役字段**（子任务回传用，父任务无产物账本） |
 | `ChatTurn` | `role`（user \| assistant）/ `content`；只存人读的对话，工具流量在 `Task.steps` |
 | `Task` | `id` / `title` / `user_input` / `workspace`（绝对路径，规范化后比较）/ `model`（档案 id，空 = 全局默认）/ `status` / `mode` / `steps[]` / `plan_version` / `plan_hash` / `conversation[]` / `final_answer` / `error` / `created_at` / `updated_at` / `subtasks[]` |
@@ -123,7 +123,9 @@ START → agent ──有 tool call──→ tool ──→ agent
 - **步数预算按轮计**：`round_steps` 只数本轮 `agent` 调用，不封顶任务总寿命（`max_steps` 默认 15）。
 - 子任务复用同一拓扑，在独立 `thread_id` 上跑，工作区继承父任务。
 
-**AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks` / `_is_subtask`）。
+**AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`round_no` / `step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks` / `_is_subtask`）。
+
+**conversation 账本**：`Task.conversation` 是逐轮只增的用户 / 助手文本账本。收尾（`_finalize_terminal` → `_merge_round_turns`）只追加本轮新增的两样东西——该轮的计划提示与末次回答——不拿 `final["messages"]` 重建：压缩可能已丢掉早期回合，而消息面只保留最新一条计划提示。旧计划提示留在原位（它就是那一轮的回答）；轮次编号按账本里的用户回合数计，压缩因此不会让编号回退。
 
 **checkpoint 语义**：挂载后每个 superstep 都是一份 state 副本并持久化；`thread_id == task_id`，因此停止/崩溃可续跑，停下后也能沿同一 thread 续说。`stop_requested` 在带 checkpointer 时不可靠（每步是副本），所以 `agent` 节点额外轮询 manager 级的 `_stop_flags`（`task_manager.py`）。
 
@@ -181,7 +183,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | event 类型 | data 字段 | 含义 |
 |------------|-----------|------|
 | `task_created` | `{task_id, title, status}` | 任务已创建 |
-| `step_start` | `{index, thought, model, model_profile}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形。`model` / `model_profile` 是本次调用用的模型名与配置 id（M1 / ADR 0010） |
+| `step_start` | `{index, round, thought, model, model_profile}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形。`round` 是该步所属的 1 起对话轮次（#265，与 `StepRecord.round` 同源）；`model` / `model_profile` 是本次调用用的模型名与配置 id（M1 / ADR 0010） |
 | `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
 | `final_answer` | `{answer:str}` | 本轮的文字回复（不是终态；下一轮会覆盖） |
@@ -214,7 +216,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 3. `tool` 节点：逐条执行工具（危险规则命中则当场拒），回填 `ToolCallRecord` 与对话消息，然后按预算/停止信号路由回 `agent` 或 `finish`。
 4. `finish`：发 `final_answer`、写对话与计划状态，任务进入 `INTERRUPTED`（停下）。
 
-**「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用**（`round_steps` 按步计预算）。一轮的最后一次 `agent` 调用没有工具调用，这一轮就结束（ADR 0008 决策 4）。
+**「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用**（`round_steps` 按步计预算）。用户每发一句话开一轮，`StepRecord.round` 记这一步属于哪一轮（1 起，0 = #265 前的旧记录）。一轮的最后一次 `agent` 调用没有工具调用，这一轮就结束（ADR 0008 决策 4）。
 
 ### 4.2 停下 / 续说 / 续跑
 

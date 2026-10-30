@@ -50,6 +50,10 @@ class ToolCallRecord(BaseModel):
 
 class StepRecord(BaseModel):
     index: int
+    #: 1-based conversation round this step belongs to (#265). 0 marks records
+    #: persisted before the field existed; the UI renders those as a legacy
+    #: block instead of guessing a round.
+    round: int = 0
     thought: str = ""
     tool_calls: List[ToolCallRecord] = Field(default_factory=list)
     status: str = "pending"  # pending | running | done | failed

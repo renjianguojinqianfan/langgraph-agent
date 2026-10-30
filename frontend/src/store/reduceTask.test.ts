@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SSEvent, Task } from "../types";
-import { needsStatusRefetch } from "./reduceTask";
+import { applyToTask, needsStatusRefetch } from "./reduceTask";
 import { useTaskStore } from "./taskStore";
 
 function snapshot(overrides: Partial<Task> = {}): Task {
@@ -100,6 +100,32 @@ describe("#189 回放不覆盖任务快照", () => {
     expect(task.updated_at).toBe("2026-10-27T00:00:09");
     expect(task.steps).toHaveLength(1);
     expect(task.conversation).toHaveLength(1);
+  });
+});
+
+describe("#265 step_start 的轮次归属", () => {
+  it("round 落到新建步骤上", () => {
+    const next = applyToTask(snapshot({ steps: [] }), "t1", {
+      type: "step_start",
+      data: { task_id: "t1", index: 1, round: 2, thought: "做点事" },
+    });
+    expect(next.steps[0]).toMatchObject({ index: 1, round: 2, thought: "做点事" });
+  });
+
+  it("旧事件没有 round 时不伪造轮次", () => {
+    const next = applyToTask(snapshot({ steps: [] }), "t1", {
+      type: "step_start",
+      data: { task_id: "t1", index: 1 },
+    });
+    expect(next.steps[0].round).toBeUndefined();
+  });
+
+  it("已有步骤收到带 round 的 step_start 时补上轮次", () => {
+    const next = applyToTask(snapshot(), "t1", {
+      type: "step_start",
+      data: { task_id: "t1", index: 1, round: 1 },
+    });
+    expect(next.steps[0].round).toBe(1);
   });
 });
 

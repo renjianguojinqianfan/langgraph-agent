@@ -22,7 +22,7 @@
 模式：`plan`（计划模式：`explore` 只读档 + 计划 prompt，产出计划文件）/ `build`（执行模式：全部已挂载工具）。
 任务是开关的载体，**开关黏性、默认 build**；模式不是第二个节点，也不是每条消息选一次（ADR 0008 决策 2 / 3）。
 状态三值：`RUNNING`（跑着）/ `INTERRUPTED`（停下，等你说话）/ `FAILED`（出错）——**没有「完成」终态**。
-「一轮」= 一次 `invoke`（START→END，一条续说）；「步」= 一轮内的一次 `agent` 调用（`round_steps` 按步计预算）。一次 `agent` 调用返回时没有工具调用，这一轮就结束（停下，决策 4）。
+「一轮」= 一次 `invoke`（START→END，一条续说）；用户每发一句话开一轮，`StepRecord.round` 记这一步属于哪一轮（1 起，0 = #265 前的旧记录）；「步」= 一轮内的一次 `agent` 调用（`round_steps` 按步计预算）。一次 `agent` 调用返回时没有工具调用，这一轮就结束（停下，决策 4）。
 「续说」= 停下后 `POST /api/tasks/{id}/messages`，沿同一 `thread_id` / checkpoint 接着跑，不是重开任务（决策 1）。
 「交付」= 停下时人去看工作区里的文件，不是新状态（决策 8）。
 运行时概念：`checkpoint` / `resume` / `workspace`（任务目录）/ 运行上下文 / 两层注入 / 模型配置。

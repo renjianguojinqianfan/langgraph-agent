@@ -36,9 +36,6 @@
   --radius-composer: 12px;
   --radius-control: 6px; /* D3 补全 */
 
-  /* 唯一的纸面阴影（AnswerSheet / PlanPane 的成品面） */
-  --shadow-sheet: 0 18px 48px -28px rgba(0, 0, 0, 0.85);
-
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
