@@ -28,6 +28,10 @@ PLAN_MESSAGE_PREFIX = "[qianfan-plan]"
 PLAN_MESSAGE_RULE = "以计划文件当前内容为准，与早先消息冲突时按计划做。"
 PLAN_MAX_CHARS = 100_000
 PLAN_MESSAGE_MAX_CHARS = 20_000
+#: The gray "plan updated" note, minted by the agent and shown as a muted line
+#: in the conversation (`frontend/src/lib/rounds.ts` mirrors the same shape).
+PLAN_NOTE_PREFIX = "计划已更新到"
+PLAN_NOTE_RE = re.compile(r"^计划已更新到第 \d+ 版。$")
 
 
 def plan_path(workspace: Path, task_id: str) -> Path:
@@ -83,6 +87,15 @@ def write_plan(workspace: Path, task_id: str, text: str) -> None:
 
 def plan_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def plan_note_text(version: int) -> str:
+    return f"{PLAN_NOTE_PREFIX}第 {version} 版。"
+
+
+def is_plan_note(content: Any) -> bool:
+    """True for the gray note, not for an answer that starts with the words."""
+    return bool(PLAN_NOTE_RE.fullmatch(str(content or "").strip()))
 
 
 def extract_plan(content: str) -> Optional[str]:

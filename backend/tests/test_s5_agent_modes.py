@@ -22,7 +22,7 @@ from typing import Any, Dict, List, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.schemas import TaskStatus
+from backend.api.schemas import ChatTurn, Task, TaskStatus
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.agent.subagent import EXPLORE_TIER, tier_face_names
@@ -77,6 +77,7 @@ def _state(**kw: Any) -> AgentState:
         "steps": [],
         "status": "RUNNING",
         "stop_requested": False,
+        "round_no": 1,
         "step_index": 0,
         "round_steps": 0,
         "final_answer": "",
@@ -200,9 +201,62 @@ def test_a_round_without_tool_calls_parks_and_the_next_message_continues(
     ]
     # Two rounds: cumulative step indices, not a reset record.
     assert [s.index for s in second.steps] == [1, 2]
+    # #265: each step records the round it belongs to, so the UI never has to
+    # guess that the last round owns the whole task's steps.
+    assert [s.round for s in second.steps] == [1, 2]
+    step_starts = [
+        e["data"] for e in tm.event_bus.replay(task_id) if e["type"] == "step_start"
+    ]
+    assert [data["round"] for data in step_starts] == [1, 2]
     events = [e["type"] for e in tm.event_bus.replay(task_id)]
     assert events.count("task_resumed") == 1
     assert events.count("task_interrupted") == 2  # one per parked round
+
+
+def test_compression_does_not_shrink_the_round_ledger(tmp_path: Path) -> None:
+    """#265: early rounds survive compression, so round numbers stay unique.
+
+    ``final["messages"]`` is the compressed list once the budget is exceeded;
+    rebuilding ``Task.conversation`` from it dropped the first round, and the
+    next round number (counted from user turns) then collided with the old one.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="t-compressed",
+        title="compressed",
+        user_input="first question",
+        workspace=str(tmp_path),
+        status=TaskStatus.RUNNING,
+        conversation=[
+            ChatTurn(role="user", content="first question"),
+            ChatTurn(role="assistant", content="answer one"),
+            ChatTurn(role="user", content="second question"),
+        ],
+    )
+
+    tm._finalize_terminal(
+        task,
+        {
+            "status": "INTERRUPTED",
+            "steps": [],
+            # What compression leaves behind: the first round is gone.
+            "messages": [
+                {"role": "user", "content": "second question"},
+                {"role": "assistant", "content": "answer two"},
+            ],
+            "final_answer": "answer two",
+        },
+    )
+
+    assert [t.content for t in task.conversation] == [
+        "first question",
+        "answer one",
+        "second question",
+        "answer two",
+    ]
+    task.conversation.append(ChatTurn(role="user", content="third question"))
+    assert tm._round_number(task) == 3
 
 
 def test_stop_on_a_parked_task_does_not_poison_the_next_round(tmp_path: Path) -> None:
