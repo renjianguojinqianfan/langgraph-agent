@@ -1,9 +1,14 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { cx } from "../../lib/cx";
+import { Icon } from "./Icon";
 
 export interface TabItem<T extends string> {
   id: T;
   label: string;
+  /** Full value for a truncated label (file paths). */
+  title?: string;
+  /** Present on closable file tabs, rendered inside the tab chip (dsh shape). */
+  onClose?: () => void;
 }
 
 interface TabsProps<T extends string> {
@@ -15,6 +20,27 @@ interface TabsProps<T extends string> {
   baseId: string;
 }
 
+function domId(baseId: string, kind: "tab" | "panel", id: string): string {
+  // Paths can carry spaces and slashes; encode them into a valid DOM id while
+  // keeping the fixed panes' ids unchanged.
+  return `${baseId}-${kind}-${encodeURIComponent(id)}`;
+}
+
+/** Panel-side counterpart of the id a tab button points at. */
+export function tabPanelId(baseId: string, id: string): string {
+  return domId(baseId, "panel", id);
+}
+
+/** Id of the tab chip itself (used to restore focus after closing a tab). */
+export function tabButtonId(baseId: string, id: string): string {
+  return domId(baseId, "tab", id);
+}
+
+/** Move focus onto a tab chip without reaching into its DOM id format. */
+export function focusTab(baseId: string, id: string): void {
+  document.getElementById(tabButtonId(baseId, id))?.focus();
+}
+
 export function Tabs<T extends string>({
   label,
   tabs,
@@ -22,14 +48,21 @@ export function Tabs<T extends string>({
   onChange,
   baseId,
 }: TabsProps<T>) {
-  const refs = useRef(new Map<T, HTMLButtonElement>());
+  const refs = useRef(new Map<T, HTMLDivElement>());
 
   const select = (id: T) => {
-    onChange(id);
+    if (id !== value) onChange(id);
     refs.current.get(id)?.focus();
   };
 
+  // Keep the active chip in view when many files are open.
+  useEffect(() => {
+    refs.current.get(value)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [value]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Arrows move between tabs even when focus sits on the nested close button;
+    // Enter / Space stay that button's own activation key.
     const at = tabs.findIndex((t) => t.id === value);
     if (at < 0) return;
     let next: number | null = null;
@@ -46,34 +79,52 @@ export function Tabs<T extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className="flex items-center gap-1"
+      className="flex items-center gap-1 whitespace-nowrap"
       onKeyDown={onKeyDown}
     >
       {tabs.map((t) => {
         const active = t.id === value;
         return (
-          <button
+          <div
             key={t.id}
-            type="button"
             role="tab"
-            id={`${baseId}-tab-${t.id}`}
-            aria-controls={`${baseId}-panel-${t.id}`}
+            id={tabButtonId(baseId, t.id)}
+            aria-controls={tabPanelId(baseId, t.id)}
             aria-selected={active}
+            aria-label={t.label}
             tabIndex={active ? 0 : -1}
+            title={t.title}
             ref={(el) => {
               if (el) refs.current.set(t.id, el);
               else refs.current.delete(t.id);
             }}
-            onClick={() => onChange(t.id)}
+            onClick={() => {
+              if (!active) onChange(t.id);
+            }}
             className={cx(
-              "relative h-9 px-2.5 text-meta transition-colors duration-150",
+              "relative flex h-9 cursor-pointer items-center px-2.5 text-meta transition-colors duration-150",
+              t.onClose && "pr-7",
               active
-                ? "text-primary after:absolute after:inset-x-1.5 after:bottom-0 after:h-[2px] after:bg-primary"
+                ? "text-primary after:absolute after:bottom-0 after:h-[2px] after:bg-primary after:inset-x-1.5"
                 : "text-tertiary hover:text-secondary"
             )}
           >
-            {t.label}
-          </button>
+            <span className="block max-w-[140px] truncate">{t.label}</span>
+            {t.onClose && (
+              <button
+                type="button"
+                aria-label={`关闭 ${t.title ?? t.label} 预览`}
+                title="关闭预览"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  t.onClose?.();
+                }}
+                className="absolute right-0.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-control text-tertiary hover:bg-surface-hover hover:text-primary"
+              >
+                <Icon name="close" size={12} />
+              </button>
+            )}
+          </div>
         );
       })}
     </div>

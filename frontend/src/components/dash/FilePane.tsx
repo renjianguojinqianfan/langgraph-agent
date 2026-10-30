@@ -1,41 +1,34 @@
-import { useEffect, useRef, useState } from "react";
-import { fileDownloadUrl, listFiles, previewFile } from "../../api/client";
-import { cx } from "../../lib/cx";
+import { useEffect, useState } from "react";
+import { listFiles } from "../../api/client";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
-import { Icon } from "../ui/Icon";
+import { FileDownloadLink } from "./FileDownloadLink";
 import { fileName, groupFiles } from "./fileGroup";
 
 /** Refresh cadence while a running task keeps writing files. */
 const POLL_MS = 2000;
 
-export function FilePane({ task, visible }: { task: Task; visible: boolean }) {
+export function FilePane({
+  task,
+  visible,
+  onOpenFile,
+}: {
+  task: Task;
+  visible: boolean;
+  onOpenFile: (path: string) => void;
+}) {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [truncated, setTruncated] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{
-    content: string;
-    truncated: boolean;
-  } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const requestSeq = useRef(0);
-  const taskIdRef = useRef(task.id);
 
+  // A different task starts from a clean pane; a status change must not clear
+  // the list the user is reading.
   useEffect(() => {
-    taskIdRef.current = task.id;
-    requestSeq.current += 1;
-  }, [task.id]);
-
-  // A different task starts from a clean pane; a status change must not close
-  // a preview the user is reading.
-  useEffect(() => {
-    setSelected(null);
-    setPreview(null);
-    setNote(null);
     setFiles([]);
     setTruncated(false);
+    setNote(null);
     setLoading(true);
   }, [task.id]);
 
@@ -74,25 +67,6 @@ export function FilePane({ task, visible }: { task: Task; visible: boolean }) {
     };
   }, [task.id, task.status, visible]);
 
-  const open = async (path: string) => {
-    const seq = ++requestSeq.current;
-    const requestedTask = task.id;
-    setNote(null);
-    try {
-      const r = await previewFile(requestedTask, path);
-      if (requestedTask !== taskIdRef.current || seq !== requestSeq.current) return;
-      if (r.data) {
-        setSelected(path);
-        setPreview({ content: r.data.content, truncated: r.data.truncated });
-      } else {
-        setNote("无法预览这个文件（二进制或不可读），可以直接下载。");
-      }
-    } catch {
-      if (requestedTask !== taskIdRef.current || seq !== requestSeq.current) return;
-      setNote("无法预览这个文件（二进制或不可读），可以直接下载。");
-    }
-  };
-
   const groups = groupFiles(files);
 
   return (
@@ -123,17 +97,10 @@ export function FilePane({ task, visible }: { task: Task; visible: boolean }) {
             <ul className="flex flex-col">
               {group.files.map((file) => (
                 <li key={file.path}>
-                  <div
-                    className={cx(
-                      "flex items-center gap-2 border-l-2 py-1 pl-2 pr-1",
-                      selected === file.path
-                        ? "border-primary"
-                        : "border-transparent hover:bg-surface-hover"
-                    )}
-                  >
+                  <div className="flex items-center gap-2 py-1 pl-2 pr-1 hover:bg-surface-hover">
                     <button
                       type="button"
-                      onClick={() => open(file.path)}
+                      onClick={() => onOpenFile(file.path)}
                       className="min-w-0 flex-1 truncate text-left text-body text-primary"
                       title={file.path}
                     >
@@ -142,14 +109,7 @@ export function FilePane({ task, visible }: { task: Task; visible: boolean }) {
                     <span className="shrink-0 font-mono text-machine tabular-nums text-tertiary">
                       {formatBytes(file.size)}
                     </span>
-                    <a
-                      href={fileDownloadUrl(task.id, file.path)}
-                      download
-                      aria-label={`下载 ${file.path}`}
-                      className="shrink-0 rounded-control p-1.5 text-tertiary hover:bg-surface-hover hover:text-primary"
-                    >
-                      <Icon name="download" size={14} />
-                    </a>
+                    <FileDownloadLink taskId={task.id} path={file.path} />
                   </div>
                 </li>
               ))}
@@ -159,36 +119,6 @@ export function FilePane({ task, visible }: { task: Task; visible: boolean }) {
       )}
 
       {note && <p className="text-meta text-state-danger">{note}</p>}
-
-      {selected && preview && (
-        <section className="rounded-well bg-surface-well">
-          <div className="flex items-center gap-2 border-b border-rule px-3 py-2">
-            <span
-              className="min-w-0 flex-1 truncate font-mono text-machine text-signal-now"
-              title={selected}
-            >
-              {selected}
-            </span>
-            {preview.truncated && (
-              <span className="shrink-0 text-meta text-tertiary">已截断</span>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setSelected(null);
-                setPreview(null);
-              }}
-              className="shrink-0 rounded-control p-1.5 text-tertiary hover:bg-surface-hover hover:text-primary"
-              aria-label="关闭预览"
-            >
-              <Icon name="close" size={14} />
-            </button>
-          </div>
-          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-code text-secondary">
-            {preview.content || "（空文件）"}
-          </pre>
-        </section>
-      )}
     </div>
   );
 }

@@ -48,6 +48,14 @@ export interface WorkspaceFile {
   size: number;
 }
 
+/** Text preview payload; `truncated` means only the first 200 KB are present. */
+export interface FilePreview {
+  path: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
