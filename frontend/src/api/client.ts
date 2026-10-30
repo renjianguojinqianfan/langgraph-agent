@@ -3,6 +3,7 @@ import {
   AuthTokenResponse,
   ChatTurn,
   CreateTaskRequest,
+  FilePreview,
   ModelKeySource,
   ModelProfile,
   ModelsData,
@@ -189,10 +190,44 @@ const _withToken = (url: string): string => {
 export const listFiles = (id: string) =>
   req<{ files: WorkspaceFile[]; truncated: boolean }>(`/tasks/${id}/files`);
 
-export const previewFile = (id: string, path: string) =>
-  req<{ path: string; content: string; size: number; truncated: boolean }>(
-    `/tasks/${id}/files/preview?path=${encodeURIComponent(path)}`
-  );
+export interface PreviewResult {
+  /** HTTP status; 0 means the request never reached the backend. */
+  status: number;
+  data: FilePreview | null;
+  /** FastAPI `detail` (or envelope message) for the failure copy. */
+  detail: string;
+}
+
+/**
+ * Preview one file, keeping the HTTP status: #266 needs 415 / 400 / 404 / 409
+ * to read differently, and `req()` flattens them into a body without a status.
+ */
+export async function previewFile(id: string, path: string): Promise<PreviewResult> {
+  const token = getAuthToken();
+  let res: Response;
+  try {
+    res = await fetch(
+      `${API_BASE}/tasks/${id}/files/preview?path=${encodeURIComponent(path)}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
+    );
+  } catch {
+    return { status: 0, data: null, detail: "" };
+  }
+  const json = (await res.json().catch(() => null)) as
+    | { data?: FilePreview; detail?: unknown; message?: unknown }
+    | null;
+  const data = json?.data;
+  return {
+    status: res.status,
+    data: data && typeof data.content === "string" ? data : null,
+    detail:
+      typeof json?.detail === "string"
+        ? json.detail
+        : typeof json?.message === "string" && json.message !== "ok"
+          ? json.message
+          : "",
+  };
+}
 
 export const fileDownloadUrl = (id: string, path: string) =>
   _withToken(`${API_BASE}/tasks/${id}/files/download?path=${encodeURIComponent(path)}`);

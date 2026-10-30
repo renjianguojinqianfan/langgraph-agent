@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TaskRail } from "../components/rail/TaskRail";
 import { TaskPanel } from "../components/TaskPanel";
-import { DashTabs, type DashTab } from "../components/dash/DashTabs";
+import { DashTabs } from "../components/dash/DashTabs";
 import { IconButton } from "../components/ui/Button";
+import {
+  closeFileTab,
+  fileTabId,
+  fileTabPath,
+  openFileTab,
+  tabAfterClosing,
+  type DashTab,
+} from "../lib/dashTabs";
 import { getTask, listTasks } from "../api/client";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSSE } from "../hooks/useSSE";
@@ -27,7 +35,12 @@ export function TaskView() {
   const workspaceDir = useTaskStore((s) => s.workspaceDir);
   const refreshModels = useModelStore((s) => s.refresh);
   const listRevision = useTaskStore((s) => s.listRevision);
-  const [dashTab, setDashTab] = useState<DashTab>("files");
+  // File previews are tabs in the third column (#266), one per opened path.
+  // Tab and file list move together so a close never reads a stale list.
+  const [dash, setDash] = useState<{ tab: DashTab; files: string[] }>({
+    tab: "files",
+    files: [],
+  });
   const [traceOpen, setTraceOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -143,12 +156,43 @@ export function TaskView() {
       .catch(() => {});
   }, [currentTaskId, status, detail?.final_answer, upsertTask]);
 
-  // Switching tasks closes the replay face.
+  // Switching tasks closes the replay face and every file-preview tab; the
+  // plan/events choice is not a file tab and survives the switch.
   useEffect(() => {
     setTraceOpen(false);
+    setDash((current) => ({
+      files: [],
+      tab: fileTabPath(current.tab) !== null ? "files" : current.tab,
+    }));
   }, [currentTaskId]);
 
+  const openFile = useCallback((path: string) => {
+    setDash((current) => ({
+      files: openFileTab(current.files, path),
+      tab: fileTabId(path),
+    }));
+    // On narrow screens the file list lives in the drawer; keep it open when
+    // its row turns into a preview tab.
+    setRightOpen(true);
+  }, []);
+
+  const closeFile = useCallback((path: string) => {
+    setDash((current) => ({
+      files: closeFileTab(current.files, path),
+      tab: tabAfterClosing(current.files, path, current.tab),
+    }));
+  }, []);
+
+  const changeTab = useCallback((tab: DashTab) => {
+    setDash((current) => ({ ...current, tab }));
+  }, []);
+
   const task = currentTaskId ? detail ?? null : null;
+  // A stale file tab (task just switched) falls back to the list for one frame
+  // instead of rendering a panel that no longer exists.
+  const openPath = fileTabPath(dash.tab);
+  const shownDashTab: DashTab =
+    openPath !== null && !dash.files.includes(openPath) ? "files" : dash.tab;
 
   return (
     <div
@@ -205,7 +249,7 @@ export function TaskView() {
             rightOpen={rightOpen}
             onToggleRight={() => setRightOpen((v) => !v)}
             onOpenPlan={() => {
-              setDashTab("plan");
+              changeTab("plan");
               setRightOpen(true);
             }}
             traceOpen={traceOpen}
@@ -226,9 +270,12 @@ export function TaskView() {
       >
         <DashTabs
           task={task}
-          tab={dashTab}
+          tab={shownDashTab}
+          fileTabs={dash.files}
           visible={!dashInert}
-          onTabChange={setDashTab}
+          onTabChange={changeTab}
+          onOpenFile={openFile}
+          onCloseFile={closeFile}
           onOpenTrace={() => setTraceOpen(true)}
         />
       </aside>
