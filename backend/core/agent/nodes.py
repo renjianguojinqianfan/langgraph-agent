@@ -71,21 +71,13 @@ def _is_tool_markup_only(text: str) -> bool:
     return bool(_TOOL_MARKUP_ONLY.fullmatch(text or ""))
 
 
-#: The one gray line G-34 allows when the plan version moves. It is a protocol
-#: line, not a prefix (#236): the frontend matches the whole sentence too
-#: (``frontend/src/lib/rounds.ts``), so a model answer that merely starts with
-#: these words must not be mistaken for the note and dropped.
-_PLAN_NOTE_PREFIX = "计划已更新到"
-_PLAN_NOTE_RE = re.compile(r"^计划已更新到第 \d+ 版。$")
-
-
 def _plan_note_text(version: int) -> str:
-    return f"{_PLAN_NOTE_PREFIX}第 {version} 版。"
+    return plan_file.plan_note_text(version)
 
 
 def _is_plan_note(message: Dict[str, Any]) -> bool:
-    return message.get("role") == "assistant" and bool(
-        _PLAN_NOTE_RE.fullmatch(str(message.get("content") or "").strip())
+    return message.get("role") == "assistant" and plan_file.is_plan_note(
+        message.get("content")
     )
 
 
@@ -320,11 +312,14 @@ class AgentRuntime:
         # The step budget is per round, not per task: a conversation may last
         # many rounds, and a cumulative counter would brick it after max_steps
         # calls. ``step_index`` stays cumulative so step records/events keep a
-        # unique index across the whole task.
+        # unique index across the whole task; ``round_no`` is what lets the UI
+        # attribute a step to the answer that produced it (#265).
         state["round_steps"] = state.get("round_steps", 0) + 1
         idx = state["step_index"]
+        round_no = int(state.get("round_no", 1) or 1)
         step: Dict[str, Any] = {
             "index": idx,
+            "round": round_no,
             "thought": "",
             "tool_calls": [],
             "status": "running",
@@ -338,6 +333,7 @@ class AgentRuntime:
             "step_start",
             {
                 "index": idx,
+                "round": round_no,
                 "thought": thought,
                 "model": getattr(self.llm, "model", ""),
                 "model_profile": self.model_profile,
@@ -440,7 +436,10 @@ class AgentRuntime:
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
 
-        answer = self._redact(resp.content or "(no content)")
+        # Strip before the ledger comparison: `_conversation_from` strips the
+        # persisted message, so a trailing newline used to make the answer
+        # never match `final_answer` and silently drop it from the ledger.
+        answer = self._redact(resp.content or "").strip() or "(no content)"
         state["final_answer"] = answer
         final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn

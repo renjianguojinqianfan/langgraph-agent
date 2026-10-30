@@ -1,7 +1,13 @@
 import { SSEvent, StepRecord, SubTask, Task, ToolCallRecord } from "../types";
 
-function makeStep(index: number): StepRecord {
-  return { index, thought: "", tool_calls: [], status: "running" };
+function makeStep(index: number, round?: number): StepRecord {
+  return {
+    index,
+    ...(round !== undefined ? { round } : {}),
+    thought: "",
+    tool_calls: [],
+    status: "running",
+  };
 }
 
 function emptyTask(id: string): Task {
@@ -24,9 +30,9 @@ function emptyTask(id: string): Task {
   };
 }
 
-function ensureStep(task: Task, index: number): Task {
+function ensureStep(task: Task, index: number, round?: number): Task {
   if (task.steps.some((s) => s.index === index)) return task;
-  const steps = [...task.steps, makeStep(index)].sort((a, b) => a.index - b.index);
+  const steps = [...task.steps, makeStep(index, round)].sort((a, b) => a.index - b.index);
   return { ...task, steps };
 }
 
@@ -55,10 +61,16 @@ export function applyToTask(
   const task = prev ?? emptyTask(id);
   switch (ev.type) {
     case "step_start": {
-      const t = ensureStep(task, ev.data.index);
+      const round = typeof ev.data.round === "number" ? ev.data.round : undefined;
+      const t = ensureStep(task, ev.data.index, round);
       const steps = t.steps.map((s) =>
         s.index === ev.data.index
-          ? { ...s, thought: ev.data.thought ?? s.thought, status: "running" }
+          ? {
+              ...s,
+              ...(round !== undefined ? { round } : {}),
+              thought: ev.data.thought ?? s.thought,
+              status: "running",
+            }
           : s
       );
       return { ...t, steps };

@@ -26,6 +26,7 @@ class AgentState(TypedDict, total=False):
     stop_requested: bool
 
     # ── Loop bookkeeping (internal) ──
+    round_no: int                           # 1-based conversation round (#265)
     step_index: int                         # cumulative across the whole task
     round_steps: int                        # agent calls (steps) this round (budget)
     final_answer: str

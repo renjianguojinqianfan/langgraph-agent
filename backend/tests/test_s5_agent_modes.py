@@ -22,7 +22,7 @@ from typing import Any, Dict, List, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.schemas import TaskStatus
+from backend.api.schemas import ChatTurn, Task, TaskStatus
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.agent.subagent import EXPLORE_TIER, tier_face_names
@@ -77,6 +77,7 @@ def _state(**kw: Any) -> AgentState:
         "steps": [],
         "status": "RUNNING",
         "stop_requested": False,
+        "round_no": 1,
         "step_index": 0,
         "round_steps": 0,
         "final_answer": "",
@@ -200,9 +201,271 @@ def test_a_round_without_tool_calls_parks_and_the_next_message_continues(
     ]
     # Two rounds: cumulative step indices, not a reset record.
     assert [s.index for s in second.steps] == [1, 2]
+    # #265: each step records the round it belongs to, so the UI never has to
+    # guess that the last round owns the whole task's steps.
+    assert [s.round for s in second.steps] == [1, 2]
+    step_starts = [
+        e["data"] for e in tm.event_bus.replay(task_id) if e["type"] == "step_start"
+    ]
+    assert [data["round"] for data in step_starts] == [1, 2]
     events = [e["type"] for e in tm.event_bus.replay(task_id)]
     assert events.count("task_resumed") == 1
     assert events.count("task_interrupted") == 2  # one per parked round
+
+
+def test_compression_does_not_shrink_the_round_ledger(tmp_path: Path) -> None:
+    """#265: early rounds survive compression, so round numbers stay unique.
+
+    ``final["messages"]`` is the compressed list once the budget is exceeded;
+    rebuilding ``Task.conversation`` from it dropped the first round, and the
+    next round number (counted from user turns) then collided with the old one.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="t-compressed",
+        title="compressed",
+        user_input="first question",
+        workspace=str(tmp_path),
+        status=TaskStatus.RUNNING,
+        conversation=[
+            ChatTurn(role="user", content="first question"),
+            ChatTurn(role="assistant", content="answer one"),
+            ChatTurn(role="user", content="second question"),
+        ],
+    )
+
+    tm._finalize_terminal(
+        task,
+        {
+            "status": "INTERRUPTED",
+            "steps": [],
+            # What compression leaves behind: the first round is gone.
+            "messages": [
+                {"role": "user", "content": "second question"},
+                {"role": "assistant", "content": "answer two"},
+            ],
+            "final_answer": "answer two",
+        },
+    )
+
+    assert [t.content for t in task.conversation] == [
+        "first question",
+        "answer one",
+        "second question",
+        "answer two",
+    ]
+    task.conversation.append(ChatTurn(role="user", content="third question"))
+    assert tm._round_number(task) == 3
+
+
+def test_plan_rounds_append_their_notes_instead_of_overwriting(
+    tmp_path: Path,
+) -> None:
+    """#265 review: a new plan note is round N's answer, not a replacement.
+
+    ``_drop_plan_notes`` keeps one note on the message face, so rebuilding the
+    ledger from ``final["messages"]`` moved round 2's answer under round 1's
+    question. The ledger must read [u1, note1, u2, note2].
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient(plan=["first step"]))
+    task_id = tm.create_task(
+        "plan", "make a plan", mode="plan", workspace=str(settings.artifacts_path)
+    )
+    first = _wait_parked(tm, task_id)
+    assert [t.content for t in first.conversation] == [
+        "make a plan",
+        "计划已更新到第 1 版。",
+    ]
+
+    tm.send_message(task_id, "refine it")
+    second = _wait_parked(tm, task_id)
+    assert [t.content for t in second.conversation] == [
+        "make a plan",
+        "计划已更新到第 1 版。",
+        "refine it",
+        "计划已更新到第 2 版。",
+    ]
+    assert [s.round for s in second.steps] == [1, 2]
+    assert tm._round_number(second) == 2
+
+
+def test_a_round_without_a_new_note_keeps_earlier_notes(tmp_path: Path) -> None:
+    """#265 review: only adopt what this round added; never drop settled answers.
+
+    Plan mode may answer with a clarifying question (no plan written), so the
+    rebuilt messages carry no note at all. Earlier notes are still their
+    rounds' answers and must survive.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="t-note",
+        title="note",
+        user_input="plan it",
+        workspace=str(tmp_path),
+        status=TaskStatus.RUNNING,
+        conversation=[
+            ChatTurn(role="user", content="plan it"),
+            ChatTurn(role="assistant", content="计划已更新到第 1 版。"),
+            ChatTurn(role="user", content="why?"),
+        ],
+    )
+
+    tm._finalize_terminal(
+        task,
+        {
+            "status": "INTERRUPTED",
+            "steps": [],
+            "messages": [
+                {"role": "user", "content": "why?"},
+                {"role": "assistant", "content": "Which folder should I use?"},
+            ],
+            "final_answer": "Which folder should I use?",
+        },
+    )
+
+    assert [t.content for t in task.conversation] == [
+        "plan it",
+        "计划已更新到第 1 版。",
+        "why?",
+        "Which folder should I use?",
+    ]
+
+
+def test_a_round_that_ended_without_an_answer_appends_nothing(
+    tmp_path: Path,
+) -> None:
+    """The rebuilt list's last assistant may be an older round's answer.
+
+    A provider error settles ``final_answer`` without appending an assistant
+    message; the ledger must not repeat the previous answer as this round's.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="t-error",
+        title="error",
+        user_input="first",
+        workspace=str(tmp_path),
+        status=TaskStatus.RUNNING,
+        conversation=[
+            ChatTurn(role="user", content="first"),
+            ChatTurn(role="assistant", content="answer one"),
+            ChatTurn(role="user", content="second"),
+        ],
+    )
+
+    tm._finalize_terminal(
+        task,
+        {
+            "status": "FAILED",
+            "steps": [],
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "answer one"},
+                {"role": "user", "content": "second"},
+            ],
+            "final_answer": "[error] provider down",
+            "error": "provider down",
+        },
+    )
+
+    assert [t.content for t in task.conversation] == [
+        "first",
+        "answer one",
+        "second",
+    ]
+
+
+def test_a_trailing_newline_answer_still_lands_in_the_ledger(tmp_path: Path) -> None:
+    """Build mode strips before the ledger comparison (#265 review).
+
+    ``_conversation_from`` strips the persisted message; an unstripped
+    ``final_answer`` therefore never matched it, and the round's answer was
+    silently missing from the conversation.
+    """
+
+    class _NewlineLLM(MockLLMClient):
+        def complete(self, messages, tools=None, **kwargs):
+            return LLMResponse(content="Done\n")
+
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, _NewlineLLM())
+    task_id = tm.create_task(title="newline", user_input="hello")
+    task = _wait_parked(tm, task_id)
+
+    assert task.final_answer == "Done"
+    assert [t.content for t in task.conversation] == ["hello", "Done"]
+
+
+def _merged(
+    tm,
+    settled: List[tuple[str, str]],
+    rebuilt: List[tuple[str, str]],
+    final_answer: str,
+) -> List[str]:
+    turns = tm._merge_round_turns(
+        [ChatTurn(role=role, content=content) for role, content in settled],
+        [ChatTurn(role=role, content=content) for role, content in rebuilt],
+        final_answer,
+    )
+    return [turn.content for turn in turns]
+
+
+def test_merge_round_turns_dedupes_notes_and_answers_already_in_the_ledger(
+    tmp_path: Path,
+) -> None:
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(
+        tm,
+        [("user", "u1"), ("assistant", "计划已更新到第 1 版。"), ("user", "u2")],
+        [
+            ("user", "u2"),
+            ("assistant", "计划已更新到第 1 版。"),
+            ("assistant", "a2"),
+        ],
+        "a2",
+    ) == ["u1", "计划已更新到第 1 版。", "u2", "a2"]
+
+
+def test_merge_round_turns_carries_a_build_rounds_injected_note(
+    tmp_path: Path,
+) -> None:
+    """An external plan edit injects a note mid-round; it precedes the answer."""
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(
+        tm,
+        [("user", "u1"), ("assistant", "a1"), ("user", "u2")],
+        [
+            ("user", "u2"),
+            ("assistant", "计划已更新到第 1 版。"),
+            ("assistant", "a2"),
+        ],
+        "a2",
+    ) == ["u1", "a1", "u2", "计划已更新到第 1 版。", "a2"]
+
+
+def test_merge_round_turns_does_not_repeat_a_resumed_answer(tmp_path: Path) -> None:
+    """A resume finalize sees the settled answer again; it must not duplicate."""
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(
+        tm,
+        [("user", "u1"), ("assistant", "a1")],
+        [("user", "u1"), ("assistant", "a1")],
+        "a1",
+    ) == ["u1", "a1"]
+
+
+def test_merge_round_turns_with_an_empty_rebuild_keeps_the_ledger(
+    tmp_path: Path,
+) -> None:
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert _merged(tm, [("user", "u1"), ("assistant", "a1")], [], "") == [
+        "u1",
+        "a1",
+    ]
 
 
 def test_stop_on_a_parked_task_does_not_poison_the_next_round(tmp_path: Path) -> None:

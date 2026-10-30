@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { cx } from "../../lib/cx";
 import type { StepRecord } from "../../types";
-import { Icon } from "../ui/Icon";
+import { DisclosureHead } from "./DisclosureHead";
 import { ToolRow } from "./ToolRow";
 
 const STATUS: Record<string, { label: string; dot: string }> = {
@@ -30,16 +29,11 @@ export function StepRow({ step }: { step: StepRecord }) {
 
   return (
     <div className="border-b border-rule last:border-b-0">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-start gap-2.5 px-1 py-2 text-left"
+      <DisclosureHead
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+        dot={status.dot}
       >
-        <span
-          aria-hidden="true"
-          className={cx("mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full", status.dot)}
-        />
         <span className="sr-only">{status.label}</span>
         <span className="min-w-0 flex-1 truncate text-body text-primary" title={summary}>
           {summary}
@@ -49,15 +43,7 @@ export function StepRow({ step }: { step: StepRecord }) {
             {toolCount} 次
           </span>
         )}
-        <Icon
-          name="chevron"
-          size={14}
-          className={cx(
-            "mt-1 shrink-0 text-tertiary transition-transform duration-150",
-            open && "rotate-180"
-          )}
-        />
-      </button>
+      </DisclosureHead>
 
       {open && (
         <div className="flex flex-col gap-1.5 pb-2 pl-5 pr-1">

@@ -34,6 +34,9 @@ export interface ToolCallRecord {
 
 export interface StepRecord {
   index: number;
+  /** 1-based conversation round this step belongs to (#265). Absent/0 on
+   * records persisted before the field existed; those render as a legacy block. */
+  round?: number;
   thought: string;
   tool_calls: ToolCallRecord[];
   status: string; // pending | running | done | failed

@@ -1128,8 +1128,15 @@ class TaskManager:
         task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
         task.plan_version = int(final.get("plan_version", task.plan_version))
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
-        task.conversation = self._conversation_from(final.get("messages"))
         task.final_answer = self.redact(final.get("final_answer", "") or "")
+        rebuilt = self._conversation_from(final.get("messages"))
+        if task.conversation:
+            task.conversation = self._merge_round_turns(
+                task.conversation, rebuilt, task.final_answer
+            )
+        else:
+            # Legacy records predate the persisted conversation; rebuild once.
+            task.conversation = rebuilt
         task.error = self.redact(final["error"]) if final.get("error") else None
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()
@@ -1152,6 +1159,59 @@ class TaskManager:
                 {"task_id": task.id, "status": status},
             )
         self._save_task(task, strict=False)
+
+    def _merge_round_turns(
+        self, settled: List[ChatTurn], rebuilt: List[ChatTurn], final_answer: str
+    ) -> List[ChatTurn]:
+        """Append what this round added to the settled round ledger (#265).
+
+        ``rebuilt`` comes from ``final["messages"]``: compression may already
+        have dropped early rounds, and the message face keeps at most one plan
+        note (``nodes._drop_plan_notes``). Replacing the ledger with it would
+        erase settled turns and let the next round number collide, so it only
+        contributes the two things a round can add: a plan note that is not in
+        the ledger yet (a plan edit or this round's note answer), and the
+        answer the final messages actually carry. Older notes stay where they
+        are — each one is its round's answer.
+        """
+        kept = list(settled)
+        note: Optional[ChatTurn] = None
+        answer: Optional[ChatTurn] = None
+        for turn in reversed(rebuilt):
+            if turn.role != "assistant":
+                continue
+            if answer is None:
+                answer = turn
+            if note is None and plan_file.is_plan_note(turn.content):
+                note = turn
+            if answer is not None and note is not None:
+                break
+        note_text = self.redact(note.content) if note is not None else ""
+        if note_text and not any(
+            turn.role == "assistant" and turn.content == note_text for turn in kept
+        ):
+            kept.append(ChatTurn(role="assistant", content=note_text))
+
+        # A provider error settles without appending an assistant message; the
+        # last rebuilt assistant is then an earlier round's answer.
+        if answer is None or self.redact(answer.content) != final_answer:
+            return kept
+        last = kept[-1]
+        if last.role == "assistant" and last.content == final_answer:
+            return kept
+        return [*kept, ChatTurn(role="assistant", content=final_answer)]
+
+    @staticmethod
+    def _round_number(task: Task) -> int:
+        """1-based conversation round for the run about to start (#265).
+
+        One user turn opens one round. Counting the persisted turns (rather than
+        a checkpoint-only counter) keeps pre-#265 checkpoints attributable: the
+        next round is still the next user turn, even when old steps carry 0.
+        ``_merge_round_turns`` never replaces settled turns, so compression
+        cannot shrink the ledger beneath the counter.
+        """
+        return max(1, sum(1 for turn in task.conversation if turn.role == "user"))
 
     @staticmethod
     def _conversation_from(messages: Any) -> List[ChatTurn]:
@@ -1327,6 +1387,7 @@ class TaskManager:
             restored["final_answer"] = ""
             restored["error"] = ""
             restored["round_steps"] = 0
+            restored["round_no"] = self._round_number(current)
             restored["mode"] = current.mode.value
             self._active_states[task_id] = restored
 
@@ -1564,6 +1625,7 @@ class TaskManager:
             restored["error"] = ""
             # Budget is per round; step_index stays cumulative for record ids.
             restored["round_steps"] = 0
+            restored["round_no"] = self._round_number(current)
             self._active_states[task_id] = restored
 
             final = graph.invoke(
