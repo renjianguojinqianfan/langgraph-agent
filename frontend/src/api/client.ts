@@ -16,12 +16,15 @@ import {
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
 
 /** Failure text from either a FastAPI ``{detail}`` body or a non-ok envelope. */
-export function apiErrorText(r: unknown): string {
+function detailText(r: unknown): string {
   const detail = (r as { detail?: unknown })?.detail;
   if (typeof detail === "string") return detail;
   const message = (r as { message?: unknown })?.message;
-  if (typeof message === "string" && message !== "ok") return message;
-  return "操作失败";
+  return typeof message === "string" && message !== "ok" ? message : "";
+}
+
+export function apiErrorText(r: unknown): string {
+  return detailText(r) || "操作失败";
 }
 
 // localStorage key must match backend/services/auth.py:TOKEN_STORAGE_KEY.
@@ -220,12 +223,7 @@ export async function previewFile(id: string, path: string): Promise<PreviewResu
   return {
     status: res.status,
     data: data && typeof data.content === "string" ? data : null,
-    detail:
-      typeof json?.detail === "string"
-        ? json.detail
-        : typeof json?.message === "string" && json.message !== "ok"
-          ? json.message
-          : "",
+    detail: json ? detailText(json) : "",
   };
 }
 

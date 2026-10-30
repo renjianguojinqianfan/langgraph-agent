@@ -36,6 +36,14 @@ describe("previewFailure", () => {
     expect(previewFailure(500, "boom").title).toBe("预览失败（HTTP 500）");
   });
 
+  it("points an escaped-path failure at the path shown in the tab header", () => {
+    expect(previewFailure(400).hint).toContain("核对上方路径");
+  });
+
+  it("says a stale login also blocks the download link", () => {
+    expect(previewFailure(401).hint).toContain("下载");
+  });
+
   it("keeps the server detail for unclassified failures", () => {
     expect(previewFailure(500, "boom").hint).toBe("boom");
     expect(previewFailure(500, "").hint).toContain("重试");

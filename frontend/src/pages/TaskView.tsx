@@ -188,11 +188,6 @@ export function TaskView() {
   }, []);
 
   const task = currentTaskId ? detail ?? null : null;
-  // A stale file tab (task just switched) falls back to the list for one frame
-  // instead of rendering a panel that no longer exists.
-  const openPath = fileTabPath(dash.tab);
-  const shownDashTab: DashTab =
-    openPath !== null && !dash.files.includes(openPath) ? "files" : dash.tab;
 
   return (
     <div
@@ -270,7 +265,7 @@ export function TaskView() {
       >
         <DashTabs
           task={task}
-          tab={shownDashTab}
+          tab={dash.tab}
           fileTabs={dash.files}
           visible={!dashInert}
           onTabChange={changeTab}

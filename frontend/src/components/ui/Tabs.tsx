@@ -36,6 +36,11 @@ export function tabButtonId(baseId: string, id: string): string {
   return domId(baseId, "tab", id);
 }
 
+/** Move focus onto a tab chip without reaching into its DOM id format. */
+export function focusTab(baseId: string, id: string): void {
+  document.getElementById(tabButtonId(baseId, id))?.focus();
+}
+
 export function Tabs<T extends string>({
   label,
   tabs,
@@ -46,7 +51,7 @@ export function Tabs<T extends string>({
   const refs = useRef(new Map<T, HTMLDivElement>());
 
   const select = (id: T) => {
-    onChange(id);
+    if (id !== value) onChange(id);
     refs.current.get(id)?.focus();
   };
 
@@ -56,13 +61,8 @@ export function Tabs<T extends string>({
   }, [value]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    // Keys on the nested close control are that control's, not the tab's.
-    if ((e.target as HTMLElement).getAttribute("role") !== "tab") return;
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onChange(value);
-      return;
-    }
+    // Arrows move between tabs even when focus sits on the nested close button;
+    // Enter / Space stay that button's own activation key.
     const at = tabs.findIndex((t) => t.id === value);
     if (at < 0) return;
     let next: number | null = null;
@@ -98,7 +98,9 @@ export function Tabs<T extends string>({
               if (el) refs.current.set(t.id, el);
               else refs.current.delete(t.id);
             }}
-            onClick={() => onChange(t.id)}
+            onClick={() => {
+              if (!active) onChange(t.id);
+            }}
             className={cx(
               "relative flex h-9 cursor-pointer items-center px-2.5 text-meta transition-colors duration-150",
               t.onClose && "pr-7",

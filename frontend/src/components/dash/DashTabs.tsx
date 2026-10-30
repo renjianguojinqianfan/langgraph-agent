@@ -1,8 +1,15 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { fileTabId, fileTabLabel, type DashTab } from "../../lib/dashTabs";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  fileTabId,
+  fileTabLabel,
+  fileTabPath,
+  tabAfterClosing,
+  type DashTab,
+} from "../../lib/dashTabs";
 import type { Task } from "../../types";
 import { Button } from "../ui/Button";
 import {
+  focusTab,
   Tabs,
   tabButtonId,
   tabPanelId,
@@ -66,22 +73,25 @@ export function DashTabs({
   onCloseFile,
   onOpenTrace,
 }: DashTabsProps) {
-  // Closing removes the focused button; put focus back on the active tab so a
-  // keyboard user is not dropped to <body>.
-  const closing = useRef(false);
+  // Focus management: opening a file (keyboard or mouse) moves focus from the
+  // hidden list row onto its chip; closing returns focus to a neighbour.
+  const [focusTarget, setFocusTarget] = useState<DashTab | null>(null);
+  const previousTab = useRef<DashTab>(tab);
+  useEffect(() => {
+    const previous = previousTab.current;
+    previousTab.current = tab;
+    if (tab !== previous && fileTabPath(tab) !== null) focusTab(BASE_ID, tab);
+  }, [tab]);
+  useEffect(() => {
+    if (focusTarget === null) return;
+    focusTab(BASE_ID, focusTarget);
+    setFocusTarget(null);
+  }, [focusTarget]);
+
   const closeFile = (path: string) => {
-    closing.current = true;
+    setFocusTarget(tabAfterClosing(fileTabs, path, tab));
     onCloseFile(path);
   };
-  useEffect(() => {
-    if (!closing.current) return;
-    closing.current = false;
-    const id = tabButtonId(BASE_ID, tab);
-    const frame = requestAnimationFrame(() => {
-      document.getElementById(id)?.focus();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [tab, fileTabs]);
 
   const tabs: TabItem<DashTab>[] = [
     ...TABS,
@@ -152,7 +162,12 @@ export function DashTabs({
             const id = fileTabId(path);
             return (
               <DashPanel key={path} tabId={id} active={id === tab}>
-                <FilePreviewTab taskId={task.id} path={path} />
+                <FilePreviewTab
+                  taskId={task.id}
+                  path={path}
+                  active={id === tab}
+                  visible={visible}
+                />
               </DashPanel>
             );
           })}

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { fileDownloadUrl, listFiles } from "../../api/client";
+import { listFiles } from "../../api/client";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
-import { Icon } from "../ui/Icon";
+import { FileDownloadLink } from "./FileDownloadLink";
 import { fileName, groupFiles } from "./fileGroup";
 
 /** Refresh cadence while a running task keeps writing files. */
@@ -109,14 +109,7 @@ export function FilePane({
                     <span className="shrink-0 font-mono text-machine tabular-nums text-tertiary">
                       {formatBytes(file.size)}
                     </span>
-                    <a
-                      href={fileDownloadUrl(task.id, file.path)}
-                      download
-                      aria-label={`下载 ${file.path}`}
-                      className="shrink-0 rounded-control p-1.5 text-tertiary hover:bg-surface-hover hover:text-primary"
-                    >
-                      <Icon name="download" size={14} />
-                    </a>
+                    <FileDownloadLink taskId={task.id} path={file.path} />
                   </div>
                 </li>
               ))}

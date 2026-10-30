@@ -1,24 +1,44 @@
 import { useEffect, useState } from "react";
-import { fileDownloadUrl, previewFile } from "../../api/client";
+import { previewFile } from "../../api/client";
 import { formatBytes } from "../../lib/format";
 import { previewFailure, type PreviewFailureCopy } from "../../lib/preview";
 import type { FilePreview } from "../../types";
-import { Icon } from "../ui/Icon";
+import { FileDownloadLink } from "./FileDownloadLink";
 
 type State =
   | { phase: "loading" }
   | { phase: "ready"; preview: FilePreview }
   | { phase: "failed"; copy: PreviewFailureCopy };
 
+interface FilePreviewTabProps {
+  taskId: string;
+  path: string;
+  /** Fetch on first activation, not on mount: hidden chips cost no request. */
+  active: boolean;
+  /** Narrow-screen drawer: a closed drawer must not fetch (#230). */
+  visible: boolean;
+}
+
 /**
  * One file-preview tab (#266): the third column switches to this body instead
  * of appending a preview below the file list. The download link is present in
  * every state, including failures.
  */
-export function FilePreviewTab({ taskId, path }: { taskId: string; path: string }) {
+export function FilePreviewTab({
+  taskId,
+  path,
+  active,
+  visible,
+}: FilePreviewTabProps) {
   const [state, setState] = useState<State>({ phase: "loading" });
+  const [load, setLoad] = useState(active && visible);
 
   useEffect(() => {
+    if (active && visible) setLoad(true);
+  }, [active, visible]);
+
+  useEffect(() => {
+    if (!load) return;
     let cancelled = false;
     setState({ phase: "loading" });
     previewFile(taskId, path)
@@ -33,9 +53,7 @@ export function FilePreviewTab({ taskId, path }: { taskId: string; path: string 
     return () => {
       cancelled = true;
     };
-  }, [taskId, path]);
-
-  const download = fileDownloadUrl(taskId, path);
+  }, [taskId, path, load]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -51,15 +69,7 @@ export function FilePreviewTab({ taskId, path }: { taskId: string; path: string 
             {formatBytes(state.preview.size)}
           </span>
         )}
-        <a
-          href={download}
-          download
-          aria-label={`下载 ${path}`}
-          title="下载"
-          className="shrink-0 rounded-control p-1.5 text-tertiary hover:bg-surface-hover hover:text-primary"
-        >
-          <Icon name="download" size={14} />
-        </a>
+        <FileDownloadLink taskId={taskId} path={path} />
       </div>
 
       {state.phase === "loading" && <p className="text-body text-tertiary">加载中…</p>}
@@ -68,14 +78,7 @@ export function FilePreviewTab({ taskId, path }: { taskId: string; path: string 
         <div role="alert" className="rounded-well border border-rule bg-surface-well px-3 py-3">
           <p className="text-body text-primary">{state.copy.title}</p>
           <p className="mt-1 text-meta text-tertiary">{state.copy.hint}</p>
-          <a
-            href={download}
-            download
-            className="mt-2 inline-flex items-center gap-1.5 rounded-control border border-rule px-2 py-1 text-meta text-primary hover:bg-surface-hover"
-          >
-            <Icon name="download" size={14} />
-            下载文件
-          </a>
+          <FileDownloadLink taskId={taskId} path={path} labeled />
         </div>
       )}
 

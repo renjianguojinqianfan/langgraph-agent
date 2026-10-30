@@ -106,6 +106,7 @@
 
   button,
   [role="button"],
+  [role="tab"],
   a {
     touch-action: manipulation;
   }
