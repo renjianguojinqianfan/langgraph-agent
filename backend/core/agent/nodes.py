@@ -72,12 +72,6 @@ def _is_tool_markup_only(text: str) -> bool:
 
 
 def _plan_note_text(version: int) -> str:
-    """The one gray line G-34 allows when the plan version moves.
-
-    Shared with :mod:`backend.services.plan_file` (and mirrored by
-    ``frontend/src/lib/rounds.ts``): a protocol line matched as a whole
-    sentence, never as a prefix (#236).
-    """
     return plan_file.plan_note_text(version)
 
 

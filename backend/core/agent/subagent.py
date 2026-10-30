@@ -340,7 +340,6 @@ class SubAgentExecutor:
                 "steps": [],
                 "status": "RUNNING",
                 "stop_requested": False,
-                "round_no": 1,
                 "step_index": 0,
                 "round_steps": 0,
                 "final_answer": "",

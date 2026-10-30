@@ -905,7 +905,6 @@ class TaskManager:
                 "steps": [],
                 "status": "RUNNING",
                 "stop_requested": False,
-                "round_no": self._round_number(task),
                 "step_index": 0,
                 "round_steps": 0,
                 "final_answer": "",
@@ -1132,50 +1131,9 @@ class TaskManager:
         task.final_answer = self.redact(final.get("final_answer", "") or "")
         rebuilt = self._conversation_from(final.get("messages"))
         if task.conversation:
-            # Settled rounds are the round ledger (#265): `final["messages"]`
-            # may be the compressed list with early turns already dropped, so
-            # rebuilding from it would erase them — and the next round number,
-            # counted from user turns, would collide. Adopt only what this
-            # round added: the current plan note and the answer the final
-            # messages actually carry (a provider error never appends one).
-            kept = list(task.conversation)
-            note = next(
-                (
-                    turn
-                    for turn in reversed(rebuilt)
-                    if turn.role == "assistant" and plan_file.is_plan_note(turn.content)
-                ),
-                None,
+            task.conversation = self._merge_round_turns(
+                task.conversation, rebuilt, task.final_answer
             )
-            note_indexes = [
-                index
-                for index, turn in enumerate(kept)
-                if plan_file.is_plan_note(turn.content)
-            ]
-            if note is None:
-                kept = [
-                    turn for turn in kept if not plan_file.is_plan_note(turn.content)
-                ]
-            elif note_indexes:
-                kept[note_indexes[-1]] = note
-            else:
-                kept.append(note)
-            last_assistant = next(
-                (turn for turn in reversed(rebuilt) if turn.role == "assistant"),
-                None,
-            )
-            already_noted = plan_file.is_plan_note(task.final_answer) and any(
-                turn.content == task.final_answer and plan_file.is_plan_note(turn.content)
-                for turn in kept
-            )
-            if (
-                task.final_answer
-                and last_assistant is not None
-                and last_assistant.content == task.final_answer
-                and not already_noted
-            ):
-                kept.append(ChatTurn(role="assistant", content=task.final_answer))
-            task.conversation = kept
         else:
             # Legacy records predate the persisted conversation; rebuild once.
             task.conversation = rebuilt
@@ -1202,6 +1160,47 @@ class TaskManager:
             )
         self._save_task(task, strict=False)
 
+    def _merge_round_turns(
+        self, settled: List[ChatTurn], rebuilt: List[ChatTurn], final_answer: str
+    ) -> List[ChatTurn]:
+        """Append what this round added to the settled round ledger (#265).
+
+        ``rebuilt`` comes from ``final["messages"]``: compression may already
+        have dropped early rounds, and the message face keeps at most one plan
+        note (``nodes._drop_plan_notes``). Replacing the ledger with it would
+        erase settled turns and let the next round number collide, so it only
+        contributes the two things a round can add: a plan note that is not in
+        the ledger yet (a plan edit or this round's note answer), and the
+        answer the final messages actually carry. Older notes stay where they
+        are — each one is its round's answer.
+        """
+        kept = list(settled)
+        note = next(
+            (
+                turn
+                for turn in reversed(rebuilt)
+                if turn.role == "assistant" and plan_file.is_plan_note(turn.content)
+            ),
+            None,
+        )
+        if note is not None and not any(
+            turn.role == "assistant" and turn.content == note.content for turn in kept
+        ):
+            kept.append(note)
+
+        answer = next(
+            (turn for turn in reversed(rebuilt) if turn.role == "assistant"),
+            None,
+        )
+        # A provider error settles without appending an assistant message; the
+        # last rebuilt assistant is then an earlier round's answer.
+        if answer is None or self.redact(answer.content) != final_answer:
+            return kept
+        last = kept[-1]
+        if last.role == "assistant" and last.content == final_answer:
+            return kept
+        return [*kept, ChatTurn(role="assistant", content=final_answer)]
+
     @staticmethod
     def _round_number(task: Task) -> int:
         """1-based conversation round for the run about to start (#265).
@@ -1209,8 +1208,8 @@ class TaskManager:
         One user turn opens one round. Counting the persisted turns (rather than
         a checkpoint-only counter) keeps pre-#265 checkpoints attributable: the
         next round is still the next user turn, even when old steps carry 0.
-        ``_finalize_terminal`` appends to this list instead of rebuilding it, so
-        compression cannot shrink the ledger beneath the counter.
+        ``_merge_round_turns`` never replaces settled turns, so compression
+        cannot shrink the ledger beneath the counter.
         """
         return max(1, sum(1 for turn in task.conversation if turn.role == "user"))
 

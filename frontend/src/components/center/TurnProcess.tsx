@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-import { useTaskStore } from "../../store/taskStore";
 import { compressFaceParts, type StepRecord, type TraceMarker } from "../../types";
 import { cx } from "../../lib/cx";
-import { Icon } from "../ui/Icon";
+import { DisclosureHead } from "./DisclosureHead";
 import { StepRow } from "./StepRow";
 
 function CompressMarker({ marker }: { marker: TraceMarker }) {
@@ -17,14 +16,11 @@ function CompressMarker({ marker }: { marker: TraceMarker }) {
 }
 
 interface TurnProcessProps {
-  taskId: string;
   steps: StepRecord[];
+  /** Markers this block owns; markers no step owns render once at the end. */
+  markers: TraceMarker[];
   /** The round currently running: opens by itself and keeps live status. */
   live?: boolean;
-  /** Only one block claims markers no step owns, so they render exactly once. */
-  includeLooseMarkers?: boolean;
-  /** Every step index in the task; a marker for another round is not loose. */
-  knownStepIndexes?: ReadonlySet<number>;
   /** Legacy records have no round; name the block instead of guessing one. */
   title?: string;
 }
@@ -35,14 +31,11 @@ interface TurnProcessProps {
  * round's steps. The turn number itself is never rendered.
  */
 export function TurnProcess({
-  taskId,
   steps,
+  markers,
   live = false,
-  includeLooseMarkers = false,
-  knownStepIndexes,
   title,
 }: TurnProcessProps) {
-  const markers = useTaskStore((s) => s.markers[taskId] ?? []);
   const [open, setOpen] = useState(live);
 
   // Follow the live round: open while it runs, fold once it settles (dsh).
@@ -51,21 +44,13 @@ export function TurnProcess({
     setOpen(live);
   }, [live]);
 
-  const known = knownStepIndexes ?? new Set(steps.map((step) => step.index));
   const byStep = new Map<number, TraceMarker[]>();
   const loose: TraceMarker[] = [];
   for (const marker of markers) {
     const index = marker.data.step_index;
-    if (typeof index === "number" && steps.some((step) => step.index === index)) {
-      const list = byStep.get(index) ?? [];
-      list.push(marker);
-      byStep.set(index, list);
-    } else if (
-      includeLooseMarkers &&
-      (typeof index !== "number" || !known.has(index))
-    ) {
-      // A marker bound to a known step belongs to that round's block; only
-      // orphans (no step index, or a step that no longer exists) fall through.
+    if (steps.some((step) => step.index === index)) {
+      byStep.set(index, [...(byStep.get(index) ?? []), marker]);
+    } else {
       loose.push(marker);
     }
   }
@@ -83,28 +68,18 @@ export function TurnProcess({
 
   return (
     <section aria-label={label} className="border-y border-rule">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2.5 px-1 py-2 text-left"
+      <DisclosureHead
+        open={open}
+        onToggle={() => setOpen((value) => !value)}
+        dot={dot}
       >
-        <span aria-hidden="true" className={cx("h-1.5 w-1.5 shrink-0 rounded-full", dot)} />
         <span className="text-body text-secondary">{label}</span>
         {steps.length > 0 && (
           <span className="font-mono text-machine tabular-nums text-tertiary">
             {steps.length} 步 · {toolCount} 次工具调用
           </span>
         )}
-        <Icon
-          name="chevron"
-          size={14}
-          className={cx(
-            "ml-auto shrink-0 text-tertiary transition-transform duration-150",
-            open && "rotate-180"
-          )}
-        />
-      </button>
+      </DisclosureHead>
 
       {open && (
         <div className="pb-1">

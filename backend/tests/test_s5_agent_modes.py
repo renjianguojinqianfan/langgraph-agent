@@ -259,6 +259,126 @@ def test_compression_does_not_shrink_the_round_ledger(tmp_path: Path) -> None:
     assert tm._round_number(task) == 3
 
 
+def test_plan_rounds_append_their_notes_instead_of_overwriting(
+    tmp_path: Path,
+) -> None:
+    """#265 review: a new plan note is round N's answer, not a replacement.
+
+    ``_drop_plan_notes`` keeps one note on the message face, so rebuilding the
+    ledger from ``final["messages"]`` moved round 2's answer under round 1's
+    question. The ledger must read [u1, note1, u2, note2].
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient(plan=["first step"]))
+    task_id = tm.create_task(
+        "plan", "make a plan", mode="plan", workspace=str(settings.artifacts_path)
+    )
+    first = _wait_parked(tm, task_id)
+    assert [t.content for t in first.conversation] == [
+        "make a plan",
+        "计划已更新到第 1 版。",
+    ]
+
+    tm.send_message(task_id, "refine it")
+    second = _wait_parked(tm, task_id)
+    assert [t.content for t in second.conversation] == [
+        "make a plan",
+        "计划已更新到第 1 版。",
+        "refine it",
+        "计划已更新到第 2 版。",
+    ]
+    assert [s.round for s in second.steps] == [1, 2]
+    assert tm._round_number(second) == 2
+
+
+def test_a_round_without_a_new_note_keeps_earlier_notes(tmp_path: Path) -> None:
+    """#265 review: only adopt what this round added; never drop settled answers.
+
+    Plan mode may answer with a clarifying question (no plan written), so the
+    rebuilt messages carry no note at all. Earlier notes are still their
+    rounds' answers and must survive.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="t-note",
+        title="note",
+        user_input="plan it",
+        workspace=str(tmp_path),
+        status=TaskStatus.RUNNING,
+        conversation=[
+            ChatTurn(role="user", content="plan it"),
+            ChatTurn(role="assistant", content="计划已更新到第 1 版。"),
+            ChatTurn(role="user", content="why?"),
+        ],
+    )
+
+    tm._finalize_terminal(
+        task,
+        {
+            "status": "INTERRUPTED",
+            "steps": [],
+            "messages": [
+                {"role": "user", "content": "why?"},
+                {"role": "assistant", "content": "Which folder should I use?"},
+            ],
+            "final_answer": "Which folder should I use?",
+        },
+    )
+
+    assert [t.content for t in task.conversation] == [
+        "plan it",
+        "计划已更新到第 1 版。",
+        "why?",
+        "Which folder should I use?",
+    ]
+
+
+def test_a_round_that_ended_without_an_answer_appends_nothing(
+    tmp_path: Path,
+) -> None:
+    """The rebuilt list's last assistant may be an older round's answer.
+
+    A provider error settles ``final_answer`` without appending an assistant
+    message; the ledger must not repeat the previous answer as this round's.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="t-error",
+        title="error",
+        user_input="first",
+        workspace=str(tmp_path),
+        status=TaskStatus.RUNNING,
+        conversation=[
+            ChatTurn(role="user", content="first"),
+            ChatTurn(role="assistant", content="answer one"),
+            ChatTurn(role="user", content="second"),
+        ],
+    )
+
+    tm._finalize_terminal(
+        task,
+        {
+            "status": "FAILED",
+            "steps": [],
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "answer one"},
+                {"role": "user", "content": "second"},
+            ],
+            "final_answer": "[error] provider down",
+            "error": "provider down",
+        },
+    )
+
+    assert [t.content for t in task.conversation] == [
+        "first",
+        "answer one",
+        "second",
+    ]
+
+
 def test_stop_on_a_parked_task_does_not_poison_the_next_round(tmp_path: Path) -> None:
     """A second 停止 click (or a stop against a parked task) must be a no-op.
 

@@ -1,5 +1,7 @@
 import type { Task } from "../../types";
+import { groupMarkers } from "../../lib/markers";
 import { isPlanNotice, legacySteps, splitRounds, stepsForRound } from "../../lib/rounds";
+import { useTaskStore } from "../../store/taskStore";
 import { AnswerSheet } from "./AnswerSheet";
 import { FailureBlock } from "./FailureBlock";
 import { PlanAnchor } from "./PlanAnchor";
@@ -19,9 +21,16 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
       : [];
   const rounds = splitRounds(conversation);
   const legacy = legacySteps(task.steps);
-  const empty = rounds.length === 0 && task.steps.length === 0;
+  const markers = useTaskStore((s) => s.markers[task.id] ?? []);
+  // Ownership is resolved once here; each block receives only its own markers.
+  const { byStep, loose } = groupMarkers(markers, task.steps);
+  const legacyMarkers = [
+    ...legacy.flatMap((step) => byStep.get(step.index) ?? []),
+    ...loose,
+  ];
+  const empty =
+    rounds.length === 0 && task.steps.length === 0 && markers.length === 0;
   const running = task.status === "RUNNING";
-  const knownStepIndexes = new Set(task.steps.map((step) => step.index));
 
   return (
     <div
@@ -38,21 +47,27 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
           </p>
         )}
 
+        {(legacy.length > 0 || legacyMarkers.length > 0) && (
+          <TurnProcess
+            steps={legacy}
+            markers={legacyMarkers}
+            title="历史执行过程"
+          />
+        )}
+
         {rounds.map((round, i) => {
           // Index 0 is a leading assistant-only block, not a backend round.
           const roundSteps = round.index > 0 ? stepsForRound(task.steps, round.index) : [];
+          const roundMarkers = roundSteps.flatMap((step) => byStep.get(step.index) ?? []);
           const last = i === rounds.length - 1;
           return (
             <div key={round.index} className="flex flex-col gap-3">
               {round.user && <UserBubble text={round.user.content} />}
-              {last && onOpenPlan && <PlanAnchor task={task} onOpenPlan={onOpenPlan} />}
               {roundSteps.length > 0 && (
                 <TurnProcess
-                  taskId={task.id}
                   steps={roundSteps}
+                  markers={roundMarkers}
                   live={running && last}
-                  includeLooseMarkers={last}
-                  knownStepIndexes={knownStepIndexes}
                 />
               )}
               {round.answers.map((turn, j) =>
@@ -68,14 +83,8 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
           );
         })}
 
-        {legacy.length > 0 && (
-          <TurnProcess
-            taskId={task.id}
-            steps={legacy}
-            title="历史执行过程"
-            includeLooseMarkers={rounds.length === 0}
-            knownStepIndexes={knownStepIndexes}
-          />
+        {rounds.length > 0 && onOpenPlan && (
+          <PlanAnchor task={task} onOpenPlan={onOpenPlan} />
         )}
 
         <FailureBlock task={task} />

@@ -59,7 +59,7 @@ frontend/src/
 ├── pages/               TaskView · LoginPage
 ├── components/          TaskPanel · AuthGuard · TraceTab
 │   ├── center/          TaskHeader · Composer · Conversation · TurnProcess · UserBubble
-│   │                    StepRow · ToolRow · AnswerSheet · FailureBlock · PlanAnchor
+│   │                    DisclosureHead · StepRow · ToolRow · AnswerSheet · FailureBlock · PlanAnchor
 │   │                    SubagentStrip · SubagentPlate
 │   ├── rail/            TaskRail · RailSearch · TaskRow · RailFooter · group.ts
 │   ├── dash/            DashTabs · FilePane · PlanPane · EventPane · TraceFace
@@ -67,7 +67,7 @@ frontend/src/
 │   └── ui/              Button · Icon · Status · Segmented · Tabs
 ├── store/               taskStore · reduceTask · modelStore · authStore
 ├── hooks/               useSSE.ts EventSource 订阅表 EVENT_TYPES（§3.4 的四处之一）· useMediaQuery.ts 断点
-├── lib/                 format · taskState · rounds · markdown · keys · cx · eventLabels.ts
+├── lib/                 format · taskState · rounds · markers · markdown · keys · cx · eventLabels.ts
 ├── api/client.ts        后端调用
 └── types/index.ts       与 schemas.py 字段对齐；SSEventType 联合
 
@@ -124,6 +124,8 @@ START → agent ──有 tool call──→ tool ──→ agent
 - 子任务复用同一拓扑，在独立 `thread_id` 上跑，工作区继承父任务。
 
 **AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`round_no` / `step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks` / `_is_subtask`）。
+
+**conversation 账本**：`Task.conversation` 是逐轮只增的用户 / 助手文本账本。收尾（`_finalize_terminal` → `_merge_round_turns`）只追加本轮新增的两样东西——该轮的计划提示与末次回答——不拿 `final["messages"]` 重建：压缩可能已丢掉早期回合，而消息面只保留最新一条计划提示。旧计划提示留在原位（它就是那一轮的回答）；轮次编号按账本里的用户回合数计，压缩因此不会让编号回退。
 
 **checkpoint 语义**：挂载后每个 superstep 都是一份 state 副本并持久化；`thread_id == task_id`，因此停止/崩溃可续跑，停下后也能沿同一 thread 续说。`stop_requested` 在带 checkpointer 时不可靠（每步是副本），所以 `agent` 节点额外轮询 manager 级的 `_stop_flags`（`task_manager.py`）。
 

@@ -28,8 +28,10 @@ PLAN_MESSAGE_PREFIX = "[qianfan-plan]"
 PLAN_MESSAGE_RULE = "以计划文件当前内容为准，与早先消息冲突时按计划做。"
 PLAN_MAX_CHARS = 100_000
 PLAN_MESSAGE_MAX_CHARS = 20_000
-#: The gray "plan updated" note, minted by the agent and shown as a muted line
-#: in the conversation (`frontend/src/lib/rounds.ts` mirrors the same shape).
+#: The one gray line G-34 allows when the plan version moves. It is a protocol
+#: line, not a prefix (#236): the frontend matches the whole sentence too
+#: (``frontend/src/lib/rounds.ts``), so a model answer that merely starts with
+#: these words must not be mistaken for the note and dropped.
 PLAN_NOTE_PREFIX = "计划已更新到"
 PLAN_NOTE_RE = re.compile(r"^计划已更新到第 \d+ 版。$")
 

@@ -83,7 +83,8 @@ describe("stepsForRound / legacySteps", () => {
 });
 
 describe("isPlanNotice", () => {
-  // 协议：后端 _plan_note_text 恒为「计划已更新到第 N 版。」（nodes.py:75-79）。
+  // 协议：后端 plan_file.plan_note_text 恒为「计划已更新到第 N 版。」
+  // （经 nodes.py 的 _plan_note_text 产出）。
   it("计划更新提示走静音行", () => {
     expect(isPlanNotice("计划已更新到第 3 版。")).toBe(true);
     expect(isPlanNotice("  计划已更新到第 2 版。\n")).toBe(true);
