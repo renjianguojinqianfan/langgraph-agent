@@ -39,7 +39,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from ...config import Settings, get_settings
 from ...utils.logging import get_logger
-from ...utils.sandbox import build_sandbox_env
+from ...utils.sandbox import build_child_env
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -528,7 +528,7 @@ class BashTool(BaseTool):
         except Exception as exc:  # pragma: no cover - defensive
             return ToolResult(success=False, error=f"cannot create workspace root: {exc}")
 
-        env = build_sandbox_env()
+        env = build_child_env()
         popen_kwargs: Dict[str, Any] = dict(
             cwd=str(workdir),
             env=env,

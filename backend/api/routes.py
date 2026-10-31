@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -436,6 +437,12 @@ def send_message(
 FILES_MAX = 2000
 PREVIEW_MAX_BYTES = 200_000
 
+#: A task id is a single safe filename component (``uuid4().hex``; legacy ids
+#: may carry ``-`` / ``_``). The record lookup in the route also means reserved
+#: device names (``CON``) cannot reach a trace path — nothing is registered
+#: under them.
+_TASK_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
+
 
 def _task_workspace(request: Request, task_id: str) -> Path:
     task = _tm(request).get_task(task_id)
@@ -555,7 +562,9 @@ def task_trace(
 
     Default: raw NDJSON (``application/x-ndjson``) so the frontend can replay
     it line by line. ``?format=json`` returns the unified envelope
-    ``{code, data:[Event,...], message}``. Missing file / disabled trace -> 404.
+    ``{code, data:[Event,...], message}``. An illegal ``task_id`` is a 400
+    before any filesystem access; an unknown task, a task without a trace file,
+    or a disabled trace is a 404.
 
     The real return type is the union below (envelope for ``?format=json``, raw
     NDJSON ``Response`` otherwise). ``response_model=None`` is stated explicitly
@@ -564,9 +573,16 @@ def task_trace(
     branches' serialisation are unchanged.
     """
     settings = request.app.state.settings
+    # Validate the segment before it is used as a filename: illegal ids are a
+    # client error and must not touch the filesystem (#254).
+    if not _TASK_ID_RE.fullmatch(task_id):
+        raise HTTPException(status_code=400, detail="invalid task_id")
     if not settings.trace_enabled:
         raise HTTPException(status_code=404, detail="task trace not enabled")
-    trace_file = settings.trace_path / f"{task_id}.jsonl"
+    task = _tm(request).get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task trace not found")
+    trace_file = settings.trace_path / f"{task.id}.jsonl"
     if not trace_file.exists():
         raise HTTPException(status_code=404, detail="task trace not found")
 

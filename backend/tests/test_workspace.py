@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 from backend.core.agent.inject import build_inject_block
 from backend.core.llm.client import MockLLMClient
 from backend.core.runtime_context import (
-    _reject_non_local_path,
     normalize_workspace,
+    reject_non_local_path,
     reset_runtime_context,
     set_runtime_context,
 )
@@ -234,7 +234,7 @@ def test_list_tasks_rejects_non_local_workspace_paths(tmp_path, bad):
 def test_reject_non_local_path_before_resolve(monkeypatch, bad):
     """The guard refuses UNC/device spellings before ``Path.resolve()`` runs."""
     with pytest.raises(ValueError):
-        _reject_non_local_path(bad)
+        reject_non_local_path(bad)
 
     def _resolve_must_not_run(*args, **kwargs):
         raise AssertionError("Path.resolve() ran for a rejected workspace")
@@ -242,6 +242,34 @@ def test_reject_non_local_path_before_resolve(monkeypatch, bad):
     monkeypatch.setattr(Path, "resolve", _resolve_must_not_run)
     with pytest.raises(ValueError):
         normalize_workspace(bad)
+
+
+def test_resolve_in_workspace_rejects_non_local_paths_before_resolve(tmp_path, monkeypatch):
+    """#254 AC4: the containment helper refuses UNC/device inputs first.
+
+    ``(root / rel).resolve()`` used to run before any validation, so a
+    ``\\\\host\\share`` relative path made Windows dial an SMB server (NTLM
+    handshake). The guard must fire before ``resolve()`` — asserted by
+    recording calls, since the helper swallows the exception and returns None.
+    """
+    from backend.core.workspace_files import resolve_in_workspace
+
+    root = tmp_path / "ws"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.txt").write_text("ok", encoding="utf-8")
+    # Positive case first: normal relative paths still resolve normally.
+    assert resolve_in_workspace(root, "a.txt") == (root / "a.txt").resolve()
+
+    resolve_calls: list[tuple] = []
+
+    def _resolve_must_not_run(*args, **kwargs):
+        resolve_calls.append(args)
+        raise AssertionError("Path.resolve() ran for a rejected relative path")
+
+    monkeypatch.setattr(Path, "resolve", _resolve_must_not_run)
+    for bad in (r"\\server\share\x", "//server/share/x", r"\\?\C:\tmp", "bad\x00path"):
+        assert resolve_in_workspace(root, bad) is None, bad
+    assert resolve_calls == []
 
 
 def test_legacy_task_gets_the_old_sandbox_workspace(tmp_path):
