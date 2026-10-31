@@ -438,8 +438,9 @@ FILES_MAX = 2000
 PREVIEW_MAX_BYTES = 200_000
 
 #: A task id is a single safe filename component (``uuid4().hex``; legacy ids
-#: may carry ``-`` / ``_``). Anything else must never be concatenated into a
-#: trace file path — a backslash is a path separator on Windows (#254).
+#: may carry ``-`` / ``_``). The record lookup in the route also means reserved
+#: device names (``CON``) cannot reach a trace path — nothing is registered
+#: under them.
 _TASK_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
 
 
@@ -561,7 +562,9 @@ def task_trace(
 
     Default: raw NDJSON (``application/x-ndjson``) so the frontend can replay
     it line by line. ``?format=json`` returns the unified envelope
-    ``{code, data:[Event,...], message}``. Missing file / disabled trace -> 404.
+    ``{code, data:[Event,...], message}``. An illegal ``task_id`` is a 400
+    before any filesystem access; an unknown task, a task without a trace file,
+    or a disabled trace is a 404.
 
     The real return type is the union below (envelope for ``?format=json``, raw
     NDJSON ``Response`` otherwise). ``response_model=None`` is stated explicitly

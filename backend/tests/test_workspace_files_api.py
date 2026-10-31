@@ -191,6 +191,35 @@ def test_download_streams_the_file(workspace, tmp_path):
         client.__exit__(None, None, None)
 
 
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        pytest.param(r"\\server\share\x.txt", id="unc-backslash"),
+        pytest.param("//server/share/x.txt", id="unc-forward-slash"),
+        pytest.param(r"\\?\C:\tmp\x.txt", id="device-namespace"),
+        pytest.param("bad\x00path", id="nul-byte"),
+    ],
+)
+def test_file_endpoints_reject_non_local_paths(workspace, tmp_path, bad_path):
+    """#254 AC4 end-to-end: UNC / device / NUL inputs are a 400, not a dial.
+
+    The unit test in ``test_workspace.py`` pins "guard before ``resolve()``";
+    this one pins the HTTP surface the audit actually named.
+    """
+    client, task_id = _client(tmp_path, workspace)
+    try:
+        preview = client.get(
+            f"/api/tasks/{task_id}/files/preview", params={"path": bad_path}
+        )
+        assert preview.status_code == 400, preview.text
+        download = client.get(
+            f"/api/tasks/{task_id}/files/download", params={"path": bad_path}
+        )
+        assert download.status_code == 400, download.text
+    finally:
+        client.__exit__(None, None, None)
+
+
 def test_missing_task_and_workspace(workspace, tmp_path):
     client, task_id = _client(tmp_path, workspace)
     try:

@@ -300,14 +300,45 @@ def test_trace_api_rejects_illegal_task_id_before_touching_disk(trace_client, mo
     outside = settings.trace_path.parent / "secret.jsonl"
     outside.write_text('{"type":"leaked"}\n', encoding="utf-8")
 
-    def _must_not_read(*args, **kwargs):
+    def _must_not_touch(*args, **kwargs):
         raise AssertionError("the trace route touched the filesystem for an illegal task_id")
 
-    monkeypatch.setattr(Path, "read_text", _must_not_read)
+    monkeypatch.setattr(Path, "read_text", _must_not_touch)
+    monkeypatch.setattr(Path, "exists", _must_not_touch)
     for bad in (r"..\secret", "..\\..\\secret", "a" * 65):
         r = client.get(f"/api/tasks/{quote(bad, safe='')}/trace")
         assert r.status_code == 400, (bad, r.text)
         assert "task_id" in r.json()["detail"].lower()
+
+
+def test_trace_api_unknown_task_never_serves_a_stale_file(trace_client):
+    """A leftover trace file must not leak through for an unknown task.
+
+    Without the record lookup, a file left by a deleted task (or a crashed
+    record write) is served as if it belonged to a live task. This 404 is only
+    reachable through the task-existence branch.
+    """
+    client, settings = trace_client
+    stale = settings.trace_path / f"{'a' * 32}.jsonl"
+    stale.write_text('{"type":"leaked"}\n', encoding="utf-8")
+
+    r = client.get(f"/api/tasks/{'a' * 32}/trace")
+    assert r.status_code == 404
+    assert "trace" in r.json()["detail"].lower()
+
+
+def test_trace_api_existing_task_without_trace_file_returns_404(trace_client):
+    """The file-missing branch stays a 404 for a live task with trace enabled."""
+    client, settings = trace_client
+    tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+    trace_file = settings.trace_path / f"{tid}.jsonl"
+    assert _wait_trace_closed(trace_file)
+    trace_file.unlink()
+
+    r = client.get(f"/api/tasks/{tid}/trace")
+    assert r.status_code == 404
+    assert "trace" in r.json()["detail"].lower()
 
 
 def test_trace_api_disabled_returns_404(tmp_path):
