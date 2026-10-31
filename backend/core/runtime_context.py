@@ -34,6 +34,10 @@ def reject_non_local_path(value: "str | Path") -> None:
     they are never a task workspace. Windows treats ``/`` and ``\\`` as
     interchangeable separators, so mixed spellings (``/\\host\\share``) are
     folded to backslashes before the prefix check.
+
+    The check is deliberately platform-independent: a POSIX filename that
+    starts with ``\\\\`` is refused too, so one path string means the same
+    thing on every OS (such names are pathological in a task workspace).
     """
     raw = os.fspath(value)
     if isinstance(raw, bytes):
