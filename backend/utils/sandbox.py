@@ -36,29 +36,20 @@ ENV_ALLOWLIST = frozenset(
 
 
 #: Extra parent variables an MCP stdio server may inherit on top of
-#: :data:`ENV_ALLOWLIST`. npm / npx (and similar CLIs) resolve their config and
-#: cache directories from these; they carry filesystem paths, not credentials.
-#: Anything else a third-party server needs must come from its own explicit
-#: ``env`` mapping in ``mcp_servers`` (issue #254).
-MCP_ENV_ALLOWLIST = ENV_ALLOWLIST | frozenset(
-    {
-        "APPDATA",
-        "LOCALAPPDATA",
-        "PROGRAMDATA",
-        "PROGRAMFILES",
-        "PROGRAMFILES(X86)",
-        "COMMONPROGRAMFILES",
-        "SYSTEMDRIVE",
-    }
-)
+#: :data:`ENV_ALLOWLIST`. It shares that base on purpose: both child kinds get
+#: the same parent-env policy. The additions are only what npm / npx read their
+#: config and cache from on Windows — paths, not credentials. Proxy / private
+#: registry / CA variables are *not* inherited; a server that needs them must
+#: declare them in its own ``env`` mapping in ``mcp_servers`` (issue #254).
+MCP_ENV_ALLOWLIST = ENV_ALLOWLIST | frozenset({"APPDATA", "LOCALAPPDATA"})
 
 
-def build_sandbox_env(allowlist: frozenset[str] = ENV_ALLOWLIST) -> Dict[str, str]:
+def build_child_env(allowlist: frozenset[str] = ENV_ALLOWLIST) -> Dict[str, str]:
     """Parent environment filtered down to ``allowlist``.
 
     Matching is case-insensitive so Windows casing (``Path``) still passes.
-    ``PYTHONUNBUFFERED`` is added for every child: both callers speak a
-    line-oriented protocol over pipes and must not lose buffered output.
+    ``PYTHONUNBUFFERED`` is added for every child: the bash tool's output should
+    stream, and MCP stdio children speak JSON-RPC over the pipe.
     """
     env = {
         key: value

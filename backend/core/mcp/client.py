@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ...config import Settings
 from ...utils.logging import get_logger
-from ...utils.sandbox import MCP_ENV_ALLOWLIST, build_sandbox_env
+from ...utils.sandbox import MCP_ENV_ALLOWLIST, build_child_env
 
 logger = get_logger("mcp.client")
 
@@ -193,9 +193,11 @@ class _McpSession:
 
         # A third-party MCP server is untrusted code (#254): it gets the
         # allowlisted parent environment only, plus its own explicit ``env``
-        # mapping. Never ``dict(os.environ)`` — that handed every server the
-        # LLM / cloud credentials sitting in the parent process.
-        env = build_sandbox_env(MCP_ENV_ALLOWLIST)
+        # mapping. Never ``dict(os.environ)`` — that handed every server every
+        # credential exported in the parent environment. Note the SDK's stdio
+        # transport additionally merges its documented-safe defaults
+        # (DEFAULT_INHERITED_ENV_VARS), which contain no credentials.
+        env = build_child_env(MCP_ENV_ALLOWLIST)
         env.update({str(k): str(v) for k, v in self.cfg.env.items()})
 
         params = StdioServerParameters(
