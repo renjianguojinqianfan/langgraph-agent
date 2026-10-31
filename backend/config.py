@@ -17,6 +17,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Project root = parent directory of this file's package (langgraph-agent/).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+#: The documented placeholder auth token. It is not a usable secret: an
+#: entrypoint with ``auth_enabled=true`` refuses to start while it is in place
+#: (:func:`backend.services.auth.ensure_startup_auth_configured`, #254).
+PLACEHOLDER_AUTH_TOKEN = "changeme"
+
 
 class Settings(BaseSettings):
     """Typed application configuration.
@@ -93,7 +98,7 @@ class Settings(BaseSettings):
 
     # ── Auth (P1 item 5, disabled for local demo) ──
     auth_enabled: bool = False
-    auth_token: str = "changeme"
+    auth_token: str = PLACEHOLDER_AUTH_TOKEN
     auth_token_ttl_sec: int = 86400  # issued token lifetime
 
     # ── MCP client (P2 item 1) ──

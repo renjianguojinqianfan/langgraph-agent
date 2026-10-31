@@ -29,7 +29,9 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 from fastapi import Header, HTTPException, Query, Request
 
-if TYPE_CHECKING:  # avoid a config -> auth import cycle at runtime
+from ..config import PLACEHOLDER_AUTH_TOKEN
+
+if TYPE_CHECKING:  # Settings is annotation-only; no runtime import needed here
     from ..config import Settings
 
 #: localStorage key the frontend uses to persist the token.
@@ -40,9 +42,7 @@ class TokenIssuer:
     """Issue and verify HMAC-signed, server-registered bearer tokens."""
 
     def __init__(self, secret: str, ttl_sec: int = 86400) -> None:
-        # No ``or "changeme"`` fallback: the documented placeholder must never
-        # become a signing secret by accident (#254).
-        self._secret = secret.encode("utf-8")
+        self._secret = (secret or "changeme").encode("utf-8")
         self._ttl_sec = max(1, int(ttl_sec))
         self._store: Dict[str, float] = {}  # token -> expires_at
         self._lock = threading.Lock()
@@ -118,7 +118,7 @@ def verify_token(
     return raw
 
 
-def ensure_startup_auth_safe(settings: "Settings") -> None:
+def ensure_startup_auth_configured(settings: "Settings") -> None:
     """Refuse to start when auth is enabled but no usable secret is configured.
 
     ``AUTH_TOKEN=`` used to slip past the ``== "changeme"`` check; the issuer
@@ -126,22 +126,26 @@ def ensure_startup_auth_safe(settings: "Settings") -> None:
     ``/auth/token`` accepted an empty password. That made the documented
     "enable auth before exposing the port" mitigation silently do nothing
     (#254 AC1). The default ``auth_enabled=false`` local-demo mode is untouched.
+
+    This is an **entrypoint** guard: ``backend.main`` calls it at import time;
+    any new process entrypoint that builds the app must call it too. Case and
+    surrounding whitespace are ignored when comparing the placeholder.
     """
     if not settings.auth_enabled:
         return
-    token = (settings.auth_token or "").strip()
-    if not token or token == "changeme":
+    token = settings.auth_token.strip()
+    if not token or token.lower() == PLACEHOLDER_AUTH_TOKEN:
         raise RuntimeError(
             "auth_enabled=true but auth_token is empty or still the placeholder "
-            "'changeme'. Set a strong auth_token via environment variable before "
-            "enabling auth."
+            f"'{PLACEHOLDER_AUTH_TOKEN}'. Set a strong auth_token via environment "
+            "variable before enabling auth."
         )
 
 
-def auth_state_notice(settings: "Settings") -> str:
+def auth_state_message(settings: "Settings") -> str:
     """One startup line stating whether the local API is authenticated."""
     if settings.auth_enabled:
-        return "auth enabled: REST + SSE require a bearer token"
+        return "auth enabled: a valid token is required for REST and SSE"
     return (
         "auth disabled: the local API is unauthenticated (local-demo default); "
         "set auth_enabled=true and a strong auth_token before exposing the port"

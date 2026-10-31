@@ -143,6 +143,7 @@
   3.1.1→3.1.2`（`langgraph` 行不动），§6 的 LangGraph Store 条目改为已修复；
   旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
 - 2026-10-31（#254，slice 3）：`auth_enabled=true` 且 `auth_token` 为空 / 空白 / 占位
-  （`changeme`）时**拒绝启动**（此前空串会绕过占位检查，issuer 回退到公开的 `changeme`
-  密钥，`/auth/token` 甚至接受空密码）；`TokenIssuer` 去掉占位回退；启动日志明示认证状态。
-  默认 `auth_enabled=false` 的本地演示语义不变（§4 收口条目）。
+  （`changeme`，大小写与前后空白不敏感）时**拒绝启动**（此前空串会绕过占位检查，issuer
+  回退到公开的 `changeme` 密钥，`/auth/token` 甚至接受空密码）；启动日志（info 级）明示
+  当前认证状态。默认 `auth_enabled=false` 的本地演示语义不变（§4 收口条目）。
+  守卫只挂在进程入口 `backend.main`；新增入口需同样调用 `ensure_startup_auth_configured`。

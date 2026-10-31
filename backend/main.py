@@ -18,7 +18,11 @@ from starlette.staticfiles import StaticFiles
 
 from .api.routes import router
 from .config import get_settings
-from .services.auth import TokenIssuer, auth_state_notice, ensure_startup_auth_safe
+from .services.auth import (
+    TokenIssuer,
+    auth_state_message,
+    ensure_startup_auth_configured,
+)
 from .services.event_bus import EventBus
 from .services.persistence import Persistence, PersistenceError
 from .services.task_manager import TaskManager
@@ -30,11 +34,8 @@ settings = get_settings()
 
 # Security guard (#254 AC1): refuse to silently serve with auth enabled but no
 # usable secret, and always state the auth posture once at startup.
-ensure_startup_auth_safe(settings)
-if settings.auth_enabled:
-    logger.info(auth_state_notice(settings))
-else:
-    logger.warning(auth_state_notice(settings))
+ensure_startup_auth_configured(settings)
+logger.info(auth_state_message(settings))
 
 
 @asynccontextmanager
