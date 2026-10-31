@@ -33,8 +33,10 @@
   进入子进程。MCP 侧另由 mcp SDK 合并它自己文档化的默认安全清单
   （`DEFAULT_INHERITED_ENV_VARS`，不含凭证），测试把两者并集钉成「只拿到这些」。
   这挡的是「继承」，不是读文件：同账号子进程仍可读明文落盘的 Key（见上两条）与 Linux 的
-  `/proc/$PPID/environ`。第三方 MCP server 需要额外变量（含代理 / 私有 registry / CA）时，
-  只能在 `mcp_servers[].env` 里显式声明——这是唯一通道（#254）。
+  `/proc/$PPID/environ`。Windows 上传给 npm / npx 的 `APPDATA` / `LOCALAPPDATA` 也可能让
+  MCP server 定位到含私有 registry 凭证的 `npmrc`；这不改变「非安全边界」的定位。
+  第三方 MCP server 需要额外变量（含代理 / 私有 registry / CA）时，只能在
+  `mcp_servers[].env` 里显式声明——这是唯一通道（#254）。
 - **禁止**：Key 写进 `.env`（提交）/ 代码 / 文档 / 截图 / issue；测试只用假 Key（如 `sk-test`）；
   提交前依赖 GitHub secret scanning（公开仓库免费）。
 

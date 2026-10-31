@@ -36,11 +36,12 @@ ENV_ALLOWLIST = frozenset(
 
 
 #: Extra parent variables an MCP stdio server may inherit on top of
-#: :data:`ENV_ALLOWLIST`. It shares that base on purpose: both child kinds get
-#: the same parent-env policy. The additions are only what npm / npx read their
-#: config and cache from on Windows — paths, not credentials. Proxy / private
-#: registry / CA variables are *not* inherited; a server that needs them must
-#: declare them in its own ``env`` mapping in ``mcp_servers`` (issue #254).
+#: :data:`ENV_ALLOWLIST`. They let npm / npx find per-user config and cache
+#: locations on Windows. The npm config file (for example,
+#: ``%APPDATA%\\npm\\etc\\npmrc``) may contain private-registry credentials,
+#: so these paths are not a secret boundary. Proxy / private registry / CA
+#: variables are *not* inherited; a server that needs them must declare them
+#: in its own ``env`` mapping in ``mcp_servers`` (issue #254).
 MCP_ENV_ALLOWLIST = ENV_ALLOWLIST | frozenset({"APPDATA", "LOCALAPPDATA"})
 
 
