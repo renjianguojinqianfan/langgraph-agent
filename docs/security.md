@@ -28,6 +28,9 @@
 - **轮换 / 泄露处置**：① 去供应商控制台**吊销并换新 Key**；② 界面重粘（或换环境变量）；
   ③ 检查 `data/logs/` 与 `data/traces/` 是否曾出现明文（正常应被 redact 成 `[redacted]`）；
   ④ 若已进过 git 历史或公开途径，**按已泄露处理**（历史不可撤回），直接轮换。
+- **子进程环境**：`bash` 工具与 MCP stdio 子进程都只继承白名单环境变量
+  （`backend/utils/sandbox.py`），LLM / 云 Key 与执行器标记不进子进程。第三方 MCP server
+  需要额外变量时，只能在 `mcp_servers[].env` 里显式声明——这是唯一通道（#254）。
 - **禁止**：Key 写进 `.env`（提交）/ 代码 / 文档 / 截图 / issue；测试只用假 Key（如 `sk-test`）；
   提交前依赖 GitHub secret scanning（公开仓库免费）。
 
@@ -141,3 +144,6 @@
 - 2026-10-25（A2）：`langgraph-checkpoint 4.2.0→4.3.0`、`langgraph-checkpoint-sqlite
   3.1.1→3.1.2`（`langgraph` 行不动），§6 的 LangGraph Store 条目改为已修复；
   旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
+- 2026-10-31（#254，slice 1）：MCP stdio 子进程不再继承完整父环境，改为白名单
+  （`MCP_ENV_ALLOWLIST`，含 npm / npx 需要的路径类变量）；`mcp_servers[].env` 仍是显式
+  扩展通道。§2 增「子进程环境」条目，`.env.example` 与 README 同步。

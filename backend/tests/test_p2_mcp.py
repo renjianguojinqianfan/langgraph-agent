@@ -320,6 +320,51 @@ def test_mcp_unreported_tool_reads_as_unknown(tmp_path):
     mgr.cleanup()
 
 
+# ─────────────────── child environment (#254) ───────────────────
+def test_mcp_child_env_is_the_allowlist(tmp_path, monkeypatch):
+    """A third-party MCP server must not inherit the parent's credentials.
+
+    The audit for #254 found ``_connect`` passed ``dict(os.environ)`` to the
+    stdio child, so every MCP server spawned from user config could read the
+    LLM / cloud keys. The child now gets the same kind of allowlist the bash
+    tool uses, plus the server's own explicit ``env`` mapping.
+    """
+    dump = tmp_path / "echo-env.json"
+    secrets = ("LLM_API_KEY", "DASHSCOPE_API_KEY", "GITHUB_TOKEN")
+    for name in secrets:
+        monkeypatch.setenv(name, "secret-sentinel-do-not-leak")
+    s = _echo_settings(
+        tmp_path,
+        mcp_servers=json.dumps(
+            [
+                {
+                    "name": "echo",
+                    "command": sys.executable,
+                    "args": [ECHO_SERVER],
+                    "env": {"ECHO_ENV_DUMP_FILE": str(dump)},
+                    "enabled": True,
+                }
+            ]
+        ),
+    )
+    mgr = McpClientManager(s)
+    mgr.connect_all()
+    try:
+        assert dump.exists(), "echo server did not dump its environment"
+        child_env = json.loads(dump.read_text(encoding="utf-8"))
+    finally:
+        mgr.cleanup()
+
+    received = {key.upper() for key in child_env}
+    assert "PATH" in received  # command resolution still works
+    for name in secrets:
+        assert name not in received, f"{name} leaked into the MCP child env"
+    # Parent markers used by the test harness / launcher must not ride along.
+    assert not any(name.startswith("QIANFAN_") for name in received)
+    # The server's own explicit env is the intended channel for extras.
+    assert child_env["ECHO_ENV_DUMP_FILE"] == str(dump)
+
+
 # ─────────────────── cleanup ───────────────────
 def test_mcp_cleanup_idempotent(tmp_path):
     s = _echo_settings(tmp_path)
