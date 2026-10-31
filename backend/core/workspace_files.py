@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..utils.logging import get_logger
+from .runtime_context import reject_non_local_path
 
 logger = get_logger("workspace.files")
 GIT_TIMEOUT_SEC = 5.0
@@ -139,8 +140,14 @@ def workspace_files(root: Path) -> list[Path]:
 
 
 def resolve_in_workspace(root: Path, rel: str) -> Optional[Path]:
-    """Resolve ``rel`` under ``root``; None when it escapes (API + tools share it)."""
+    """Resolve ``rel`` under ``root``; None when it escapes or is non-local.
+
+    UNC / device / NUL-bearing inputs are refused *before* ``Path.resolve()``,
+    which on Windows dials the SMB server named in the path (NTLM handshake).
+    The same guard the workspace switcher uses runs first here too (#254).
+    """
     try:
+        reject_non_local_path(rel)
         resolved = root.resolve()
         candidate = (resolved / rel).resolve()
     except Exception:

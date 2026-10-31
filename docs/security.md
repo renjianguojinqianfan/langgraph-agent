@@ -128,6 +128,8 @@
   不挡同机进程或浏览器发出的简单请求。
 - 默认无鉴权：`auth_enabled=false` 时鉴权依赖本身关闭，token 仍是占位符；这不是权限边界。
 - 停止 / 超时只回收本仓建立的进程树；`setsid` 等自行脱管的进程不受管；trace 不是防篡改审计日志。
+- UNC / 设备路径守卫是**字符串判据**：工作区内的 junction / symlink 指向 UNC 时，`resolve()`
+  仍可能先联网（随后被包含性判断拒绝，越界读不会成功）。这条既有边界不在 #254 的修复范围。
 
 ## 8. 变更记录
 
@@ -147,7 +149,13 @@
   `StaticFiles` 契约。新增传递依赖：`opentelemetry-api`、`annotated-doc`。
 - 2026-10-25（A2）：`langgraph-checkpoint 4.2.0→4.3.0`、`langgraph-checkpoint-sqlite
   3.1.1→3.1.2`（`langgraph` 行不动），§6 的 LangGraph Store 条目改为已修复；
-  旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
 - 2026-10-31（#254，slice 1）：MCP stdio 子进程不再继承完整父环境，改为白名单
   （`MCP_ENV_ALLOWLIST`，含 npm / npx 需要的路径类变量）；`mcp_servers[].env` 仍是显式
   扩展通道。§2 增「子进程环境」条目，`.env.example` 与 README 同步。
+- 2026-10-31（#254，slice 2）：`GET /tasks/{id}/trace` 先校验 `task_id` 是单一安全
+  文件名（非法 → 400，不触达文件系统；任务不存在 → 404），不再把原始路径段拼进 trace
+  文件路径（Windows 反斜杠曾是路径穿越）；`resolve_in_workspace` 改为先拒绝 UNC / 设备 /
+  NUL 路径再 `resolve()`（此前 `(root / rel).resolve()` 会先拨 SMB），API preview / download
+  与文件工具共用该入口；测试同时纳入 Windows 冒烟清单。§7 记录 junction / symlink 指向
+  UNC 的既有限制。文档：`docs/architecture.md` 的 `/trace` 行。
+  旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
