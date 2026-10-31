@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import threading
 import time
+from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -283,6 +285,29 @@ def test_trace_api_missing_returns_404(trace_client):
     r = client.get("/api/tasks/does_not_exist/trace")
     assert r.status_code == 404
     assert "trace" in r.json()["detail"].lower()
+
+
+def test_trace_api_rejects_illegal_task_id_before_touching_disk(trace_client, monkeypatch):
+    """#254 AC3: ``task_id`` is a filename component, so it is validated first.
+
+    A backslash is not a URL path separator, so ``..\\secret`` used to reach the
+    route and be concatenated into ``<trace_dir>\\..\\secret.jsonl`` — a
+    filesystem escape on Windows. Illegal ids must be refused with 400 before
+    any file exists/read call.
+    """
+    client, settings = trace_client
+    # A real file the traversal would hit if the segment were concatenated.
+    outside = settings.trace_path.parent / "secret.jsonl"
+    outside.write_text('{"type":"leaked"}\n', encoding="utf-8")
+
+    def _must_not_read(*args, **kwargs):
+        raise AssertionError("the trace route touched the filesystem for an illegal task_id")
+
+    monkeypatch.setattr(Path, "read_text", _must_not_read)
+    for bad in (r"..\secret", "..\\..\\secret", "a" * 65):
+        r = client.get(f"/api/tasks/{quote(bad, safe='')}/trace")
+        assert r.status_code == 400, (bad, r.text)
+        assert "task_id" in r.json()["detail"].lower()
 
 
 def test_trace_api_disabled_returns_404(tmp_path):

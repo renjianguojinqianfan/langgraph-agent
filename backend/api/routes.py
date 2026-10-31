@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -436,6 +437,11 @@ def send_message(
 FILES_MAX = 2000
 PREVIEW_MAX_BYTES = 200_000
 
+#: A task id is a single safe filename component (``uuid4().hex``; legacy ids
+#: may carry ``-`` / ``_``). Anything else must never be concatenated into a
+#: trace file path — a backslash is a path separator on Windows (#254).
+_TASK_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
+
 
 def _task_workspace(request: Request, task_id: str) -> Path:
     task = _tm(request).get_task(task_id)
@@ -564,9 +570,16 @@ def task_trace(
     branches' serialisation are unchanged.
     """
     settings = request.app.state.settings
+    # Validate the segment before it is used as a filename: illegal ids are a
+    # client error and must not touch the filesystem (#254).
+    if not _TASK_ID_RE.fullmatch(task_id):
+        raise HTTPException(status_code=400, detail="invalid task_id")
     if not settings.trace_enabled:
         raise HTTPException(status_code=404, detail="task trace not enabled")
-    trace_file = settings.trace_path / f"{task_id}.jsonl"
+    task = _tm(request).get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task trace not found")
+    trace_file = settings.trace_path / f"{task.id}.jsonl"
     if not trace_file.exists():
         raise HTTPException(status_code=404, detail="task trace not found")
 

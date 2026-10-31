@@ -141,3 +141,8 @@
 - 2026-10-25（A2）：`langgraph-checkpoint 4.2.0→4.3.0`、`langgraph-checkpoint-sqlite
   3.1.1→3.1.2`（`langgraph` 行不动），§6 的 LangGraph Store 条目改为已修复；
   旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
+- 2026-10-31（#254，slice 2）：`GET /tasks/{id}/trace` 先校验 `task_id` 是单一安全
+  文件名（非法 → 400，不触达文件系统；任务不存在 → 404），不再把原始路径段拼进 trace
+  文件路径（Windows 反斜杠曾是路径穿越）；`resolve_in_workspace` 改为先拒绝 UNC / 设备 /
+  NUL 路径再 `resolve()`（此前 `(root / rel).resolve()` 会先拨 SMB），API preview / download
+  与文件工具共用该入口。文档：`docs/architecture.md` 的 `/trace` 行。

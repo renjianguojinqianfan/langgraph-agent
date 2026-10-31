@@ -24,7 +24,7 @@ _workspace: ContextVar[Optional[Path]] = ContextVar("qianfan_workspace", default
 Tokens = Tuple[Token[Optional[str]], Token[Optional[Path]]]
 
 
-def _reject_non_local_path(value: "str | Path") -> None:
+def reject_non_local_path(value: "str | Path") -> None:
     """Refuse UNC / device paths before ``resolve()`` can touch the network.
 
     ``Path.resolve()`` on Windows dials an SMB server for ``\\\\host\\share``
@@ -50,9 +50,9 @@ def normalize_workspace(value: "str | Path") -> str:
     Resolves ``~``, relative paths (against the process cwd), ``..`` and
     symlinks, keeping the original letter case for display. UNC, device and
     NUL-bearing paths are refused before any filesystem call (see
-    :func:`_reject_non_local_path`).
+    :func:`reject_non_local_path`).
     """
-    _reject_non_local_path(value)
+    reject_non_local_path(value)
     path = Path(value).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
