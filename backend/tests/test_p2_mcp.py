@@ -29,6 +29,7 @@ import pytest
 from backend.config import Settings
 from backend.core.mcp.client import McpClientManager, McpServerConfig
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
+from backend.utils.sandbox import MCP_ENV_ALLOWLIST
 
 ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
 
@@ -318,6 +319,66 @@ def test_mcp_unreported_tool_reads_as_unknown(tmp_path):
     )
     assert unreported.danger_signal == "unknown"
     mgr.cleanup()
+
+
+# ─────────────────── child environment (#254) ───────────────────
+def test_mcp_child_env_is_allowlisted_only(tmp_path, monkeypatch):
+    """A third-party MCP server gets the allowlist, not the parent environment.
+
+    The audit for #254 found ``_connect`` passed ``dict(os.environ)`` to the
+    stdio child, so every MCP server spawned from user config could read the
+    LLM / cloud keys exported in the parent. The child now gets the bash
+    allowlist plus npm's Windows config dirs, plus its own explicit ``env``
+    mapping. Asserted as "the received set is a subset of the declared policy",
+    so a denylist implementation that leaks any other variable would fail.
+    """
+    dump = tmp_path / "echo-env.json"
+    secrets = ("LLM_API_KEY", "DASHSCOPE_API_KEY", "GITHUB_TOKEN", "EXA_API_KEY")
+    for name in secrets:
+        monkeypatch.setenv(name, "secret-sentinel-do-not-leak")
+    monkeypatch.setenv("MY_TEST_ONLY_VAR", "not-on-any-allowlist")
+    s = _echo_settings(
+        tmp_path,
+        mcp_servers=json.dumps(
+            [
+                {
+                    "name": "echo",
+                    "command": sys.executable,
+                    "args": [ECHO_SERVER],
+                    "env": {"ECHO_ENV_DUMP_FILE": str(dump)},
+                    "enabled": True,
+                }
+            ]
+        ),
+    )
+    mgr = McpClientManager(s)
+    mgr.connect_all()
+    try:
+        assert dump.exists(), "echo server did not dump its environment"
+        child_env = json.loads(dump.read_text(encoding="utf-8"))
+    finally:
+        mgr.cleanup()
+
+    received = {key.upper() for key in child_env}
+    # PATH is inherited unchanged, so `npx` / `node` resolve inside the child.
+    path_key = next(key for key in child_env if key.upper() == "PATH")
+    assert child_env[path_key] == os.environ["PATH"]
+    for name in (*secrets, "MY_TEST_ONLY_VAR"):
+        assert name not in received, f"{name} leaked into the MCP child env"
+    # "Only the allowlist": nothing beyond the declared policy + explicit env.
+    # The MCP SDK's stdio transport also merges its documented-safe defaults
+    # (DEFAULT_INHERITED_ENV_VARS) on top of the env we pass, so they belong to
+    # the effective policy; anything else is an unexplained leak.
+    from mcp.client.stdio import DEFAULT_INHERITED_ENV_VARS
+
+    allowed = (
+        {name.upper() for name in MCP_ENV_ALLOWLIST}
+        | {name.upper() for name in DEFAULT_INHERITED_ENV_VARS}
+        | {"PYTHONUNBUFFERED", "ECHO_ENV_DUMP_FILE"}
+    )
+    assert received <= allowed, f"unexpected inherited variables: {received - allowed}"
+    # The server's own explicit env is the intended channel for extras.
+    assert child_env["ECHO_ENV_DUMP_FILE"] == str(dump)
 
 
 # ─────────────────── cleanup ───────────────────

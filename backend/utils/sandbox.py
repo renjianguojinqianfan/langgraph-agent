@@ -1,9 +1,9 @@
 """Child-process environment helper.
 
-The bash tool runs commands with this process's account privileges — it is not
-a sandbox (README「这不是安全边界」). The allowlist filters what the child
-*inherits*; it is not a secret boundary — files, and on Linux
-``/proc/$PPID/environ``, remain readable by the same account.
+Child processes (the bash tool and every MCP stdio server) run with this
+process's account privileges — this is not a sandbox (README「这不是安全边界」).
+The allowlists filter what a child *inherits*; they are not a secret boundary —
+files, and on Linux ``/proc/$PPID/environ``, remain readable by the same account.
 """
 
 from __future__ import annotations
@@ -35,15 +35,26 @@ ENV_ALLOWLIST = frozenset(
 )
 
 
-def build_sandbox_env() -> Dict[str, str]:
-    """Parent environment filtered down to :data:`ENV_ALLOWLIST`.
+#: Extra parent variables an MCP stdio server may inherit on top of
+#: :data:`ENV_ALLOWLIST`. It shares that base on purpose: both child kinds get
+#: the same parent-env policy. The additions are only what npm / npx read their
+#: config and cache from on Windows — paths, not credentials. Proxy / private
+#: registry / CA variables are *not* inherited; a server that needs them must
+#: declare them in its own ``env`` mapping in ``mcp_servers`` (issue #254).
+MCP_ENV_ALLOWLIST = ENV_ALLOWLIST | frozenset({"APPDATA", "LOCALAPPDATA"})
+
+
+def build_child_env(allowlist: frozenset[str] = ENV_ALLOWLIST) -> Dict[str, str]:
+    """Parent environment filtered down to ``allowlist``.
 
     Matching is case-insensitive so Windows casing (``Path``) still passes.
+    ``PYTHONUNBUFFERED`` is added for every child: the bash tool's output should
+    stream, and MCP stdio children speak JSON-RPC over the pipe.
     """
     env = {
         key: value
         for key, value in os.environ.items()
-        if key.upper() in ENV_ALLOWLIST and value is not None
+        if key.upper() in allowlist and value is not None
     }
     env["PYTHONUNBUFFERED"] = "1"
     return env

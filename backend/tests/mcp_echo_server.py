@@ -19,6 +19,7 @@ it works on Windows without resolving ``python`` from PATH).
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -42,6 +43,17 @@ _pid_file = os.environ.get("ECHO_PID_FILE")
 if _pid_file:
     try:
         Path(_pid_file).write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:  # pragma: no cover - test helper
+        pass
+
+# Optional: when ECHO_ENV_DUMP_FILE is set, dump the environment this child
+# actually received, so tests can pin the MCP child-env allowlist (#254).
+_env_dump_file = os.environ.get("ECHO_ENV_DUMP_FILE")
+if _env_dump_file:
+    try:
+        Path(_env_dump_file).write_text(
+            json.dumps(dict(os.environ), ensure_ascii=False), encoding="utf-8"
+        )
     except Exception:  # pragma: no cover - test helper
         pass
 

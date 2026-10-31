@@ -28,6 +28,13 @@
 - **轮换 / 泄露处置**：① 去供应商控制台**吊销并换新 Key**；② 界面重粘（或换环境变量）；
   ③ 检查 `data/logs/` 与 `data/traces/` 是否曾出现明文（正常应被 redact 成 `[redacted]`）；
   ④ 若已进过 git 历史或公开途径，**按已泄露处理**（历史不可撤回），直接轮换。
+- **子进程环境**：`bash` 工具与 MCP stdio 子进程都不继承完整父环境，只拿白名单里的变量
+  （`backend/utils/sandbox.py`）——因此**环境变量里导出的** LLM / 云 Key 与执行器标记不会
+  进入子进程。MCP 侧另由 mcp SDK 合并它自己文档化的默认安全清单
+  （`DEFAULT_INHERITED_ENV_VARS`，不含凭证），测试把两者并集钉成「只拿到这些」。
+  这挡的是「继承」，不是读文件：同账号子进程仍可读明文落盘的 Key（见上两条）与 Linux 的
+  `/proc/$PPID/environ`。第三方 MCP server 需要额外变量（含代理 / 私有 registry / CA）时，
+  只能在 `mcp_servers[].env` 里显式声明——这是唯一通道（#254）。
 - **禁止**：Key 写进 `.env`（提交）/ 代码 / 文档 / 截图 / issue；测试只用假 Key（如 `sk-test`）；
   提交前依赖 GitHub secret scanning（公开仓库免费）。
 
@@ -142,10 +149,13 @@
   `StaticFiles` 契约。新增传递依赖：`opentelemetry-api`、`annotated-doc`。
 - 2026-10-25（A2）：`langgraph-checkpoint 4.2.0→4.3.0`、`langgraph-checkpoint-sqlite
   3.1.1→3.1.2`（`langgraph` 行不动），§6 的 LangGraph Store 条目改为已修复；
-  旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
+- 2026-10-31（#254，slice 1）：MCP stdio 子进程不再继承完整父环境，改为白名单
+  （`MCP_ENV_ALLOWLIST`，含 npm / npx 需要的路径类变量）；`mcp_servers[].env` 仍是显式
+  扩展通道。§2 增「子进程环境」条目，`.env.example` 与 README 同步。
 - 2026-10-31（#254，slice 2）：`GET /tasks/{id}/trace` 先校验 `task_id` 是单一安全
   文件名（非法 → 400，不触达文件系统；任务不存在 → 404），不再把原始路径段拼进 trace
   文件路径（Windows 反斜杠曾是路径穿越）；`resolve_in_workspace` 改为先拒绝 UNC / 设备 /
   NUL 路径再 `resolve()`（此前 `(root / rel).resolve()` 会先拨 SMB），API preview / download
   与文件工具共用该入口；测试同时纳入 Windows 冒烟清单。§7 记录 junction / symlink 指向
   UNC 的既有限制。文档：`docs/architecture.md` 的 `/trace` 行。
+  旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
