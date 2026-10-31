@@ -111,6 +111,7 @@ jobs:
   #   test_bash_tool.py              bash 路径解析 / 命令执行 / 后台进程树（B1 第四个文件）
   #   test_strict_msgpack_guard.py   langgraph 自读开关的离线守卫（子进程探针；#216）
   #   test_trace.py                  trace 文件名判据（反斜杠穿越 / 非法 task_id；#254）
+  #   test_auth.py                   启动期 auth 守卫（子进程探针 / 导入期拒绝启动；#254）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
     name: Backend Windows smoke
@@ -149,6 +150,7 @@ jobs:
           backend/tests/test_task_delete.py
           backend/tests/test_strict_msgpack_guard.py
           backend/tests/test_trace.py
+          backend/tests/test_auth.py
           -q -rs
 
   # ── 前端：类型检查 + 单元测试 + 生产构建 ─────────────────────────────────

@@ -8,7 +8,11 @@ regression).
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,12 +20,104 @@ from fastapi.testclient import TestClient
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.main import app
-from backend.services.auth import TokenIssuer
+from backend.services.auth import (
+    TokenIssuer,
+    auth_state_message,
+    ensure_startup_auth_configured,
+)
 from backend.services.event_bus import EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+# ── startup guard (#254 AC1, minimal) ──
+@pytest.mark.parametrize(
+    "token", ["", "   ", "changeme", "  changeme  ", "CHANGEME", " Changeme "]
+)
+def test_startup_refuses_enabled_auth_without_a_real_token(tmp_path, token):
+    """A blank / placeholder token must fail loudly, not silently disable auth.
+
+    ``AUTH_TOKEN=`` used to slip past the ``== "changeme"`` check; the issuer
+    then fell back to the publicly documented ``changeme`` secret, and
+    ``/auth/token`` accepted an empty password. The placeholder comparison is
+    case- and whitespace-insensitive.
+    """
+    settings = make_settings(tmp_path, auth_enabled=True, auth_token=token)
+    with pytest.raises(RuntimeError, match="auth_token"):
+        ensure_startup_auth_configured(settings)
+
+
+def test_startup_refuses_enabled_auth_when_token_is_unset(tmp_path):
+    """No ``AUTH_TOKEN`` at all means the ``config.py`` placeholder is used."""
+    settings = make_settings(tmp_path, auth_enabled=True)
+    with pytest.raises(RuntimeError, match="auth_token"):
+        ensure_startup_auth_configured(settings)
+
+
+def test_startup_accepts_disabled_auth_and_a_real_token(tmp_path):
+    ensure_startup_auth_configured(make_settings(tmp_path, auth_enabled=False, auth_token="changeme"))
+    ensure_startup_auth_configured(make_settings(tmp_path, auth_enabled=True, auth_token="real-secret"))
+
+
+def test_auth_state_message_reports_both_states(tmp_path):
+    disabled = auth_state_message(make_settings(tmp_path, auth_enabled=False))
+    enabled = auth_state_message(
+        make_settings(tmp_path, auth_enabled=True, auth_token="real-secret")
+    )
+    assert "disabled" in disabled and "unauthenticated" in disabled
+    assert "enabled" in enabled
+
+
+def _import_main(tmp_path, **env_overrides) -> subprocess.CompletedProcess[str]:
+    """Run the real ``import backend.main`` with the runtime dirs isolated."""
+    env = {k: v for k, v in os.environ.items() if k not in ("AUTH_ENABLED", "AUTH_TOKEN")}
+    env.update(
+        {
+            "DATA_DIR": str(tmp_path / "data"),
+            "ARTIFACTS_DIR": str(tmp_path / "artifacts"),
+            "TRACE_DIR": str(tmp_path / "traces"),
+            "CHECKPOINT_DIR": str(tmp_path / "checkpoints"),
+        }
+    )
+    env.update(env_overrides)
+    return subprocess.run(
+        [sys.executable, "-c", "import backend.main"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def test_import_refuses_empty_auth_token(tmp_path):
+    """The real startup path: ``import backend.main`` must exit non-zero.
+
+    A unit test on the guard can drift from the import-time wiring; this runs
+    the actual module import with ``AUTH_ENABLED=true AUTH_TOKEN=`` in a child
+    process (offline, no server socket).
+    """
+    result = _import_main(tmp_path, AUTH_ENABLED="true", AUTH_TOKEN="")
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "auth_token" in (result.stdout + result.stderr).lower()
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"AUTH_ENABLED": "true", "AUTH_TOKEN": "real-secret"}, "auth enabled"),
+        ({"AUTH_ENABLED": "false", "AUTH_TOKEN": "changeme"}, "auth disabled"),
+    ],
+)
+def test_import_logs_the_auth_state(tmp_path, env, expected):
+    """The startup notice is wired to logging, not just a helper's return value."""
+    result = _import_main(tmp_path, **env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert expected in (result.stdout + result.stderr)
 
 
 # ── TokenIssuer unit tests ──
