@@ -42,7 +42,7 @@ class TokenIssuer:
     """Issue and verify HMAC-signed, server-registered bearer tokens."""
 
     def __init__(self, secret: str, ttl_sec: int = 86400) -> None:
-        self._secret = (secret or "changeme").encode("utf-8")
+        self._secret = (secret or PLACEHOLDER_AUTH_TOKEN).encode("utf-8")
         self._ttl_sec = max(1, int(ttl_sec))
         self._store: Dict[str, float] = {}  # token -> expires_at
         self._lock = threading.Lock()
@@ -134,7 +134,7 @@ def ensure_startup_auth_configured(settings: "Settings") -> None:
     if not settings.auth_enabled:
         return
     token = settings.auth_token.strip()
-    if not token or token.lower() == PLACEHOLDER_AUTH_TOKEN:
+    if not token or token.lower() == PLACEHOLDER_AUTH_TOKEN.lower():
         raise RuntimeError(
             "auth_enabled=true but auth_token is empty or still the placeholder "
             f"'{PLACEHOLDER_AUTH_TOKEN}'. Set a strong auth_token via environment "
