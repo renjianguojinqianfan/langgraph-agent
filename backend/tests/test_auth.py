@@ -8,7 +8,11 @@ regression).
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,12 +20,75 @@ from fastapi.testclient import TestClient
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.main import app
-from backend.services.auth import TokenIssuer
+from backend.services.auth import (
+    TokenIssuer,
+    auth_state_notice,
+    ensure_startup_auth_safe,
+)
 from backend.services.event_bus import EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+# ── startup guard (#254 AC1, minimal) ──
+@pytest.mark.parametrize("token", ["", "   ", "changeme", "  changeme  "])
+def test_startup_refuses_enabled_auth_without_a_real_token(tmp_path, token):
+    """A blank / placeholder token must fail loudly, not silently disable auth.
+
+    ``AUTH_TOKEN=`` used to slip past the ``== "changeme"`` check; the issuer
+    then fell back to the publicly documented ``changeme`` secret, and
+    ``/auth/token`` accepted an empty password.
+    """
+    settings = make_settings(tmp_path, auth_enabled=True, auth_token=token)
+    with pytest.raises(RuntimeError, match="auth_token"):
+        ensure_startup_auth_safe(settings)
+
+
+def test_startup_accepts_disabled_auth_and_a_real_token(tmp_path):
+    ensure_startup_auth_safe(make_settings(tmp_path, auth_enabled=False, auth_token="changeme"))
+    ensure_startup_auth_safe(make_settings(tmp_path, auth_enabled=True, auth_token="real-secret"))
+
+
+def test_auth_state_notice_reports_both_states(tmp_path):
+    disabled = auth_state_notice(make_settings(tmp_path, auth_enabled=False))
+    enabled = auth_state_notice(
+        make_settings(tmp_path, auth_enabled=True, auth_token="real-secret")
+    )
+    assert "disabled" in disabled and "unauthenticated" in disabled
+    assert "enabled" in enabled
+
+
+def test_import_refuses_empty_auth_token(tmp_path):
+    """The real startup path: ``import backend.main`` must exit non-zero.
+
+    A unit test on the guard can drift from the import-time wiring; this runs
+    the actual module import with ``AUTH_ENABLED=true AUTH_TOKEN=`` in a child
+    process (offline, no server socket).
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("AUTH_ENABLED", "AUTH_TOKEN")}
+    env.update(
+        {
+            "AUTH_ENABLED": "true",
+            "AUTH_TOKEN": "",
+            "DATA_DIR": str(tmp_path / "data"),
+            "ARTIFACTS_DIR": str(tmp_path / "artifacts"),
+            "TRACE_DIR": str(tmp_path / "traces"),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", "import backend.main"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "auth_token" in (result.stdout + result.stderr).lower()
 
 
 # ── TokenIssuer unit tests ──

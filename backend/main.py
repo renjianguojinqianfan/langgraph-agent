@@ -18,20 +18,23 @@ from starlette.staticfiles import StaticFiles
 
 from .api.routes import router
 from .config import get_settings
-from .services.auth import TokenIssuer
+from .services.auth import TokenIssuer, auth_state_notice, ensure_startup_auth_safe
 from .services.event_bus import EventBus
 from .services.persistence import Persistence, PersistenceError
 from .services.task_manager import TaskManager
+from .utils.logging import get_logger
+
+logger = get_logger("main")
 
 settings = get_settings()
 
-# Security guard: refuse to silently serve with the publicly known placeholder
-# token (e.g. when auth is enabled in a container without overriding the default).
-if settings.auth_enabled and settings.auth_token == "changeme":
-    raise RuntimeError(
-        "auth_enabled=true but auth_token is still the placeholder 'changeme'. "
-        "Set a strong auth_token via environment variable before enabling auth."
-    )
+# Security guard (#254 AC1): refuse to silently serve with auth enabled but no
+# usable secret, and always state the auth posture once at startup.
+ensure_startup_auth_safe(settings)
+if settings.auth_enabled:
+    logger.info(auth_state_notice(settings))
+else:
+    logger.warning(auth_state_notice(settings))
 
 
 @asynccontextmanager

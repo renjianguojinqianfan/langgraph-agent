@@ -25,9 +25,12 @@ import hmac
 import secrets
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 from fastapi import Header, HTTPException, Query, Request
+
+if TYPE_CHECKING:  # avoid a config -> auth import cycle at runtime
+    from ..config import Settings
 
 #: localStorage key the frontend uses to persist the token.
 TOKEN_STORAGE_KEY = "lga_auth_token"
@@ -37,7 +40,9 @@ class TokenIssuer:
     """Issue and verify HMAC-signed, server-registered bearer tokens."""
 
     def __init__(self, secret: str, ttl_sec: int = 86400) -> None:
-        self._secret = (secret or "changeme").encode("utf-8")
+        # No ``or "changeme"`` fallback: the documented placeholder must never
+        # become a signing secret by accident (#254).
+        self._secret = secret.encode("utf-8")
         self._ttl_sec = max(1, int(ttl_sec))
         self._store: Dict[str, float] = {}  # token -> expires_at
         self._lock = threading.Lock()
@@ -111,3 +116,33 @@ def verify_token(
     if not raw or not issuer.verify(raw):
         raise HTTPException(status_code=401, detail="invalid or expired token")
     return raw
+
+
+def ensure_startup_auth_safe(settings: "Settings") -> None:
+    """Refuse to start when auth is enabled but no usable secret is configured.
+
+    ``AUTH_TOKEN=`` used to slip past the ``== "changeme"`` check; the issuer
+    then fell back to the publicly documented placeholder secret and
+    ``/auth/token`` accepted an empty password. That made the documented
+    "enable auth before exposing the port" mitigation silently do nothing
+    (#254 AC1). The default ``auth_enabled=false`` local-demo mode is untouched.
+    """
+    if not settings.auth_enabled:
+        return
+    token = (settings.auth_token or "").strip()
+    if not token or token == "changeme":
+        raise RuntimeError(
+            "auth_enabled=true but auth_token is empty or still the placeholder "
+            "'changeme'. Set a strong auth_token via environment variable before "
+            "enabling auth."
+        )
+
+
+def auth_state_notice(settings: "Settings") -> str:
+    """One startup line stating whether the local API is authenticated."""
+    if settings.auth_enabled:
+        return "auth enabled: REST + SSE require a bearer token"
+    return (
+        "auth disabled: the local API is unauthenticated (local-demo default); "
+        "set auth_enabled=true and a strong auth_token before exposing the port"
+    )

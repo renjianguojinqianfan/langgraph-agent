@@ -59,7 +59,8 @@
 - **隔离**：不可信任务（陌生网页 / 仓库 / 外部 MCP server）在容器、虚拟机或专用低权账户
   里跑；不要用带敏感凭据的账户跑不可信内容。
 - **收口**：服务只留 `127.0.0.1`，端口不做转发 / 内网暴露；必须暴露时先开 `auth_enabled`
-  并把占位 token 换掉。
+  并把占位 token 换掉。`auth_enabled=true` 且 token 为空 / 占位会**拒绝启动**，启动日志也会
+  明示当前认证状态（#254）——不会出现「以为开了锁、其实没锁」。
 - **兜底**：危险动作规则表是最后一道机械闸，不是完整防护；删条目 = 放行该类动作，加规则按
   `.env.example` 的格式（正则对每个入参文本叶子做不区分大小写搜索，不跨叶子拼接）。
   规则漏掉的场景靠上面的隔离兜底，而不是把本文读成安全承诺。
@@ -141,3 +142,7 @@
 - 2026-10-25（A2）：`langgraph-checkpoint 4.2.0→4.3.0`、`langgraph-checkpoint-sqlite
   3.1.1→3.1.2`（`langgraph` 行不动），§6 的 LangGraph Store 条目改为已修复；
   旧 checkpoint 库读回与 resume / serde 回归证据见 #204 关联 PR。
+- 2026-10-31（#254，slice 3）：`auth_enabled=true` 且 `auth_token` 为空 / 空白 / 占位
+  （`changeme`）时**拒绝启动**（此前空串会绕过占位检查，issuer 回退到公开的 `changeme`
+  密钥，`/auth/token` 甚至接受空密码）；`TokenIssuer` 去掉占位回退；启动日志明示认证状态。
+  默认 `auth_enabled=false` 的本地演示语义不变（§4 收口条目）。
