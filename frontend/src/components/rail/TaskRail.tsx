@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { apiErrorText, deleteWorkspaceTasks } from "../../api/client";
+import { historyListState } from "../../lib/failureStates";
 import { useTaskStore } from "../../store/taskStore";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
@@ -23,6 +24,8 @@ interface PendingDelete {
 export function TaskRail() {
   const tasks = useTaskStore((s) => s.tasks);
   const listError = useTaskStore((s) => s.listError);
+  const listLoading = useTaskStore((s) => s.listLoading);
+  const retryList = useTaskStore((s) => s.retryList);
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
   const removeWorkspaceTasks = useTaskStore((s) => s.removeWorkspaceTasks);
@@ -36,6 +39,15 @@ export function TaskRail() {
 
   const visible = filterByQuery(tasks, query);
   const groups = railGroups(visible, filter);
+  // #256: which face the list may show. With rows from the last success the
+  // failure stays a one-line banner above real rows; with none it owns the
+  // pane — the empty copy would read as "no tasks here" (the #256 bug).
+  const listState = historyListState({
+    error: listError,
+    loading: listLoading,
+    rows: tasks.length,
+    visible: visible.length,
+  });
   // Count from the unfiltered list: the dialog describes the whole directory,
   // not just the rows the search box currently shows (F2).
   const directoryCounts = new Map<string, number>();
@@ -92,7 +104,7 @@ export function TaskRail() {
           onChange={setFilter}
           label="任务范围"
         />
-        {listError && (
+        {listError && listState === "rows" && (
           <p role="status" className="text-meta text-state-danger">
             {listError}
           </p>
@@ -100,7 +112,28 @@ export function TaskRail() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
-        {visible.length === 0 ? (
+        {listState === "error" ? (
+          <div className="px-3 py-6">
+            <p role="alert" className="text-body text-state-danger">
+              {listError}
+            </p>
+            <p className="mt-1 text-meta text-tertiary">
+              确认后台在运行后重试；列表不会显示为空。
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={retryList}
+            >
+              重试
+            </Button>
+          </div>
+        ) : listState === "loading" ? (
+          <div className="px-3 py-6">
+            <p className="text-body text-tertiary">加载中…</p>
+          </div>
+        ) : listState === "empty" ? (
           <div className="px-3 py-6">
             <p className="text-body text-secondary">这里还没有任务</p>
             <p className="mt-1 text-meta text-tertiary">
