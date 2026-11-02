@@ -29,6 +29,9 @@ beforeEach(() => {
     markers: {},
     listRevision: 0,
     listError: "",
+    listLoading: false,
+    detailError: {},
+    detailRevision: 0,
     historyFilter: "current",
   });
 });
@@ -104,5 +107,84 @@ describe("removeWorkspaceTasks (#241)", () => {
     expect(state.markers.old).toBeUndefined();
     expect(state.currentTaskId).toBeNull();
     expect(state.tasks.map((row) => row.id)).toEqual(["b1"]);
+  });
+});
+
+describe("#256 列表失败态", () => {
+  it("setListError / setListLoading 是两块独立状态（失败≠加载中≠空）", () => {
+    useTaskStore.getState().setListLoading(true);
+    expect(useTaskStore.getState().listLoading).toBe(true);
+    expect(useTaskStore.getState().listError).toBe("");
+
+    useTaskStore.getState().setListLoading(false);
+    useTaskStore.getState().setListError("无法连接后台；确认服务在运行后再试。");
+    const state = useTaskStore.getState();
+    expect(state.listLoading).toBe(false);
+    expect(state.listError).not.toBe("");
+  });
+
+  it("retryList 只推 listRevision，不伪造行、不清错误", () => {
+    useTaskStore.setState({ listRevision: 4, listError: "无法连接后台", tasks: [] });
+
+    useTaskStore.getState().retryList();
+
+    const state = useTaskStore.getState();
+    expect(state.listRevision).toBe(5);
+    expect(state.tasks).toEqual([]);
+    // The error stays until the retry answers; clearing it here would show
+    // the empty copy while the request is in flight.
+    expect(state.listError).not.toBe("");
+  });
+});
+
+describe("#256 选中任务快照失败", () => {
+  it("setDetailError 按任务 id 记/清，互不串味", () => {
+    useTaskStore.getState().setDetailError("t1", "任务不存在或已被删除。");
+
+    useTaskStore.getState().setDetailError("t2", "无法连接后台；确认服务在运行后再试。");
+    expect(useTaskStore.getState().detailError).toEqual({
+      t1: "任务不存在或已被删除。",
+      t2: "无法连接后台；确认服务在运行后再试。",
+    });
+
+    useTaskStore.getState().setDetailError("t1", "");
+    expect(useTaskStore.getState().detailError.t1).toBeUndefined();
+    expect(useTaskStore.getState().detailError.t2).toBeDefined();
+  });
+
+  it("retryDetail 推 detailRevision（同一行重点也能重取），不清既有错误", () => {
+    useTaskStore.setState({ detailRevision: 1, detailError: { t1: "炸了" } });
+
+    useTaskStore.getState().retryDetail();
+
+    const state = useTaskStore.getState();
+    expect(state.detailRevision).toBe(2);
+    // The error stays visible until the retry answers.
+    expect(state.detailError.t1).toBe("炸了");
+  });
+});
+
+describe("#256 PlanAnchor 版本同步", () => {
+  it("setPlanVersion 同步 detail 与列表行的 plan_version", () => {
+    useTaskStore.setState({
+      tasks: [task("t1"), task("t2")],
+      detail: { t1: task("t1"), t2: task("t2") },
+    });
+
+    useTaskStore.getState().setPlanVersion("t1", 3);
+
+    const state = useTaskStore.getState();
+    expect(state.detail.t1.plan_version).toBe(3);
+    expect(state.tasks[0].plan_version).toBe(3);
+    expect(state.detail.t2.plan_version).toBe(0);
+  });
+
+  it("版本没变时不动 store（不触发计划重取回路）", () => {
+    useTaskStore.setState({ detail: { t1: task("t1") } });
+    const before = useTaskStore.getState().detail;
+
+    useTaskStore.getState().setPlanVersion("t1", 0);
+
+    expect(useTaskStore.getState().detail).toBe(before);
   });
 });

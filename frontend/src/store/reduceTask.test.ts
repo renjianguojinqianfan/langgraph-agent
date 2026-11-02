@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SSEvent, Task } from "../types";
-import { applyToTask, needsStatusRefetch } from "./reduceTask";
+import { applyToTask, mergeSnapshot, needsStatusRefetch } from "./reduceTask";
 import { useTaskStore } from "./taskStore";
 
 function snapshot(overrides: Partial<Task> = {}): Task {
@@ -222,6 +222,99 @@ describe("子智能体事件只动 subtasks", () => {
     });
     expect(task.steps).toHaveLength(1);
     expect(task.conversation).toHaveLength(1);
+  });
+});
+
+describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
+  const live = () =>
+    snapshot({
+      status: "RUNNING",
+      steps: [
+        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, thought: "第二步", tool_calls: [], status: "running" },
+      ],
+      conversation: [
+        { role: "user", content: "做点事" },
+        { role: "assistant", content: "好的" },
+      ],
+      updated_at: "2026-10-27T00:00:05",
+    });
+
+  it("快照步骤更少（请求早于流）→ 保留实时 steps / conversation / 状态", () => {
+    const stale = snapshot({
+      status: "PENDING",
+      steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+      conversation: [{ role: "user", content: "做点事" }],
+      updated_at: "2026-10-27T00:00:01",
+    });
+
+    const merged = mergeSnapshot(live(), stale);
+
+    expect(merged.steps).toHaveLength(2);
+    expect(merged.conversation).toHaveLength(2);
+    // A stale snapshot's status is stale too (#189): live RUNNING wins over PENDING.
+    expect(merged.status).toBe("RUNNING");
+    // The snapshot stays authoritative for the fields the stream never owns.
+    expect(merged.updated_at).toBe("2026-10-27T00:00:01");
+    expect(merged.title).toBe(live().title);
+  });
+
+  it("快照步骤不少于实时（新鲜）→ 快照整体胜出", () => {
+    const fresh = snapshot({
+      status: "INTERRUPTED",
+      steps: [
+        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, thought: "第二步", tool_calls: [], status: "done" },
+        { index: 3, thought: "第三步", tool_calls: [], status: "done" },
+      ],
+      conversation: [
+        { role: "user", content: "做点事" },
+        { role: "assistant", content: "做完了" },
+      ],
+      updated_at: "2026-10-27T00:00:09",
+    });
+
+    const merged = mergeSnapshot(live(), fresh);
+
+    expect(merged).toBe(fresh);
+    expect(merged.steps).toHaveLength(3);
+    expect(merged.status).toBe("INTERRUPTED");
+  });
+
+  it("步骤数相等 → 快照胜出（REST 权威，含同数的内容差异）", () => {
+    const tie = snapshot({
+      status: "FAILED",
+      steps: [
+        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, thought: "第二步（带结果）", tool_calls: [], status: "failed" },
+      ],
+      error: "炸了",
+    });
+
+    const merged = mergeSnapshot(live(), tie);
+
+    expect(merged.status).toBe("FAILED");
+    expect(merged.error).toBe("炸了");
+    expect(merged.steps[1].thought).toBe("第二步（带结果）");
+  });
+
+  it("store 层：SSE 渲染两步后迟到的 getTask 快照（一步）不清步骤", () => {
+    useTaskStore.setState({ currentTaskId: "t1", detail: { t1: live() } });
+
+    // The snapshot requested on selection resolves after the stream caught up.
+    useTaskStore.getState().upsertTask(
+      snapshot({
+        status: "PENDING",
+        steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+        conversation: [{ role: "user", content: "做点事" }],
+        updated_at: "2026-10-27T00:00:01",
+      })
+    );
+
+    const task = useTaskStore.getState().detail["t1"];
+    expect(task.steps).toHaveLength(2);
+    expect(task.steps[1].thought).toBe("第二步");
+    expect(task.status).toBe("RUNNING");
   });
 });
 

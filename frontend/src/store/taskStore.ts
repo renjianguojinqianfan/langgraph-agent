@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { SSEvent, Task, TraceMarker } from "../types";
 import { currentDir, setDirParam } from "../workspace";
-import { applyToTask, mergeStatusSnapshot } from "./reduceTask";
+import { applyToTask, mergeSnapshot, mergeStatusSnapshot } from "./reduceTask";
 
 interface TaskState {
   tasks: Task[];
@@ -21,6 +21,12 @@ interface TaskState {
   listRevision: number;
   /** Non-empty when the last history load failed (backend unreachable). */
   listError: string;
+  /** #256: true while the history list is in flight — the empty copy waits. */
+  listLoading: boolean;
+  /** #256: per-task snapshot load failure; a set entry is never a new task. */
+  detailError: Record<string, string>;
+  /** #256: bumped by `retryDetail`; the snapshot effect keys on it. */
+  detailRevision: number;
 
   setTasks: (tasks: Task[]) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -37,6 +43,15 @@ interface TaskState {
   applyEvent: (ev: SSEvent) => void;
   setHistoryFilter: (filter: "current" | "all") => void;
   setListError: (message: string) => void;
+  setListLoading: (loading: boolean) => void;
+  /** #256: refetch the history list (the load effect keys on `listRevision`). */
+  retryList: () => void;
+  /** #256: remember (or clear) why a task's snapshot could not be loaded. */
+  setDetailError: (id: string, message: string) => void;
+  /** #256: refetch the selected task's snapshot (the effect keys on the revision). */
+  retryDetail: () => void;
+  /** #256: mirror a saved plan version onto the task so PlanAnchor can't go stale. */
+  setPlanVersion: (id: string, version: number) => void;
 }
 
 /** Remove ids from every per-task cache; clear the selection if it was removed. */
@@ -73,11 +88,34 @@ export const useTaskStore = create<TaskState>((set) => ({
   settingsOpen: false,
   listRevision: 0,
   listError: "",
+  listLoading: false,
+  detailError: {},
+  detailRevision: 0,
 
   setTasks: (tasks) => set({ tasks }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setListError: (listError) => set({ listError }),
+  setListLoading: (listLoading) => set({ listLoading }),
+  retryList: () => set((state) => ({ listRevision: state.listRevision + 1 })),
+  setDetailError: (id, message) =>
+    set((state) => {
+      const detailError = { ...state.detailError };
+      if (message) detailError[id] = message;
+      else delete detailError[id];
+      return { detailError };
+    }),
+  retryDetail: () => set((state) => ({ detailRevision: state.detailRevision + 1 })),
+  setPlanVersion: (id, version) =>
+    set((state) => {
+      const prev = state.detail[id];
+      if (!prev || prev.plan_version === version) return {};
+      const next = { ...prev, plan_version: version };
+      return {
+        detail: { ...state.detail, [id]: next },
+        tasks: state.tasks.map((t) => (t.id === id ? next : t)),
+      };
+    }),
 
   setCurrentTask: (id) => set({ currentTaskId: id }),
 
@@ -110,13 +148,17 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   upsertTask: (task) =>
     set((state) => {
-      const detail = { ...state.detail, [task.id]: task };
+      // #256: a late snapshot (requested before the stream caught up) must not
+      // replace the detail wholesale — mergeSnapshot keeps the live steps.
+      const prev = state.detail[task.id];
+      const next = prev ? mergeSnapshot(prev, task) : task;
+      const detail = { ...state.detail, [task.id]: next };
       // Membership belongs to the server's filtered GET: a task from another
       // directory must not be inserted by a detail fetch or SSE event.
       if (!state.tasks.some((t) => t.id === task.id)) return { detail };
       return {
         detail,
-        tasks: state.tasks.map((t) => (t.id === task.id ? task : t)),
+        tasks: state.tasks.map((t) => (t.id === task.id ? next : t)),
       };
     }),
 

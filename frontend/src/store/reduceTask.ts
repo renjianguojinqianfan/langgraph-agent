@@ -184,6 +184,29 @@ export function mergeStatusSnapshot(prev: Task, snapshot: Task): Task {
 }
 
 /**
+ * #256: apply a refetched snapshot without letting a late one wipe the live
+ * stream. A snapshot requested before the stream caught up carries fewer
+ * steps than the detail already holds — that snapshot is provably older, so
+ * its steps / conversation / subtasks / final answer (and the status that
+ * came with them, #189) lose to the live detail. A snapshot with at least as
+ * many steps is fresh and wins outright (same tie-break as before: REST is
+ * authoritative).
+ */
+export function mergeSnapshot(prev: Task, snapshot: Task): Task {
+  const live = prev.steps.length > snapshot.steps.length;
+  if (!live) return snapshot;
+  return {
+    ...snapshot,
+    steps: prev.steps,
+    conversation: prev.conversation,
+    subtasks: prev.subtasks,
+    final_answer: prev.final_answer,
+    status: prev.status,
+    error: prev.error,
+  };
+}
+
+/**
  * #189: SSE can outrun the REST snapshot (still PENDING while steps already
  * stream). Callers refetch once per task when this returns true.
  */
