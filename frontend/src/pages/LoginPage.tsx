@@ -1,20 +1,27 @@
 import { useState } from "react";
 import { useAuthStore } from "../store/authStore";
+import type { LoginOutcome } from "../lib/failureStates";
+
+/** #256: each failure says what happened and what to do next (§7 错). */
+const FAILURE_COPY: Record<Exclude<LoginOutcome, "ok">, string> = {
+  "wrong-secret": "口令错误，请重试。",
+  unreachable: "连不上后台（网络或服务端错误）；确认服务在运行后重试。",
+};
 
 export function LoginPage() {
   const login = useAuthStore((s) => s.login);
   const [secret, setSecret] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<LoginOutcome>("ok");
   const [busy, setBusy] = useState(false);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!secret.trim()) return;
     setBusy(true);
-    setError("");
-    const ok = await login(secret.trim());
+    setError("ok");
+    const outcome = await login(secret.trim());
     setBusy(false);
-    if (!ok) setError("口令错误，请重试");
+    setError(outcome);
   };
 
   return (
@@ -34,7 +41,11 @@ export function LoginPage() {
           placeholder="口令"
           autoFocus
         />
-        {error && <div className="mb-2 text-body text-state-danger">{error}</div>}
+        {error !== "ok" && (
+          <div role="alert" className="mb-2 text-body text-state-danger">
+            {FAILURE_COPY[error]}
+          </div>
+        )}
         <button
           type="submit"
           disabled={busy}
