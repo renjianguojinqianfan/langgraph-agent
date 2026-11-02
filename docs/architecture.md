@@ -152,7 +152,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；读不到 → 404/409 |
 | PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4） | — | `text/event-stream` |
-| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认原始 NDJSON；`?format=json` 走信封 `{data:[Event...]}`；非法 `task_id` → 400（不触达文件系统），任务不存在 / 无 trace → 404 |
+| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认原始 NDJSON（逐字节原样返回，畸形行也 included，回放面按设计跳过）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**；非法 `task_id` → 400（不触达文件系统），任务不存在 / 无 trace / trace 关闭（`trace_enabled=false`）→ 404；超过 `TRACE_MAX_BYTES`（8 MiB；有界读取 cap+1 字节，不整份入内存）→ 413（两种格式）；非 UTF-8 → 422（两种格式），`?format=json` 的畸形行（非法 JSON / 非对象 / 缺 `type` / `data` / `ts`）→ 422 且 `detail` 带行号；读取失败 → 500（记日志） |
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（最多返回前 200 KB，`truncated` 标记） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400；文件不存在 → 404；工作区不存在 → 409。404 的 `detail` 是 `task not found` 或 `file not found`，前端据此区分任务与文件消失（`frontend/src/lib/preview.ts`） |
 | GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
@@ -199,7 +199,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 ### 3.5 错误口径与响应信封
 
-- **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/415/500）。
+- **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/413/415/422/500；413 / 422 由 `/trace` 的大小上限与逐行校验引入，#260）。
 - **工具失败两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。
 - **被规则当场拒的调用**走第三形状（ADR 0008 决策 6）：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开）。
 - **只执行一次**：工具调用无自动重试、无熔断（ADR 0003 已退役）；失败原因原样回给模型。
