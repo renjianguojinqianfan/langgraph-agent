@@ -534,7 +534,13 @@ class TaskManager:
 
         Idempotent: calling it multiple times, or constructing a new
         :class:`TaskManager` over an old one, never leaks connections.
+
+        #260: every step logs. A shutdown that hung on a worker or skipped a
+        resource used to leave no trace at all in the log; the operator now
+        sees begin → MCP cleanup → worker join → store close → done, and a
+        warning names whatever did not complete.
         """
+        logger.info("shutdown: begin")
         mcp = getattr(self, "_mcp", None)
         if mcp is not None:
             try:
@@ -542,6 +548,7 @@ class TaskManager:
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("MCP cleanup failed: %s", exc)
             self._mcp = None
+            logger.info("shutdown: MCP child processes cleaned up")
         # Let in-flight workers finish committing their checkpoints BEFORE the
         # sqlite connection goes away — closing under a writing thread is what
         # corrupted the shared WAL file and crashed native sqlite3.
@@ -565,6 +572,7 @@ class TaskManager:
                 alive,
             )
             return
+        logger.info("shutdown: all worker threads joined")
         conn = getattr(self, "_checkpoint_conn", None)
         if conn is not None:
             try:
@@ -573,6 +581,8 @@ class TaskManager:
                 logger.warning("checkpoint connection close failed: %s", exc)
             self._checkpointer = None
             self._checkpoint_conn = None
+            logger.info("shutdown: checkpoint connection closed")
+        logger.info("shutdown: complete")
 
     # ── creation / query ──
     @staticmethod

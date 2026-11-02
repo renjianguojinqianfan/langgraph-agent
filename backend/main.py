@@ -55,11 +55,14 @@ async def lifespan(app: FastAPI):
     )
     yield
     # P2 item 1: gracefully shut down MCP child processes on app exit so no
-    # stdio subprocess survives the server.
+    # stdio subprocess survives the server. #260: the shutdown path itself
+    # logs each step (TaskManager.shutdown); a failure here must reach the log
+    # file as well, not only stdout.
+    logger.info("app shutdown: releasing task manager resources")
     try:
         app.state.task_manager.shutdown()
-    except Exception as exc:  # pragma: no cover - defensive
-        print(f"[lifespan] task_manager.shutdown failed: {exc}")
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("task_manager.shutdown failed")
 
 
 app = FastAPI(title="LangGraph Autonomous Task Agent", version="0.1.0", lifespan=lifespan)

@@ -8,6 +8,7 @@ trace-file error cannot leave a RUNNING task with no worker.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
 
@@ -168,6 +169,46 @@ def test_shutdown_closes_connection_when_idle(tmp_path):
 
     assert tm._checkpoint_conn is None
     assert tm._checkpointer is None
+
+
+def test_shutdown_logs_each_step(tmp_path, caplog):
+    """#260 AC4: a normal shutdown is visible in the log, step by step.
+
+    Before this, a clean shutdown logged nothing at all — an operator could
+    not tell "resources were released" from "shutdown never ran".
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    assert tm._checkpoint_conn is not None
+    log = logging.getLogger("agent.task_manager")
+    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    try:
+        with caplog.at_level(logging.INFO):
+            tm.shutdown()
+    finally:
+        log.removeHandler(caplog.handler)
+
+    assert "shutdown: begin" in caplog.text
+    assert "all worker threads joined" in caplog.text
+    assert "checkpoint connection closed" in caplog.text
+    assert "shutdown: complete" in caplog.text
+
+
+def test_shutdown_logs_the_incomplete_path(tmp_path, caplog):
+    """#260 AC4: a worker outliving the join is named in the log — and the
+    idle path's "complete" line must not appear for it."""
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    tm._threads["t-live"] = _AliveThread()
+    log = logging.getLogger("agent.task_manager")
+    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    try:
+        with caplog.at_level(logging.INFO):
+            tm.shutdown()
+    finally:
+        log.removeHandler(caplog.handler)
+
+    assert "still alive after 5s" in caplog.text
+    assert "shutdown: complete" not in caplog.text
 
 
 def test_resume_trace_failure_leaves_task_interrupted(tmp_path, monkeypatch):
