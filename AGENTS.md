@@ -49,6 +49,10 @@
 # 离线回归（唯一权威）——解释器一律 .venv311；根目录 .venv 是 3.13 且无依赖，不要用
 .\.venv311\Scripts\python.exe -m pytest backend/tests/ -q
 
+# 例外：harness 里跑离线回归可能整文件假红——MSYS bash 初始化即死，退出码 3221225794、stderr 含
+# `*** fatal error -`。环境问题非代码回退：换仓库外的解释器（pyvenv.cfg 的 home）或回自己终端；
+# 判据与已排除项见 docs/harness-bash-false-red.md。
+
 # Windows 敏感面（与 CI backend-windows-smoke 同清单；改路径 / 进程 / os 分支时跑）
 .\.venv311\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py -q -rs
 
