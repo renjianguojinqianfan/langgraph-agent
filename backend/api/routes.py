@@ -638,7 +638,11 @@ def task_trace(
 
     if format == "json":
         events = []
-        for lineno, line in enumerate(raw.splitlines(), start=1):
+        # Split on "\n" only (#260): JSONL's separator is the newline, and the
+        # recorder writes with ``ensure_ascii=False``, so U+2028 / U+2029 / NEL
+        # stay raw inside a legal line — ``str.splitlines()`` would cut such a
+        # line in half and 422 a file the backend itself wrote correctly.
+        for lineno, line in enumerate(raw.split("\n"), start=1):
             if not line.strip():
                 continue
             try:

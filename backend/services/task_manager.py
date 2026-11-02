@@ -541,14 +541,17 @@ class TaskManager:
         warning names whatever did not complete.
         """
         logger.info("shutdown: begin")
+        failed = False
         mcp = getattr(self, "_mcp", None)
         if mcp is not None:
             try:
                 mcp.cleanup()
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 logger.warning("MCP cleanup failed: %s", exc)
+                failed = True
+            else:
+                logger.info("shutdown: MCP child processes cleaned up")
             self._mcp = None
-            logger.info("shutdown: MCP child processes cleaned up")
         # Let in-flight workers finish committing their checkpoints BEFORE the
         # sqlite connection goes away — closing under a writing thread is what
         # corrupted the shared WAL file and crashed native sqlite3.
@@ -577,12 +580,19 @@ class TaskManager:
         if conn is not None:
             try:
                 conn.close()
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 logger.warning("checkpoint connection close failed: %s", exc)
+                failed = True
+            else:
+                logger.info("shutdown: checkpoint connection closed")
             self._checkpointer = None
             self._checkpoint_conn = None
-            logger.info("shutdown: checkpoint connection closed")
-        logger.info("shutdown: complete")
+        # "complete" is a claim about every step: a warning above must not be
+        # followed by a success line that contradicts it.
+        if failed:
+            logger.warning("shutdown: finished with errors (see the warnings above)")
+        else:
+            logger.info("shutdown: complete")
 
     # ── creation / query ──
     @staticmethod

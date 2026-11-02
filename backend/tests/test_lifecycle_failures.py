@@ -211,6 +211,45 @@ def test_shutdown_logs_the_incomplete_path(tmp_path, caplog):
     assert "shutdown: complete" not in caplog.text
 
 
+class _BoomMcp:
+    def cleanup(self) -> None:
+        raise RuntimeError("mcp boom")
+
+
+class _BoomConn:
+    def close(self) -> None:
+        raise RuntimeError("close boom")
+
+
+def test_shutdown_logs_failures_instead_of_success_lines(tmp_path, caplog):
+    """#260 rework (S3): a failed step must not be followed by its success line.
+
+    Two contradictory lines ("cleanup failed" + "cleaned up") make the log
+    unreadable exactly when the operator needs it; the final line must then be
+    "finished with errors", not "complete".
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    tm._mcp = _BoomMcp()
+    tm._checkpoint_conn = _BoomConn()
+    log = logging.getLogger("agent.task_manager")
+    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    try:
+        with caplog.at_level(logging.INFO):
+            tm.shutdown()
+    finally:
+        log.removeHandler(caplog.handler)
+
+    assert "MCP cleanup failed" in caplog.text
+    assert "mcp boom" in caplog.text
+    assert "MCP child processes cleaned up" not in caplog.text
+    assert "checkpoint connection close failed" in caplog.text
+    assert "close boom" in caplog.text
+    assert "checkpoint connection closed" not in caplog.text
+    assert "shutdown: finished with errors" in caplog.text
+    assert "shutdown: complete" not in caplog.text
+
+
 def test_resume_trace_failure_leaves_task_interrupted(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     before = _parked_task(settings)

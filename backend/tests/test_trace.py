@@ -460,6 +460,31 @@ def test_trace_api_json_format_rejects_malformed_line(trace_client):
     assert raw.text.splitlines()[1] == "{not json"
 
 
+def test_trace_api_json_format_accepts_unicode_line_separators(trace_client):
+    """#260 rework (S1): JSONL's separator is ``\\n``; U+2028/U+2029/NEL are payload.
+
+    The recorder writes with ``ensure_ascii=False``, so those characters stay
+    raw inside a legal line. ``str.splitlines()`` would cut the line in half
+    and 422 a file the backend itself wrote correctly — a false alarm on a
+    perfectly good trace.
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    lines = trace_file.read_text(encoding="utf-8").split("\n")
+    lines[0] = json.dumps(
+        {"type": "final_answer", "data": {"answer": "a\u2028b\u2029c\x85d"}, "ts": 1.5},
+        ensure_ascii=False,
+    )
+    trace_file.write_text("\n".join(lines), encoding="utf-8")
+
+    r = client.get(f"/api/tasks/{tid}/trace?format=json")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["data"][0]["data"]["answer"] == "a\u2028b\u2029c\x85d"
+    # The separators did not split the line: same event count as the file.
+    assert len(body["data"]) == len([ln for ln in lines if ln.strip()])
+
+
 def test_trace_api_json_format_rejects_non_object_and_missing_fields(trace_client):
     """#260 AC3: the event shape is validated, with the line located."""
     client, settings = trace_client
