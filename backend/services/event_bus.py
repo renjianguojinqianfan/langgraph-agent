@@ -3,6 +3,15 @@
 Used to fan out step/task events from the orchestration kernel to any number of
 SSE subscribers. A bounded per-task buffer lets late SSE subscribers replay
 recent events so they do not miss anything published before they connected.
+
+Bound and overflow policy (#260): each task's replay buffer is a
+``deque(maxlen=buffer_size)`` — publishing past the cap evicts the OLDEST
+event, so one long run cannot grow the heap and the buffer always holds the
+most recent ``buffer_size`` events. The per-task entry itself is released by
+:meth:`drop` when the task's history is deleted; a parked task keeps its
+buffer so a reconnecting client can still replay. The SSE-side outbox has its
+own bound (``backend/api/sse.py``); this buffer alone does not limit how much
+a live subscriber can be sent.
 """
 
 from __future__ import annotations

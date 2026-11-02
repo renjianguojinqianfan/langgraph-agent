@@ -69,3 +69,24 @@ def test_bad_subscriber_does_not_break_publisher():
     bus.subscribe("t1", received.append)
     bus.publish("t1", "ok", {})  # should not raise despite broken subscriber
     assert len(received) == 1
+
+
+def test_replay_buffer_is_bounded_and_drops_the_oldest():
+    """#260 AC1: the per-task buffer is bounded; overflow evicts the OLDEST.
+
+    The bound is what keeps a long run from growing the heap; the policy is
+    drop-oldest so the buffer always holds the most recent events — that is
+    what a late subscriber replays.
+    """
+    bus = EventBus(buffer_size=3)
+    for i in range(5):
+        bus.publish("t1", "step_start", {"i": i})
+
+    assert [e["data"]["i"] for e in bus.replay("t1")] == [2, 3, 4]
+
+
+def test_replay_buffer_default_bound_is_explicit():
+    """#260 AC1: the production bound is a number, not "unlimited"."""
+    bus = EventBus()
+    bus.publish("t1", "x", {})  # materialise the task's deque
+    assert bus._buffers["t1"].maxlen == 1000
