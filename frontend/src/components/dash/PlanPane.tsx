@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { apiErrorText, getPlan, putPlan } from "../../api/client";
+import { apiErrorText, getPlanSnapshot, putPlan } from "../../api/client";
 import { Markdown } from "../../lib/markdown";
+import { planLoadFailure, planLoadState } from "../../lib/failureStates";
 import { isParked } from "../../lib/taskState";
+import { useTaskStore } from "../../store/taskStore";
 import type { Task } from "../../types";
 import { Button } from "../ui/Button";
 import { Status } from "../ui/Status";
@@ -44,11 +46,18 @@ export function PlanPane({ task }: { task: Task }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  /** #256: why the plan could not be read; non-empty blocks every save. */
+  const [loadError, setLoadError] = useState("");
+  /** Bumped by the retry button; the load effect keys on it. */
+  const [reloadToken, setReloadToken] = useState(0);
   const [note, setNote] = useState<string | null>(null);
   const [conflict, setConflict] = useState<{
     text: string;
     version: number;
   } | null>(null);
+  // #256: a saved plan version must reach the store, or PlanAnchor keeps
+  // showing the stale one and the next write starts from the wrong version.
+  const setPlanVersion = useTaskStore((s) => s.setPlanVersion);
 
   const editable = isParked(task.status);
 
@@ -59,6 +68,7 @@ export function PlanPane({ task }: { task: Task }) {
     setText("");
     setVersion(0);
     setLoaded("");
+    setLoadError("");
     setLoading(true);
   }, [task.id]);
 
@@ -66,21 +76,30 @@ export function PlanPane({ task }: { task: Task }) {
     if (editing) return;
     let cancelled = false;
     setLoading(true);
-    getPlan(task.id)
+    getPlanSnapshot(task.id)
       .then((r) => {
-        if (cancelled || !r.data) return;
+        if (cancelled) return;
+        // #256: a failed read is an error face, never an empty plan — the
+        // empty face is what let an empty PUT overwrite the real file.
+        if (planLoadState(r.status) !== "ready" || !r.data) {
+          setLoadError(planLoadFailure(r.status, r.detail));
+          return;
+        }
+        setLoadError("");
         setText(r.data.text);
         setVersion(r.data.version);
         setLoaded(r.data.text);
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setLoadError(planLoadFailure(0));
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [task.id, task.plan_version, task.status, editing]);
+  }, [task.id, task.plan_version, task.status, editing, reloadToken]);
 
   const startEdit = () => {
     setLoaded(text);
@@ -96,13 +115,19 @@ export function PlanPane({ task }: { task: Task }) {
     setConflict(null);
   };
 
+  /** Mirror the server's version onto the task (#256, PlanAnchor). */
+  const applyVersion = (next: number) => {
+    setVersion(next);
+    setPlanVersion(task.id, next);
+  };
+
   const doPut = async () => {
     setBusy(true);
     setNote(null);
     try {
       const r = await putPlan(task.id, text);
       if (r.data?.ok) {
-        setVersion(r.data.version);
+        applyVersion(r.data.version);
         setLoaded(text);
         setEditing(false);
         setConflict(null);
@@ -122,24 +147,31 @@ export function PlanPane({ task }: { task: Task }) {
     setNote(null);
     try {
       // GET has no hash, so "has the file changed since I opened the editor?"
-      // is answered by re-reading the text and comparing it locally.
+      // is answered by re-reading the text and comparing it locally. A failed
+      // re-read blocks the save (#256): without a fresh read there is no proof
+      // the file still matches, and an empty editor must never reach the disk.
       try {
-        const fresh = await getPlan(task.id);
-        const freshText = fresh.data?.text ?? null;
-        if (freshText !== null && freshText !== loaded) {
+        const fresh = await getPlanSnapshot(task.id);
+        if (planLoadState(fresh.status) !== "ready" || !fresh.data) {
+          setNote(planLoadFailure(fresh.status, fresh.detail));
+          return;
+        }
+        const freshText = fresh.data.text;
+        if (freshText !== loaded) {
           setConflict({
             text: freshText,
-            version: fresh.data?.version ?? version,
+            version: fresh.data.version,
           });
           setNote("计划文件在编辑期间被外部修改；请选择载入新版或覆盖保存。");
           return;
         }
       } catch {
-        // No fresh read: attempt the PUT; the server still owns the status gate.
+        setNote(planLoadFailure(0));
+        return;
       }
       const r = await putPlan(task.id, text);
       if (r.data?.ok) {
-        setVersion(r.data.version);
+        applyVersion(r.data.version);
         setLoaded(text);
         setEditing(false);
         setConflict(null);
@@ -165,6 +197,9 @@ export function PlanPane({ task }: { task: Task }) {
 
   const toc = parsePlanToc(text);
   const headingIds = new Map(toc.map((item) => [item.line, item.slug]));
+  // #256: with the plan unread, the editor holds nothing true — no edit, no
+  // save; the only way forward is reading it again.
+  const saveBlocked = !!loadError;
 
   return (
     <div className="flex flex-col gap-3">
@@ -177,8 +212,10 @@ export function PlanPane({ task }: { task: Task }) {
             size="sm"
             className="ml-auto shrink-0"
             onClick={startEdit}
-            disabled={!editable}
-            aria-describedby={!editable ? "plan-edit-reason" : undefined}
+            disabled={!editable || saveBlocked}
+            aria-describedby={
+              !editable ? "plan-edit-reason" : saveBlocked ? "plan-load-error" : undefined
+            }
           >
             {text.trim() ? "编辑" : "编写计划"}
           </Button>
@@ -209,6 +246,24 @@ export function PlanPane({ task }: { task: Task }) {
         </p>
       )}
 
+      {loadError && (
+        <div
+          id="plan-load-error"
+          role="alert"
+          className="flex flex-col items-start gap-2 rounded-well border border-state-danger/30 bg-state-danger/5 px-3 py-2"
+        >
+          <span className="text-meta text-state-danger">{loadError}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            disabled={loading}
+          >
+            {loading ? "重试中…" : "重试"}
+          </Button>
+        </div>
+      )}
+
       {note && (
         <p role="status" className="text-meta text-secondary">
           {note}
@@ -237,7 +292,7 @@ export function PlanPane({ task }: { task: Task }) {
           spellCheck={false}
           className="min-h-[280px] w-full resize-y rounded-well border border-rule-strong bg-surface-well px-3 py-2 font-mono text-code text-primary"
         />
-      ) : text.trim() ? (
+      ) : loadError ? null : text.trim() ? (
         <>
           <PlanToc items={toc} />
           <Markdown headingIds={headingIds}>{text}</Markdown>
