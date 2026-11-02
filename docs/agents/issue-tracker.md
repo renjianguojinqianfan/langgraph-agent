@@ -50,6 +50,11 @@ Infer the repo from `git remote -v` — `gh` does this automatically when run in
   holds env-var-shaped text (e.g. `$DASHSCOPE_API_KEY`) — PowerShell will expand it.
 - `gh` output piped through `Select-Object`/`ForEach-Object` is fine; piping through
   `jq` requires `jq` on PATH — fall back to `--json ... --jq '...'` (gh's built-in jq).
+- **2026-10-31 实证三小坑**：① `gh issue edit <N> --add-assignee @me` 里 `@me` 被
+  PowerShell 当成 splatting，报 `flag needs an argument`，加引号 `'@me'` 即解；
+  ② fork 来的 PR 首次 workflow run 结论是 `action_required`，需维护者审批后 CI
+  才跑；③ git-bash 的 `/tmp` 与 Windows `%TEMP%` 不是同一路径，取值用
+  `cygpath -w /tmp` 或在 pwsh 里读 `$env:TEMP`（2026-10-31 白掉一次读的同源坑）。
 
 ## Pull requests as a triage surface
 

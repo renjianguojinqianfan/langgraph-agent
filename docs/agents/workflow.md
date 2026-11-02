@@ -11,7 +11,7 @@
 | 2 | **qoder** | 调用 `implement` skill 实施（TDD：约定的 seam 上先写红测试；常跑类型检查与单测） |
 | 3 | **qoder** | 调用 `code-review` skill **自评审**（双轴：规范轴 + 需求轴），返工发现后才进下一步 |
 | 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/archive/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」；**暴露面清理例外**：本机路径 / 用户目录的占位符替换优先于快照冻结，见 [`docs/security.md`](../security.md) §3 |
-| 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号（`Closes #N`）；body 调 `pr` skill 写（Summary 最小可视化 / Before-After Evidence / Merge Danger）；验证状态四态如实写（通过/跳过/未运行/产物验收） |
+| 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号（`Closes #N`）；body 调 `pr` skill 写（Summary 最小可视化 / Before-After Evidence / Merge Danger）；验证状态四态如实写（通过/跳过/未运行/产物验收）；**返工 commit 后必须刷新 PR body**——Summary 的符号名、Evidence 的命令与数字与最终 head 对账（#274 实证：返工后 body 仍是 commit 1 快照，评审为三个数字往返一条评论） |
 | 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest）+ 危险动作钩子检查〔2026-10-14 起取代「冻结区检查」，冻结区随 ADR 0008 解除〕 + 真模型视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
 | 6 | 评审侧/用户 | 合并：调 `verification-loop` skill 走收尾门（机械验证 + 端到端验收）→ CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
 
@@ -39,6 +39,7 @@
 
 - 评审提出返工 → qoder 在**同一分支**修 → push → CI 复绿。
 - 复核口径分两档：**纯注释 / docs 返工** → 评审读返工 diff + 新 head CI 全绿 + `mergeable` 即可收口合并；**含代码的返工** → 回到步 5 完整口径（受影响面的门禁 + 相关测试至少重跑一轮）。
+- **契约变更改既有断言的口径**：契约性变更（如 `TokenIssuer` fail-closed 这类收紧）**允许**改既有断言，但 PR 必须逐条列出「旧断言 → 新断言 → 为什么是契约变化而非放宽」，评审侧对照「既有测试只增不减」红线核账；没有这份清单的断言修改一律按放宽打回。
 - **复盘**：合并后（或返工超一轮时）调 `retro` skill 会话复盘——机械错误变确定性检查、判断变编码规范，落点回写 `AGENTS.md` / `pyproject.toml` / 门禁（对应全局 AGENTS.md §5 反熵回路；上游主流程把 retro 放在 code-review 之后）。`diagnosing-bugs` 修完硬 bug 同样跑一次，问「什么检查本可以防住它」。
 
 ## 并行实施（多 worktree，2026-09-28 #49 试水首证）
@@ -59,6 +60,16 @@
 - **边界靠机械断言，不靠任务卡**：试水实证卡守不住文件面（禁了文档，agent 第二轮还是写了）；有效闸门是 push 前四断言——`git status` 空 / worktree 只有主树+本票 / ~~冻结区 diff 空~~〔2026-10-14 起作废，冻结区随 ADR 0008 解除〕 / 远端无此分支
 - **分离评审不是仪式**：agent 自评全绿之后，步 5 独立评审仍抓到了人漏读的真 bug（无可再挤时仍自称压缩）——不因自评绿而免
 - **多票大工程可整 spec 路由 `implement-spec`**：整份 spec 单集成分支落地、ticket 当任务图、实施子代理各占 worktree/分支、frontier 并发、最后跑一次 `code-review`——本节手搓约定（claim 走 GitHub、ADR 发号统一、四断言、brief 纪律）继续有效，只是执行形态换成上游正式版
+
+## 同票多切片（2026-10-31 #254 实证补入）
+
+一张票切多个 PR 时（#254 = 3 个串行 PR）叠加以下约定：
+
+- **一 slice 一分支**：能开 worktree 就开；多切片串行切入同一 worktree 会反复撞编辑器的「file changed since it was read」，且评审侧在两个分支间找代码要靠 diff 纠正
+- **预演合并 + 树等价证明**：实合前在临时 worktree 按序真合一遍，让冲突 / 解谱 / 门禁问题前置暴露；合并后 `git diff <预演树> master` 必须为空——证明「实合结果 = 已验证树」
+- **同点追加类冲突解谱 = 都留 + 逐行核对**：两边各自追加的行全部保留，按核对清单逐行验。清单类同点追加已有机械守卫（Windows 冒烟清单双址：`backend/tests/test_smoke_list_parity.py`，漂移即红）；目前仍靠人的只剩 `docs/security.md` §8 变更记录一种
+- **合并后 master 复跑门禁**：合完在 master 上复跑受影响面的门禁，再合下一张
+- **分支清理**：合并后删本地已合并分支（默认动作）；删远端分支前先确认
 
 ## 备注
 
