@@ -180,10 +180,6 @@ export const putMode = (id: string, mode: TaskMode) =>
     body: JSON.stringify({ mode }),
   });
 
-/** Replace a parked task's plan; it seeds the next round. */
-export const getPlan = (id: string) =>
-  req<{ text: string; version: number }>(`/tasks/${id}/plan`);
-
 export interface PlanSnapshotResult {
   /** HTTP status; 0 means the request never reached the backend. */
   status: number;
@@ -283,12 +279,6 @@ export const putTaskModel = (id: string, model: string) =>
   });
 
 // ── P1 item 5: auth ──
-export const loginRequest = (secret: string) =>
-  req<AuthTokenResponse>("/auth/token", {
-    method: "POST",
-    body: JSON.stringify({ token: secret }),
-  });
-
 export interface LoginAttempt {
   /** HTTP status; 0 means the request never reached the backend. */
   status: number;
