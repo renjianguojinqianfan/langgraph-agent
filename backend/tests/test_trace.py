@@ -4,11 +4,17 @@ Covers the TraceRecorder (event order preserved, unknown tasks ignored,
 unsubscribe after close, idempotent attach) and the ``GET /api/tasks/{id}/trace``
 REST endpoint (raw NDJSON, ``?format=json`` envelope, 404 for missing file,
 404 when trace is disabled). Runs fully offline with a scripted MockLLMClient.
+
+#260 adds the failure surface: a trace write that fails must be counted and
+logged (never silent — ``EventBus.publish`` swallows subscriber exceptions by
+contract), and the read endpoint must refuse oversized / malformed / unreadable
+files with a located error instead of reading them whole into memory.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from pathlib import Path
@@ -18,6 +24,7 @@ from urllib.parse import quote
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.api import routes
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
@@ -213,6 +220,56 @@ def test_late_attach_does_not_duplicate_events_after_reattach(tmp_path):
     assert [e["type"] for e in events].count("step_start") == 1
 
 
+# ── #260: write failures are visible ────────────────────────────
+class _BrokenHandle:
+    """A file handle whose writes fail like a full disk."""
+
+    def write(self, _line: str) -> int:
+        raise OSError("no space left on device")
+
+    def flush(self) -> None:
+        raise OSError("no space left on device")
+
+    def close(self) -> None:
+        pass
+
+
+def test_trace_write_failure_is_counted_and_logged(tmp_path, caplog):
+    """#260 AC2: a failed write is counted and logged — never silent.
+
+    ``EventBus.publish`` swallows subscriber exceptions by contract ("a bad
+    subscriber must not break the publisher"), so without the recorder's own
+    signal a disk-full trace would lose every event invisibly. The publisher
+    must also stay unbroken: both ``publish`` calls return normally.
+    """
+    log = logging.getLogger("agent.trace")
+    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    try:
+        with caplog.at_level(logging.WARNING):
+            settings = make_settings(tmp_path)
+            bus = EventBus()
+            rec = TraceRecorder(settings)
+            rec.attach(bus, "t1")
+            rec._files["t1"] = _BrokenHandle()  # swap in the failing handle
+            bus.publish("t1", "a", {"n": 1})
+            bus.publish("t1", "b", {"n": 2})
+            # Observable signal: the loss is counted per task, live.
+            assert rec.write_failures == {"t1": 2}
+            rec.close("t1")
+    finally:
+        log.removeHandler(caplog.handler)
+
+    # First failure logged with traceback; later ones counted, not repeated —
+    # a disk-full run must not flood the log one line per event.
+    assert caplog.text.count("trace write failed for t1") == 1
+    assert "no space left on device" in caplog.text
+    # The end marker failure and the end-of-era loss summary are both visible.
+    assert "trace_end write failed for t1" in caplog.text
+    assert "lost 2 event(s) to write failures" in caplog.text
+    # close() pops the counter: the next era starts from a clean signal.
+    assert rec.write_failures == {}
+
+
 # ── GET /api/tasks/{id}/trace ─────────────────────────────────
 @pytest.fixture
 def trace_client(tmp_path):
@@ -369,3 +426,106 @@ def test_trace_api_disabled_returns_404(tmp_path):
         r = test_client.get("/api/tasks/abc/trace")
         assert r.status_code == 404
         assert "trace" in r.json()["detail"].lower()
+
+
+# ── #260: read failures, size cap, format validation ───────────
+def _finished_task_with_trace(client, settings) -> tuple[str, Path]:
+    """One parked task whose trace file is closed (no more writes)."""
+    tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+    trace_file = settings.trace_path / f"{tid}.jsonl"
+    assert _wait_trace_closed(trace_file)
+    return tid, trace_file
+
+
+def test_trace_api_json_format_rejects_malformed_line(trace_client):
+    """#260 AC3: a malformed line is a located 422, not a silently short list.
+
+    The raw NDJSON branch stays a byte-for-byte passthrough: the replay face
+    skips malformed lines by design and export identity depends on the bytes.
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+
+    lines = trace_file.read_text(encoding="utf-8").splitlines()
+    lines[1] = "{not json"
+    trace_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    r = client.get(f"/api/tasks/{tid}/trace?format=json")
+    assert r.status_code == 422
+    assert "line 2" in r.json()["detail"]
+
+    raw = client.get(f"/api/tasks/{tid}/trace")
+    assert raw.status_code == 200
+    assert raw.text.splitlines()[1] == "{not json"
+
+
+def test_trace_api_json_format_rejects_non_object_and_missing_fields(trace_client):
+    """#260 AC3: the event shape is validated, with the line located."""
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    original = trace_file.read_text(encoding="utf-8").splitlines()
+
+    for bad, expected in (
+        ("[1, 2, 3]", "not a JSON object"),
+        ('{"foo": 1}', "missing string field 'type'"),
+        ('{"type": "x"}', "missing object field 'data'"),
+        ('{"type": "x", "data": {}}', "missing numeric field 'ts'"),
+    ):
+        lines = list(original)
+        lines[0] = bad
+        trace_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        r = client.get(f"/api/tasks/{tid}/trace?format=json")
+        assert r.status_code == 422, bad
+        assert "line 1" in r.json()["detail"]
+        assert expected in r.json()["detail"]
+
+
+def test_trace_api_rejects_oversized_trace(trace_client, monkeypatch):
+    """#260 AC3: the file is never read whole into memory — over cap is a 413."""
+    client, settings = trace_client
+    tid, _ = _finished_task_with_trace(client, settings)
+    monkeypatch.setattr(routes, "TRACE_MAX_BYTES", 16)
+
+    r = client.get(f"/api/tasks/{tid}/trace")
+    assert r.status_code == 413
+    assert "byte limit" in r.json()["detail"]
+
+    r_json = client.get(f"/api/tasks/{tid}/trace?format=json")
+    assert r_json.status_code == 413
+
+
+def test_trace_api_rejects_non_utf8_trace(trace_client):
+    """#260 AC3: a non-UTF-8 file is a clear 422, not an unhandled decode error."""
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    trace_file.write_bytes(
+        b'{"type":"a","data":{},"ts":1}\n\xff\xfe not utf-8\n'
+    )
+
+    r = client.get(f"/api/tasks/{tid}/trace")
+    assert r.status_code == 422
+    assert "UTF-8" in r.json()["detail"]
+
+
+def test_trace_api_read_failure_is_logged_and_returns_500(trace_client, monkeypatch, caplog):
+    """#260 AC2: a read failure is a logged 500, not an unhandled traceback."""
+    client, settings = trace_client
+    tid, _ = _finished_task_with_trace(client, settings)
+
+    def _locked_open(self, *args, **kwargs):
+        raise OSError("file is locked by another process")
+
+    monkeypatch.setattr(Path, "open", _locked_open)
+    log = logging.getLogger("agent.api.routes")
+    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    try:
+        with caplog.at_level(logging.ERROR):
+            r = client.get(f"/api/tasks/{tid}/trace")
+    finally:
+        log.removeHandler(caplog.handler)
+
+    assert r.status_code == 500
+    assert "could not be read" in r.json()["detail"]
+    assert "file is locked" in r.json()["detail"]
+    assert f"trace read failed for task {tid}" in caplog.text

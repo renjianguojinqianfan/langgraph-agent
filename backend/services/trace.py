@@ -24,6 +24,13 @@ Concurrency: all file access is guarded by a lock; writes use ``append +
 flush`` so the on-disk order matches the publish order. ``attach`` registers
 its callback outside the lock — the bus is never called while holding it —
 and removes it again if a concurrent :meth:`close` won the race.
+
+Write failures are never silent (#260): :class:`EventBus` swallows subscriber
+exceptions by contract ("a bad subscriber must not break the publisher"), so a
+disk-full or I/O-error trace would otherwise lose every event with no signal.
+The recorder counts the loss per task (:attr:`TraceRecorder.write_failures`),
+logs the first failure with its traceback, and logs one end-of-era summary in
+:meth:`close` — a disk full for the whole run costs exactly two log lines.
 """
 
 from __future__ import annotations
@@ -51,6 +58,10 @@ class TraceRecorder:
         self._cbs: Dict[str, Callable[[Event], None]] = {}
         self._buses: Dict[str, EventBus] = {}
         self._lock = threading.Lock()
+        #: Per-task count of events lost to write failures (#260) — the
+        #: in-process observable signal that a trace is incomplete. Mutated
+        #: under ``self._lock``; popped by :meth:`close` when the era ends.
+        self.write_failures: Dict[str, int] = {}
 
     def attach(self, event_bus: EventBus, task_id: str) -> None:
         """Subscribe to ``event_bus`` for ``task_id`` and open its JSONL file.
@@ -89,8 +100,24 @@ class TraceRecorder:
             if fh is None:
                 return
             line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
-            fh.write(line)
-            fh.flush()
+            try:
+                fh.write(line)
+                fh.flush()
+            except OSError:
+                # A failed write must be visible (#260): the bus swallows
+                # subscriber exceptions by contract, so without this the
+                # recorder would lose events in total silence. Count the loss
+                # and log the FIRST failure per task with the traceback; later
+                # ones only bump the counter, so a disk-full run cannot flood
+                # the log with one line per event.
+                first = self.write_failures.get(task_id, 0) == 0
+                self.write_failures[task_id] = self.write_failures.get(task_id, 0) + 1
+                if first:
+                    logger.exception(
+                        "trace write failed for %s; events are being lost from "
+                        "this task's trace — close() will log the total",
+                        task_id,
+                    )
 
     def close(self, task_id: str) -> None:
         """Write ``trace_end``, unsubscribe, and close the file handle."""
@@ -103,8 +130,24 @@ class TraceRecorder:
                 try:
                     fh.write(json.dumps(end_event, ensure_ascii=False, default=str) + "\n")
                     fh.flush()
+                except OSError:
+                    logger.exception(
+                        "trace_end write failed for %s; the JSONL has no end marker",
+                        task_id,
+                    )
                 finally:
                     fh.close()
+            # End-of-era summary (#260): the per-event warning fires once, so a
+            # run that failed from the first write would otherwise leave no
+            # end-of-run trace of the loss.
+            lost = self.write_failures.pop(task_id, 0)
+            if lost:
+                logger.error(
+                    "trace for %s lost %d event(s) to write failures; the JSONL "
+                    "is incomplete",
+                    task_id,
+                    lost,
+                )
         # Unsubscribe outside the lock to avoid any deadlock risk.
         if bus is not None and cb is not None:
             bus.unsubscribe(task_id, cb)

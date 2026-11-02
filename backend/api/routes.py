@@ -551,6 +551,21 @@ def task_events(
     return sse_response(task_id, _eb(request), request)
 
 
+#: Upper bound for reading one trace file into memory (#260). ``?format=json``
+#: must parse every line, so an unbounded read let one huge trace pin the heap;
+#: the route reads one byte past this cap and refuses the file (413) instead of
+#: silently serving a truncated trace.
+TRACE_MAX_BYTES = 8_388_608  # 8 MiB
+
+
+def _trace_line_error(lineno: int, why: str) -> HTTPException:
+    """A malformed trace line is a located, client-visible 422 (#260)."""
+    return HTTPException(
+        status_code=422,
+        detail=f"trace line {lineno} is malformed: {why}",
+    )
+
+
 @router.get("/tasks/{task_id}/trace", response_model=None)
 def task_trace(
     task_id: str,
@@ -561,10 +576,16 @@ def task_trace(
     """Return the persisted JSONL trace for a task.
 
     Default: raw NDJSON (``application/x-ndjson``) so the frontend can replay
-    it line by line. ``?format=json`` returns the unified envelope
-    ``{code, data:[Event,...], message}``. An illegal ``task_id`` is a 400
-    before any filesystem access; an unknown task, a task without a trace file,
-    or a disabled trace is a 404.
+    it line by line — byte-for-byte the on-disk file, malformed lines included
+    (the replay face skips those by design, and export identity depends on
+    them). ``?format=json`` returns the unified envelope
+    ``{code, data:[Event,...], message}`` and validates every line, so a
+    malformed trace is a located 422 instead of a silently shortened list.
+
+    An illegal ``task_id`` is a 400 before any filesystem access; an unknown
+    task, a task without a trace file, or a disabled trace is a 404; a file
+    past :data:`TRACE_MAX_BYTES` is a 413 (never read whole into memory); an
+    unreadable file is a logged 500.
 
     The real return type is the union below (envelope for ``?format=json``, raw
     NDJSON ``Response`` otherwise). ``response_model=None`` is stated explicitly
@@ -586,16 +607,53 @@ def task_trace(
     if not trace_file.exists():
         raise HTTPException(status_code=404, detail="task trace not found")
 
-    raw = trace_file.read_text(encoding="utf-8")
+    # Bounded read (#260): never pull a whole unbounded file into memory.
+    try:
+        with trace_file.open("rb") as handle:
+            raw_bytes = handle.read(TRACE_MAX_BYTES + 1)
+    except OSError as exc:
+        logger.error(
+            "trace read failed for task %s (%s: %s)",
+            task.id,
+            type(exc).__name__,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500, detail=f"trace file could not be read: {exc}"
+        ) from None
+    if len(raw_bytes) > TRACE_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"trace file exceeds the {TRACE_MAX_BYTES} byte limit; "
+                "it cannot be served through this endpoint"
+            ),
+        )
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=422, detail="trace file is not valid UTF-8"
+        ) from None
+
     if format == "json":
         events = []
-        for line in raw.splitlines():
+        for lineno, line in enumerate(raw.splitlines(), start=1):
             if not line.strip():
                 continue
             try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:  # pragma: no cover - defensive
-                continue
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise _trace_line_error(lineno, f"not valid JSON ({exc.msg})") from None
+            if not isinstance(event, dict):
+                raise _trace_line_error(lineno, "not a JSON object")
+            if not isinstance(event.get("type"), str):
+                raise _trace_line_error(lineno, "missing string field 'type'")
+            if not isinstance(event.get("data"), dict):
+                raise _trace_line_error(lineno, "missing object field 'data'")
+            if not isinstance(event.get("ts"), (int, float)):
+                raise _trace_line_error(lineno, "missing numeric field 'ts'")
+            events.append(event)
         return _envelope(data=events)
     return Response(content=raw, media_type="application/x-ndjson")
 
