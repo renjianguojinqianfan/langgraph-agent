@@ -11,7 +11,7 @@ import {
   tabAfterClosing,
   type DashTab,
 } from "../lib/dashTabs";
-import { getTask, listTasks } from "../api/client";
+import { getTask, getTaskSnapshot, listTasks } from "../api/client";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
@@ -19,6 +19,10 @@ import { needsStatusRefetch } from "../store/reduceTask";
 import { useTaskStore } from "../store/taskStore";
 import { SSEvent } from "../types";
 import { cx } from "../lib/cx";
+import {
+  detailLoadFailure,
+  detailLoadState,
+} from "../lib/failureStates";
 import { isParked } from "../lib/taskState";
 
 export function TaskView() {
@@ -31,6 +35,9 @@ export function TaskView() {
   const upsertTask = useTaskStore((s) => s.upsertTask);
   const setTasks = useTaskStore((s) => s.setTasks);
   const setListError = useTaskStore((s) => s.setListError);
+  const setListLoading = useTaskStore((s) => s.setListLoading);
+  const setDetailError = useTaskStore((s) => s.setDetailError);
+  const detailRevision = useTaskStore((s) => s.detailRevision);
   const historyFilter = useTaskStore((s) => s.historyFilter);
   const workspaceDir = useTaskStore((s) => s.workspaceDir);
   const refreshModels = useModelStore((s) => s.refresh);
@@ -84,15 +91,20 @@ export function TaskView() {
   useEffect(() => {
     let cancelled = false;
     const dir = historyFilter === "all" ? "all" : workspaceDir || "current";
+    // #256: the empty copy waits for the answer — a pending list must not
+    // read as "no tasks", and a failed one must not either.
+    setListLoading(true);
     listTasks(50, dir)
       .then((r) => {
-        if (!cancelled && r.data?.tasks) {
-          setTasks(r.data.tasks);
-          setListError("");
-        }
+        if (cancelled || !r.data?.tasks) return;
+        setTasks(r.data.tasks);
+        setListError("");
       })
       .catch(() => {
         if (!cancelled) setListError("无法连接后台；确认服务在运行后再试。");
+      })
+      .finally(() => {
+        if (!cancelled) setListLoading(false);
       });
     return () => {
       cancelled = true;
@@ -100,6 +112,7 @@ export function TaskView() {
   }, [
     setTasks,
     setListError,
+    setListLoading,
     historyFilter,
     listRevision,
     currentTaskId,
@@ -132,15 +145,32 @@ export function TaskView() {
   // Live SSE for the current task.
   useSSE(currentTaskId, onEvent);
 
-  // Fetch a fresh snapshot when the selected task changes.
+  // Fetch a fresh snapshot when the selected task changes. #256: the status
+  // travels with the answer — a 404 (or a dead backend) is a failed load, not
+  // a missing task that the center column may render as "新任务".
   useEffect(() => {
     if (!currentTaskId) return;
-    getTask(currentTaskId)
+    let cancelled = false;
+    getTaskSnapshot(currentTaskId)
       .then((r) => {
-        if (r.data) upsertTask(r.data);
+        if (cancelled) return;
+        const state = detailLoadState(r.status);
+        if (state === "ready" && r.data) {
+          setDetailError(currentTaskId, "");
+          upsertTask(r.data);
+        } else {
+          setDetailError(currentTaskId, detailLoadFailure(state));
+        }
       })
-      .catch(() => {});
-  }, [currentTaskId, upsertTask]);
+      .catch(() => {
+        if (!cancelled) {
+          setDetailError(currentTaskId, detailLoadFailure("unreachable"));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTaskId, upsertTask, setDetailError, detailRevision]);
 
   // A round just parked: pull the authoritative record (conversation, plan,
   // steps). SSE carries the live events but is replayed on every reconnect, so
@@ -188,6 +218,14 @@ export function TaskView() {
   }, []);
 
   const task = currentTaskId ? detail ?? null : null;
+  // #256: a selected task whose snapshot failed stays a failure — never the
+  // "新任务" face (sending there would silently create a second task). While
+  // the snapshot is in flight the center column says so instead of pretending
+  // to be a new task.
+  const loadError = useTaskStore((s) =>
+    currentTaskId ? (s.detailError[currentTaskId] ?? "") : ""
+  );
+  const loading = !!currentTaskId && !task && !loadError;
 
   return (
     <div
@@ -241,6 +279,8 @@ export function TaskView() {
         >
           <TaskPanel
             task={task}
+            loadError={loadError}
+            loading={loading}
             rightOpen={rightOpen}
             onToggleRight={() => setRightOpen((v) => !v)}
             onOpenPlan={() => {
