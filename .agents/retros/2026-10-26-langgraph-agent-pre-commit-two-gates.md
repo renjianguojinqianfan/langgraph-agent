@@ -6,7 +6,7 @@
 
 ## 结论
 
-1. **闸 1（缓存/数据库写不进）**：`setx PRE_COMMIT_HOME "E:\code\demo\.precommit-cache"` 已写入用户环境；它只影响之后启动的进程。本会话（Qoder 21:01 启动）仍解析到 `C:\Users\DELL\.cache`，重启 agent 后才继承；期间用 per-command 前缀。缓存目录实测可写。
+1. **闸 1（缓存/数据库写不进）**：`setx PRE_COMMIT_HOME "<repo-root>\.precommit-cache"` 已写入用户环境；它只影响之后启动的进程。本会话（Qoder 21:01 启动）仍解析到 `C:\Users\<user>\.cache`，重启 agent 后才继承；期间用 per-command 前缀。缓存目录实测可写。
 2. **闸 2（脏树提交失败）**：根因是 `.git/hooks/post-checkout` 与 `post-commit` 两个 **10 字节空钩子**。它们让 git 在 pre-commit 的 stash 阶段派生 `sh.exe`；而 `.venv311` 的解释器被 HIPS 限制，其子孙进程创建 MSYS 共享对象被拒（`NtCreateDirectoryObject ... 0xC0000022`）。把两个空钩子挪开即通，**与提权 MSYS、并发 agent 无关**（交接文档的假设 1 已证伪）。
 3. 验证：脏树 `pre_commit hook-impl` rc=0；真实 `git commit --allow-empty`（脏树）四钩子 Skip、commit-msg Passed、提交成功；探针提交已回滚，HEAD 仍 `a6bcfe7`。
 
@@ -19,8 +19,8 @@
 ```
 File ".../pre_commit/staged_files_only.py", line 81, in _unstaged_changes_cleared
     cmd_output_b(*_CHECKOUT_CMD, env=no_checkout_env)
-Command: ('E:/Git/mingw64/libexec/git-core\\git.EXE', '-c', 'submodule.recurse=0', 'checkout', '--', '.')
-stderr: 0 [main] sh (23636) E:\Git\usr\bin\sh.exe: *** fatal error
+Command: ('<git-root>/mingw64/libexec/git-core\\git.EXE', '-c', 'submodule.recurse=0', 'checkout', '--', '.')
+stderr: 0 [main] sh (23636) <git-root>\usr\bin\sh.exe: *** fatal error
         - NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-b491248b697284ab): 0xC0000022
 ```
 
@@ -48,15 +48,15 @@ run-command.c: trace: run_command: .git/hooks/post-checkout <old> <new> 0
 | node.exe | ok |
 | `.venv311/Scripts/python.exe` | **FAIL 0xC0000022** |
 | uv 基础解释器 3.11.15（`AppData/Roaming/uv/...`） | ok |
-| `E:\python\python.exe`（3.13） | ok |
+| `<python-install>\python.exe`（3.13） | ok |
 
-同组解释器写 `C:\Users\DELL`：
+同组解释器写 `C:\Users\<user>`：
 
 | 解释器 | 写用户目录 |
 |---|---|
 | `.venv311/Scripts/python.exe` | `PermissionError` |
 | uv 基础 3.11.15 | WRITE_OK |
-| `E:\python\python.exe` | WRITE_OK |
+| `<python-install>\python.exe` | WRITE_OK |
 
 二进制不同，不是同一个 exe 换了路径：
 
@@ -64,7 +64,7 @@ run-command.c: trace: run_command: .git/hooks/post-checkout <old> <new> 0
 |---|---|---|
 | `.venv311/Scripts/python.exe`（venv launcher） | 262144 | `4cca2027` |
 | uv 基础 3.11.15 | 91648 | `ae7e9694` |
-| `E:\python\python.exe` | 105696 | `7c2fc2b3` |
+| `<python-install>\python.exe` | 105696 | `7c2fc2b3` |
 
 **推断**：HIPS 的规则针对 `.venv311` 这个 venv 解释器（或它作为 launcher 的身份），不是「所有 python.exe」，也不是「所有 MSYS」。交接文档的假设 1（提权 MSYS 进程占共享对象）被证伪：若共享对象被高完整性进程占住，bash/node 派生的 sh 也会失败；实测都正常。假设 2（HIPS）成立，并收窄到具体解释器。
 
@@ -72,7 +72,7 @@ run-command.c: trace: run_command: .git/hooks/post-checkout <old> <new> 0
 
 ## 修法（本机，可逆）
 
-1. **缓存**（交接文档已做，本次复核）：`setx PRE_COMMIT_HOME "E:\code\demo\.precommit-cache"`。回滚：`setx PRE_COMMIT_HOME ""`。注意 `setx` 只影响新进程；已在跑的 Qoder / opencode 需要重启才继承。
+1. **缓存**（交接文档已做，本次复核）：`setx PRE_COMMIT_HOME "<repo-root>\.precommit-cache"`。回滚：`setx PRE_COMMIT_HOME ""`。注意 `setx` 只影响新进程；已在跑的 Qoder / opencode 需要重启才继承。
 2. **空钩子**（本次实施）：
 
    ```bash
@@ -87,14 +87,14 @@ run-command.c: trace: run_command: .git/hooks/post-checkout <old> <new> 0
 
 ## 验证记录（2026-10-26）
 
-- 解析探针：本会话 `PRE_COMMIT_HOME` → `C:\Users\DELL/.cache`（未继承 setx）；显式前缀后，缓存写入 `E:\code\demo\.precommit-cache`。
+- 解析探针：本会话 `PRE_COMMIT_HOME` → `C:\Users\<user>/.cache`（未继承 setx）；显式前缀后，缓存写入 `<repo-root>\.precommit-cache`。
 - 脏树 `pre_commit hook-impl --hook-type=pre-commit`：rc=0，4 个钩子 Skip，`Restored changes from ...`。
 - 真实提交：脏树 + `git commit --allow-empty -F <msg>` → 4 Skip + `commit-msg 校验 ... Passed` → 提交 `52d78fb`；`git reset --soft HEAD~1` 回滚，HEAD 回到 `a6bcfe7`，`AGENTS.md` 已还原。
-- 未跑：全量 pytest / ruff / mypy（本次不改仓库源码，且这些钩子在 md-only 提交里本来就 Skip）。工作区原有的未跟踪 `pytest-of-DELL/` 未动。
+- 未跑：全量 pytest / ruff / mypy（本次不改仓库源码，且这些钩子在 md-only 提交里本来就 Skip）。工作区原有的未跟踪 `pytest-of-<user>/` 未动。
 
 ## 仍存在 / 复发条件
 
-- HIPS 对 `.venv311` 解释器的限制**没有解除**：该解释器写 `C:\Users\DELL` 仍被拒，它派生的 MSYS `sh` 仍会 0xC0000022。本次只是移除了提交路径上的唯一触发点。
+- HIPS 对 `.venv311` 解释器的限制**没有解除**：该解释器写 `C:\Users\<user>` 仍被拒，它派生的 MSYS `sh` 仍会 0xC0000022。本次只是移除了提交路径上的唯一触发点。
 - 若以后在钩子里加入 shell 入口、或让 git 从 venv python 子孙里派生 `sh`（如新的 `post-*` 钩子、`core.fsmonitor` 脚本、过滤器命令），问题会复发。优先保持钩子 entry 为 python/node 直接入口。
 - 换机 / 重装安全软件 / 换解释器路径后，先跑两条探针：`GIT_TRACE=1 <git checkout 命令>` 看是否派生 sh；`.venv311/Scripts/python.exe -c "subprocess.run([sh,...])"` 看是否 0xC0000022。
 
