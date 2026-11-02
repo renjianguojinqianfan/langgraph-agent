@@ -152,3 +152,12 @@
   C25/C27/C29 workflow 条目 + C30 issue-tracker 小抄。
 - **二批（需用户批准，用户级）**：C26 修改 `~/.agents/skills/code-review`。
 - **三批（判断题 / 可选）**：C28 评审分工口径、C31 AGENTS.md 压缩。
+
+> **2026-11-02 更新（一批已交付，PR [#278](https://github.com/renjianguojinqianfan/langgraph-agent/pull/278)）**：
+> C23 挂到 open issue #261 下作切片（未新开票——#261 第一条 AC 即此事），双轴自评审后返工
+> 一次（Duplicated Code 提 helper、ci.yml job 边界改扫描、domain.md 补归属行、ci.yml 注释
+> 补漏列文件），CI 3/3 绿，等独立评审 + 合并。**新发现两条**（不在原候选内）：① ci.yml 的
+> paths 过滤器排除根级 AGENTS.md，纯改冒烟命令的直推不触发 CI，守卫要等下一个碰 `backend/`
+> 的 PR 才开火——已在 #261 票面留证，建议作后续切片；② 默认沙箱下假红面比
+> `docs/harness-bash-false-red.md 写的宽（562 error，conftest 临时根也被拒），已写进
+> C24 的 verification-notes.md。二批（C26）与三批（C28/C31）仍待拍板。
