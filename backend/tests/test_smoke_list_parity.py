@@ -21,6 +21,9 @@ CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # ci.yml job 注释与 AGENTS.md 正文里提到的文件名都不带这个前缀，天然不会误收。
 _FILE_TOKEN = re.compile(r"backend/tests/[A-Za-z0-9_]+\.py")
 
+# ci.yml 的 job 键（2 空格缩进）；steps / 注释行的缩进或首字符都不匹配。
+_JOB_KEY = re.compile(r"^  [A-Za-z0-9_-]+:", re.MULTILINE)
+
 
 def _agents_md_command_lines() -> list[str]:
     """AGENTS.md 里的 Windows 冒烟 pytest 命令行（预期有且仅有一条）。
@@ -37,11 +40,23 @@ def _agents_md_command_lines() -> list[str]:
 
 
 def _ci_windows_smoke_block() -> str:
-    """ci.yml 里 backend-windows-smoke job 的整段文本（到下一个 job 键为止）。"""
+    """ci.yml 里 backend-windows-smoke job 的整段文本（到下一个 job 键为止）。
+
+    边界按「下一个 2 空格缩进的 job 键」扫描，不硬钉某个 job 名：中间插入
+    新 job 不会静默扩块，既有 job 改名也不会炸出看不懂的 ValueError。
+    """
     text = CI_YML.read_text(encoding="utf-8")
     start = text.index("  backend-windows-smoke:")
-    end = text.index("\n  frontend-build:", start)
-    return text[start:end]
+    boundary = _JOB_KEY.search(text, start + 1)
+    assert boundary is not None, "ci.yml 里 backend-windows-smoke 之后找不到下一个 job 键"
+    return text[start : boundary.start()]
+
+
+def _smoke_files() -> tuple[set[str], set[str]]:
+    """两址清单：(AGENTS.md 命令里的文件, ci.yml job 里的文件)。"""
+    lines = _agents_md_command_lines()
+    assert lines, "AGENTS.md 里找不到 Windows 冒烟 pytest 命令（含 backend/tests/*.py 的那行）"
+    return set(_FILE_TOKEN.findall(lines[0])), set(_FILE_TOKEN.findall(_ci_windows_smoke_block()))
 
 
 def test_agents_md_carries_exactly_one_smoke_command() -> None:
@@ -52,8 +67,7 @@ def test_agents_md_carries_exactly_one_smoke_command() -> None:
 
 
 def test_windows_smoke_list_is_identical_in_both_places() -> None:
-    agents_files = set(_FILE_TOKEN.findall(_agents_md_command_lines()[0]))
-    ci_files = set(_FILE_TOKEN.findall(_ci_windows_smoke_block()))
+    agents_files, ci_files = _smoke_files()
 
     assert agents_files, "AGENTS.md 的 Windows 冒烟命令里解析不到测试文件"
     assert ci_files, "ci.yml backend-windows-smoke job 里解析不到测试文件"
@@ -65,8 +79,6 @@ def test_windows_smoke_list_is_identical_in_both_places() -> None:
 
 
 def test_every_smoke_list_entry_exists_on_disk() -> None:
-    entries = set(_FILE_TOKEN.findall(_agents_md_command_lines()[0])) | set(
-        _FILE_TOKEN.findall(_ci_windows_smoke_block())
-    )
-    missing = sorted(rel for rel in entries if not (REPO_ROOT / rel).is_file())
+    agents_files, ci_files = _smoke_files()
+    missing = sorted(rel for rel in agents_files | ci_files if not (REPO_ROOT / rel).is_file())
     assert not missing, f"冒烟清单里的文件不存在：{missing}"
