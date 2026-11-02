@@ -79,8 +79,44 @@ export const createTask = (body: CreateTaskRequest) =>
     body: JSON.stringify(body),
   });
 
-export const listTasks = (limit = 50, dir = "current") =>
-  req<{ tasks: Task[] }>(`/tasks?limit=${limit}&dir=${encodeURIComponent(dir)}`);
+export interface TaskListSnapshotResult {
+  /** HTTP status; 0 means the request never reached the backend. */
+  status: number;
+  data: { tasks: Task[] } | null;
+  /** FastAPI `detail` (or envelope message) for the failure copy. */
+  detail: string;
+}
+
+/**
+ * #256: list tasks keeping the HTTP status. `req()` never rejects on a
+ * non-2xx, so a JSON-bodied 500 (persistence failure) or 401 (expired token)
+ * resolved with an empty envelope and the rail fell back to the empty face —
+ * exactly the #256 bug on the list path.
+ */
+export async function listTasksSnapshot(
+  limit = 50,
+  dir = "current"
+): Promise<TaskListSnapshotResult> {
+  const token = getAuthToken();
+  let res: Response;
+  try {
+    res = await fetch(
+      `${API_BASE}/tasks?limit=${limit}&dir=${encodeURIComponent(dir)}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
+    );
+  } catch {
+    return { status: 0, data: null, detail: "" };
+  }
+  const json = (await res.json().catch(() => null)) as
+    | { data?: { tasks?: Task[] }; detail?: unknown; message?: unknown }
+    | null;
+  const tasks = json?.data?.tasks;
+  return {
+    status: res.status,
+    data: Array.isArray(tasks) ? { tasks } : null,
+    detail: json ? detailText(json) : "",
+  };
+}
 
 /** #242: canonicalize + existence-check a directory before switching to it. */
 export const validateWorkspace = (path: string) =>

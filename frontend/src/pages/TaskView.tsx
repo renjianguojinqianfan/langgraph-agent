@@ -11,7 +11,7 @@ import {
   tabAfterClosing,
   type DashTab,
 } from "../lib/dashTabs";
-import { getTask, getTaskSnapshot, listTasks } from "../api/client";
+import { getTask, getTaskSnapshot, listTasksSnapshot } from "../api/client";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
@@ -22,6 +22,8 @@ import { cx } from "../lib/cx";
 import {
   detailLoadFailure,
   detailLoadState,
+  listLoadFailure,
+  listLoadOutcome,
 } from "../lib/failureStates";
 import { isParked } from "../lib/taskState";
 
@@ -92,16 +94,22 @@ export function TaskView() {
     let cancelled = false;
     const dir = historyFilter === "all" ? "all" : workspaceDir || "current";
     // #256: the empty copy waits for the answer — a pending list must not
-    // read as "no tasks", and a failed one must not either.
+    // read as "no tasks", and a failed one must not either. `req()` never
+    // rejects on a non-2xx, so the status travels with the answer.
     setListLoading(true);
-    listTasks(50, dir)
+    listTasksSnapshot(50, dir)
       .then((r) => {
-        if (cancelled || !r.data?.tasks) return;
-        setTasks(r.data.tasks);
-        setListError("");
+        if (cancelled) return;
+        const outcome = listLoadOutcome(r.status, r.data?.tasks ?? null);
+        if (outcome.ok) {
+          setTasks(outcome.tasks);
+          setListError("");
+        } else {
+          setListError(outcome.error);
+        }
       })
       .catch(() => {
-        if (!cancelled) setListError("无法连接后台；确认服务在运行后再试。");
+        if (!cancelled) setListError(listLoadFailure(0));
       })
       .finally(() => {
         if (!cancelled) setListLoading(false);

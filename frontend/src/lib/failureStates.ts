@@ -7,6 +7,8 @@
  * seam as `preview.ts` / `taskState.ts`).
  */
 
+import type { Task } from "../types";
+
 /** What the history list may show. A failed load is never an empty list. */
 export type HistoryListState = "error" | "loading" | "empty" | "rows";
 
@@ -28,6 +30,36 @@ export function historyListState(input: {
     return "empty";
   }
   return input.visible === 0 ? "empty" : "rows";
+}
+
+/**
+ * #256: what one list answer means. `req()` never rejects on a non-2xx, so a
+ * JSON-bodied 500 (persistence failure) or 401 (expired token) used to arrive
+ * as an envelope without `tasks` and the caller silently kept the empty face.
+ * A 2xx *with* `tasks` is the only success — including a genuinely empty
+ * list, which is a real answer and shows the empty face.
+ */
+export type ListLoadOutcome =
+  | { ok: true; tasks: Task[] }
+  | { ok: false; error: string };
+
+export function listLoadOutcome(status: number, tasks: Task[] | null): ListLoadOutcome {
+  if (status >= 200 && status < 300 && tasks) return { ok: true, tasks };
+  return { ok: false, error: listLoadFailure(status) };
+}
+
+/** Why the list read failed; 401 is its own face (the token expired). */
+export function listLoadFailure(status: number): string {
+  switch (status) {
+    case 0:
+      return "无法连接后台；确认服务在运行后再试。";
+    case 401:
+      return "登录已失效；刷新页面重新登录。";
+    default:
+      return status >= 200 && status < 300
+        ? "任务列表响应异常；请重试。"
+        : `任务列表读取失败（HTTP ${status}）。`;
+  }
 }
 
 /**

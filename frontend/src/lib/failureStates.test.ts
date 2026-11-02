@@ -3,6 +3,8 @@ import {
   detailLoadFailure,
   detailLoadState,
   historyListState,
+  listLoadFailure,
+  listLoadOutcome,
   loginOutcome,
   planLoadFailure,
   planLoadState,
@@ -83,6 +85,59 @@ describe("planLoadState (#256: 计划读败不伪装空计划)", () => {
     );
     expect(planLoadFailure(0)).toContain("无法连接后台");
     expect(planLoadFailure(503)).toContain("HTTP 503");
+  });
+});
+
+describe("listLoadOutcome (#256 评审 S1: JSON-bodied 500 不落空态)", () => {
+  const rows = [
+    {
+      id: "t1",
+      title: "任务",
+      user_input: "做点事",
+      workspace: "E:/work",
+      model: "",
+      status: "INTERRUPTED" as const,
+      mode: "build" as const,
+      steps: [],
+      plan_version: 0,
+      conversation: [],
+      final_answer: "",
+      created_at: "",
+      updated_at: "",
+    },
+  ];
+
+  it("500（JSON body 的 detail）→ 错误面孔，不是空态", () => {
+    const outcome = listLoadOutcome(500, null);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("HTTP 500");
+  });
+
+  it("401（token 失效）→ 登录已失效的专属文案", () => {
+    const outcome = listLoadOutcome(401, null);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("登录已失效");
+  });
+
+  it("传输失败（0）→ 无法连接后台", () => {
+    const outcome = listLoadOutcome(0, null);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("无法连接后台");
+  });
+
+  it("200 但信封没有 tasks（响应异常）→ 错误面孔", () => {
+    const outcome = listLoadOutcome(200, null);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("响应异常");
+  });
+
+  it("200 + tasks → 成功；真的空列表也是成功（空态有理）", () => {
+    expect(listLoadOutcome(200, rows)).toEqual({ ok: true, tasks: rows });
+    expect(listLoadOutcome(200, [])).toEqual({ ok: true, tasks: [] });
+  });
+
+  it("listLoadFailure 的 5xx 文案带状态码", () => {
+    expect(listLoadFailure(503)).toContain("HTTP 503");
   });
 });
 
