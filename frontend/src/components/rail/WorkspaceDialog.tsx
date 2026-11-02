@@ -114,7 +114,7 @@ export function WorkspaceDialog({ open, onClose }: WorkspaceDialogProps) {
             label="目录"
             name="workspace"
             value={draft}
-            placeholder="例如：E:\\code\\demo\\project"
+            placeholder="例如：E:\\example\\project"
             onChange={setDraft}
             autoFocus
           />

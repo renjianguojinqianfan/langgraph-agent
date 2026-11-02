@@ -30,13 +30,13 @@ function task(id: string, workspace: string, overrides: Partial<Task> = {}): Tas
 
 describe("basename", () => {
   it("handles posix and windows separators", () => {
-    expect(basename("E:/code/demo/langgraph-agent")).toBe("langgraph-agent");
-    expect(basename("E:\\code\\demo\\langgraph-agent")).toBe("langgraph-agent");
+    expect(basename("E:/example/project")).toBe("project");
+    expect(basename("E:\\example\\project")).toBe("project");
   });
 
   it("drops trailing separators and handles empty paths", () => {
-    expect(basename("E:/code/demo/")).toBe("demo");
-    expect(basename("E:\\code\\demo\\")).toBe("demo");
+    expect(basename("E:/example/")).toBe("example");
+    expect(basename("E:\\example\\")).toBe("example");
     expect(basename("/")).toBe("/");
     expect(basename("   ")).toBe("");
   });
