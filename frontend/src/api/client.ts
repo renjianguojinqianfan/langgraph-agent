@@ -88,6 +88,39 @@ export const validateWorkspace = (path: string) =>
 
 export const getTask = (id: string) => req<Task>(`/tasks/${id}`);
 
+export interface TaskSnapshotResult {
+  /** HTTP status; 0 means the request never reached the backend. */
+  status: number;
+  data: Task | null;
+  /** FastAPI `detail` (or envelope message) for the failure copy. */
+  detail: string;
+}
+
+/**
+ * #256: fetch one task's snapshot keeping the HTTP status. `req()` flattens
+ * every answer into a body, so a 404 ("task not found") used to look like an
+ * empty response and the center column fell back to the "新任务" face.
+ */
+export async function getTaskSnapshot(id: string): Promise<TaskSnapshotResult> {
+  const token = getAuthToken();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+  } catch {
+    return { status: 0, data: null, detail: "" };
+  }
+  const json = (await res.json().catch(() => null)) as
+    | { data?: Task; detail?: unknown; message?: unknown }
+    | null;
+  return {
+    status: res.status,
+    data: json?.data && typeof json.data.id === "string" ? json.data : null,
+    detail: json ? detailText(json) : "",
+  };
+}
+
 /** #241: delete one task's history (record + checkpoint + trace; disk stays). */
 export const deleteTask = (id: string) =>
   req<{ ok: boolean; cleanup: { checkpoint: boolean; trace: boolean } }>(
@@ -114,6 +147,44 @@ export const putMode = (id: string, mode: TaskMode) =>
 /** Replace a parked task's plan; it seeds the next round. */
 export const getPlan = (id: string) =>
   req<{ text: string; version: number }>(`/tasks/${id}/plan`);
+
+export interface PlanSnapshotResult {
+  /** HTTP status; 0 means the request never reached the backend. */
+  status: number;
+  data: { text: string; version: number } | null;
+  /** FastAPI `detail` (or envelope message) for the failure copy. */
+  detail: string;
+}
+
+/**
+ * #256: read the plan keeping the HTTP status. A failed read must not fall
+ * back to the empty-plan face — that face is what let an empty `PUT`
+ * overwrite the real file on disk (`backend/api/routes.py`: 404 task gone,
+ * 409 plan file not UTF-8).
+ */
+export async function getPlanSnapshot(id: string): Promise<PlanSnapshotResult> {
+  const token = getAuthToken();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/plan`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+  } catch {
+    return { status: 0, data: null, detail: "" };
+  }
+  const json = (await res.json().catch(() => null)) as
+    | { data?: { text?: unknown; version?: unknown }; detail?: unknown; message?: unknown }
+    | null;
+  const data = json?.data;
+  return {
+    status: res.status,
+    data:
+      data && typeof data.text === "string" && typeof data.version === "number"
+        ? { text: data.text, version: data.version }
+        : null,
+    detail: json ? detailText(json) : "",
+  };
+}
 
 export const putPlan = (id: string, text: string) =>
   req<{ ok: boolean; version: number }>(`/tasks/${id}/plan`, {
@@ -181,6 +252,38 @@ export const loginRequest = (secret: string) =>
     method: "POST",
     body: JSON.stringify({ token: secret }),
   });
+
+export interface LoginAttempt {
+  /** HTTP status; 0 means the request never reached the backend. */
+  status: number;
+  data: AuthTokenResponse | null;
+}
+
+/**
+ * #256: post the secret keeping the HTTP status. `req()` flattens a 401
+ * ("invalid token") into a body, which made a wrong secret and a dead
+ * backend look identical to the login page.
+ */
+export async function loginAttempt(secret: string): Promise<LoginAttempt> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: secret }),
+    });
+  } catch {
+    return { status: 0, data: null };
+  }
+  const json = (await res.json().catch(() => null)) as
+    | { data?: AuthTokenResponse }
+    | null;
+  const data = json?.data;
+  return {
+    status: res.status,
+    data: data && typeof data.token === "string" ? data : null,
+  };
+}
 
 export const logoutRequest = () => setAuthToken(null);
 
