@@ -81,8 +81,9 @@ export interface Task {
 
 // --- P1 item 2: sub-agent ---
 
-/** 子任务快照：面板只吃 REST 的 `Task.subtasks`（生产者由 #70-A 在 spawn 路径补回）；
- * 三条 `subtask_*` 汇总事件走父频道、只进 Trace 时间线，不喂本快照。 */
+/** 子任务快照：权威是 REST 的 `Task.subtasks`；父频道的三条 `subtask_*` 事件
+ * （#70 裁定 A 恢复，生产者在 spawn 路径）同时进前端 reducer 做实时态——插入
+ * 等待→运行、回传摘要与产物、失败置态（见 store/reduceTask.ts），不只进 Trace。 */
 export interface SubTask {
   subtask_id: string;
   name: string;
