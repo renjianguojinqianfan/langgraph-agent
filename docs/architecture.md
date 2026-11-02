@@ -225,7 +225,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 停止 | 用户按停 | `TaskManager.stop()` 翻 `_stop_flags` 与 state、发布 `task_interrupted`；worker 在节点入口检测后收口，状态 `INTERRUPTED` |
 | 续说 | 停下后发消息 | `POST /api/tasks/{id}/messages`：同一 `thread_id` / checkpoint 继续同一段对话（多轮入口） |
 | 续跑 | 停止 / 崩溃后 | `POST /api/tasks/{id}/resume`：从最近 durable checkpoint 重建并继续；发布 `task_resumed` |
-| 崩溃对账 | 进程重启 | 启动时把 `tasks.json` 里非终态记录翻成 `INTERRUPTED`（可恢复），清扫悬空 tool call |
+| 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），逐条隔离；悬空 tool call 的清扫在 `agent` 节点循环入口（#46），不在启动对账里 |
 
 checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`），格式戳 v2；v1 旧库启动时拒绝挂载并按迁移文档 §2.4 处置。`data/` 可弃，不做跨大版本快照兼容。
 
