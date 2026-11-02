@@ -174,7 +174,7 @@ ADR 是决策记录，不建议改写原句；在 T5 里加一条审计注记或
 默认 cwd 是 `Settings.artifacts_path`（`bash.py:305`），默认即 `data/artifacts`。本机探针：
 
 ```text
-pwd                         -> /e/code/demo/langgraph-agent/data/artifacts
+pwd                         -> <repo-root>/data/artifacts
 ../../.env                  -> 可读
 ../../data                  -> 可读写（trace / checkpoint / snapshots）
 ../../.git                  -> 可读写

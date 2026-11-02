@@ -19,7 +19,7 @@
             "command": "pwd && ls -la"
           },
           "error": null,
-          "output_excerpt": "{\"stdout\": \"/e/qianfan-c7-20261021/A\\ntotal 0\\ndrwxr-xr-x 1 <user> 197121 0 Oct 21 12:43 .\\ndrwxr-xr-x 1 <user> 197121 0 Oct 21 12:43 ..\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
+          "output_excerpt": "{\"stdout\": \"<tmp>/qianfan-c7-20261021/A\\ntotal 0\\ndrwxr-xr-x 1 <user> 197121 0 Oct 21 12:43 .\\ndrwxr-xr-x 1 <user> 197121 0 Oct 21 12:43 ..\\n\", \"stderr\": \"\", \"exit_code\": 0, \"cwd\": \"<tmp>\\\\qianfan-c7-20261021\\\\A\", \"timed_out\": false, \"stopped\": false, \"truncated\": false}"
         }
       ]
     },
