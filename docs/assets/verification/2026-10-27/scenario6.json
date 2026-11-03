@@ -2,14 +2,14 @@
   "scenario6": {
     "a": {
       "id": "25c55dcccfa14bedb6a9df20242ff8d8",
-      "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-a",
+      "workspace": "<repo-root>\\.qoder\\tmp\\qa2026-a",
       "status": "INTERRUPTED",
       "files": [],
       "answer_chars": 28
     },
     "b": {
       "id": "f1477ef0355b4f60a925dc9f68f26651",
-      "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-b",
+      "workspace": "<repo-root>\\.qoder\\tmp\\qa2026-b",
       "status": "INTERRUPTED",
       "files": []
     },
@@ -29,14 +29,14 @@
     "list_dir_a": [
       {
         "id": "25c55dcccfa14bedb6a9df20242ff8d8",
-        "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-a",
+        "workspace": "<repo-root>\\.qoder\\tmp\\qa2026-a",
         "status": "INTERRUPTED"
       }
     ],
     "list_dir_b": [
       {
         "id": "f1477ef0355b4f60a925dc9f68f26651",
-        "workspace": "E:\\code\\demo\\langgraph-agent\\.qoder\\tmp\\qa2026-b",
+        "workspace": "<repo-root>\\.qoder\\tmp\\qa2026-b",
         "status": "INTERRUPTED"
       }
     ],

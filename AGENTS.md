@@ -63,6 +63,9 @@
 # 文档链接（改 docs/ 或根级 md 必跑；只校验 tracked Markdown 的相对链接）
 .\.venv311\Scripts\python.exe scripts\check_doc_links.py
 
+# 文档暴露面（改任何 tracked Markdown（含 docs/、根级 md、.agents/retros/）、docs/ 下验证证据或 lessons/ 必跑；防本机绝对路径回潮，判据见 docs/security.md §3）
+.\.venv311\Scripts\python.exe scripts\check_no_machine_paths.py
+
 # 真实模型验证（发布前 / 换模型）：启服务、在网页端手动跑一遍（CI 不再跑真模型）
 .\.venv311\Scripts\python.exe -m uvicorn backend.main:app --port 8000 --reload
 cd frontend; npm run dev

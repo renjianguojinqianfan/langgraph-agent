@@ -30,7 +30,7 @@
 **探针一**（自己终端里跑；Git Bash 路径用你机器上的）——分清是机器问题还是 harness 问题：
 
 ```powershell
-& "E:\code\demo\langgraph-agent\.venv311\Scripts\python.exe" -c "import subprocess; p=subprocess.run([r'<bash>','-c','echo ok'],capture_output=True); print(p.returncode, p.stderr[:100])"
+& "<repo-root>\.venv311\Scripts\python.exe" -c "import subprocess; p=subprocess.run([r'<bash>','-c','echo ok'],capture_output=True); print(p.returncode, p.stderr[:100])"
 ```
 
 `0` → 机器是好的，红来自 harness 血统；仍挂 → 机器层面，见文末第一类。
@@ -46,8 +46,8 @@
 | 解释器位置 | spawn bash |
 |---|---|
 | 仓库内 `.venvtest\Scripts\python.exe` | 挂 |
-| `E:\code\venvtest4`（仓库外、同盘、同上级目录） | 好 |
-| `E:\venvtest3`（仓库外、同盘） | 好 |
+| `<repo-root>\..\..\venvtest4`（仓库外、同盘、同上级目录） | 好 |
+| `<repo-root>\..\..\..\venvtest3`（仓库外、同盘） | 好 |
 | `%TEMP%\opencode\venvtest` | 好 |
 
 **已排除**（逐项试过，全都一样挂；这些方向都已查过，无需重查）：uv venv 重定向器（md5 相同的 python.exe 仅因位置不同而结果不同，所以不是它）、venv 工具、site-packages 内容、`close_fds=False`、`-I -S -E`、`os.system` / `os.spawnv` / `cmd start`、四种 `creationflags`、`AllocConsole`、干净环境、restricted SID（= 0）、job 成员（`IsProcessInJob` = False）。限制附着在**父进程**而非子进程路径——仓库内的 bash 副本被仓库外 python 拉起时能正常启动。
@@ -61,7 +61,7 @@
 - **探针二好使**（opencode / qoder）：限制按路径，换解释器位置即可。用这个跑回归：
 
   ```bash
-  "C:\Users\DELL\AppData\Roaming\uv\python\cpython-3.11.15-windows-x86_64-none\python.exe" -m pytest backend/tests/ -q
+  "C:\Users\<user>\AppData\Roaming\uv\python\cpython-3.11.15-windows-x86_64-none\python.exe" -m pytest backend/tests/ -q
   ```
 
   本机在真解释器的 site-packages 放了 cwd 判定的 `sitecustomize.py`，把仓库 venv 的 site-packages 桥接过去——**不能用 `PYTHONPATH`**：MCP 测试会 spawn 子进程，子进程吃的是 `build_child_env` 白名单，环境变量到不了它。删该文件即回退；cwd 判定保证仓库外无副作用。

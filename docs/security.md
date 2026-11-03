@@ -44,9 +44,23 @@
 
 公开仓库里的 Markdown、截图、验证证据都按**公开信息**处理。硬规则：
 
-- 不得出现 `C:\Users\<用户名>`、家目录 / 个人笔记路径、主机名、内网地址、一次性工作稿内容。
-- 文档一律用占位符：`<repo-root>` / `<workspace>` / `<tmp>` / `<knowledge-base>` / `<user>`；
+- 不得出现**真实用户名 / 家目录 / 个人笔记路径 / 本机绝对路径**、主机名、内网地址、一次性工作稿内容；
+  占位符形态按下一条的清单写（`C:\Users\<user>` 是**合规示例**，不是违例——别把它读成禁止形态）。
+- 文档一律用占位符：`<repo-root>` / `<workspace>` / `<tmp>` / `<knowledge-base>` / `<user>` /
+  `<git-root>` / `<python-install>` / `<personal-notes>`（后三个为 #262 补：Git 安装根 /
+  独立 Python 安装根 / 个人笔记库根；门禁的放行清单与本行逐字一致）。
   `.pre-commit-config.yaml` 等配置用**仓库相对路径**，不写本机绝对路径。
+- **机械门（#262）**：`python scripts/check_no_machine_paths.py`（本地脚本，与
+  `check_doc_links.py` 同先例，未进 CI）扫描全部 tracked Markdown、`docs/` 下验证证据
+  （.json / .txt）与 tracked `lessons/`（含 HTML），命中「绝对路径且机器特有」即红。放行面是
+  **确切清单**而非形态猜测：① 首个占位符之前的机器特有段全是通用根——`C:\Users\<user>` 放行，
+  用户名写真实值、占位符只跟在后面的形态照样红（PR #283 返工实证的绕过形态，由
+  `backend/tests/test_no_machine_paths.py` 的表驱动红绿矩阵锁定）；`..` 段与「占位符/省略号 +
+  真实尾巴」两类洗白形态同样红；② 四个系统根（Windows / Program Files /
+  Program Files (x86) / ProgramData，按带空格完整前缀切分，git-bash `/c/Windows` 同形态）；
+  ③ 孤行省略号（`C:\...`，后面不能再跟东西）——所以新写的真实路径（另一个盘符检出目录、另一个用户名的主目录）照样红。
+  该测试还断言扫描面的**成员结构**（根 Markdown / docs / retros / lessons / 证据各有一名成员在面内，代码不在面内），并对全仓 docs 面跑一次零发现（CI 随离线套件强制执行）；AGENTS.md 触发行与扫描面的一致性由**人工保持**——门禁脚本自身是权威，测试不解析自然语言触发行（那会是脆弱的第二真相源）。
+  代码不在扫描面：路径边界测试本来就要内嵌绝对路径输入（如临时目录下的文件）。
 - **与「历史快照不改」的边界**：暴露面清理优先于快照冻结——`docs/archive/` 只做占位符替换、
   不改语义（2026-10-24 已做一轮；规则出处见 `docs/agents/workflow.md` 步 3.5）。
 - 验证证据（`docs/assets/verification/`）落库前必须脱敏：用户名、用户配置目录、本机绝对路径
