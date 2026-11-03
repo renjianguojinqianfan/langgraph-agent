@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TaskStatus(str, Enum):
@@ -46,6 +46,16 @@ class ToolCallRecord(BaseModel):
     output: Any = None
     status: str = "pending"  # pending | success | failed | skipped
     error: Optional[str] = None
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def _normalize_input(cls, value: Any) -> Dict[str, Any]:
+        """Read legacy non-dict inputs (list / scalar / null) without dropping the record.
+
+        Records written before #255 stored a few calls' args as a list or scalar;
+        the runtime always writes an object, so this only fires on load.
+        """
+        return value if isinstance(value, dict) else {"value": value}
 
 
 class StepRecord(BaseModel):
