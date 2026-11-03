@@ -6,7 +6,7 @@
 
 ## 结论
 
-1. **闸 1（缓存/数据库写不进）**：`setx PRE_COMMIT_HOME "<repo-root>\.precommit-cache"` 已写入用户环境；它只影响之后启动的进程。本会话（Qoder 21:01 启动）仍解析到 `C:\Users\<user>\.cache`，重启 agent 后才继承；期间用 per-command 前缀。缓存目录实测可写。
+1. **闸 1（缓存/数据库写不进）**：`setx PRE_COMMIT_HOME "<repo-root>\..\.precommit-cache"` 已写入用户环境；它只影响之后启动的进程。本会话（Qoder 21:01 启动）仍解析到 `C:\Users\<user>\.cache`，重启 agent 后才继承；期间用 per-command 前缀。缓存目录实测可写。
 2. **闸 2（脏树提交失败）**：根因是 `.git/hooks/post-checkout` 与 `post-commit` 两个 **10 字节空钩子**。它们让 git 在 pre-commit 的 stash 阶段派生 `sh.exe`；而 `.venv311` 的解释器被 HIPS 限制，其子孙进程创建 MSYS 共享对象被拒（`NtCreateDirectoryObject ... 0xC0000022`）。把两个空钩子挪开即通，**与提权 MSYS、并发 agent 无关**（交接文档的假设 1 已证伪）。
 3. 验证：脏树 `pre_commit hook-impl` rc=0；真实 `git commit --allow-empty`（脏树）四钩子 Skip、commit-msg Passed、提交成功；探针提交已回滚，HEAD 仍 `a6bcfe7`。
 
@@ -72,7 +72,7 @@ run-command.c: trace: run_command: .git/hooks/post-checkout <old> <new> 0
 
 ## 修法（本机，可逆）
 
-1. **缓存**（交接文档已做，本次复核）：`setx PRE_COMMIT_HOME "<repo-root>\.precommit-cache"`。回滚：`setx PRE_COMMIT_HOME ""`。注意 `setx` 只影响新进程；已在跑的 Qoder / opencode 需要重启才继承。
+1. **缓存**（交接文档已做，本次复核）：`setx PRE_COMMIT_HOME "<repo-root>\..\.precommit-cache"`。回滚：`setx PRE_COMMIT_HOME ""`。注意 `setx` 只影响新进程；已在跑的 Qoder / opencode 需要重启才继承。
 2. **空钩子**（本次实施）：
 
    ```bash
@@ -87,7 +87,7 @@ run-command.c: trace: run_command: .git/hooks/post-checkout <old> <new> 0
 
 ## 验证记录（2026-10-26）
 
-- 解析探针：本会话 `PRE_COMMIT_HOME` → `C:\Users\<user>/.cache`（未继承 setx）；显式前缀后，缓存写入 `<repo-root>\.precommit-cache`。
+- 解析探针：本会话 `PRE_COMMIT_HOME` → `C:\Users\<user>/.cache`（未继承 setx）；显式前缀后，缓存写入 `<repo-root>\..\.precommit-cache`。
 - 脏树 `pre_commit hook-impl --hook-type=pre-commit`：rc=0，4 个钩子 Skip，`Restored changes from ...`。
 - 真实提交：脏树 + `git commit --allow-empty -F <msg>` → 4 Skip + `commit-msg 校验 ... Passed` → 提交 `52d78fb`；`git reset --soft HEAD~1` 回滚，HEAD 回到 `a6bcfe7`，`AGENTS.md` 已还原。
 - 未跑：全量 pytest / ruff / mypy（本次不改仓库源码，且这些钩子在 md-only 提交里本来就 Skip）。工作区原有的未跟踪 `pytest-of-<user>/` 未动。
