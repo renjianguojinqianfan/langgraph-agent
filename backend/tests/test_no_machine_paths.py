@@ -140,10 +140,14 @@ def test_system_roots_and_prose_are_allowed(line: str) -> None:
 
 
 def test_scoped_files_covers_the_documented_surface() -> None:
-    """AGENTS.md's trigger wording and ``scoped_files()`` must not drift apart.
+    """Pin the scan surface's member structure (not the AGENTS.md wording).
 
-    The doc says "any tracked Markdown + docs evidence + lessons/"; this pins
-    one concrete member of each surface and keeps code out.
+    Asserts one concrete member of each surface the gate claims — root
+    Markdown, docs Markdown, tracked retros, lessons/, docs evidence — and
+    that code stays out. It deliberately does **not** parse the AGENTS.md
+    trigger line: that is prose, and a prose parser here would be a brittle
+    second source of truth. The gate script is the authority; the AGENTS.md
+    wording is kept in sync by hand (see docs/security.md §3).
     """
     files = {path.relative_to(gate.ROOT).as_posix() for path in gate.scoped_files()}
     assert "AGENTS.md" in files, "root Markdown missing from the scan surface"
