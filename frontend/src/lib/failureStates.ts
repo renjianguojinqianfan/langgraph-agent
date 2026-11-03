@@ -44,6 +44,16 @@ export function listBannerVisible(error: string, state: HistoryListState): boole
 }
 
 /**
+ * The empty face's title. "No tasks at all" and "tasks exist, none match the
+ * query" are different truths — and the second one, with a failed refetch on
+ * top, is exactly the 搜索过滤空 + 刷新失败 combination where
+ * "这里还没有任务" was half a lie (复审 LOW-1).
+ */
+export function listEmptyTitle(rows: number): string {
+  return rows > 0 ? "没有匹配的任务" : "这里还没有任务";
+}
+
+/**
  * #256: what one list answer means. `req()` never rejects on a non-2xx, so a
  * JSON-bodied 500 (persistence failure) or 401 (expired token) used to arrive
  * as an envelope without `tasks` and the caller silently kept the empty face.

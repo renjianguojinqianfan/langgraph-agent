@@ -4,6 +4,7 @@ import {
   detailLoadState,
   historyListState,
   listBannerVisible,
+  listEmptyTitle,
   listLoadFailure,
   listLoadOutcome,
   loginOutcome,
@@ -62,6 +63,30 @@ describe("listBannerVisible (#256 复审 LOW: 搜索过滤空不藏错误横幅)
   it("无错 → 无横幅", () => {
     expect(listBannerVisible("", "rows")).toBe(false);
     expect(listBannerVisible("", "empty")).toBe(false);
+  });
+});
+
+describe("listEmptyTitle (#256 复审 LOW-1: 搜索过滤空 + 刷新失败不说半句假话)", () => {
+  it("一行都没有 → 「这里还没有任务」", () => {
+    expect(listEmptyTitle(0)).toBe("这里还没有任务");
+  });
+
+  it("有行但被搜索过滤空 → 「没有匹配的任务」（有任务，只是不匹配）", () => {
+    expect(listEmptyTitle(3)).toBe("没有匹配的任务");
+  });
+
+  it("组合态钉住：listError + 过滤后零行 → 横幅在 + 空态说「没有匹配」", () => {
+    // rows>0 / visible=0 + 失败：横幅（带重试）+ 「没有匹配的任务」，
+    // 不再是「这里还没有任务」——那在有任务的目录里是半句假话。
+    const state = historyListState({
+      error: "无法连接后台",
+      loading: false,
+      rows: 3,
+      visible: 0,
+    });
+    expect(state).toBe("empty");
+    expect(listBannerVisible("无法连接后台", state)).toBe(true);
+    expect(listEmptyTitle(3)).toBe("没有匹配的任务");
   });
 });
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { apiErrorText, deleteWorkspaceTasks } from "../../api/client";
-import { historyListState, listBannerVisible } from "../../lib/failureStates";
+import { historyListState, listBannerVisible, listEmptyTitle } from "../../lib/failureStates";
 import { useTaskStore } from "../../store/taskStore";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
@@ -157,7 +157,10 @@ export function TaskRail() {
           </div>
         ) : listState === "empty" ? (
           <div className="px-3 py-6">
-            <p className="text-body text-secondary">这里还没有任务</p>
+            {/* #256 (复审 LOW-1): "rows exist, none match the query" is a
+                different truth from "no tasks at all" — and with a failed
+                refetch on top, "这里还没有任务" was half a lie. */}
+            <p className="text-body text-secondary">{listEmptyTitle(tasks.length)}</p>
             <p className="mt-1 text-meta text-tertiary">
               {query.trim() ? "换个关键词试试。" : "在下方输入开始。"}
             </p>
