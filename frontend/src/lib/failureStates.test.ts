@@ -146,6 +146,20 @@ describe("planLoadState (#256: 计划读败不伪装空计划)", () => {
     expect(planLoadFailure(401)).toContain("重新登录");
     expect(planLoadFailure(401)).not.toContain("HTTP 401");
   });
+
+  it("409 无 detail → 通用兜底，不锁死 UTF-8 归因（#280 脱敏连带）", () => {
+    // #280 把全部读失败（UnicodeDecodeError 与 OSError——锁文件 / 权限）都映射到
+    // 409 且 detail 脱敏；锁死「UTF-8」会对锁 / 权限原因显示错误归因。
+    expect(planLoadFailure(409)).not.toContain("UTF-8");
+    expect(planLoadFailure(409, "   ")).not.toContain("UTF-8");
+    expect(planLoadFailure(409)).toContain("服务端日志");
+  });
+
+  it("409 有 detail → 展示服务端（已脱敏的）detail", () => {
+    expect(planLoadFailure(409, "plan file could not be read")).toContain(
+      "plan file could not be read"
+    );
+  });
 });
 
 describe("listLoadOutcome (#256 评审 S1: JSON-bodied 500 不落空态)", () => {

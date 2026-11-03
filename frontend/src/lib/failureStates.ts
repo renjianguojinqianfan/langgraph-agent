@@ -142,10 +142,16 @@ export function planLoadState(status: number): PlanLoadState {
  * Why the plan read failed. A missing plan *file* is not a failure (the
  * backend answers 200 with empty text); these are the read failures:
  * `backend/api/routes.py` raises 404 for a vanished task and 409 for a plan
- * file that is not the agreed UTF-8 Markdown. A 401 is the dead token — the
- * retry button cannot fix it, so the copy points at re-login. A 2xx with an
- * unusable envelope is its own wording — "HTTP 200" in a failure line reads
- * as a contradiction.
+ * file that cannot be read. A 401 is the dead token — the retry button
+ * cannot fix it, so the copy points at re-login. A 2xx with an unusable
+ * envelope is its own wording — "HTTP 200" in a failure line reads as a
+ * contradiction.
+ *
+ * The 409 fallback is cause-agnostic on purpose: `#280` maps every read
+ * failure (UnicodeDecodeError *and* OSError — a locked file, a permission
+ * error) onto 409 with a sanitized detail, so a copy that names one cause
+ * would mis-attribute the others. When the server does send a detail it is
+ * already sanitized and gets shown verbatim.
  */
 export function planLoadFailure(status: number, detail?: string): string {
   switch (status) {
@@ -156,7 +162,9 @@ export function planLoadFailure(status: number, detail?: string): string {
     case 404:
       return "任务不存在或已被删除。";
     case 409:
-      return `计划文件无法读取：${detail?.trim() || "内容不是约定的 UTF-8 Markdown。"}`;
+      return detail?.trim()
+        ? `计划文件无法读取：${detail.trim()}`
+        : "计划文件无法读取；请稍后重试，若持续失败查看服务端日志。";
     default:
       return status >= 200 && status < 300
         ? "计划响应异常；请重试。"
