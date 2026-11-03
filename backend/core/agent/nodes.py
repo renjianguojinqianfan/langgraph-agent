@@ -762,7 +762,10 @@ class AgentRuntime:
 
         The step record is marked ``done`` only when this round actually produced
         an answer; a stop or a spent step budget leaves it ``failed`` (it did not
-        complete what it started).
+        complete what it started). Only a step this round created and that is
+        still ``running`` is settled here (#255): a stop at the loop entry skips
+        the ``agent`` node's step creation, so the tail may belong to an earlier
+        round that already carries its own verdict.
         """
         if state.get("stop_requested"):
             state["status"] = "INTERRUPTED"
@@ -770,7 +773,11 @@ class AgentRuntime:
             state["status"] = "FAILED"
         else:
             state["status"] = "INTERRUPTED"
-        if state.get("steps"):
-            answered = bool(state.get("final_answer")) and not state.get("error")
-            state["steps"][-1]["status"] = "done" if answered else "failed"
+        steps = state.get("steps") or []
+        if steps:
+            last = steps[-1]
+            same_round = last.get("round", 0) == int(state.get("round_no", 1) or 1)
+            if same_round and last.get("status") == "running":
+                answered = bool(state.get("final_answer")) and not state.get("error")
+                last["status"] = "done" if answered else "failed"
         return state
