@@ -19,9 +19,11 @@ import mimetypes
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import AsyncIterator
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
@@ -223,6 +225,10 @@ def resume_task(
         raise HTTPException(status_code=404, detail="task not found")
     try:
         result = _tm(request).resume(task_id)
+    except PlanError as exc:
+        # The plan pre-check inside the resume refused (#279 AC3): same
+        # sanitised face as GET /plan — the cause goes to the log only.
+        raise _plan_read_failed(task_id, exc) from None
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data=result)
@@ -387,7 +393,7 @@ def get_plan(
     try:
         result = _tm(request).get_plan(task_id)
     except PlanError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise _plan_read_failed(task_id, exc) from None
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return _envelope(data=result)
@@ -429,6 +435,10 @@ def send_message(
         raise HTTPException(status_code=400, detail="`input` is required.")
     try:
         result = _tm(request).send_message(task_id, payload.input)
+    except PlanError as exc:
+        # The plan pre-check inside the continuation refused (#279 AC3): same
+        # sanitised face as GET /plan — the cause goes to the log only.
+        raise _plan_read_failed(task_id, exc) from None
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data=result)
@@ -551,6 +561,73 @@ def task_events(
     return sse_response(task_id, _eb(request), request)
 
 
+#: Upper bound for reading one trace file into memory (#260). It guards the
+#: ``?format=json`` branch only, which must parse every line; the raw NDJSON
+#: branch streams instead (see the route). The route reads one byte past this
+#: cap and refuses the file (413) instead of silently serving a truncated list.
+TRACE_MAX_BYTES = 8_388_608  # 8 MiB
+
+#: What the client is told when the trace file cannot be read at all (#260).
+#: Deliberately generic: the OSError text (Windows: absolute paths, lock
+#: holders) goes to the server log, never to the response body.
+_TRACE_READ_ERROR_DETAIL = "trace file could not be read; see the server log"
+
+#: Same discipline for the plan file (#279 AC3 / #260 rework): ``PlanError``
+#: carries the absolute plan path and the OS error, and the frontend renders
+#: this detail verbatim — so the full cause goes to the log only.
+_PLAN_READ_ERROR_DETAIL = "plan file cannot be read; see the server log"
+
+#: Chunk size for streaming the raw trace prefix (#260 rework).
+_TRACE_CHUNK_BYTES = 64 * 1024
+
+
+def _trace_line_error(lineno: int, why: str) -> HTTPException:
+    """A malformed trace line is a located, client-visible 422 (#260)."""
+    return HTTPException(
+        status_code=422,
+        detail=f"trace line {lineno} is malformed: {why}",
+    )
+
+
+def _trace_read_failed(task_id: str, exc: OSError) -> HTTPException:
+    """Log the full cause, answer with the safe detail (#260)."""
+    logger.error(
+        "trace read failed for task %s (%s: %s)",
+        task_id,
+        type(exc).__name__,
+        exc,
+    )
+    return HTTPException(status_code=500, detail=_TRACE_READ_ERROR_DETAIL)
+
+
+def _plan_read_failed(task_id: str, exc: PlanError) -> HTTPException:
+    """Log the full cause, answer with the safe detail (#260 rework)."""
+    logger.error("plan read failed for task %s: %s", task_id, exc)
+    return HTTPException(status_code=409, detail=_PLAN_READ_ERROR_DETAIL)
+
+
+async def _trace_prefix_body(path: Path, size: int) -> AsyncIterator[bytes]:
+    """Yield at most ``size`` bytes of ``path`` — the stat-time prefix snapshot.
+
+    Stopping at the stat-time size is what makes the stream consistent: the
+    trace keeps growing while its task runs, so a stream that ran to EOF would
+    send more bytes than any length declared up front (``FileResponse``
+    declares ``content-length`` from ``os.stat`` and reads to EOF — h11
+    ``too much data`` on the client). A file shorter than ``size`` (replaced /
+    truncated) simply ends early. Nothing is declared, so neither direction
+    can violate the protocol; the semantic is "raw = the prefix snapshot at
+    request time" (#260 rework).
+    """
+    remaining = size
+    async with await anyio.open_file(str(path), "rb") as handle:
+        while remaining > 0:
+            chunk = await handle.read(min(remaining, _TRACE_CHUNK_BYTES))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
 @router.get("/tasks/{task_id}/trace", response_model=None)
 def task_trace(
     task_id: str,
@@ -561,13 +638,26 @@ def task_trace(
     """Return the persisted JSONL trace for a task.
 
     Default: raw NDJSON (``application/x-ndjson``) so the frontend can replay
-    it line by line. ``?format=json`` returns the unified envelope
-    ``{code, data:[Event,...], message}``. An illegal ``task_id`` is a 400
-    before any filesystem access; an unknown task, a task without a trace file,
-    or a disabled trace is a 404.
+    it line by line — byte-for-byte the on-disk file, malformed lines included
+    (the replay face skips those by design, and export identity depends on
+    them). It is **streamed**, never buffered and never capped: this is the
+    frontend's only trace consumer (replay + export), so a long trace must
+    stay replayable. The body is the **prefix snapshot at request time** — the
+    file keeps growing while its task runs, and the stream stops at the size
+    ``stat`` saw (see :func:`_trace_prefix_body`); the size bound applies to
+    the parsing branch only.
 
-    The real return type is the union below (envelope for ``?format=json``, raw
-    NDJSON ``Response`` otherwise). ``response_model=None`` is stated explicitly
+    ``?format=json`` returns the unified envelope
+    ``{code, data:[Event,...], message}`` and validates every line, so a
+    malformed trace is a located 422 instead of a silently shortened list.
+
+    An illegal ``task_id`` is a 400 before any filesystem access; an unknown
+    task, a task without a trace file, or a disabled trace is a 404; a
+    ``?format=json`` file past :data:`TRACE_MAX_BYTES` is a 413; an unreadable
+    file (either branch) is a logged 500 with a generic detail.
+
+    The real return type is the union below (envelope for ``?format=json``,
+    raw NDJSON response otherwise). ``response_model=None`` is stated explicitly
     so FastAPI keeps skipping model inference exactly as it did when the
     annotation was the bare ``Response`` subclass — the OpenAPI document and both
     branches' serialisation are unchanged.
@@ -586,18 +676,75 @@ def task_trace(
     if not trace_file.exists():
         raise HTTPException(status_code=404, detail="task trace not found")
 
-    raw = trace_file.read_text(encoding="utf-8")
-    if format == "json":
-        events = []
-        for line in raw.splitlines():
-            if not line.strip():
-                continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:  # pragma: no cover - defensive
-                continue
-        return _envelope(data=events)
-    return Response(content=raw, media_type="application/x-ndjson")
+    if format != "json":
+        # Stream the stat-time PREFIX (#260 rework): the file keeps growing
+        # while the task runs, and a "read to EOF" stream (FileResponse) would
+        # send more bytes than the length it declares up front — the client
+        # sees h11 ``too much data`` or a silently truncated body. The old
+        # ``read_text`` was a consistent snapshot; this restores that property
+        # without the memory cost. The response is chunked (no declared
+        # length), so neither growth nor a shrinking/replaced file can violate
+        # the protocol, and the semantic is "raw = the prefix snapshot at
+        # request time".
+        # The probe only NARROWS the window: a file deleted or locked between
+        # the probe and the stream fails mid-response (server-logged, client
+        # sees a broken body) instead of as a clean 500. The realistic cases
+        # — a parked file, or a running task appending — are covered.
+        try:
+            size = trace_file.stat().st_size
+            with trace_file.open("rb"):
+                pass
+        except OSError as exc:
+            raise _trace_read_failed(task.id, exc) from None
+        return StreamingResponse(
+            _trace_prefix_body(trace_file, size),
+            media_type="application/x-ndjson",
+        )
+
+    # Bounded read (#260): the parsing branch must not pull a whole unbounded
+    # file into memory.
+    try:
+        with trace_file.open("rb") as handle:
+            raw_bytes = handle.read(TRACE_MAX_BYTES + 1)
+    except OSError as exc:
+        raise _trace_read_failed(task.id, exc) from None
+    if len(raw_bytes) > TRACE_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"trace file exceeds the {TRACE_MAX_BYTES} byte limit; "
+                "the raw NDJSON form has no limit"
+            ),
+        )
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=422, detail="trace file is not valid UTF-8"
+        ) from None
+
+    events = []
+    # Split on "\n" only (#260): JSONL's separator is the newline, and the
+    # recorder writes with ``ensure_ascii=False``, so U+2028 / U+2029 / NEL
+    # stay raw inside a legal line — ``str.splitlines()`` would cut such a
+    # line in half and 422 a file the backend itself wrote correctly.
+    for lineno, line in enumerate(raw.split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise _trace_line_error(lineno, f"not valid JSON ({exc.msg})") from None
+        if not isinstance(event, dict):
+            raise _trace_line_error(lineno, "not a JSON object")
+        if not isinstance(event.get("type"), str):
+            raise _trace_line_error(lineno, "missing string field 'type'")
+        if not isinstance(event.get("data"), dict):
+            raise _trace_line_error(lineno, "missing object field 'data'")
+        if not isinstance(event.get("ts"), (int, float)):
+            raise _trace_line_error(lineno, "missing numeric field 'ts'")
+        events.append(event)
+    return _envelope(data=events)
 
 
 # ── P1 item 5: auth (public) ──

@@ -4,11 +4,18 @@ Covers the TraceRecorder (event order preserved, unknown tasks ignored,
 unsubscribe after close, idempotent attach) and the ``GET /api/tasks/{id}/trace``
 REST endpoint (raw NDJSON, ``?format=json`` envelope, 404 for missing file,
 404 when trace is disabled). Runs fully offline with a scripted MockLLMClient.
+
+#260 adds the failure surface: a trace write that fails must be counted and
+logged (never silent — ``EventBus.publish`` swallows subscriber exceptions by
+contract), and the read endpoint must refuse oversized / malformed / unreadable
+files with a located error instead of reading them whole into memory.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import threading
 import time
 from pathlib import Path
@@ -18,10 +25,12 @@ from urllib.parse import quote
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.api import routes
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.main import app
+from backend.services import trace as trace_module
 from backend.services.event_bus import Event, EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
@@ -213,6 +222,172 @@ def test_late_attach_does_not_duplicate_events_after_reattach(tmp_path):
     assert [e["type"] for e in events].count("step_start") == 1
 
 
+# ── #260: write failures are visible ────────────────────────────
+class _BrokenHandle:
+    """A file handle whose writes fail like a full disk."""
+
+    def write(self, _line: str) -> int:
+        raise OSError("no space left on device")
+
+    def flush(self) -> None:
+        raise OSError("no space left on device")
+
+    def close(self) -> None:
+        pass
+
+
+class _CloseBoomHandle(_BrokenHandle):
+    """A handle whose close() fails too — the disk-full rework scenario."""
+
+    def close(self) -> None:
+        raise OSError("close boom")
+
+
+def test_trace_write_failure_is_counted_and_logged(tmp_path, caplog, app_log_capture):
+    """#260 AC2: a failed write is counted and logged — never silent.
+
+    ``EventBus.publish`` swallows subscriber exceptions by contract ("a bad
+    subscriber must not break the publisher"), so without the recorder's own
+    signal a disk-full trace would lose every event invisibly. The publisher
+    must also stay unbroken: both ``publish`` calls return normally.
+    """
+    app_log_capture("trace")
+    with caplog.at_level(logging.WARNING):
+        settings = make_settings(tmp_path)
+        bus = EventBus()
+        rec = TraceRecorder(settings)
+        rec.attach(bus, "t1")
+        rec._files["t1"] = _BrokenHandle()  # swap in the failing handle
+        bus.publish("t1", "a", {"n": 1})
+        bus.publish("t1", "b", {"n": 2})
+        # Observable signal: the loss is counted per task, live.
+        assert rec.write_failures == {"t1": 2}
+        rec.close("t1")
+
+    # First failure logged with traceback; later ones counted, not repeated —
+    # a disk-full run must not flood the log one line per event.
+    assert caplog.text.count("trace write failed for t1") == 1
+    assert "no space left on device" in caplog.text
+    # The end marker failure and the end-of-era loss summary are both visible.
+    assert "trace_end write failed for t1" in caplog.text
+    assert "lost 2 event(s) to write failures" in caplog.text
+    # close() pops the counter: the next era starts from a clean signal.
+    assert rec.write_failures == {}
+
+
+def test_trace_serialization_failure_is_counted_and_logged(
+    tmp_path, monkeypatch, caplog, app_log_capture
+):
+    """#260 rework (LOW-6): an unencodable payload is a counted loss, not silence.
+
+    Serialization now sits inside the guarded region, so a payload ``json``
+    cannot encode counts toward ``write_failures`` and logs like any other
+    lost line — the previous docstring promised coverage the code did not
+    have.
+    """
+    app_log_capture("trace")
+    settings = make_settings(tmp_path)
+    bus = EventBus()
+    rec = TraceRecorder(settings)
+    rec.attach(bus, "t1")
+
+    def _unencodable(*_args, **_kwargs):
+        raise TypeError("keys must be str, int, float, bool or None")
+
+    monkeypatch.setattr(trace_module.json, "dumps", _unencodable)
+    with caplog.at_level(logging.WARNING):
+        bus.publish("t1", "weird", {"ok": 1})
+
+    assert rec.write_failures == {"t1": 1}
+    assert "trace write failed for t1" in caplog.text
+
+
+def test_trace_prefix_stream_stops_at_the_stat_time_size(tmp_path):
+    """#260 rework (MEDIUM-1): the raw stream is the stat-time prefix snapshot.
+
+    ``FileResponse`` declared ``content-length`` from ``os.stat`` and then
+    read to EOF, so a trace still being appended sent more bytes than
+    declared (h11 ``too much data`` / client-side truncation). The stream
+    stops at the size the route snapshotted; a file that shrank instead
+    (replaced / truncated) simply ends early — nothing is declared, so
+    neither direction can violate the protocol.
+    """
+    path = tmp_path / "t.jsonl"
+    path.write_bytes(b"0123456789")
+    size = path.stat().st_size
+    # A worker appends while the response streams (task still running).
+    with path.open("ab") as handle:
+        handle.write(b"ABCDEF")
+
+    async def scenario() -> bytes:
+        return b"".join([chunk async for chunk in routes._trace_prefix_body(path, size)])
+
+    assert asyncio.run(scenario()) == b"0123456789"
+
+
+def test_trace_api_raw_streams_the_stat_time_prefix(trace_client, monkeypatch):
+    """#260 rework (MEDIUM-1), route level: growth mid-request cannot overshoot.
+
+    The route stats twice (``exists()`` + the size read) and each stat here
+    appends one more line, simulating a worker that keeps writing while the
+    response is built. The body must carry the append that was on disk when
+    the size was taken, and NOT the one that landed after it.
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    original = trace_file.read_bytes()
+    grown_line = b'{"type": "grown", "data": {}, "ts": 1.0}\n'
+
+    real_stat = Path.stat
+
+    def _growing_stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if self.suffix == ".jsonl":
+            with self.open("ab") as handle:
+                handle.write(grown_line)
+        return result
+
+    monkeypatch.setattr(Path, "stat", _growing_stat)
+
+    r = client.get(f"/api/tasks/{tid}/trace")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/x-ndjson")
+    # Exactly the snapshot: one append in, the later one out.
+    assert r.content == original + grown_line
+    # No declared length to violate (chunked) — and the file did keep growing.
+    assert "content-length" not in r.headers
+    assert trace_file.read_bytes().count(grown_line) == 2
+
+
+def test_trace_close_failure_still_logs_summary_and_unsubscribes(
+    tmp_path, caplog, app_log_capture
+):
+    """#260 rework: a failing ``fh.close()`` must not skip summary/unsubscribe.
+
+    Disk-full is exactly when close() re-raises, and the old ordering put both
+    the loss summary and the bus unsubscribe behind that exception — the one
+    scenario this mechanism exists for lost both (summary invisible, callback
+    leaked into the next era).
+    """
+    app_log_capture("trace")
+    settings = make_settings(tmp_path)
+    bus = EventBus()
+    rec = TraceRecorder(settings)
+    rec.attach(bus, "t1")
+    rec._files["t1"] = _CloseBoomHandle()  # write AND close fail
+    with caplog.at_level(logging.WARNING):
+        bus.publish("t1", "a", {"n": 1})
+        rec.close("t1")  # must not raise, whatever the disk does
+        bus.publish("t1", "b", {"n": 2})  # after close — must not be appended
+
+    assert "trace file close failed for t1" in caplog.text
+    assert "lost 1 event(s) to write failures" in caplog.text
+    assert rec.write_failures == {}
+    # Unsubscribe survived the close failure: no subscriber is left behind.
+    assert not bus._subs.get("t1")
+
+
 # ── GET /api/tasks/{id}/trace ─────────────────────────────────
 @pytest.fixture
 def trace_client(tmp_path):
@@ -369,3 +544,154 @@ def test_trace_api_disabled_returns_404(tmp_path):
         r = test_client.get("/api/tasks/abc/trace")
         assert r.status_code == 404
         assert "trace" in r.json()["detail"].lower()
+
+
+# ── #260: read failures, size cap, format validation ───────────
+def _finished_task_with_trace(client, settings) -> tuple[str, Path]:
+    """One parked task whose trace file is closed (no more writes)."""
+    tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+    trace_file = settings.trace_path / f"{tid}.jsonl"
+    assert _wait_trace_closed(trace_file)
+    return tid, trace_file
+
+
+def test_trace_api_json_format_rejects_malformed_line(trace_client):
+    """#260 AC3: a malformed line is a located 422, not a silently short list.
+
+    The raw NDJSON branch stays a byte-for-byte passthrough: the replay face
+    skips malformed lines by design and export identity depends on the bytes.
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+
+    lines = trace_file.read_text(encoding="utf-8").splitlines()
+    lines[1] = "{not json"
+    trace_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    r = client.get(f"/api/tasks/{tid}/trace?format=json")
+    assert r.status_code == 422
+    assert "line 2" in r.json()["detail"]
+
+    raw = client.get(f"/api/tasks/{tid}/trace")
+    assert raw.status_code == 200
+    assert raw.text.splitlines()[1] == "{not json"
+
+
+def test_trace_api_json_format_accepts_unicode_line_separators(trace_client):
+    """#260 rework (S1): JSONL's separator is ``\\n``; U+2028/U+2029/NEL are payload.
+
+    The recorder writes with ``ensure_ascii=False``, so those characters stay
+    raw inside a legal line. ``str.splitlines()`` would cut the line in half
+    and 422 a file the backend itself wrote correctly — a false alarm on a
+    perfectly good trace.
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    lines = trace_file.read_text(encoding="utf-8").split("\n")
+    lines[0] = json.dumps(
+        {"type": "final_answer", "data": {"answer": "a\u2028b\u2029c\x85d"}, "ts": 1.5},
+        ensure_ascii=False,
+    )
+    trace_file.write_text("\n".join(lines), encoding="utf-8")
+
+    r = client.get(f"/api/tasks/{tid}/trace?format=json")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["data"][0]["data"]["answer"] == "a\u2028b\u2029c\x85d"
+    # The separators did not split the line: same event count as the file.
+    assert len(body["data"]) == len([ln for ln in lines if ln.strip()])
+
+
+def test_trace_api_json_format_rejects_non_object_and_missing_fields(trace_client):
+    """#260 AC3: the event shape is validated, with the line located."""
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    original = trace_file.read_text(encoding="utf-8").splitlines()
+
+    for bad, expected in (
+        ("[1, 2, 3]", "not a JSON object"),
+        ('{"foo": 1}', "missing string field 'type'"),
+        ('{"type": "x"}', "missing object field 'data'"),
+        ('{"type": "x", "data": {}}', "missing numeric field 'ts'"),
+    ):
+        lines = list(original)
+        lines[0] = bad
+        trace_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        r = client.get(f"/api/tasks/{tid}/trace?format=json")
+        assert r.status_code == 422, bad
+        assert "line 1" in r.json()["detail"]
+        assert expected in r.json()["detail"]
+
+
+def test_trace_api_json_format_caps_oversized_files_but_raw_streams(
+    trace_client, monkeypatch
+):
+    """#260 rework: the size cap guards the PARSING branch only.
+
+    Raw NDJSON is the frontend's only trace consumer (replay + export), and a
+    long trace used to be replayable — capping it was a product regression, so
+    the raw branch streams the file instead: no memory cost at any size, and
+    never a refusal. ``?format=json`` must parse every line, so it keeps the
+    bound (413, never a silently truncated list).
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    monkeypatch.setattr(routes, "TRACE_MAX_BYTES", 16)
+
+    r_json = client.get(f"/api/tasks/{tid}/trace?format=json")
+    assert r_json.status_code == 413
+    assert "byte limit" in r_json.json()["detail"]
+
+    raw = client.get(f"/api/tasks/{tid}/trace")
+    assert raw.status_code == 200
+    assert raw.headers["content-type"].startswith("application/x-ndjson")
+    # Streamed byte-for-byte (compared as BYTES: on Windows the recorder's
+    # text-mode append puts \r\n on disk, and read_text would normalise it —
+    # the export-identity contract is about the bytes the client receives).
+    assert raw.content == trace_file.read_bytes()
+
+
+def test_trace_api_json_format_rejects_non_utf8_trace(trace_client):
+    """#260 AC3: a non-UTF-8 file is a clear 422 on the parsing branch.
+
+    The raw branch streams bytes as-is (byte-for-byte passthrough), so the
+    decode check belongs to ``?format=json`` — the only branch that parses.
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    trace_file.write_bytes(b'{"type":"a","data":{},"ts":1}\n\xff\xfe not utf-8\n')
+
+    r = client.get(f"/api/tasks/{tid}/trace?format=json")
+    assert r.status_code == 422
+    assert "UTF-8" in r.json()["detail"]
+
+
+def test_trace_api_read_failure_is_logged_and_returns_500(
+    trace_client, monkeypatch, caplog, app_log_capture
+):
+    """#260 AC2: a read failure is a logged 500, not an unhandled traceback.
+
+    The response detail is deliberately generic (#260 rework): the OSError text
+    (Windows: absolute paths, lock holders) is operator information and stays
+    in the server log.
+    """
+    client, settings = trace_client
+    tid, _ = _finished_task_with_trace(client, settings)
+
+    def _locked_open(self, *args, **kwargs):
+        raise OSError("file is locked by another process")
+
+    monkeypatch.setattr(Path, "open", _locked_open)
+    app_log_capture("api.routes")
+    with caplog.at_level(logging.ERROR):
+        r = client.get(f"/api/tasks/{tid}/trace")
+
+    assert r.status_code == 500
+    detail = r.json()["detail"]
+    assert "could not be read" in detail
+    # The raw OS error must NOT reach the client…
+    assert "file is locked" not in detail
+    # …but the operator log keeps the full cause.
+    assert "file is locked" in caplog.text
+    assert f"trace read failed for task {tid}" in caplog.text

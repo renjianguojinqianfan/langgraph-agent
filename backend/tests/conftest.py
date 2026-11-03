@@ -16,6 +16,7 @@ that exports them cannot make the suite dial out.
 from __future__ import annotations
 
 import atexit
+import logging
 import os
 import shutil
 import sys
@@ -291,3 +292,29 @@ def event_bus() -> EventBus:
 @pytest.fixture
 def persistence(settings) -> Persistence:
     return Persistence(settings)
+
+
+@pytest.fixture
+def app_log_capture(caplog):
+    """Attach caplog's handler to an ``agent.*`` logger on demand (#260).
+
+    ``get_logger`` sets ``propagate = False``, so caplog's root handler never
+    sees these records; attach it directly instead of repeating the
+    addHandler/removeHandler dance in every test:
+
+        def test_x(caplog, app_log_capture):
+            app_log_capture("task_manager")
+            with caplog.at_level(logging.INFO):
+                ...
+            assert "..." in caplog.text
+    """
+    attached: list[logging.Logger] = []
+
+    def _capture(name: str) -> None:
+        log = logging.getLogger(f"agent.{name}")
+        log.addHandler(caplog.handler)
+        attached.append(log)
+
+    yield _capture
+    for log in attached:
+        log.removeHandler(caplog.handler)

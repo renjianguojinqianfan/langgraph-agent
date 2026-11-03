@@ -1,8 +1,18 @@
 """Process-internal publish/subscribe event bus.
 
 Used to fan out step/task events from the orchestration kernel to any number of
-SSE subscribers. A bounded per-task buffer lets late SSE subscribers replay
-recent events so they do not miss anything published before they connected.
+SSE subscribers. A bounded per-task buffer lets late SSE subscribers replay the
+most recent events published before they connected.
+
+Bound and overflow policy (#260): each task's replay buffer is a
+``deque(maxlen=buffer_size)`` — publishing past the cap evicts the OLDEST
+event, so one long run cannot grow the heap and the buffer always holds the
+most recent ``buffer_size`` events. It is a bounded window, not a complete
+history: the SSE-side outbox (``backend/api/sse.py``) independently drops the
+oldest queued frame under backpressure, so a reconnecting client can still miss
+events that fell out of both. The per-task entry itself is released by
+:meth:`drop` when the task's history is deleted; a parked task keeps its buffer
+so a reconnect can still replay its window.
 """
 
 from __future__ import annotations
@@ -14,11 +24,15 @@ from typing import Any, Callable, Dict, List
 
 Event = Dict[str, Any]
 
+#: Default bound of the per-task replay buffer (#260 AC1). The SSE outbox
+#: derives its own cap from this constant, so the two cannot drift apart.
+DEFAULT_BUFFER_SIZE = 1000
+
 
 class EventBus:
     """Tiny thread-safe pub/sub bus scoped per task id."""
 
-    def __init__(self, buffer_size: int = 1000) -> None:
+    def __init__(self, buffer_size: int = DEFAULT_BUFFER_SIZE) -> None:
         self._subs: Dict[str, set] = defaultdict(set)
         self._buffers: Dict[str, "deque[Event]"] = defaultdict(lambda: deque(maxlen=buffer_size))
         self._lock = threading.Lock()

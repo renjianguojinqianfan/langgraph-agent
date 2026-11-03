@@ -8,6 +8,7 @@ trace-file error cannot leave a RUNNING task with no worker.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
 
@@ -168,6 +169,123 @@ def test_shutdown_closes_connection_when_idle(tmp_path):
 
     assert tm._checkpoint_conn is None
     assert tm._checkpointer is None
+
+
+def test_shutdown_logs_each_step(tmp_path, caplog, app_log_capture):
+    """#260 AC4: a normal shutdown is visible in the log, step by step.
+
+    Before this, a clean shutdown logged nothing at all — an operator could
+    not tell "resources were released" from "shutdown never ran".
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    assert tm._checkpoint_conn is not None
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
+
+    assert "shutdown: begin" in caplog.text
+    assert "all worker threads joined" in caplog.text
+    assert "shutdown: checkpoint connection close done" in caplog.text
+    assert "shutdown: complete" in caplog.text
+
+
+def test_shutdown_logs_the_incomplete_path(tmp_path, caplog, app_log_capture):
+    """#260 AC4: a worker outliving the join is named in the log — and the
+    idle path's "complete" line must not appear for it."""
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    tm._threads["t-live"] = _AliveThread()
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
+
+    assert "still alive after 5s" in caplog.text
+    assert "shutdown: complete" not in caplog.text
+
+
+class _BoomMcp:
+    def cleanup(self) -> None:
+        raise RuntimeError("mcp boom")
+
+
+class _BoomConn:
+    def close(self) -> None:
+        raise RuntimeError("close boom")
+
+
+def test_shutdown_logs_failures_instead_of_success_lines(tmp_path, caplog, app_log_capture):
+    """#260 rework (S3): a failed step must not be followed by its success line.
+
+    Two contradictory lines ("cleanup failed" + "cleaned up") make the log
+    unreadable exactly when the operator needs it; the final line must then be
+    "finished with errors", not "complete".
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    tm._mcp = _BoomMcp()
+    tm._checkpoint_conn = _BoomConn()
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
+
+    assert "shutdown: MCP cleanup failed" in caplog.text
+    assert "mcp boom" in caplog.text
+    assert "shutdown: MCP cleanup done" not in caplog.text
+    assert "shutdown: checkpoint connection close failed" in caplog.text
+    assert "close boom" in caplog.text
+    assert "shutdown: checkpoint connection close done" not in caplog.text
+    assert "shutdown: finished with errors" in caplog.text
+    assert "shutdown: complete" not in caplog.text
+
+
+def test_second_shutdown_says_already_complete(tmp_path, caplog, app_log_capture):
+    """#260 rework (AC4): a repeat shutdown must not replay the sequence.
+
+    Replaying "begin → … → complete" read as if resources had been released a
+    second time; the flag makes the repeat an explicit no-op line instead.
+    The alive path deliberately stays un-flagged so a later call can still
+    finish the job (close the connection once the workers are gone).
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    tm.shutdown()
+    caplog.clear()  # only the REPEAT call's records are under test here
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
+
+    assert "already complete" in caplog.text
+    assert "shutdown: begin" not in caplog.text
+    assert "checkpoint connection close done" not in caplog.text
+
+
+def test_failed_shutdown_leaves_the_latch_open(tmp_path, caplog, app_log_capture):
+    """#260 rework (LOW-4): a failed shutdown must not latch "already complete".
+
+    A failed step is often transient (a locked store closes on the next try);
+    latching on failure would turn every later call into a silent no-op that
+    claims "already complete". The latch engages only after a clean release.
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm._checkpoint_conn = _BoomConn()
+        tm.shutdown()
+        assert "finished with errors" in caplog.text
+        assert "already complete" not in caplog.text
+
+        caplog.clear()
+        # The transient failure clears: the retry completes, and only now does
+        # the latch engage.
+        tm._checkpoint_conn = _Conn()
+        tm.shutdown()
+        assert "shutdown: complete" in caplog.text
+        assert "already complete" not in caplog.text
+
+        caplog.clear()
+        tm.shutdown()
+    assert "already complete" in caplog.text
 
 
 def test_resume_trace_failure_leaves_task_interrupted(tmp_path, monkeypatch):

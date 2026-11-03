@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from backend.services.event_bus import EventBus
+from backend.api.sse import SSE_QUEUE_MAX
+from backend.services.event_bus import DEFAULT_BUFFER_SIZE, EventBus
 
 
 def test_subscriber_receives_published_events():
@@ -69,3 +70,27 @@ def test_bad_subscriber_does_not_break_publisher():
     bus.subscribe("t1", received.append)
     bus.publish("t1", "ok", {})  # should not raise despite broken subscriber
     assert len(received) == 1
+
+
+def test_replay_buffer_is_bounded_and_drops_the_oldest():
+    """#260 AC1: the per-task buffer is bounded; overflow evicts the OLDEST.
+
+    The bound is what keeps a long run from growing the heap; the policy is
+    drop-oldest so the buffer always holds the most recent events — that is
+    what a late subscriber replays.
+    """
+    bus = EventBus(buffer_size=3)
+    for i in range(5):
+        bus.publish("t1", "step_start", {"i": i})
+
+    assert [e["data"]["i"] for e in bus.replay("t1")] == [2, 3, 4]
+
+
+def test_replay_buffer_default_bound_is_explicit():
+    """#260 AC1: the production bound is a number, not "unlimited"."""
+    bus = EventBus()
+    bus.publish("t1", "x", {})  # materialise the task's deque
+    assert bus._buffers["t1"].maxlen == DEFAULT_BUFFER_SIZE
+    # Single source: the SSE outbox derives its cap from the same constant, so
+    # the two bounds cannot drift apart (#260 rework).
+    assert SSE_QUEUE_MAX == DEFAULT_BUFFER_SIZE
