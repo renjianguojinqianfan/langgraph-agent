@@ -8,18 +8,24 @@ and every tracked file under ``lessons/`` (public HTML lessons included). Code i
 out of scope on purpose: path-boundary tests embed literals such as ``C:\tmp\x``
 as *inputs*, and system references like ``C:\Windows\...`` are legitimate.
 
-Enforces the path half of ``docs/security.md`` §3 (「不得出现 ``C:\Users<user>``、
-家目录 / 个人笔记路径……；文档一律用占位符」). The exemptions are an **exact list**,
-never a shape guess, so a new real path (``E:\code\demo\new``) still fails:
+Enforces the path half of ``docs/security.md`` §3 (「不得出现真实用户名 / 本机绝对
+路径；占位符按清单」). The exemptions are an **exact list**, never a shape guess, so
+a new real path (``E:\code\demo\new``) still fails:
 
 * every machine-identifying segment before the first placeholder is a generic
-  root (``C:\Users\<user>`` passes, ``C:\Users\DELL\<workspace>`` fails — a
-  placeholder only whitewashes what *follows* a generic root);
+  root — Windows (``C:\Users\<user>``) or git-bash mount (``/c/Users/<user>``);
+  ``C:\Users\DELL\<workspace>`` fails, a placeholder only whitewashes what
+  *follows* a generic root;
 * a system root, resolved on the raw line so spaced roots
   (``C:\Program Files\...``) survive the token stopping at the space;
-* an ellipsis shorthand (``C:\...``).
+* a lone ellipsis segment (``C:\...``) — and nothing after it.
+
+Two shapes are rejected on sight because they launder a real path behind an
+exemption: any ``..`` segment (``C:\Windows\..\Users\DELL`` — the system root
+before it proves nothing) and a placeholder or ellipsis with a real tail.
 
 ``PLACEHOLDERS`` mirrors the §3 vocabulary verbatim — doc and gate move together.
+The red/green matrix is locked by ``backend/tests/test_no_machine_paths.py``.
 """
 
 from __future__ import annotations
@@ -83,39 +89,50 @@ POSIX_DRIVE = re.compile(rf"(?<![\w.:])/[a-z]{_SEP}(?:{_PATH_UNIT})+")
 #: ``←/→/Home/End`` does not read as a path.
 POSIX_HOME = re.compile(rf"(?<![\w.])/(?:Users|home){_SEP}(?:{_PATH_UNIT})+")
 
-#: System-root prefix, spaces and doubled separators included, resolved against
-#: the raw line rather than the (possibly space-truncated) token.
-_SYSTEM_PREFIX = re.compile(rf"(?i)[a-z]:{_SEP}+(?:{_SYSTEM_ROOT_ALT})(?={_SEP}|$)")
+#: System-root prefix — Windows (``C:\Windows``) and git-bash mount
+#: (``/c/Windows``) spellings, spaces and doubled separators included, resolved
+#: against the raw line rather than the (possibly space-truncated) token. The
+#: root must end at a non-alphanumeric boundary, so ``C:\WindowsFoo`` is not a
+#: system root while ``/c/Windows`` (root alone, e.g. quoted in prose) is.
+_SYSTEM_PREFIX = re.compile(
+    rf"(?i)(?:[a-z]:|/[a-z]){_SEP}+(?:{_SYSTEM_ROOT_ALT})(?![A-Za-z0-9])"
+)
 _DRIVE_ONLY = re.compile(r"(?i)[a-z]:$")
+_MOUNT_LETTER = re.compile(r"[A-Za-z]$")
 
 
 def _segments(token: str) -> list[str]:
-    """Path segments, without the drive letter or empty doubled-separator parts."""
+    r"""Path segments, without the drive prefix or empty doubled-separator parts.
+
+    The drive prefix is either the Windows spelling (``C:``) or the git-bash
+    mount (``/c``), so ``/c/Users/<user>`` segments exactly like
+    ``C:\Users\<user>``.
+    """
     parts = [part for part in re.split(_SEP, token) if part]
-    if parts and _DRIVE_ONLY.fullmatch(parts[0]):
+    if parts and (_DRIVE_ONLY.fullmatch(parts[0]) or _MOUNT_LETTER.fullmatch(parts[0])):
         parts = parts[1:]
     return parts
 
 
 def _segments_ok(segments: list[str]) -> bool:
     """True when the machine-identifying part of the path is placeholders only."""
+    if ".." in segments:
+        return False  # traversal: a system root or placeholder BEFORE it proves nothing
     first_placeholder = next(
         (i for i, seg in enumerate(segments) if seg in PLACEHOLDERS), None
     )
     if first_placeholder is None:
-        # No placeholder: only the ellipsis shorthand (``C:\...``) is documentation.
-        return bool(segments) and set(segments[0]) <= {"."}
+        # No placeholder: only a lone ellipsis segment (``C:\...``) is documentation.
+        return len(segments) == 1 and set(segments[0]) <= {"."}
     return all(seg.lower() in GENERIC_ROOTS for seg in segments[:first_placeholder])
 
 
-def _windows_allows(line: str, match: re.Match[str]) -> bool:
-    if _SYSTEM_PREFIX.match(line, match.start()):
+def _allows(line: str, match: re.Match[str]) -> bool:
+    """Verdict for one absolute-path token: exemptions first, segments second."""
+    segments = _segments(match.group(0))
+    if ".." not in segments and _SYSTEM_PREFIX.match(line, match.start()):
         return True
-    return _segments_ok(_segments(match.group(0)))
-
-
-def _posix_allows(line: str, match: re.Match[str]) -> bool:
-    return _segments_ok(_segments(match.group(0)))
+    return _segments_ok(segments)
 
 
 @dataclass(frozen=True)
@@ -127,9 +144,9 @@ class Rule:
 
 
 RULES = (
-    Rule(WIN_PATH, _windows_allows),
-    Rule(POSIX_DRIVE, _posix_allows),
-    Rule(POSIX_HOME, _posix_allows),
+    Rule(WIN_PATH, _allows),
+    Rule(POSIX_DRIVE, _allows),
+    Rule(POSIX_HOME, _allows),
 )
 
 
