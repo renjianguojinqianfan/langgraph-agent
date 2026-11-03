@@ -164,7 +164,11 @@ export function TaskView() {
     getTaskSnapshot(currentTaskId)
       .then((r) => {
         if (cancelled) return;
-        const state = detailLoadState(r.status);
+        // `hasData` splits a real snapshot from a 2xx whose envelope carries
+        // none (a wrong VITE_API_BASE, an SPA-fallback HTML page): the latter
+        // is a failed load too — an empty copy would delete the detailError
+        // entry and park the column on "加载中…" forever (复审回归).
+        const state = detailLoadState(r.status, r.data !== null);
         if (state === "ready" && r.data) {
           setDetailError(currentTaskId, "");
           setAuthExpired("detail", false);

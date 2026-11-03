@@ -46,22 +46,44 @@ describe("historyListState (#256: 失败不伪装空列表)", () => {
 });
 
 describe("detailLoadState (#256: 选中失败不伪装新任务)", () => {
-  it("200 → ready", () => {
-    expect(detailLoadState(200)).toBe("ready");
+  it("200 + 有数据 → ready", () => {
+    expect(detailLoadState(200, true)).toBe("ready");
   });
 
   it("404 → missing", () => {
-    expect(detailLoadState(404)).toBe("missing");
+    expect(detailLoadState(404, false)).toBe("missing");
   });
 
   it("401 → auth（token 失效，不是服务端的错）", () => {
-    expect(detailLoadState(401)).toBe("auth");
+    expect(detailLoadState(401, false)).toBe("auth");
   });
 
   it("传输失败（0）→ unreachable；5xx → server（评审：500 时服务在运行，不能叫连不上）", () => {
-    expect(detailLoadState(0)).toBe("unreachable");
-    expect(detailLoadState(500)).toBe("server");
-    expect(detailLoadState(502)).toBe("server");
+    expect(detailLoadState(0, false)).toBe("unreachable");
+    expect(detailLoadState(500, false)).toBe("server");
+    expect(detailLoadState(502, false)).toBe("server");
+  });
+
+  it("复审回归：200 + 信封不可用 → bad-response（不再是 ready+空文案死路）", () => {
+    // VITE_API_BASE 指错 / SPA fallback 回 200 HTML / 网关回 200 错误体：
+    // 2xx 但没有快照。旧链路 detailLoadFailure("ready") 返空串 → 删掉
+    // detailError → 永久「加载中…」且无重试入口。
+    expect(detailLoadState(200, false)).toBe("bad-response");
+    expect(detailLoadFailure("bad-response", 200)).not.toBe("");
+    expect(detailLoadFailure("bad-response", 200)).toContain("响应异常");
+  });
+
+  it("每种失败状态的文案都非空（空串会删掉 detailError，就是那条死路）", () => {
+    const failures = [
+      "missing",
+      "auth",
+      "unreachable",
+      "server",
+      "bad-response",
+    ] as const;
+    for (const state of failures) {
+      expect(detailLoadFailure(state, 200)).not.toBe("");
+    }
   });
 
   it("四种失败各有归因文案，都不说「新任务」", () => {

@@ -72,19 +72,33 @@ export function listLoadFailure(status: number): string {
  * face. The buckets stay attributed separately (design.md §7): `missing`
  * (404) vs `auth` (401) vs `unreachable` (the request never arrived — a 500
  * means the server IS running, so it must not read as "连不上后台") vs
- * `server` (any other non-2xx).
+ * `server` (any other non-2xx) vs `bad-response` (a 2xx whose envelope
+ * carries no snapshot — a wrong `VITE_API_BASE`, an SPA-fallback HTML page,
+ * a gateway error body: still a failed load, never a spinner forever).
  */
-export type DetailLoadState = "ready" | "missing" | "auth" | "unreachable" | "server";
+export type DetailLoadState =
+  | "ready"
+  | "missing"
+  | "auth"
+  | "unreachable"
+  | "server"
+  | "bad-response";
 
-export function detailLoadState(status: number): DetailLoadState {
+export function detailLoadState(status: number, hasData: boolean): DetailLoadState {
+  if (status >= 200 && status < 300) return hasData ? "ready" : "bad-response";
   if (status === 404) return "missing";
   if (status === 401) return "auth";
-  if (status >= 200 && status < 300) return "ready";
   if (status === 0) return "unreachable";
   return "server";
 }
 
-/** Copy for the center column when the selected task's snapshot failed. */
+/**
+ * Copy for the center column when the selected task's snapshot failed. Every
+ * failure state must produce a non-empty line: the caller stores the copy as
+ * the `detailError` entry, and an empty string deletes that entry — which is
+ * how a 2xx-without-envelope used to park the column on "加载中…" with no
+ * error face and no retry (复审回归).
+ */
 export function detailLoadFailure(state: DetailLoadState, status = 0): string {
   switch (state) {
     case "missing":
@@ -95,6 +109,8 @@ export function detailLoadFailure(state: DetailLoadState, status = 0): string {
       return "无法连接后台；确认服务在运行后再试。";
     case "server":
       return `服务端出错（HTTP ${status}）；稍后重试。`;
+    case "bad-response":
+      return "任务响应异常；请重试。";
     default:
       return "";
   }

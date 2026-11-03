@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listTasksSnapshot } from "./client";
-import { listLoadOutcome } from "../lib/failureStates";
+import { getTaskSnapshot, listTasksSnapshot } from "./client";
+import { detailLoadFailure, detailLoadState, listLoadOutcome } from "../lib/failureStates";
 
 /** Stub global fetch the way the status-preserving readers see it. */
 function stubFetch(impl: () => Promise<{ status: number; json: () => Promise<unknown> }>) {
@@ -68,5 +68,53 @@ describe("listTasksSnapshot (#256 评审 S1)", () => {
     const r = await listTasksSnapshot(50, "current");
     expect(r.status).toBe(0);
     expect(r.data).toBeNull();
+  });
+});
+
+/**
+ * #256 复审回归的硬证据：**2xx + 不合规信封**。`VITE_API_BASE` 指错、SPA
+ * fallback 回 200 HTML、网关回 200 错误体时，详情读取曾经走
+ * `detailLoadFailure("ready")` → 空串 → 删掉 detailError → 永久「加载中…」。
+ */
+describe("getTaskSnapshot (#256 复审：2xx 空信封不走死路)", () => {
+  it("200 + 非信封 body → bad-response 错误面，不是永久加载", async () => {
+    stubFetch(async () => ({
+      status: 200,
+      // SPA fallback / gateway error page: 200, but not the API envelope.
+      json: async () => "<!doctype html><title>proxy error</title>",
+    }));
+
+    const r = await getTaskSnapshot("t1");
+    expect(r.status).toBe(200);
+    expect(r.data).toBeNull();
+
+    // TaskView 的判定链：2xx + 无数据 = 失败，文案非空 → 错误面 + 重试可达。
+    const state = detailLoadState(r.status, r.data !== null);
+    expect(state).toBe("bad-response");
+    const copy = detailLoadFailure(state, r.status);
+    expect(copy).not.toBe("");
+    expect(copy).toContain("响应异常");
+  });
+
+  it("200 + 信封 → ready，数据原样带回", async () => {
+    const data = { id: "t1" };
+    stubFetch(async () => ({ status: 200, json: async () => ({ data }) }));
+
+    const r = await getTaskSnapshot("t1");
+    expect(r.status).toBe(200);
+    expect(r.data).toEqual(data);
+    expect(detailLoadState(r.status, r.data !== null)).toBe("ready");
+  });
+
+  it("404 → missing（任务不存在，不是新任务）", async () => {
+    stubFetch(async () => ({
+      status: 404,
+      json: async () => ({ detail: "task not found" }),
+    }));
+
+    const r = await getTaskSnapshot("gone");
+    expect(r.status).toBe(404);
+    expect(detailLoadState(r.status, r.data !== null)).toBe("missing");
+    expect(detailLoadFailure("missing", r.status)).toContain("不存在");
   });
 });
