@@ -111,14 +111,20 @@ def _many_messages(n: int = 20) -> list:
 
 
 def assert_tool_protocol(messages: List[Dict[str, Any]]) -> None:
-    """Every assistant ``tool_calls`` block is answered, in order, right after it.
+    """Every assistant ``tool_calls`` block is answered, in order, right after it,
+    and no ``tool`` reply stands outside such a run.
 
     #255: compression and the dangling sweep must never hand the LLM a history
-    that starts with a ``tool`` reply or leaves an assistant call unanswered.
+    that starts with an orphan ``tool`` reply or leaves an assistant call
+    unanswered.
     """
     i = 0
     while i < len(messages):
         msg = messages[i]
+        if msg.get("role") == "tool":
+            raise AssertionError(
+                f"orphan tool reply at index {i}: {msg.get('tool_call_id')}"
+            )
         calls = msg.get("tool_calls") if msg.get("role") == "assistant" else None
         if not calls:
             i += 1

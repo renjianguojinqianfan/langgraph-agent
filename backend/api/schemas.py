@@ -50,10 +50,13 @@ class ToolCallRecord(BaseModel):
     @field_validator("input", mode="before")
     @classmethod
     def _normalize_input(cls, value: Any) -> Dict[str, Any]:
-        """Read legacy non-dict inputs (list / scalar / null) without dropping the record.
+        """Wrap non-dict inputs (legacy list / scalar / null) at the read boundary.
 
-        Records written before #255 stored a few calls' args as a list or scalar;
-        the runtime always writes an object, so this only fires on load.
+        Old records stored a few calls' args as a list or scalar, and a provider
+        may return non-object JSON (``openai_compat.py`` only maps decode errors
+        to ``{}``); wrapping keeps the record readable instead of failing the
+        whole task record. Dispatch reads args from ``state["_current_tool_calls"]``,
+        never from this persisted field, so tool arguments are not rewritten.
         """
         return value if isinstance(value, dict) else {"value": value}
 
