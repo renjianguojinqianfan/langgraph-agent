@@ -105,10 +105,10 @@ export function TaskView() {
         if (outcome.ok) {
           setTasks(outcome.tasks);
           setListError("");
-          setAuthExpired(false);
+          setAuthExpired("list", false);
         } else {
           setListError(outcome.error);
-          setAuthExpired(outcome.authExpired);
+          setAuthExpired("list", outcome.authExpired);
         }
       })
       .finally(() => {
@@ -167,11 +167,11 @@ export function TaskView() {
         const state = detailLoadState(r.status);
         if (state === "ready" && r.data) {
           setDetailError(currentTaskId, "");
-          setAuthExpired(false);
+          setAuthExpired("detail", false);
           upsertTask(r.data);
         } else {
           setDetailError(currentTaskId, detailLoadFailure(state, r.status));
-          setAuthExpired(state === "auth");
+          setAuthExpired("detail", state === "auth");
         }
       });
     return () => {

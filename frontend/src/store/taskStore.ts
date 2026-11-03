@@ -28,11 +28,13 @@ interface TaskState {
   /** #256: bumped by `retryDetail`; the snapshot effect keys on it. */
   detailRevision: number;
   /**
-   * #256: the stored token expired (a 401 on any face). Global on purpose —
-   * a dead token fails every request, and the way back is dropping it and
-   * logging in again (AuthGuard only checks that a token exists).
+   * #256: which face last answered 401. Per-source on purpose: the list,
+   * detail and plan reads happen independently, and one global flag let a
+   * 401 on one face put a "重新登录" button on another face's transport
+   * failure (复审 LOW). Each effect writes — and each face reads — only its
+   * own entry, so the copy and the button come from the same answer.
    */
-  authExpired: boolean;
+  authExpired: Record<"list" | "detail" | "plan", boolean>;
 
   setTasks: (tasks: Task[]) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -58,8 +60,8 @@ interface TaskState {
   retryDetail: () => void;
   /** #256: mirror a saved plan version onto the task so PlanAnchor can't go stale. */
   setPlanVersion: (id: string, version: number) => void;
-  /** #256: a 401 answered; every face offers re-login while this is set. */
-  setAuthExpired: (expired: boolean) => void;
+  /** #256: a 401 answered on one face; that face offers re-login while set. */
+  setAuthExpired: (source: "list" | "detail" | "plan", expired: boolean) => void;
 }
 
 /** Remove ids from every per-task cache; clear the selection if it was removed. */
@@ -104,7 +106,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   listLoading: true,
   detailError: {},
   detailRevision: 0,
-  authExpired: false,
+  authExpired: { list: false, detail: false, plan: false },
 
   setTasks: (tasks) => set({ tasks }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
@@ -120,7 +122,12 @@ export const useTaskStore = create<TaskState>((set) => ({
       return { detailError };
     }),
   retryDetail: () => set((state) => ({ detailRevision: state.detailRevision + 1 })),
-  setAuthExpired: (authExpired) => set({ authExpired }),
+  setAuthExpired: (source, expired) =>
+    set((state) =>
+      state.authExpired[source] === expired
+        ? {}
+        : { authExpired: { ...state.authExpired, [source]: expired } }
+    ),
   setPlanVersion: (id, version) =>
     set((state) => {
       const prev = state.detail[id];

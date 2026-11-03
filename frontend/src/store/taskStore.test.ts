@@ -32,7 +32,7 @@ beforeEach(() => {
     listLoading: false,
     detailError: {},
     detailRevision: 0,
-    authExpired: false,
+    authExpired: { list: false, detail: false, plan: false },
     historyFilter: "current",
   });
 });
@@ -202,18 +202,45 @@ describe("#256 选中任务快照失败", () => {
   });
 });
 
-describe("#256 authExpired（401 全局位）", () => {
-  it("setAuthExpired 记录/清除，与 detailError 互不依赖", () => {
-    useTaskStore.getState().setAuthExpired(true);
-    expect(useTaskStore.getState().authExpired).toBe(true);
+describe("#256 authExpired（按来源分存）", () => {
+  it("setAuthExpired 按来源记录/清除，互不覆写", () => {
+    useTaskStore.getState().setAuthExpired("list", true);
+    expect(useTaskStore.getState().authExpired).toEqual({
+      list: true,
+      detail: false,
+      plan: false,
+    });
 
-    useTaskStore.getState().setAuthExpired(false);
-    expect(useTaskStore.getState().authExpired).toBe(false);
+    useTaskStore.getState().setAuthExpired("detail", true);
+    useTaskStore.getState().setAuthExpired("list", false);
+    expect(useTaskStore.getState().authExpired).toEqual({
+      list: false,
+      detail: true,
+      plan: false,
+    });
+  });
+
+  it("值不变时不动 store（不触发无谓重渲染）", () => {
+    const before = useTaskStore.getState().authExpired;
+    useTaskStore.getState().setAuthExpired("list", false);
+    expect(useTaskStore.getState().authExpired).toBe(before);
+  });
+
+  it("复审 LOW：list 401 + detail 传输失败并发 → 两来源各说各话", () => {
+    // The single global flag let one face's 401 relabel another face's
+    // transport failure ("重新登录" copy over a "重试" button). Per-source
+    // flags keep each face's copy and button from the same answer.
+    useTaskStore.getState().setAuthExpired("list", true);
+    useTaskStore.getState().setAuthExpired("detail", false);
+
+    const state = useTaskStore.getState().authExpired;
+    expect(state.list).toBe(true);
+    expect(state.detail).toBe(false);
   });
 
   it("401 置位不清 detail（重新登录后回到原任务）", () => {
     useTaskStore.setState({ detail: { t1: task("t1") } });
-    useTaskStore.getState().setAuthExpired(true);
+    useTaskStore.getState().setAuthExpired("detail", true);
     expect(useTaskStore.getState().detail.t1).toBeDefined();
   });
 });

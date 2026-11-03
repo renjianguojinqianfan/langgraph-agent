@@ -33,8 +33,10 @@ export function TaskPanel({
 }: TaskPanelProps) {
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
   const retryDetail = useTaskStore((s) => s.retryDetail);
-  // #256: a 401 fails every face; the way back is dropping the dead token.
-  const authExpired = useTaskStore((s) => s.authExpired);
+  // #256: a 401 on the detail read; the way back is dropping the dead token.
+  // Per-source (复审 LOW): a 401 on the list must not put a re-login button
+  // on this face's transport failure.
+  const detailAuthExpired = useTaskStore((s) => s.authExpired.detail);
 
   if (task && traceOpen) {
     return (
@@ -86,7 +88,7 @@ export function TaskPanel({
           <span className="min-w-0 flex-1 text-meta text-state-danger">
             {loadError}
           </span>
-          {authExpired ? (
+          {detailAuthExpired ? (
             <ReauthAction />
           ) : (
             <Button variant="outline" size="sm" onClick={retryDetail}>
@@ -116,12 +118,12 @@ export function TaskPanel({
               {loadError}
             </p>
             <p className="text-meta text-tertiary">
-              {authExpired
+              {detailAuthExpired
                 ? "重新登录后会回到这里。"
                 : "可以在左侧重新选择，或重试这一次加载。"}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              {authExpired ? (
+              {detailAuthExpired ? (
                 <ReauthAction />
               ) : (
                 <Button variant="outline" size="sm" onClick={retryDetail}>

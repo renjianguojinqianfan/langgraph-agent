@@ -26,7 +26,9 @@ export function TaskRail() {
   const tasks = useTaskStore((s) => s.tasks);
   const listError = useTaskStore((s) => s.listError);
   const listLoading = useTaskStore((s) => s.listLoading);
-  const authExpired = useTaskStore((s) => s.authExpired);
+  // Per-source (复审 LOW): only the list read's own 401 drives this rail's
+  // re-login button — a detail 401 must not relabel a list transport failure.
+  const listAuthExpired = useTaskStore((s) => s.authExpired.list);
   const retryList = useTaskStore((s) => s.retryList);
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
@@ -113,7 +115,7 @@ export function TaskRail() {
             <p role="status" className="min-w-0 flex-1 text-meta text-state-danger">
               {listError}
             </p>
-            {authExpired ? <ReauthAction /> : (
+            {listAuthExpired ? <ReauthAction /> : (
               <Button variant="outline" size="sm" onClick={retryList}>
                 重试
               </Button>
@@ -129,12 +131,12 @@ export function TaskRail() {
               {listError}
             </p>
             <p className="mt-1 text-meta text-tertiary">
-              {authExpired
+              {listAuthExpired
                 ? "重新登录后会回到这里；列表不会显示为空。"
                 : "确认后台在运行后重试；列表不会显示为空。"}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              {authExpired ? (
+              {listAuthExpired ? (
                 <ReauthAction />
               ) : (
                 <Button
