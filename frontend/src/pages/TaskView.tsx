@@ -22,7 +22,6 @@ import { cx } from "../lib/cx";
 import {
   detailLoadFailure,
   detailLoadState,
-  listLoadFailure,
   listLoadOutcome,
 } from "../lib/failureStates";
 import { isParked } from "../lib/taskState";
@@ -39,6 +38,7 @@ export function TaskView() {
   const setListError = useTaskStore((s) => s.setListError);
   const setListLoading = useTaskStore((s) => s.setListLoading);
   const setDetailError = useTaskStore((s) => s.setDetailError);
+  const setAuthExpired = useTaskStore((s) => s.setAuthExpired);
   const detailRevision = useTaskStore((s) => s.detailRevision);
   const historyFilter = useTaskStore((s) => s.historyFilter);
   const workspaceDir = useTaskStore((s) => s.workspaceDir);
@@ -94,8 +94,9 @@ export function TaskView() {
     let cancelled = false;
     const dir = historyFilter === "all" ? "all" : workspaceDir || "current";
     // #256: the empty copy waits for the answer — a pending list must not
-    // read as "no tasks", and a failed one must not either. `req()` never
-    // rejects on a non-2xx, so the status travels with the answer.
+    // read as "no tasks", and a failed one must not either. `listTasksSnapshot`
+    // never rejects (a transport failure comes back as status 0), so there is
+    // no catch to write: every answer is decided in `then`.
     setListLoading(true);
     listTasksSnapshot(50, dir)
       .then((r) => {
@@ -104,12 +105,11 @@ export function TaskView() {
         if (outcome.ok) {
           setTasks(outcome.tasks);
           setListError("");
+          setAuthExpired(false);
         } else {
           setListError(outcome.error);
+          setAuthExpired(outcome.authExpired);
         }
-      })
-      .catch(() => {
-        if (!cancelled) setListError(listLoadFailure(0));
       })
       .finally(() => {
         if (!cancelled) setListLoading(false);
@@ -121,6 +121,7 @@ export function TaskView() {
     setTasks,
     setListError,
     setListLoading,
+    setAuthExpired,
     historyFilter,
     listRevision,
     currentTaskId,
@@ -155,7 +156,8 @@ export function TaskView() {
 
   // Fetch a fresh snapshot when the selected task changes. #256: the status
   // travels with the answer — a 404 (or a dead backend) is a failed load, not
-  // a missing task that the center column may render as "新任务".
+  // a missing task that the center column may render as "新任务". The reader
+  // never rejects, so there is no catch: every answer is decided in `then`.
   useEffect(() => {
     if (!currentTaskId) return;
     let cancelled = false;
@@ -165,20 +167,17 @@ export function TaskView() {
         const state = detailLoadState(r.status);
         if (state === "ready" && r.data) {
           setDetailError(currentTaskId, "");
+          setAuthExpired(false);
           upsertTask(r.data);
         } else {
           setDetailError(currentTaskId, detailLoadFailure(state, r.status));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setDetailError(currentTaskId, detailLoadFailure("unreachable"));
+          setAuthExpired(state === "auth");
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [currentTaskId, upsertTask, setDetailError, detailRevision]);
+  }, [currentTaskId, upsertTask, setDetailError, setAuthExpired, detailRevision]);
 
   // A round just parked: pull the authoritative record (conversation, plan,
   // steps). SSE carries the live events but is replayed on every reconnect, so

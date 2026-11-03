@@ -59,6 +59,47 @@ async function req<T>(path: string, init?: RequestInit): Promise<ApiResponse<T>>
   return json;
 }
 
+/** One status-preserving answer; `data` is null unless `parse` accepted it. */
+interface StatusResult<T> {
+  /** HTTP status; 0 means the request never reached the backend. */
+  status: number;
+  data: T | null;
+  /** FastAPI `detail` (or envelope message) for the failure copy. */
+  detail: string;
+}
+
+/**
+ * #256: the one status-preserving read behind every snapshot face (list /
+ * task / plan / login, and `previewFile` behind it). `req()` flattens every
+ * answer into a body, so a non-2xx with a JSON body — a 500 from a
+ * persistence failure, a 401 from an expired token — looked like an empty
+ * envelope and the callers fell back to their empty faces.
+ *
+ * Never rejects: a transport failure comes back as `status: 0`, and `parse`
+ * decides whether the envelope carries a usable payload. The failure copy
+ * comes from `status` / `detail`, never from a rejection.
+ */
+async function reqWithStatus<T>(
+  path: string,
+  parse: (json: unknown) => T | null,
+  init?: RequestInit
+): Promise<StatusResult<T>> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  } catch {
+    return { status: 0, data: null, detail: "" };
+  }
+  const json = await res.json().catch(() => null);
+  return { status: res.status, data: parse(json), detail: json ? detailText(json) : "" };
+}
+
 /** SSE URL for a task; appends the bearer token as ``?token=`` when present
  * (EventSource cannot set custom headers). */
 export function eventsUrl(taskId: string): string {
@@ -79,44 +120,21 @@ export const createTask = (body: CreateTaskRequest) =>
     body: JSON.stringify(body),
   });
 
-export interface TaskListSnapshotResult {
-  /** HTTP status; 0 means the request never reached the backend. */
-  status: number;
-  data: { tasks: Task[] } | null;
-  /** FastAPI `detail` (or envelope message) for the failure copy. */
-  detail: string;
-}
+export type TaskListSnapshotResult = StatusResult<{ tasks: Task[] }>;
 
 /**
- * #256: list tasks keeping the HTTP status. `req()` never rejects on a
- * non-2xx, so a JSON-bodied 500 (persistence failure) or 401 (expired token)
- * resolved with an empty envelope and the rail fell back to the empty face —
- * exactly the #256 bug on the list path.
+ * #256: list tasks keeping the HTTP status. A JSON-bodied 500 (persistence
+ * failure) or 401 (expired token) must reach the error face, not the empty
+ * list — the #256 bug on the list path.
  */
-export async function listTasksSnapshot(
-  limit = 50,
-  dir = "current"
-): Promise<TaskListSnapshotResult> {
-  const token = getAuthToken();
-  let res: Response;
-  try {
-    res = await fetch(
-      `${API_BASE}/tasks?limit=${limit}&dir=${encodeURIComponent(dir)}`,
-      { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
-    );
-  } catch {
-    return { status: 0, data: null, detail: "" };
-  }
-  const json = (await res.json().catch(() => null)) as
-    | { data?: { tasks?: Task[] }; detail?: unknown; message?: unknown }
-    | null;
-  const tasks = json?.data?.tasks;
-  return {
-    status: res.status,
-    data: Array.isArray(tasks) ? { tasks } : null,
-    detail: json ? detailText(json) : "",
-  };
-}
+export const listTasksSnapshot = (limit = 50, dir = "current") =>
+  reqWithStatus<{ tasks: Task[] }>(
+    `/tasks?limit=${limit}&dir=${encodeURIComponent(dir)}`,
+    (json) => {
+      const tasks = (json as { data?: { tasks?: unknown } } | null)?.data?.tasks;
+      return Array.isArray(tasks) ? { tasks: tasks as Task[] } : null;
+    }
+  );
 
 /** #242: canonicalize + existence-check a directory before switching to it. */
 export const validateWorkspace = (path: string) =>
@@ -124,38 +142,18 @@ export const validateWorkspace = (path: string) =>
 
 export const getTask = (id: string) => req<Task>(`/tasks/${id}`);
 
-export interface TaskSnapshotResult {
-  /** HTTP status; 0 means the request never reached the backend. */
-  status: number;
-  data: Task | null;
-  /** FastAPI `detail` (or envelope message) for the failure copy. */
-  detail: string;
-}
+export type TaskSnapshotResult = StatusResult<Task>;
 
 /**
- * #256: fetch one task's snapshot keeping the HTTP status. `req()` flattens
- * every answer into a body, so a 404 ("task not found") used to look like an
- * empty response and the center column fell back to the "新任务" face.
+ * #256: fetch one task's snapshot keeping the HTTP status. A 404 ("task not
+ * found") used to look like an empty response and the center column fell
+ * back to the "新任务" face.
  */
-export async function getTaskSnapshot(id: string): Promise<TaskSnapshotResult> {
-  const token = getAuthToken();
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-  } catch {
-    return { status: 0, data: null, detail: "" };
-  }
-  const json = (await res.json().catch(() => null)) as
-    | { data?: Task; detail?: unknown; message?: unknown }
-    | null;
-  return {
-    status: res.status,
-    data: json?.data && typeof json.data.id === "string" ? json.data : null,
-    detail: json ? detailText(json) : "",
-  };
-}
+export const getTaskSnapshot = (id: string) =>
+  reqWithStatus<Task>(`/tasks/${encodeURIComponent(id)}`, (json) => {
+    const data = (json as { data?: { id?: unknown } } | null)?.data;
+    return data && typeof data.id === "string" ? (data as Task) : null;
+  });
 
 /** #241: delete one task's history (record + checkpoint + trace; disk stays). */
 export const deleteTask = (id: string) =>
@@ -180,13 +178,7 @@ export const putMode = (id: string, mode: TaskMode) =>
     body: JSON.stringify({ mode }),
   });
 
-export interface PlanSnapshotResult {
-  /** HTTP status; 0 means the request never reached the backend. */
-  status: number;
-  data: { text: string; version: number } | null;
-  /** FastAPI `detail` (or envelope message) for the failure copy. */
-  detail: string;
-}
+export type PlanSnapshotResult = StatusResult<{ text: string; version: number }>;
 
 /**
  * #256: read the plan keeping the HTTP status. A failed read must not fall
@@ -194,29 +186,16 @@ export interface PlanSnapshotResult {
  * overwrite the real file on disk (`backend/api/routes.py`: 404 task gone,
  * 409 plan file not UTF-8).
  */
-export async function getPlanSnapshot(id: string): Promise<PlanSnapshotResult> {
-  const token = getAuthToken();
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/plan`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-  } catch {
-    return { status: 0, data: null, detail: "" };
-  }
-  const json = (await res.json().catch(() => null)) as
-    | { data?: { text?: unknown; version?: unknown }; detail?: unknown; message?: unknown }
-    | null;
-  const data = json?.data;
-  return {
-    status: res.status,
-    data:
-      data && typeof data.text === "string" && typeof data.version === "number"
+export const getPlanSnapshot = (id: string) =>
+  reqWithStatus<{ text: string; version: number }>(
+    `/tasks/${encodeURIComponent(id)}/plan`,
+    (json) => {
+      const data = (json as { data?: { text?: unknown; version?: unknown } } | null)?.data;
+      return data && typeof data.text === "string" && typeof data.version === "number"
         ? { text: data.text, version: data.version }
-        : null,
-    detail: json ? detailText(json) : "",
-  };
-}
+        : null;
+    }
+  );
 
 export const putPlan = (id: string, text: string) =>
   req<{ ok: boolean; version: number }>(`/tasks/${id}/plan`, {
@@ -279,37 +258,22 @@ export const putTaskModel = (id: string, model: string) =>
   });
 
 // ── P1 item 5: auth ──
-export interface LoginAttempt {
-  /** HTTP status; 0 means the request never reached the backend. */
-  status: number;
-  data: AuthTokenResponse | null;
-}
+export type LoginAttempt = StatusResult<AuthTokenResponse>;
 
 /**
  * #256: post the secret keeping the HTTP status. `req()` flattens a 401
  * ("invalid token") into a body, which made a wrong secret and a dead
  * backend look identical to the login page.
  */
-export async function loginAttempt(secret: string): Promise<LoginAttempt> {
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/auth/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: secret }),
-    });
-  } catch {
-    return { status: 0, data: null };
-  }
-  const json = (await res.json().catch(() => null)) as
-    | { data?: AuthTokenResponse }
-    | null;
-  const data = json?.data;
-  return {
-    status: res.status,
-    data: data && typeof data.token === "string" ? data : null,
-  };
-}
+export const loginAttempt = (secret: string) =>
+  reqWithStatus<AuthTokenResponse>(
+    "/auth/token",
+    (json) => {
+      const data = (json as { data?: { token?: unknown } } | null)?.data;
+      return data && typeof data.token === "string" ? (data as AuthTokenResponse) : null;
+    },
+    { method: "POST", body: JSON.stringify({ token: secret }) }
+  );
 
 export const logoutRequest = () => setAuthToken(null);
 
@@ -322,39 +286,20 @@ const _withToken = (url: string): string => {
 export const listFiles = (id: string) =>
   req<{ files: WorkspaceFile[]; truncated: boolean }>(`/tasks/${id}/files`);
 
-export interface PreviewResult {
-  /** HTTP status; 0 means the request never reached the backend. */
-  status: number;
-  data: FilePreview | null;
-  /** FastAPI `detail` (or envelope message) for the failure copy. */
-  detail: string;
-}
+export type PreviewResult = StatusResult<FilePreview>;
 
 /**
  * Preview one file, keeping the HTTP status: #266 needs 415 / 400 / 404 / 409
  * to read differently, and `req()` flattens them into a body without a status.
  */
-export async function previewFile(id: string, path: string): Promise<PreviewResult> {
-  const token = getAuthToken();
-  let res: Response;
-  try {
-    res = await fetch(
-      `${API_BASE}/tasks/${id}/files/preview?path=${encodeURIComponent(path)}`,
-      { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
-    );
-  } catch {
-    return { status: 0, data: null, detail: "" };
-  }
-  const json = (await res.json().catch(() => null)) as
-    | { data?: FilePreview; detail?: unknown; message?: unknown }
-    | null;
-  const data = json?.data;
-  return {
-    status: res.status,
-    data: data && typeof data.content === "string" ? data : null,
-    detail: json ? detailText(json) : "",
-  };
-}
+export const previewFile = (id: string, path: string) =>
+  reqWithStatus<FilePreview>(
+    `/tasks/${id}/files/preview?path=${encodeURIComponent(path)}`,
+    (json) => {
+      const data = (json as { data?: { content?: unknown } } | null)?.data;
+      return data && typeof data.content === "string" ? (data as FilePreview) : null;
+    }
+  );
 
 export const fileDownloadUrl = (id: string, path: string) =>
   _withToken(`${API_BASE}/tasks/${id}/files/download?path=${encodeURIComponent(path)}`);
