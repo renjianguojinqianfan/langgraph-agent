@@ -187,10 +187,15 @@ export function mergeStatusSnapshot(prev: Task, snapshot: Task): Task {
  * #256: apply a refetched snapshot without letting a late one wipe the live
  * stream. A snapshot requested before the stream caught up carries fewer
  * steps than the detail already holds — that snapshot is provably older, so
- * its steps / conversation / subtasks / final answer / plan version (and the
- * status that came with them, #189) lose to the live detail. A snapshot with
- * at least as many steps is fresh and wins outright (same tie-break as
- * before: REST is authoritative).
+ * its steps / conversation / subtasks / final answer (and the status that
+ * came with them, #189) lose to the live detail. A snapshot with at least as
+ * many steps is fresh and wins outright (same tie-break as before: REST is
+ * authoritative).
+ *
+ * The plan version is the one field both branches take with `max`: it only
+ * ever grows on the server, and an in-flight GET requested across a save can
+ * come back with the pre-save version at an *equal* step count — replacing
+ * wholesale there walked a saved v5 back to v1 (复审 AC4 相等步数分支).
  *
  * vs `mergeStatusSnapshot`: that one keeps prev wholesale and takes three
  * status fields (the #189 status-only refetch); this one takes the snapshot
@@ -199,8 +204,9 @@ export function mergeStatusSnapshot(prev: Task, snapshot: Task): Task {
  * by REST only.
  */
 export function mergeSnapshotUnlessStale(prev: Task, snapshot: Task): Task {
+  const plan_version = Math.max(prev.plan_version, snapshot.plan_version);
   const live = prev.steps.length > snapshot.steps.length;
-  if (!live) return snapshot;
+  if (!live) return { ...snapshot, plan_version };
   return {
     ...snapshot,
     steps: prev.steps,
@@ -209,7 +215,7 @@ export function mergeSnapshotUnlessStale(prev: Task, snapshot: Task): Task {
     final_answer: prev.final_answer,
     // A saved plan version lives on the task; a stale snapshot would walk it
     // back and the next save would start from the wrong version (AC4).
-    plan_version: prev.plan_version,
+    plan_version,
     status: prev.status,
     error: prev.error,
   };

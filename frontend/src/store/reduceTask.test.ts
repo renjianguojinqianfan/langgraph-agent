@@ -274,6 +274,40 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     expect(merged.plan_version).toBe(5);
   });
 
+  it("AC4：步数相等但快照版本更旧（跨保存 in-flight GET）→ 取 max 不退回", () => {
+    // Same step count, older version: the old tie-break returned the snapshot
+    // wholesale and walked the saved version back (复审 AC4 相等步数分支).
+    const equal = snapshot({
+      status: "PENDING",
+      plan_version: 1,
+      steps: [
+        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, thought: "第二步", tool_calls: [], status: "running" },
+      ],
+    });
+
+    const merged = mergeSnapshotUnlessStale({ ...live(), plan_version: 5 }, equal);
+
+    expect(merged.plan_version).toBe(5);
+    // Equal steps still means the snapshot's own fields win (REST 权威).
+    expect(merged.status).toBe("PENDING");
+  });
+
+  it("AC4：快照版本更新（服务器领先）→ 取快照的版本", () => {
+    const ahead = snapshot({
+      status: "INTERRUPTED",
+      plan_version: 7,
+      steps: [
+        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, thought: "第二步", tool_calls: [], status: "running" },
+      ],
+    });
+
+    const merged = mergeSnapshotUnlessStale({ ...live(), plan_version: 5 }, ahead);
+
+    expect(merged.plan_version).toBe(7);
+  });
+
   it("快照步骤不少于实时（新鲜）→ 快照整体胜出", () => {
     const fresh = snapshot({
       status: "INTERRUPTED",
@@ -291,7 +325,9 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
 
     const merged = mergeSnapshotUnlessStale(live(), fresh);
 
-    expect(merged).toBe(fresh);
+    // Field-for-field the snapshot wins (a spread copy now, not identity —
+    // the plan version goes through max()).
+    expect(merged).toEqual(fresh);
     expect(merged.steps).toHaveLength(3);
     expect(merged.status).toBe("INTERRUPTED");
   });
