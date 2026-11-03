@@ -6,6 +6,7 @@ import { TraceFace } from "./dash/TraceFace";
 import { Task } from "../types";
 import { useTaskStore } from "../store/taskStore";
 import { Button } from "./ui/Button";
+import { ReauthAction } from "./ReauthAction";
 
 interface TaskPanelProps {
   task: Task | null;
@@ -32,6 +33,8 @@ export function TaskPanel({
 }: TaskPanelProps) {
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
   const retryDetail = useTaskStore((s) => s.retryDetail);
+  // #256: a 401 fails every face; the way back is dropping the dead token.
+  const authExpired = useTaskStore((s) => s.authExpired);
 
   if (task && traceOpen) {
     return (
@@ -71,6 +74,35 @@ export function TaskPanel({
         </header>
       )}
 
+      {/* #256 (评审 AC2): the snapshot failed while a partial task is already
+          on screen (SSE replay / a list row seeded it). The error face must
+          not be hidden by the task — the composer stays disabled and points
+          at entries that have to exist, so the banner carries them. */}
+      {task && loadError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 border-b border-rule px-4 py-2"
+        >
+          <span className="min-w-0 flex-1 text-meta text-state-danger">
+            {loadError}
+          </span>
+          {authExpired ? (
+            <ReauthAction />
+          ) : (
+            <Button variant="outline" size="sm" onClick={retryDetail}>
+              重试
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentTask(null)}
+          >
+            新建任务
+          </Button>
+        </div>
+      )}
+
       {task && task.mode === "build" && (
         <SubagentStrip subtasks={task.subtasks ?? []} />
       )}
@@ -84,12 +116,18 @@ export function TaskPanel({
               {loadError}
             </p>
             <p className="text-meta text-tertiary">
-              可以在左侧重新选择，或重试这一次加载。
+              {authExpired
+                ? "重新登录后会回到这里。"
+                : "可以在左侧重新选择，或重试这一次加载。"}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" onClick={retryDetail}>
-                重试
-              </Button>
+              {authExpired ? (
+                <ReauthAction />
+              ) : (
+                <Button variant="outline" size="sm" onClick={retryDetail}>
+                  重试
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"

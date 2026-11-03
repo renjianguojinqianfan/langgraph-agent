@@ -76,6 +76,8 @@ export function PlanPane({ task }: { task: Task }) {
     if (editing) return;
     let cancelled = false;
     setLoading(true);
+    // `getPlanSnapshot` never rejects (transport failure → status 0), so every
+    // answer is decided in `then` — no catch to write here.
     getPlanSnapshot(task.id)
       .then((r) => {
         if (cancelled) return;
@@ -89,9 +91,6 @@ export function PlanPane({ task }: { task: Task }) {
         setText(r.data.text);
         setVersion(r.data.version);
         setLoaded(r.data.text);
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError(planLoadFailure(0));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -150,23 +149,19 @@ export function PlanPane({ task }: { task: Task }) {
       // is answered by re-reading the text and comparing it locally. A failed
       // re-read blocks the save (#256): without a fresh read there is no proof
       // the file still matches, and an empty editor must never reach the disk.
-      try {
-        const fresh = await getPlanSnapshot(task.id);
-        if (planLoadState(fresh.status) !== "ready" || !fresh.data) {
-          setNote(planLoadFailure(fresh.status, fresh.detail));
-          return;
-        }
-        const freshText = fresh.data.text;
-        if (freshText !== loaded) {
-          setConflict({
-            text: freshText,
-            version: fresh.data.version,
-          });
-          setNote("计划文件在编辑期间被外部修改；请选择载入新版或覆盖保存。");
-          return;
-        }
-      } catch {
-        setNote(planLoadFailure(0));
+      // The reader never rejects, so this is straight-line code.
+      const fresh = await getPlanSnapshot(task.id);
+      if (planLoadState(fresh.status) !== "ready" || !fresh.data) {
+        setNote(planLoadFailure(fresh.status, fresh.detail));
+        return;
+      }
+      const freshText = fresh.data.text;
+      if (freshText !== loaded) {
+        setConflict({
+          text: freshText,
+          version: fresh.data.version,
+        });
+        setNote("计划文件在编辑期间被外部修改；请选择载入新版或覆盖保存。");
         return;
       }
       const r = await putPlan(task.id, text);
@@ -190,7 +185,9 @@ export function PlanPane({ task }: { task: Task }) {
     if (!conflict) return;
     setText(conflict.text);
     setLoaded(conflict.text);
-    setVersion(conflict.version);
+    // #256 (评审 AC4): the fresh version must reach the store too — a
+    // local-only setVersion left PlanAnchor on the stale one.
+    applyVersion(conflict.version);
     setConflict(null);
     setNote("已载入新版；继续编辑后再保存。");
   };

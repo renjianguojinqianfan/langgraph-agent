@@ -5,6 +5,7 @@ import { useTaskStore } from "../../store/taskStore";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Segmented } from "../ui/Segmented";
+import { ReauthAction } from "../ReauthAction";
 import { filterByQuery, railGroups, type RailFilter } from "./group";
 import { RailFooter } from "./RailFooter";
 import { RailSearch } from "./RailSearch";
@@ -25,6 +26,7 @@ export function TaskRail() {
   const tasks = useTaskStore((s) => s.tasks);
   const listError = useTaskStore((s) => s.listError);
   const listLoading = useTaskStore((s) => s.listLoading);
+  const authExpired = useTaskStore((s) => s.authExpired);
   const retryList = useTaskStore((s) => s.retryList);
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
@@ -105,9 +107,18 @@ export function TaskRail() {
           label="任务范围"
         />
         {listError && listState === "rows" && (
-          <p role="status" className="text-meta text-state-danger">
-            {listError}
-          </p>
+          // AC1: a failed refetch keeps the stale rows, but the banner still
+          // carries its retry entry — text alone left the user with no way out.
+          <div className="flex items-center gap-2">
+            <p role="status" className="min-w-0 flex-1 text-meta text-state-danger">
+              {listError}
+            </p>
+            {authExpired ? <ReauthAction /> : (
+              <Button variant="outline" size="sm" onClick={retryList}>
+                重试
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -118,16 +129,23 @@ export function TaskRail() {
               {listError}
             </p>
             <p className="mt-1 text-meta text-tertiary">
-              确认后台在运行后重试；列表不会显示为空。
+              {authExpired
+                ? "重新登录后会回到这里；列表不会显示为空。"
+                : "确认后台在运行后重试；列表不会显示为空。"}
             </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              onClick={retryList}
-            >
-              重试
-            </Button>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {authExpired ? (
+                <ReauthAction />
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={retryList}
+                >
+                  重试
+                </Button>
+              )}
+            </div>
           </div>
         ) : listState === "loading" ? (
           <div className="px-3 py-6">

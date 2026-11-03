@@ -43,6 +43,8 @@ export function Composer() {
   const detailError = useTaskStore((s) =>
     s.currentTaskId ? (s.detailError[s.currentTaskId] ?? "") : ""
   );
+  // #256: a 401 fails every request; the entries offered are re-login ones.
+  const authExpired = useTaskStore((s) => s.authExpired);
   const setCurrent = useTaskStore((s) => s.setCurrentTask);
   const upsert = useTaskStore((s) => s.upsertTask);
   const workspaceDir = useTaskStore((s) => s.workspaceDir);
@@ -76,7 +78,9 @@ export function Composer() {
   // One reason line under the input; the placeholder only carries the action
   // (new task / continue) and never repeats the disable reason.
   const disabledReason = detailError
-    ? "任务加载失败；重试或新建任务"
+    ? authExpired
+      ? "登录已失效；重新登录后再试"
+      : "任务加载失败；重试或新建任务"
     : loading
       ? "正在加载任务…"
       : task?.status === "PENDING"
