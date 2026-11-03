@@ -149,10 +149,10 @@ START → agent ──有 tool call──→ tool ──→ agent
 | PUT | `/api/tasks/{id}/model` | 换任务模型（下一条消息生效） | `{model}` | `TaskManager.set_model` 结果；不能改 → 409 / 落盘失败 → 500（`{detail}`） |
 | PUT | `/api/tasks/{id}/mode` | 切计划/执行模式（黏性，下一轮生效） | `{mode}` | `TaskManager.set_mode` 结果；不能切 → 409 / 落盘失败 → 500（`{detail}`） |
 | POST | `/api/tasks/{id}/messages` | 停下 / 失败后续说（同一 thread，多轮对话入口；需 checkpoint） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 / 落盘失败 → 500（`{detail}`） |
-| GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；读不到 → 404/409 |
+| GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；任务不存在 → 404；计划文件读失败 → 409（detail 通用文案，全因只进服务端日志）——IO / 锁（`PlanIOError`，瞬时）在 worker 种子与轮内刷新处**容忍**：保住本轮计划 + warn，请求路径预检仍 409 可重试；内容损坏（`PlanError`，非 UTF-8）**严格**：轮判 FAILED |
 | PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4） | — | `text/event-stream` |
-| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认 raw NDJSON：`FileResponse` **流式**返回，字节直通、**无大小上限**、服务端零缓冲，畸形行原样带出（回放面按设计跳过、导出身份依赖字节）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**（每行须为 JSON 对象且含 string `type` / object `data` / numeric `ts`；按 `\n` 切分）——**413 / 422 只属这个分支**（唯一有界读取，cap+1 字节）：超 `TRACE_MAX_BYTES`（8 MiB）→ 413（`detail` 明示 raw 形式无上限）；畸形行 → 422（`detail` 带行号）；非 UTF-8 → 422（文件级解码失败，无行号可给）。任一分支读取失败（锁 / 权限）→ 500 通用 detail，全因只进服务端日志；非法 `task_id` → 400（触碰文件系统之前），trace 关闭（`trace_enabled=false`）/ 任务不存在 / 无 trace → 404 |
+| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认 raw NDJSON：**stat 时前缀快照**流式返回（`StreamingResponse`，64KiB 分块、chunked 不声明长度）——任务跑着时 trace 仍在增长，流只发响应开始 `stat` 看到的那个 size 的字节，**无大小上限**、服务端零缓冲；文件被替换 / 截断则提前收尾，增长与缩短两个方向都不违约（语义 = 「raw = 请求时刻的前缀快照」，不是「当前整个文件」）；畸形行原样带出（回放面按设计跳过、导出身份依赖字节）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**（每行须为 JSON 对象且含 string `type` / object `data` / numeric `ts`；按 `\n` 切分）——**413 / 422 只属这个分支**（唯一有界读取，cap+1 字节）：超 `TRACE_MAX_BYTES`（8 MiB）→ 413（`detail` 明示 raw 形式无上限）；畸形行 → 422（`detail` 带行号）；非 UTF-8 → 422（文件级解码失败，无行号可给）。任一分支读取失败（锁 / 权限）→ 500 通用 detail，全因只进服务端日志；非法 `task_id` → 400（触碰文件系统之前），trace 关闭（`trace_enabled=false`）/ 任务不存在 / 无 trace → 404 |
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（最多返回前 200 KB，`truncated` 标记） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400；文件不存在 → 404；工作区不存在 → 409。404 的 `detail` 是 `task not found` 或 `file not found`，前端据此区分任务与文件消失（`frontend/src/lib/preview.ts`） |
 | GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
@@ -199,7 +199,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 ### 3.5 错误口径与响应信封
 
-- **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/413/415/422/500；413 / 422 由 `/trace` 的 `?format=json` 分支引入——大小上限与逐行校验；500 含 `/trace` 读取失败的通用 detail，全因只进服务端日志，#260）。
+- **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/413/415/422/500；413 / 422 由 `/trace` 的 `?format=json` 分支引入——大小上限与逐行校验；409 含 `/plan` 读失败、500 含 `/trace` 读取失败，两者都是通用 detail、全因只进服务端日志，#260）。
 - **工具失败两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。
 - **被规则当场拒的调用**走第三形状（ADR 0008 决策 6）：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开）。
 - **只执行一次**：工具调用无自动重试、无熔断（ADR 0003 已退役）；失败原因原样回给模型。
