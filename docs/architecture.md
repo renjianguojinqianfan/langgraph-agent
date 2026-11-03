@@ -152,7 +152,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；读不到 → 404/409 |
 | PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4） | — | `text/event-stream` |
-| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认原始 NDJSON（逐字节原样返回，畸形行也 included，回放面按设计跳过）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**；非法 `task_id` → 400（不触达文件系统），任务不存在 / 无 trace / trace 关闭（`trace_enabled=false`）→ 404；超过 `TRACE_MAX_BYTES`（8 MiB；有界读取 cap+1 字节，不整份入内存）→ 413（两种格式）；非 UTF-8 → 422（两种格式），`?format=json` 的畸形行（非法 JSON / 非对象 / 缺 `type` / `data` / `ts`）→ 422 且 `detail` 带行号；读取失败 → 500（记日志） |
+| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认 raw NDJSON：`FileResponse` **流式**返回，字节直通、**无大小上限**、服务端零缓冲，畸形行原样带出（回放面按设计跳过、导出身份依赖字节）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**（每行须为 JSON 对象且含 string `type` / object `data` / numeric `ts`；按 `\n` 切分），该分支是唯一有界读取（cap+1 字节）；非法 `task_id` → 400（触碰文件系统之前），trace 关闭（`trace_enabled=false`）/ 任务不存在 / 无 trace → 404；`?format=json` 超 `TRACE_MAX_BYTES`（8 MiB）→ 413（`detail` 明示 raw 形式无上限）或非 UTF-8 / 畸形行 → 422（`detail` 带行号）；任一分支读取失败（锁 / 权限）→ 500 通用 detail，全因只进服务端日志 |
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（最多返回前 200 KB，`truncated` 标记） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400；文件不存在 → 404；工作区不存在 → 409。404 的 `detail` 是 `task not found` 或 `file not found`，前端据此区分任务与文件消失（`frontend/src/lib/preview.ts`） |
 | GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
@@ -176,7 +176,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 > **守卫链**：`npm run check:sse`（前端 job）逐条比对「后端发布点 == 本表 == `EVENT_TYPES`」，并校验 `SSEventType` 联合 = `EVENT_TYPES ∪ trace 文件独有类型`、事件页中文标签表（`frontend/src/lib/eventLabels.ts`）的键集 = `EVENT_TYPES`；`backend/tests/test_sse_publish_ast.py`（backend job）用 AST 枚举发布调用，与上表第一列比对。两条路径都只认**字符串字面量**类型：经变量名传入的发布调用是共同盲区，必须手工同步四处。
 > **唯一不对称**：`trace_end` 只写 trace JSONL、不经 EventBus——进 `SSEventType` 联合、不进 `EVENT_TYPES` 订阅表。
 > 子智能体快照仍以 REST 的 `Task.subtasks` 为准；F7 起前端 reducer 同时消费父频道的 `subtask_*` 三条事件做实时态（`SubagentStrip`），两者只影响子智能体条，不进对话/步骤语义。`subtask_*` 三条只发在**父频道**，子任务自己的频道不带。
-> **投递语义**：单个发布者内的事件按发布顺序推送；跨发布者（worker 线程与 `stop()` 的 HTTP 线程）不保证顺序，但回放与实时之间**不丢不重**。晚订阅者先收到缓冲区回放，再继续实时流——`EventBus.subscribe` 在同一把锁里登记订阅并取回放快照，`backend/api/sse.py` 把 worker 线程的发布经 `call_soon_threadsafe` 投回事件循环。
+> **投递语义**（#260 起为「有界窗口 + 丢最旧 + 丢件必留日志」）：单个发布者内的事件按发布顺序推送；跨发布者（worker 线程与 `stop()` 的 HTTP 线程）不保证顺序。每任务回放缓冲（`deque(maxlen=DEFAULT_BUFFER_SIZE)`）与每连接出站队列（`asyncio.Queue(maxsize=SSE_QUEUE_MAX)`，派生自同一常量故两闸不可能漂移）都有界——积压超窗时丢**最旧**的已入队事件、流保持近实时；丢件不静默：首丢 WARNING（`sse outbox for task X overflowed (cap N); dropping oldest queued events`），流关闭时若有丢弃再 WARNING 汇总（`sse stream for task X closed after dropping N event(s)`）。**恢复边界**：重连最多补回 bus 缓冲里最近的 ≤1000 条；已从出站队列与缓冲同时逐出的事件按设计不可恢复——替代方案（无界增长）正是该边界要消除的东西。订阅即快照的原子性未变：`EventBus.subscribe` 在同一把锁里登记订阅并取回放快照，晚订阅者先收到缓冲区回放、再继续实时流（`backend/api/sse.py` 把 worker 线程的发布经 `call_soon_threadsafe` 投回事件循环）——这个**回放→实时交接**仍不丢不重；改变的是积压超过窗口之后的语义。15s 心跳不变。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
@@ -199,7 +199,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 ### 3.5 错误口径与响应信封
 
-- **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/413/415/422/500；413 / 422 由 `/trace` 的大小上限与逐行校验引入，#260）。
+- **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/413/415/422/500；413 / 422 由 `/trace` 的 `?format=json` 分支引入——大小上限与逐行校验；500 含 `/trace` 读取失败的通用 detail，全因只进服务端日志，#260）。
 - **工具失败两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。
 - **被规则当场拒的调用**走第三形状（ADR 0008 决策 6）：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开）。
 - **只执行一次**：工具调用无自动重试、无熔断（ADR 0003 已退役）；失败原因原样回给模型。
