@@ -3,8 +3,8 @@ import { withDirParam } from "./workspace";
 
 describe("withDirParam", () => {
   it("sets the directory as an encoded query parameter", () => {
-    expect(withDirParam("", "E:\\code\\demo")).toBe(
-      `?dir=${encodeURIComponent("E:\\code\\demo")}`
+    expect(withDirParam("", "E:\\example\\project")).toBe(
+      `?dir=${encodeURIComponent("E:\\example\\project")}`
     );
   });
 
