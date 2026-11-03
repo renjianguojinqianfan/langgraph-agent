@@ -23,6 +23,22 @@ class PlanError(RuntimeError):
     denial, device error): the file is there, so answering "no plan" would
     hide a real failure behind an empty string — the frontend would render an
     empty plan and allow saving over a file it could not read (#279 AC3).
+
+    The two causes need opposite handling, so the I/O one gets its own
+    subclass: :class:`PlanIOError` is usually transient (a Windows AV scanner
+    or an editor holding the file for a moment) and a round must survive it,
+    while this decode error is persistent content corruption the user has to
+    fix — a round that silently ran without the plan would hide it.
+    """
+
+
+class PlanIOError(PlanError):
+    """The plan file exists but the OS refused the read (lock / permission).
+
+    Transient by nature (#260 rework MEDIUM-2): worker-thread seeds and the
+    mid-round refresh degrade to "keep the round's current plan" plus a
+    warning instead of failing the whole task. Request-path pre-checks still
+    refuse with 409 (retryable), and the client detail stays generic.
     """
 
 
@@ -67,9 +83,13 @@ def read_plan(workspace: Path, task_id: str) -> str:
     """The plan file's text; ``""`` means "no plan file" and nothing else.
 
     A missing file is the normal empty case. A file that exists but cannot be
-    read raises :class:`PlanError` so the failure surfaces (GET /plan answers
-    non-200; a round refuses to start) instead of masquerading as an empty
-    plan that the UI would happily overwrite (#279 AC3 backend half).
+    read raises so the failure surfaces (GET /plan answers non-200; a round
+    refuses to start) instead of masquerading as an empty plan that the UI
+    would happily overwrite (#279 AC3 backend half). The cause picks the
+    class: a decode error is :class:`PlanError` (persistent corruption — a
+    round must not silently run without the plan), an OS refusal is
+    :class:`PlanIOError` (usually transient — a round survives it, see
+    ``TaskManager._seed_plan_lenient``).
     """
     path = plan_path(workspace, task_id)
     try:
@@ -79,7 +99,7 @@ def read_plan(workspace: Path, task_id: str) -> str:
     except UnicodeDecodeError as exc:
         raise PlanError(f"plan file is not valid UTF-8: {path}") from exc
     except OSError as exc:
-        raise PlanError(
+        raise PlanIOError(
             f"plan file cannot be read ({type(exc).__name__}: {exc}): {path}"
         ) from exc
     if text.strip():

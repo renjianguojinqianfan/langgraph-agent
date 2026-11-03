@@ -561,9 +561,11 @@ class TaskManager:
         #260: every step logs. A shutdown that hung on a worker or skipped a
         resource used to leave no trace at all in the log; the operator now
         sees begin → MCP cleanup → worker join → store close → done, and a
-        warning names whatever did not complete. A repeat call after a
-        completed shutdown says so instead of replaying the whole sequence
-        (which read as if resources were released a second time).
+        warning names whatever did not complete. A repeat call after a fully
+        released shutdown says "already complete" instead of replaying the
+        whole sequence (which read as if resources were released a second
+        time); a shutdown that ended in errors leaves the latch open so the
+        next call retries the steps.
         """
         if getattr(self, "_shutdown_complete", False):
             logger.info("shutdown: already complete; nothing to release")
@@ -611,9 +613,13 @@ class TaskManager:
         # followed by a success line that contradicts it.
         if failed:
             logger.warning("shutdown: finished with errors (see the warnings above)")
+            # The latch stays OPEN on purpose (#260 rework): a failed step is
+            # often transient (a locked store closes on the next try), and
+            # latching here would turn every later call into a silent no-op
+            # that claims "already complete".
         else:
             logger.info("shutdown: complete")
-        self._shutdown_complete = True
+            self._shutdown_complete = True
 
     # ── creation / query ──
     @staticmethod
@@ -769,6 +775,33 @@ class TaskManager:
             "plan_version": version,
             "plan_hash": digest,
         }
+
+    def _seed_plan_lenient(self, task: Task) -> Optional[Dict[str, Any]]:
+        """``_seed_plan`` that degrades to "keep what the round has" (#260).
+
+        A transient lock (Windows AV scanner, an editor holding the file) must
+        not fail a round that is already running: the worker threads seed the
+        plan over the checkpoint and would otherwise mark the whole task
+        FAILED — the reviewer's MEDIUM-2. Returns ``None`` when the OS refused
+        the read, and the caller keeps the restored state's plan untouched
+        (for a fresh ``run()``, an empty plan) plus a warning.
+
+        Only :class:`~backend.services.plan_file.PlanIOError` is absorbed: a
+        decode error (persistent content corruption) still fails the round, so
+        a corrupt plan can never be silently ignored. The request-path
+        pre-checks (``resume`` / ``_continue``) stay strict for both — a
+        persistent failure must refuse with 409 before the record flips
+        (#279 AC3), and a transient one is a retryable refusal.
+        """
+        try:
+            return self._seed_plan(task)
+        except plan_file.PlanIOError as exc:
+            logger.warning(
+                "plan seed failed for %s (%s); keeping the round's current plan",
+                task.id,
+                exc,
+            )
+            return None
 
     def create_task(
         self,
@@ -935,7 +968,13 @@ class TaskManager:
             # The directory may have disappeared while the task was queued.
             # Fail before any file tool can recreate its root.
             self._require_workspace(task)
-            seeded = self._seed_plan(task)
+            # A fresh task has no plan file yet, so the lenient path is nearly
+            # unreachable here — but a lock must never fail the round (#260).
+            seeded = self._seed_plan_lenient(task) or {
+                "plan_text": "",
+                "plan_version": 0,
+                "plan_hash": "",
+            }
             state: AgentState = {
                 "task_id": task_id,
                 "mode": task.mode.value,
@@ -1415,12 +1454,15 @@ class TaskManager:
             # Since #139 one invoke is one round: the per-round budget restarts
             # and the stale answer/error must not leak into this round's finish.
             # The plan file is the source of truth; seed it over the checkpoint.
-            seeded = self._seed_plan(current)
-            restored["plan_text"] = seeded["plan_text"]
-            restored["plan_version"] = max(
-                seeded["plan_version"], int(restored.get("plan_version", 0))
-            )
-            restored["plan_hash"] = seeded["plan_hash"]
+            # Lenient (#260): a transient lock keeps the checkpoint's plan
+            # instead of failing the round.
+            seeded = self._seed_plan_lenient(current)
+            if seeded is not None:
+                restored["plan_text"] = seeded["plan_text"]
+                restored["plan_version"] = max(
+                    seeded["plan_version"], int(restored.get("plan_version", 0))
+                )
+                restored["plan_hash"] = seeded["plan_hash"]
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False
             restored["_current_tool_calls"] = []
@@ -1651,12 +1693,15 @@ class TaskManager:
                     {"role": "user", "content": user_text}
                 )
             # The plan file is the source of truth; seed it over the checkpoint.
-            seeded = self._seed_plan(current)
-            restored["plan_text"] = seeded["plan_text"]
-            restored["plan_version"] = max(
-                seeded["plan_version"], int(restored.get("plan_version", 0))
-            )
-            restored["plan_hash"] = seeded["plan_hash"]
+            # Lenient (#260): a transient lock keeps the checkpoint's plan
+            # instead of failing the round.
+            seeded = self._seed_plan_lenient(current)
+            if seeded is not None:
+                restored["plan_text"] = seeded["plan_text"]
+                restored["plan_version"] = max(
+                    seeded["plan_version"], int(restored.get("plan_version", 0))
+                )
+                restored["plan_hash"] = seeded["plan_hash"]
             restored["mode"] = current.mode.value
             restored["status"] = "RUNNING"
             restored["stop_requested"] = False

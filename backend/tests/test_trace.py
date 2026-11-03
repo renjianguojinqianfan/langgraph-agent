@@ -13,6 +13,7 @@ files with a located error instead of reading them whole into memory.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -29,6 +30,7 @@ from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
 from backend.main import app
+from backend.services import trace as trace_module
 from backend.services.event_bus import Event, EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
@@ -271,6 +273,91 @@ def test_trace_write_failure_is_counted_and_logged(tmp_path, caplog, app_log_cap
     assert "lost 2 event(s) to write failures" in caplog.text
     # close() pops the counter: the next era starts from a clean signal.
     assert rec.write_failures == {}
+
+
+def test_trace_serialization_failure_is_counted_and_logged(
+    tmp_path, monkeypatch, caplog, app_log_capture
+):
+    """#260 rework (LOW-6): an unencodable payload is a counted loss, not silence.
+
+    Serialization now sits inside the guarded region, so a payload ``json``
+    cannot encode counts toward ``write_failures`` and logs like any other
+    lost line — the previous docstring promised coverage the code did not
+    have.
+    """
+    app_log_capture("trace")
+    settings = make_settings(tmp_path)
+    bus = EventBus()
+    rec = TraceRecorder(settings)
+    rec.attach(bus, "t1")
+
+    def _unencodable(*_args, **_kwargs):
+        raise TypeError("keys must be str, int, float, bool or None")
+
+    monkeypatch.setattr(trace_module.json, "dumps", _unencodable)
+    with caplog.at_level(logging.WARNING):
+        bus.publish("t1", "weird", {"ok": 1})
+
+    assert rec.write_failures == {"t1": 1}
+    assert "trace write failed for t1" in caplog.text
+
+
+def test_trace_prefix_stream_stops_at_the_stat_time_size(tmp_path):
+    """#260 rework (MEDIUM-1): the raw stream is the stat-time prefix snapshot.
+
+    ``FileResponse`` declared ``content-length`` from ``os.stat`` and then
+    read to EOF, so a trace still being appended sent more bytes than
+    declared (h11 ``too much data`` / client-side truncation). The stream
+    stops at the size the route snapshotted; a file that shrank instead
+    (replaced / truncated) simply ends early — nothing is declared, so
+    neither direction can violate the protocol.
+    """
+    path = tmp_path / "t.jsonl"
+    path.write_bytes(b"0123456789")
+    size = path.stat().st_size
+    # A worker appends while the response streams (task still running).
+    with path.open("ab") as handle:
+        handle.write(b"ABCDEF")
+
+    async def scenario() -> bytes:
+        return b"".join([chunk async for chunk in routes._trace_prefix_body(path, size)])
+
+    assert asyncio.run(scenario()) == b"0123456789"
+
+
+def test_trace_api_raw_streams_the_stat_time_prefix(trace_client, monkeypatch):
+    """#260 rework (MEDIUM-1), route level: growth mid-request cannot overshoot.
+
+    The route stats twice (``exists()`` + the size read) and each stat here
+    appends one more line, simulating a worker that keeps writing while the
+    response is built. The body must carry the append that was on disk when
+    the size was taken, and NOT the one that landed after it.
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    original = trace_file.read_bytes()
+    grown_line = b'{"type": "grown", "data": {}, "ts": 1.0}\n'
+
+    real_stat = Path.stat
+
+    def _growing_stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if self.suffix == ".jsonl":
+            with self.open("ab") as handle:
+                handle.write(grown_line)
+        return result
+
+    monkeypatch.setattr(Path, "stat", _growing_stat)
+
+    r = client.get(f"/api/tasks/{tid}/trace")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/x-ndjson")
+    # Exactly the snapshot: one append in, the later one out.
+    assert r.content == original + grown_line
+    # No declared length to violate (chunked) — and the file did keep growing.
+    assert "content-length" not in r.headers
+    assert trace_file.read_bytes().count(grown_line) == 2
 
 
 def test_trace_close_failure_still_logs_summary_and_unsubscribes(

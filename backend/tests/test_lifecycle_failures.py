@@ -259,6 +259,35 @@ def test_second_shutdown_says_already_complete(tmp_path, caplog, app_log_capture
     assert "checkpoint connection close done" not in caplog.text
 
 
+def test_failed_shutdown_leaves_the_latch_open(tmp_path, caplog, app_log_capture):
+    """#260 rework (LOW-4): a failed shutdown must not latch "already complete".
+
+    A failed step is often transient (a locked store closes on the next try);
+    latching on failure would turn every later call into a silent no-op that
+    claims "already complete". The latch engages only after a clean release.
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm._checkpoint_conn = _BoomConn()
+        tm.shutdown()
+        assert "finished with errors" in caplog.text
+        assert "already complete" not in caplog.text
+
+        caplog.clear()
+        # The transient failure clears: the retry completes, and only now does
+        # the latch engage.
+        tm._checkpoint_conn = _Conn()
+        tm.shutdown()
+        assert "shutdown: complete" in caplog.text
+        assert "already complete" not in caplog.text
+
+        caplog.clear()
+        tm.shutdown()
+    assert "already complete" in caplog.text
+
+
 def test_resume_trace_failure_leaves_task_interrupted(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     before = _parked_task(settings)

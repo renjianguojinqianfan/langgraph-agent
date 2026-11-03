@@ -252,17 +252,35 @@ class AgentRuntime:
         refresh_plan = state.get("round_steps", 0) <= 1 or meta["compressed"]
         if refresh_plan:
             workspace = workspace_root(settings)
-            plan_text = plan_file.read_plan(workspace, self.task_id)
-            digest = plan_file.plan_hash(plan_text)
-            if digest != state.get("plan_hash", ""):
-                state["plan_hash"] = digest
-                if plan_text.strip():
-                    state["plan_version"] = int(state.get("plan_version", 0)) + 1
-            state["plan_text"] = plan_text
-            if plan_text.strip():
-                _ensure_plan_note(compressed, int(state.get("plan_version", 0)))
+            try:
+                plan_text = plan_file.read_plan(workspace, self.task_id)
+            except plan_file.PlanIOError as exc:
+                # A transient lock (Windows AV scanner, an editor holding the
+                # file) must not fail the whole round: keep the plan this round
+                # started with and warn. A PERSISTENT failure still surfaces
+                # where the user can act on it — GET /plan answers 409 and the
+                # frontend blocks saving over a plan it could not read (#279
+                # AC3 end-to-end guard, unchanged by this fallback) — and a
+                # decode error (corrupt content) still fails the round via
+                # PlanError, so corruption is never silently ignored.
+                logger.warning(
+                    "plan refresh failed for %s (%s); continuing with the "
+                    "round's current plan",
+                    self.task_id,
+                    exc,
+                )
+                plan_text = str(state.get("plan_text", ""))
             else:
-                _drop_plan_notes(compressed)
+                digest = plan_file.plan_hash(plan_text)
+                if digest != state.get("plan_hash", ""):
+                    state["plan_hash"] = digest
+                    if plan_text.strip():
+                        state["plan_version"] = int(state.get("plan_version", 0)) + 1
+                state["plan_text"] = plan_text
+                if plan_text.strip():
+                    _ensure_plan_note(compressed, int(state.get("plan_version", 0)))
+                else:
+                    _drop_plan_notes(compressed)
         else:
             plan_text = str(state.get("plan_text", ""))
         plan_file.sync_plan_message(compressed, plan_text)

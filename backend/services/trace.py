@@ -25,15 +25,16 @@ flush`` so the on-disk order matches the publish order. ``attach`` registers
 its callback outside the lock — the bus is never called while holding it —
 and removes it again if a concurrent :meth:`close` won the race.
 
-I/O write failures are never silent (#260): :class:`EventBus` swallows
-subscriber exceptions by contract ("a bad subscriber must not break the
-publisher"), so a disk-full trace would otherwise lose every event with no
-signal. The recorder counts the loss per task (:attr:`TraceRecorder.write_failures`),
-logs the first failure with its traceback, and logs one end-of-era summary in
-:meth:`close` — a disk full for the whole run costs exactly two log lines.
-Scope is the file I/O (``OSError`` from write / flush / close): serialization
-cannot fail for recorder-written events (``json.dumps`` runs with
-``default=str`` on plain dicts), so there is no third failure class to report.
+Every failure that stops a line from reaching the file is visible (#260):
+:class:`EventBus` swallows subscriber exceptions by contract ("a bad
+subscriber must not break the publisher"), so a disk-full trace would
+otherwise lose every event with no signal. The recorder counts the loss per
+task (:attr:`TraceRecorder.write_failures`), logs the first failure with its
+traceback, and logs one end-of-era summary in :meth:`close` — a disk full for
+the whole run costs exactly two log lines. The per-event path guards
+serialization and I/O alike (``Exception``): an event ``json`` cannot encode
+is a lost line like any other, not a silent one. The ``trace_end`` marker in
+:meth:`close` is a literal dict, so it guards I/O (``OSError``) only.
 """
 
 from __future__ import annotations
@@ -102,17 +103,19 @@ class TraceRecorder:
             fh = self._files.get(task_id)
             if fh is None:
                 return
-            line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
             try:
+                line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
                 fh.write(line)
                 fh.flush()
-            except OSError:
+            except Exception:
                 # A failed write must be visible (#260): the bus swallows
                 # subscriber exceptions by contract, so without this the
                 # recorder would lose events in total silence. Count the loss
                 # and log the FIRST failure per task with the traceback; later
                 # ones only bump the counter, so a disk-full run cannot flood
-                # the log with one line per event.
+                # the log with one line per event. ``Exception``, not
+                # ``OSError``: serialization is inside the guard too, so a
+                # payload json cannot encode counts as the loss it is.
                 first = self.write_failures.get(task_id, 0) == 0
                 self.write_failures[task_id] = self.write_failures.get(task_id, 0) + 1
                 if first:

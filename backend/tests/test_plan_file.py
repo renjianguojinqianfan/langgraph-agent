@@ -7,6 +7,7 @@ means no plan, and a model write to the file is picked up next call.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -485,7 +486,14 @@ def test_build_mode_does_not_create_a_plan_file(tmp_path):
     assert not plan_file.plan_path(Path(task.workspace), task_id).exists()
 
 
-def test_non_utf8_plan_is_a_readable_conflict(tmp_path):
+def test_non_utf8_plan_is_a_readable_conflict(tmp_path, caplog, app_log_capture):
+    """A non-UTF-8 plan is a readable conflict (409), with a sanitised detail.
+
+    #260 rework (LOW-3): the detail used to carry the ``PlanError`` text — the
+    absolute plan path plus the decoder error — straight to the frontend, which
+    renders it verbatim. It is now generic (the same discipline as the trace
+    500) and the full cause goes to the server log.
+    """
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))
     task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
@@ -497,14 +505,21 @@ def test_non_utf8_plan_is_a_readable_conflict(tmp_path):
     client = TestClient(app, base_url="http://localhost")
     client.__enter__()
     getattr(client.app, "state").task_manager = tm
+    app_log_capture("api.routes")
     try:
-        got = client.get(f"/api/tasks/{task_id}/plan")
-        assert got.status_code == 409
-        assert "UTF-8" in got.json()["detail"]
+        with caplog.at_level(logging.ERROR):
+            got = client.get(f"/api/tasks/{task_id}/plan")
+            assert got.status_code == 409
+            detail = got.json()["detail"]
+            assert "cannot be read" in detail
+            assert str(path) not in detail  # no absolute path to the client
+            assert "UTF-8" in caplog.text  # the cause is in the log
 
-        sent = client.post(f"/api/tasks/{task_id}/messages", json={"input": "go"})
-        assert sent.status_code == 409
-        assert "UTF-8" in sent.json()["detail"]
+            sent = client.post(f"/api/tasks/{task_id}/messages", json={"input": "go"})
+            assert sent.status_code == 409
+            sent_detail = sent.json()["detail"]
+            assert "cannot be read" in sent_detail
+            assert str(path) not in sent_detail
     finally:
         client.__exit__(None, None, None)
 
@@ -541,13 +556,15 @@ def _lock_plan_reads(monkeypatch) -> None:
     monkeypatch.setattr(Path, "read_text", _locked)
 
 
-def test_unreadable_plan_is_a_readable_conflict(tmp_path, monkeypatch):
+def test_unreadable_plan_is_a_readable_conflict(tmp_path, monkeypatch, caplog, app_log_capture):
     """#279 AC3 backend half: GET /plan must not answer 200 with an empty plan.
 
     ``read_plan`` used to swallow the OSError into ``""``, so the frontend
     rendered an empty plan and allowed saving over a file it could not read —
     an empty-overwrite hole end to end. The failure now surfaces through the
-    existing PlanError face (409 on GET and on continuation).
+    existing PlanError face (409 on GET and on continuation), and the client
+    detail is sanitised (#260 rework LOW-3): the absolute path and the OS
+    error go to the server log only.
     """
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     tm = make_manager(settings, MockLLMClient(final_answer="ok"))
@@ -561,18 +578,76 @@ def test_unreadable_plan_is_a_readable_conflict(tmp_path, monkeypatch):
     client = TestClient(app, base_url="http://localhost")
     client.__enter__()
     getattr(client.app, "state").task_manager = tm
+    app_log_capture("api.routes")
     try:
-        got = client.get(f"/api/tasks/{task_id}/plan")
-        assert got.status_code == 409
-        assert "plan" in got.json()["detail"].lower()
+        with caplog.at_level(logging.ERROR):
+            got = client.get(f"/api/tasks/{task_id}/plan")
+            assert got.status_code == 409
+            detail = got.json()["detail"]
+            assert "plan" in detail.lower()
+            # #260 rework (LOW-3): no absolute path / OS text to the client.
+            assert str(plan_file.plan_path(workspace, task_id)) not in detail
+            assert "Permission denied" not in detail
+            assert "plan read failed" in caplog.text  # the cause is in the log
 
-        # Continuation refuses too: a round must not start on a plan the
-        # backend could not read (it would silently run without it).
-        sent = client.post(f"/api/tasks/{task_id}/messages", json={"input": "go"})
-        assert sent.status_code == 409
-        assert "plan" in sent.json()["detail"].lower()
+            # Continuation refuses too: a round must not start on a plan the
+            # backend could not read (it would silently run without it).
+            sent = client.post(f"/api/tasks/{task_id}/messages", json={"input": "go"})
+            assert sent.status_code == 409
+            assert "cannot be read" in sent.json()["detail"]
     finally:
         client.__exit__(None, None, None)
+
+
+def test_transient_plan_lock_does_not_fail_the_round(
+    tmp_path, monkeypatch, caplog, app_log_capture
+):
+    """#260 rework (MEDIUM-2): a transient plan lock keeps the round alive.
+
+    Windows AV scanners / editors lock a file briefly. The mid-round refresh
+    (G-34) used to let that ``PlanError`` fail the WHOLE round; it now keeps
+    the plan the round started with and warns. A PERSISTENT failure still
+    surfaces where the user can act — GET /plan 409 + the frontend's
+    save-blocked guard (#279 AC3 end to end, unchanged).
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    llm = _RecordingLLM(final_answer="done")
+    tm = make_manager(settings, llm)
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    _wait(tm, task_id)
+    workspace = Path(tm.get_task(task_id).workspace)
+    plan_file.write_plan(workspace, task_id, "# Plan\n\n1. locked mid-round")
+
+    # Round 2 reads the plan normally, so the checkpoint carries it: round 3
+    # must run on THAT when the file cannot be read mid-round.
+    tm.send_message(task_id, "first")
+    _wait(tm, task_id)
+
+    real_read_plan = plan_file.read_plan
+    calls = {"n": 0}
+
+    def _transient_lock(ws, tid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_read_plan(ws, tid)  # the request-path pre-check passes
+        raise plan_file.PlanIOError(
+            "plan file cannot be read (PermissionError: locked)"
+        )
+
+    monkeypatch.setattr(plan_file, "read_plan", _transient_lock)
+    app_log_capture("agent.runtime")
+    llm.transcripts.clear()
+    tm.send_message(task_id, "go")
+    task = _wait(tm, task_id)
+
+    # The round finished on the plan it started with — not FAILED.
+    assert task.status.value == "INTERRUPTED"
+    assert calls["n"] >= 2  # the worker seed and the mid-round refresh both ran
+    assert "plan seed failed" in caplog.text  # worker thread: kept the checkpoint's plan
+    assert "plan refresh failed" in caplog.text  # node: kept the round's plan
+    assert any(
+        "1. locked mid-round" in text for text in _plan_messages(llm.transcripts[0])
+    )
 
 
 def test_read_plan_distinguishes_missing_from_unreadable(tmp_path, monkeypatch):

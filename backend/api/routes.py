@@ -19,9 +19,11 @@ import mimetypes
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import AsyncIterator
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
@@ -223,6 +225,10 @@ def resume_task(
         raise HTTPException(status_code=404, detail="task not found")
     try:
         result = _tm(request).resume(task_id)
+    except PlanError as exc:
+        # The plan pre-check inside the resume refused (#279 AC3): same
+        # sanitised face as GET /plan — the cause goes to the log only.
+        raise _plan_read_failed(task_id, exc) from None
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data=result)
@@ -387,7 +393,7 @@ def get_plan(
     try:
         result = _tm(request).get_plan(task_id)
     except PlanError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise _plan_read_failed(task_id, exc) from None
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return _envelope(data=result)
@@ -429,6 +435,10 @@ def send_message(
         raise HTTPException(status_code=400, detail="`input` is required.")
     try:
         result = _tm(request).send_message(task_id, payload.input)
+    except PlanError as exc:
+        # The plan pre-check inside the continuation refused (#279 AC3): same
+        # sanitised face as GET /plan — the cause goes to the log only.
+        raise _plan_read_failed(task_id, exc) from None
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return _envelope(data=result)
@@ -562,6 +572,14 @@ TRACE_MAX_BYTES = 8_388_608  # 8 MiB
 #: holders) goes to the server log, never to the response body.
 _TRACE_READ_ERROR_DETAIL = "trace file could not be read; see the server log"
 
+#: Same discipline for the plan file (#279 AC3 / #260 rework): ``PlanError``
+#: carries the absolute plan path and the OS error, and the frontend renders
+#: this detail verbatim — so the full cause goes to the log only.
+_PLAN_READ_ERROR_DETAIL = "plan file cannot be read; see the server log"
+
+#: Chunk size for streaming the raw trace prefix (#260 rework).
+_TRACE_CHUNK_BYTES = 64 * 1024
+
 
 def _trace_line_error(lineno: int, why: str) -> HTTPException:
     """A malformed trace line is a located, client-visible 422 (#260)."""
@@ -582,6 +600,34 @@ def _trace_read_failed(task_id: str, exc: OSError) -> HTTPException:
     return HTTPException(status_code=500, detail=_TRACE_READ_ERROR_DETAIL)
 
 
+def _plan_read_failed(task_id: str, exc: PlanError) -> HTTPException:
+    """Log the full cause, answer with the safe detail (#260 rework)."""
+    logger.error("plan read failed for task %s: %s", task_id, exc)
+    return HTTPException(status_code=409, detail=_PLAN_READ_ERROR_DETAIL)
+
+
+async def _trace_prefix_body(path: Path, size: int) -> AsyncIterator[bytes]:
+    """Yield at most ``size`` bytes of ``path`` — the stat-time prefix snapshot.
+
+    Stopping at the stat-time size is what makes the stream consistent: the
+    trace keeps growing while its task runs, so a stream that ran to EOF would
+    send more bytes than any length declared up front (``FileResponse``
+    declares ``content-length`` from ``os.stat`` and reads to EOF — h11
+    ``too much data`` on the client). A file shorter than ``size`` (replaced /
+    truncated) simply ends early. Nothing is declared, so neither direction
+    can violate the protocol; the semantic is "raw = the prefix snapshot at
+    request time" (#260 rework).
+    """
+    remaining = size
+    async with await anyio.open_file(str(path), "rb") as handle:
+        while remaining > 0:
+            chunk = await handle.read(min(remaining, _TRACE_CHUNK_BYTES))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
 @router.get("/tasks/{task_id}/trace", response_model=None)
 def task_trace(
     task_id: str,
@@ -596,7 +642,10 @@ def task_trace(
     (the replay face skips those by design, and export identity depends on
     them). It is **streamed**, never buffered and never capped: this is the
     frontend's only trace consumer (replay + export), so a long trace must
-    stay replayable — the size bound applies to the parsing branch only.
+    stay replayable. The body is the **prefix snapshot at request time** — the
+    file keeps growing while its task runs, and the stream stops at the size
+    ``stat`` saw (see :func:`_trace_prefix_body`); the size bound applies to
+    the parsing branch only.
 
     ``?format=json`` returns the unified envelope
     ``{code, data:[Event,...], message}`` and validates every line, so a
@@ -628,17 +677,29 @@ def task_trace(
         raise HTTPException(status_code=404, detail="task trace not found")
 
     if format != "json":
-        # Stream the file (same pattern as the workspace download endpoint):
-        # no memory cost at any size, so a long run stays replayable/exportable
-        # (#260 — an 8 MiB cap here used to break the frontend's only trace
-        # consumer). The readability probe keeps a locked / permission-denied
-        # file a logged 500 instead of a 200 with a truncated body.
+        # Stream the stat-time PREFIX (#260 rework): the file keeps growing
+        # while the task runs, and a "read to EOF" stream (FileResponse) would
+        # send more bytes than the length it declares up front — the client
+        # sees h11 ``too much data`` or a silently truncated body. The old
+        # ``read_text`` was a consistent snapshot; this restores that property
+        # without the memory cost. The response is chunked (no declared
+        # length), so neither growth nor a shrinking/replaced file can violate
+        # the protocol, and the semantic is "raw = the prefix snapshot at
+        # request time".
+        # The probe only NARROWS the window: a file deleted or locked between
+        # the probe and the stream fails mid-response (server-logged, client
+        # sees a broken body) instead of as a clean 500. The realistic cases
+        # — a parked file, or a running task appending — are covered.
         try:
+            size = trace_file.stat().st_size
             with trace_file.open("rb"):
                 pass
         except OSError as exc:
             raise _trace_read_failed(task.id, exc) from None
-        return FileResponse(trace_file, media_type="application/x-ndjson")
+        return StreamingResponse(
+            _trace_prefix_body(trace_file, size),
+            media_type="application/x-ndjson",
+        )
 
     # Bounded read (#260): the parsing branch must not pull a whole unbounded
     # file into memory.
