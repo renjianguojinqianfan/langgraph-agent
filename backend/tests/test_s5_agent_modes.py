@@ -798,3 +798,92 @@ def test_completed_is_not_a_live_status(tmp_path: Path) -> None:
     loaded = rebuilt.load_task("legacy")
     assert loaded is not None
     assert loaded.status == TaskStatus.INTERRUPTED
+
+
+# ── #255: finish only settles the step this round created ───────────────────
+def _finish_state(**kw: Any) -> AgentState:
+    base = dict(
+        steps=[],
+        final_answer="",
+        error="",
+        stop_requested=False,
+        round_no=1,
+    )
+    base.update(kw)
+    return _state(**base)
+
+
+def test_finish_does_not_touch_a_previous_rounds_done_step(tmp_path: Path) -> None:
+    """轮首停止时 agent 不建 step，finish 不得把上一轮已 done 的 step 改成 failed。"""
+    rt = _runtime(make_settings(tmp_path), MockLLMClient(), [])
+    state = _finish_state(
+        round_no=2,
+        stop_requested=True,
+        steps=[{"index": 1, "round": 1, "status": "done", "tool_calls": []}],
+    )
+
+    out = rt.finish(state)
+
+    assert out["status"] == "INTERRUPTED"
+    assert out["steps"][0]["status"] == "done"
+
+
+def test_finish_does_not_touch_a_done_step_in_the_same_round(
+    tmp_path: Path,
+) -> None:
+    """本轮工具已执行完（step 已 done）后停止：终态由工具侧写定，finish 不改口。"""
+    rt = _runtime(make_settings(tmp_path), MockLLMClient(), [])
+    state = _finish_state(
+        round_no=2,
+        stop_requested=True,
+        steps=[{"index": 2, "round": 2, "status": "done", "tool_calls": []}],
+    )
+
+    out = rt.finish(state)
+
+    assert out["status"] == "INTERRUPTED"
+    assert out["steps"][0]["status"] == "done"
+
+
+def test_finish_marks_the_running_step_done(tmp_path: Path) -> None:
+    """正常回答：本轮 running → done。"""
+    rt = _runtime(make_settings(tmp_path), MockLLMClient(), [])
+    state = _finish_state(
+        round_no=1,
+        final_answer="答案",
+        steps=[{"index": 1, "round": 1, "status": "running", "tool_calls": []}],
+    )
+
+    out = rt.finish(state)
+
+    assert out["status"] == "INTERRUPTED"
+    assert out["steps"][0]["status"] == "done"
+
+
+def test_finish_marks_the_running_step_failed_on_error(tmp_path: Path) -> None:
+    """出错：本轮 running → failed。"""
+    rt = _runtime(make_settings(tmp_path), MockLLMClient(), [])
+    state = _finish_state(
+        round_no=1,
+        error="boom",
+        steps=[{"index": 1, "round": 1, "status": "running", "tool_calls": []}],
+    )
+
+    out = rt.finish(state)
+
+    assert out["status"] == "FAILED"
+    assert out["steps"][0]["status"] == "failed"
+
+
+def test_finish_leaves_a_legacy_step_without_round_alone(tmp_path: Path) -> None:
+    """legacy step 无 ``round``（=0）视为不属于本轮：保守地不改。"""
+    rt = _runtime(make_settings(tmp_path), MockLLMClient(), [])
+    state = _finish_state(
+        round_no=1,
+        stop_requested=True,
+        steps=[{"index": 1, "status": "running", "tool_calls": []}],
+    )
+
+    out = rt.finish(state)
+
+    assert out["steps"][0]["status"] == "running"

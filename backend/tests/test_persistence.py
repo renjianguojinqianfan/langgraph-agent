@@ -2,8 +2,33 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from backend.api.schemas import StepRecord, Task, TaskStatus
 from backend.services.persistence import Persistence
+
+
+def _task_with_input(value: object) -> Task:
+    return Task.model_validate(
+        {
+            "id": "legacy",
+            "steps": [
+                {
+                    "index": 1,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "tool_name": "read",
+                            "input": value,
+                            "status": "success",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
 
 
 def _sample_task(task_id="abc") -> Task:
@@ -79,5 +104,65 @@ def test_failed_dump_restores_the_previous_record(settings, monkeypatch):
     assert p.save_task(replacement) is False
     assert p.load_task("t-keep") is original
     assert p.load_task("t-keep").status == TaskStatus.INTERRUPTED
+
+
+# ── #255: legacy non-dict tool-call input stays readable ────────────────────
+@pytest.mark.parametrize(
+    "legacy",
+    [
+        [{"path": "a.txt", "content": "x"}],
+        "ls -la",
+        42,
+        None,
+    ],
+)
+def test_legacy_tool_call_input_is_normalized_on_read(legacy) -> None:
+    """旧格式把入参直接存成了 list / str / int / null：读入边界包成对象。"""
+    task = _task_with_input(legacy)
+
+    assert task.steps[0].tool_calls[0].input == {"value": legacy}
+
+
+def test_dict_tool_call_input_is_unchanged() -> None:
+    """正常对象入参行为不变，不被包一层。"""
+    task = _task_with_input({"path": "a.txt"})
+
+    assert task.steps[0].tool_calls[0].input == {"path": "a.txt"}
+
+
+def test_legacy_input_in_tasks_json_loads_and_dumps_as_object(settings) -> None:
+    """旧形态 tasks.json 落盘：加载成功，导出的 ``input`` 也是对象。"""
+    (settings.data_path / "tasks.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "legacy",
+                    "status": "INTERRUPTED",
+                    "steps": [
+                        {
+                            "index": 1,
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "tool_name": "read",
+                                    "input": ["a", "b"],
+                                    "status": "success",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    p = Persistence(settings)
+    loaded = p.load_task("legacy")
+
+    assert loaded is not None
+    assert loaded.steps[0].tool_calls[0].input == {"value": ["a", "b"]}
+    dumped = loaded.model_dump(mode="json")
+    assert dumped["steps"][0]["tool_calls"][0]["input"] == {"value": ["a", "b"]}
 
 

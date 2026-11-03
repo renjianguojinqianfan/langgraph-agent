@@ -565,29 +565,48 @@ class AgentRuntime:
         keeps its own words onto the message face too — one text, one source
         (#95), otherwise the model is told「interrupted before execution」about a
         call that ran and failed.
+
+        The reply goes **in place** — after the assistant turn that asked and
+        its already-answered replies, before any newer user turn (#255). A
+        continuation appends the new user message before this sweep runs, so the
+        old append-to-the-tail shape produced ``assistant → user → tool``.
         """
         messages = state.get("messages") or []
         answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+        by_id = {r.get("id"): r for r in self._call_records(state)}
         orphans: List[str] = []
-        for msg in messages:
+        # Backwards: inserting at i+1 only shifts indexes we already visited.
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
             if msg.get("role") != "assistant":
                 continue
-            for tc in msg.get("tool_calls") or []:
-                cid = tc.get("id")
-                if cid and cid not in answered:
-                    orphans.append(cid)
-                    answered.add(cid)
+            missing = [
+                tc.get("id")
+                for tc in msg.get("tool_calls") or []
+                if tc.get("id") and tc.get("id") not in answered
+            ]
+            if not missing:
+                continue
+            insert_at = i + 1
+            while insert_at < len(messages) and messages[insert_at].get("role") == "tool":
+                insert_at += 1
+            replies: List[Dict[str, Any]] = []
+            for cid in missing:
+                answered.add(cid)
+                orphans.append(cid)
+                rec = by_id.get(cid)
+                if rec is not None and rec.get("status") == "pending":
+                    rec["status"] = "skipped"
+                    rec["error"] = DANGLING_SWEEP_TEXT
+                own = str((rec or {}).get("error") or "")
+                replies.append(
+                    self._tool_failure_message(
+                        {"id": cid, "error": own or DANGLING_SWEEP_TEXT}
+                    )
+                )
+            messages[insert_at:insert_at] = replies
         if not orphans:
             return
-
-        by_id = {r.get("id"): r for r in self._call_records(state)}
-        for cid in orphans:
-            rec = by_id.get(cid)
-            if rec is not None and rec.get("status") == "pending":
-                rec["status"] = "skipped"
-                rec["error"] = DANGLING_SWEEP_TEXT
-            own = str((rec or {}).get("error") or "")
-            self._feed_tool_failure(state, {"id": cid, "error": own or DANGLING_SWEEP_TEXT})
         logger.info("task %s swept %d dangling tool call(s) at loop entry", self.task_id, len(orphans))
 
 
@@ -688,6 +707,18 @@ class AgentRuntime:
             }
         )
 
+    def _tool_failure_message(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+        """The conversation-face reply for one un-successful call (one text, one source)."""
+        return {
+            "role": "tool",
+            "tool_call_id": rec["id"],
+            "content": json.dumps(
+                {"ok": False, "error": rec["error"] or "tool failed"},
+                ensure_ascii=False,
+                default=str,
+            ),
+        }
+
     def _feed_tool_failure(self, state: AgentState, rec: Dict[str, Any]) -> None:
         """Answer one un-successful call on the conversation face (issue #95).
 
@@ -700,7 +731,7 @@ class AgentRuntime:
         as little as the old bare ``null`` did. The success path never comes
         through here.
         """
-        self._feed_tool_reply(state, rec, {"ok": False, "error": rec["error"] or "tool failed"})
+        state.setdefault("messages", []).append(self._tool_failure_message(rec))
 
     def _feed_blocked(self, state: AgentState, rec: Dict[str, Any]) -> None:
         """Answer a policy-blocked call on the conversation face (#136).
@@ -729,9 +760,11 @@ class AgentRuntime:
         ``INTERRUPTED`` (停下, 等你说话). The task can always be continued by
         sending another message. Only an error is ``FAILED``.
 
-        The step record is marked ``done`` only when this round actually produced
-        an answer; a stop or a spent step budget leaves it ``failed`` (it did not
-        complete what it started).
+        A step this round left ``running`` is settled here: ``done`` when the
+        round produced an answer, ``failed`` on a stop / spent budget / error.
+        A step that already carries a verdict — ``tool_node`` finished it in
+        this round, or it belongs to an earlier round (a stop at the loop entry
+        skips the ``agent`` node's step creation) — is never rewritten (#255).
         """
         if state.get("stop_requested"):
             state["status"] = "INTERRUPTED"
@@ -739,7 +772,11 @@ class AgentRuntime:
             state["status"] = "FAILED"
         else:
             state["status"] = "INTERRUPTED"
-        if state.get("steps"):
-            answered = bool(state.get("final_answer")) and not state.get("error")
-            state["steps"][-1]["status"] = "done" if answered else "failed"
+        steps = state.get("steps") or []
+        if steps:
+            last = steps[-1]
+            same_round = last.get("round", 0) == int(state.get("round_no", 1) or 1)
+            if same_round and last.get("status") == "running":
+                answered = bool(state.get("final_answer")) and not state.get("error")
+                last["status"] = "done" if answered else "failed"
         return state

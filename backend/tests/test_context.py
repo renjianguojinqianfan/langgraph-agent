@@ -110,6 +110,37 @@ def _many_messages(n: int = 20) -> list:
     ]
 
 
+def assert_tool_protocol(messages: List[Dict[str, Any]]) -> None:
+    """Every assistant ``tool_calls`` block is answered, in order, right after it,
+    and no ``tool`` reply stands outside such a run.
+
+    #255: compression and the dangling sweep must never hand the LLM a history
+    that starts with an orphan ``tool`` reply or leaves an assistant call
+    unanswered.
+    """
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.get("role") == "tool":
+            raise AssertionError(
+                f"orphan tool reply at index {i}: {msg.get('tool_call_id')}"
+            )
+        calls = msg.get("tool_calls") if msg.get("role") == "assistant" else None
+        if not calls:
+            i += 1
+            continue
+        expected = [tc.get("id") for tc in calls]
+        replies: List[Any] = []
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "tool":
+            replies.append(messages[j].get("tool_call_id"))
+            j += 1
+        assert replies == expected, (
+            f"tool calls {expected} at index {i} answered by {replies}"
+        )
+        i = j
+
+
 # ── estimate_tokens ───────────────────────────────────────────
 def test_estimate_tokens_positive_and_grows():
     small = [_msg("user", "hi")]
@@ -517,12 +548,13 @@ def test_band_note_reuses_the_evict_contract():
         assert note.count(EVICT_PLACEHOLDER_PREFIX) == 1  # 不套便签
 
 
-def test_band_note_keeps_the_tool_name_when_the_call_was_truncated_away():
-    """便签的工具名反查不许被截断自缚：整列表里查得到，就不能写成 ``?``。
+def test_band_note_names_every_tool_without_splitting_the_pair():
+    """#255：为了给带内工具结果点名，不许把 assistant 调用截到带外。
 
-    T1.4 契约要求便签点名工具。截断把最旧那条 assistant 调用挤到带外之后，带内
-    那条 tool 结果照样要叫得出名字——同一条消息走带外逐出时点得出 ``read``，走带
-    内挤压也必须点得出。
+    旧断言钉住的是「截断切散配对、靠整段历史查名把便签点出来」：``keep_recent=3``
+    把 ``a1`` 截走、留下孤立的 ``t1``。配对不变量生效后这个切点被拒绝
+    （``dropped == 0``），两条工具结果改由带内挤压退场；名字仍要查得到，不降级成 ``?``。
+    这是契约变化，不是放宽：新断言多了一条「配对不许拆」。
     """
     msgs = [
         _assistant_call("c1", "read"),
@@ -533,10 +565,12 @@ def test_band_note_keeps_the_tool_name_when_the_call_was_truncated_away():
 
     out, meta = compress_messages(msgs, budget=100, keep_recent=3, trace_ref=TRACE_REF)
 
-    assert meta["dropped"] == 1  # c1 的 assistant 调用被截到带外了
+    assert meta["dropped"] == 0  # 切点会拆散 c1 的配对 → 不截断
+    assert meta["band_evicted"] == 2  # 带内挤压退场，配对原地不动
+    assert_tool_protocol(out)
     notes = _notes(out)
     assert len(notes) == 2, out
-    assert "工具: read" in notes[0], notes[0]  # 调用已在带外，名字仍要查到
+    assert "工具: read" in notes[0], notes[0]
     assert "工具: grep" in notes[1], notes[1]
     assert "工具: ?" not in notes[0] + notes[1]
 
@@ -756,3 +790,122 @@ def test_compressed_event_carries_band_evicted(tmp_path: Path):
     assert state["context_tokens"] < 12012
     # 没有新事件类型混进来。
     assert {e["type"] for e in events} == {"context_compressed"}
+
+
+# ── #255: compression never splits an assistant tool_calls / tool reply pair ──
+def test_truncate_cut_snaps_back_to_tool_pair() -> None:
+    """边界落在 assistant 与其 tool 回复之间时，切点回退到该 assistant 之前。
+
+    ``keep_recent=3`` 按位置算出的边界恰好是 ``tool(c0)``：保留段会以孤立 tool
+    开头，配对跨过压缩边界。安全切点必须回退一条（``dropped == 1``）。
+    """
+    msgs = [
+        _msg("user", "u" * 400),
+        _assistant_call("c0", "read"),
+        _tool("r0", "c0"),
+        _assistant_call("c1", "read"),
+        _tool("r1", "c1"),
+    ]
+    out, meta = compress_messages(msgs, budget=1, keep_recent=3)
+
+    assert meta["compressed"] is True
+    assert meta["dropped"] == 1, meta
+    assert out[1] is msgs[1]  # kept from the assistant that owns c0
+    assert_tool_protocol(out)
+
+
+def test_truncate_cut_multi_tool_calls_never_splits_reply_run() -> None:
+    """一个 assistant 带 3 个 call，边界落在回复段中间时整段保留。"""
+    calls = [
+        {"id": f"c{i}", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+        for i in range(3)
+    ]
+    msgs = [
+        _msg("user", "u" * 400),
+        _msg("assistant", "", tool_calls=calls),
+        _tool("r0", "c0"),
+        _tool("r1", "c1"),
+        _tool("r2", "c2"),
+        _msg("user", "next"),
+    ]
+    out, meta = compress_messages(msgs, budget=1, keep_recent=4)
+
+    assert meta["compressed"] is True
+    assert meta["dropped"] == 1, meta
+    assert out[1] is msgs[1]
+    assert [m.get("tool_call_id") for m in out if m.get("role") == "tool"] == [
+        "c0",
+        "c1",
+        "c2",
+    ]
+    assert_tool_protocol(out)
+
+
+def test_summarize_cut_uses_same_safe_boundary() -> None:
+    """``summarize`` 走同一个安全切点，摘要段也不能切散配对。"""
+    msgs = [
+        _msg("user", "u" * 400),
+        _assistant_call("c0", "read"),
+        _tool("r0", "c0"),
+        _assistant_call("c1", "read"),
+        _tool("r1", "c1"),
+    ]
+    llm = _FakeLLM("早期摘要")
+
+    out, meta = compress_messages(
+        msgs, budget=1, keep_recent=3, strategy="summarize", llm=llm
+    )
+
+    assert meta["strategy"] == "summarize"
+    assert meta["compressed"] is True
+    assert meta["dropped"] == 1, meta
+    assert llm.calls == 1
+    assert out[0] == {"role": "system", "content": "早期摘要"}
+    assert_tool_protocol(out)
+
+
+def test_no_safe_cut_reports_no_compression() -> None:
+    """整段是单个不可拆的 tool 对：没有合法切点就不截断，原列表返回（不空转）。"""
+    msgs = [
+        _msg(
+            "assistant",
+            "",
+            tool_calls=[
+                {"id": "c0", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+                {"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+            ],
+        ),
+        _tool("", "c0"),
+        _tool("", "c1"),
+    ]
+
+    out, meta = compress_messages(msgs, budget=1, keep_recent=2)
+
+    assert out is msgs
+    assert meta["compressed"] is False, meta
+    assert meta["dropped"] == 0
+    assert meta["band_evicted"] == 0
+
+
+def test_cut_recovers_after_a_legacy_orphan_reply() -> None:
+    """旧 bug 留在磁盘上的孤立 tool 回复随前缀一起丢弃，不再永久禁用压缩。
+
+    孤立回复只能证明**前缀**损坏；它落在切点左侧时对保留段无影响。若把它当成
+    全局污染，旧任务升级后 ``dropped`` 恒为 0，上下文只增不减。
+    """
+    msgs = [
+        _msg("user", "u" * 400),
+        _assistant_call("c0", "read"),
+        _tool("r0", "c0"),
+        _tool("stray", "c_old"),  # legacy orphan: no assistant before it
+        _msg("user", "next"),
+        _assistant_call("c1", "read"),
+        _tool("r1", "c1"),
+    ]
+
+    out, meta = compress_messages(msgs, budget=1, keep_recent=3)
+
+    assert meta["compressed"] is True, meta
+    assert meta["dropped"] == 4  # the orphan dies with the dropped prefix
+    assert out[1] is msgs[4]
+    assert_tool_protocol(out)

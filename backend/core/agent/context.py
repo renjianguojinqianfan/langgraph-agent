@@ -215,9 +215,9 @@ def _squeeze_band(
     :func:`compress_messages` reports ``converged=False``.
 
     ``names`` is the ``tool_call_id`` → tool name map of the **whole** history, not
-    just the band: truncation drops the oldest messages, and a band tool result
-    whose assistant call just went out of the band still has to be named in its
-    note (T1.4 contract), not degraded to ``?``.
+    just the band: since #255 the pair-safe cut keeps a band tool result and its
+    assistant call on the same side, so this is a consistency habit rather than a
+    live fallback — a band note still names a call the map can find (T1.4).
 
     Returns how many band messages gave way (0 = nothing squeezed). A message
     demoted at both notches counts once.
@@ -391,6 +391,44 @@ def summarize_messages(
         return f"[上下文摘要失败({detail})，已省略早期消息]"
 
 
+def _cut_balance(messages: List[Dict[str, Any]]) -> List[bool]:
+    """``out[i]`` — is the boundary *before* ``messages[i]`` protocol-safe?
+
+    Counts *open* assistant calls: every ``tool_calls`` entry opens one, every
+    ``tool`` reply closes one, and a surplus reply cannot open debt (the count
+    floors at zero; it only ever lives on the **dropped** side). ``out[0]`` is
+    trivially safe. Tolerating surplus replies matters: old checkpoints already
+    carry the split pairs this ticket fixes (#255), and one stale orphan must
+    not disable compression for that task forever.
+    """
+    out: List[bool] = [True]
+    balance = 0
+    for msg in messages:
+        role = msg.get("role")
+        if role == "assistant":
+            balance += len(msg.get("tool_calls") or [])
+        elif role == "tool":
+            balance = max(0, balance - 1)
+        out.append(balance == 0)
+    return out
+
+
+def _pair_safe_drop(messages: List[Dict[str, Any]], dropped: int) -> int:
+    """Retreat ``dropped`` until the cut leaves no orphan on either side (#255).
+
+    A cut between an assistant's ``tool_calls`` and its ``tool`` reply would
+    hand the model a history that starts with an unanswered reply; a cut while
+    calls are still open would drop the assistant but keep or lose the reply the
+    same way. Both are refused here before either strategy builds its candidate.
+    """
+    balance = _cut_balance(messages)
+    while dropped > 0:
+        if balance[dropped] and messages[dropped].get("role") != "tool":
+            return dropped
+        dropped -= 1
+    return 0
+
+
 def _droppable_count(messages: List[Dict[str, Any]], keep_recent: int) -> int:
     """How many of the oldest messages ``keep_recent`` lets a strategy drop (0 = none).
 
@@ -415,7 +453,7 @@ def _truncate_candidate(
     Whether the round counts as a compression is the entry point's call (the
     convergence guard), not this function's.
     """
-    dropped = _droppable_count(messages, keep_recent)
+    dropped = _pair_safe_drop(messages, _droppable_count(messages, keep_recent))
     if not dropped:
         return messages, 0
     placeholder = {
@@ -434,11 +472,12 @@ def _summarize_candidate(
 ) -> Tuple[List[Dict[str, Any]], int]:
     """The ``summarize`` layout: one LLM summary block in place of the early history.
 
-    Same ``(candidate, dropped)`` contract as :func:`_truncate_candidate`. Its early
-    exit matters twice over: with nothing dropped there is no early history to
-    summarise, so a squeeze-only round must never spend an LLM call.
+    Same ``(candidate, dropped)`` contract as :func:`_truncate_candidate`, and the
+    same pair-safe cut: with no legal boundary nothing is dropped, so a
+    squeeze-only round must never spend an LLM call. Its early exit matters twice
+    over: with nothing dropped there is no early history to summarise.
     """
-    dropped = _droppable_count(messages, keep_recent)
+    dropped = _pair_safe_drop(messages, _droppable_count(messages, keep_recent))
     if not dropped:
         return messages, 0
     summary = summarize_messages(
