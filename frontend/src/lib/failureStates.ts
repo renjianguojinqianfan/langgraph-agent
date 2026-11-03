@@ -33,6 +33,17 @@ export function historyListState(input: {
 }
 
 /**
+ * Whether the one-line error banner rides above the list. It shows on every
+ * face except the full error face (which already carries the copy and the
+ * entry) — including the search-emptied "empty": gating on "rows" hid the
+ * banner, and the retry with it, the moment the query filtered every row
+ * away (复审 LOW).
+ */
+export function listBannerVisible(error: string, state: HistoryListState): boolean {
+  return !!error && state !== "error";
+}
+
+/**
  * #256: what one list answer means. `req()` never rejects on a non-2xx, so a
  * JSON-bodied 500 (persistence failure) or 401 (expired token) used to arrive
  * as an envelope without `tasks` and the caller silently kept the empty face.

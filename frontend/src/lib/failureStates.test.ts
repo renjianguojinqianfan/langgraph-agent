@@ -3,6 +3,7 @@ import {
   detailLoadFailure,
   detailLoadState,
   historyListState,
+  listBannerVisible,
   listLoadFailure,
   listLoadOutcome,
   loginOutcome,
@@ -42,6 +43,25 @@ describe("historyListState (#256: 失败不伪装空列表)", () => {
     expect(
       historyListState({ error: "无法连接后台", loading: false, rows: 2, visible: 2 })
     ).toBe("rows");
+  });
+});
+
+describe("listBannerVisible (#256 复审 LOW: 搜索过滤空不藏错误横幅)", () => {
+  it("有错 + 行态 → 横幅在", () => {
+    expect(listBannerVisible("无法连接后台", "rows")).toBe(true);
+  });
+
+  it("有错 + 搜索过滤空（empty）→ 横幅仍在（旧条件 gating on rows 会藏掉它）", () => {
+    expect(listBannerVisible("无法连接后台", "empty")).toBe(true);
+  });
+
+  it("完整错误面自带文案与入口 → 不重复叠横幅", () => {
+    expect(listBannerVisible("无法连接后台", "error")).toBe(false);
+  });
+
+  it("无错 → 无横幅", () => {
+    expect(listBannerVisible("", "rows")).toBe(false);
+    expect(listBannerVisible("", "empty")).toBe(false);
   });
 });
 

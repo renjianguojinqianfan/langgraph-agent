@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { apiErrorText, deleteWorkspaceTasks } from "../../api/client";
-import { historyListState } from "../../lib/failureStates";
+import { historyListState, listBannerVisible } from "../../lib/failureStates";
 import { useTaskStore } from "../../store/taskStore";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
@@ -108,9 +108,11 @@ export function TaskRail() {
           onChange={setFilter}
           label="任务范围"
         />
-        {listError && listState === "rows" && (
-          // AC1: a failed refetch keeps the stale rows, but the banner still
-          // carries its retry entry — text alone left the user with no way out.
+        {listBannerVisible(listError, listState) && (
+          // AC1 + 复审 LOW: a failed refetch keeps the stale rows, but the
+          // banner still carries its retry entry — text alone left the user
+          // with no way out. The predicate keeps it visible when the search
+          // box filters every row away (state reads "empty" then).
           <div className="flex items-center gap-2">
             <p role="status" className="min-w-0 flex-1 text-meta text-state-danger">
               {listError}
