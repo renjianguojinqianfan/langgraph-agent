@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from backend.services.event_bus import EventBus
+from backend.api.sse import SSE_QUEUE_MAX
+from backend.services.event_bus import DEFAULT_BUFFER_SIZE, EventBus
 
 
 def test_subscriber_receives_published_events():
@@ -89,4 +90,7 @@ def test_replay_buffer_default_bound_is_explicit():
     """#260 AC1: the production bound is a number, not "unlimited"."""
     bus = EventBus()
     bus.publish("t1", "x", {})  # materialise the task's deque
-    assert bus._buffers["t1"].maxlen == 1000
+    assert bus._buffers["t1"].maxlen == DEFAULT_BUFFER_SIZE
+    # Single source: the SSE outbox derives its cap from the same constant, so
+    # the two bounds cannot drift apart (#260 rework).
+    assert SSE_QUEUE_MAX == DEFAULT_BUFFER_SIZE

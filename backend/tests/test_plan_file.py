@@ -528,6 +528,70 @@ def test_non_utf8_plan_fails_the_run(tmp_path, monkeypatch):
     assert "UTF-8" in (task.error or "")
 
 
+# ── #279 AC3 backend half: an unreadable plan is not an empty plan ──
+def _lock_plan_reads(monkeypatch) -> None:
+    """Make every ``.md`` read fail like a locked file (Windows AV / editor)."""
+    real_read_text = Path.read_text
+
+    def _locked(self, *args, **kwargs):
+        if self.suffix == ".md":
+            raise PermissionError(13, "Permission denied")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _locked)
+
+
+def test_unreadable_plan_is_a_readable_conflict(tmp_path, monkeypatch):
+    """#279 AC3 backend half: GET /plan must not answer 200 with an empty plan.
+
+    ``read_plan`` used to swallow the OSError into ``""``, so the frontend
+    rendered an empty plan and allowed saving over a file it could not read —
+    an empty-overwrite hole end to end. The failure now surfaces through the
+    existing PlanError face (409 on GET and on continuation).
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = tm.create_task("p", "hi", workspace=str(settings.artifacts_path))
+    task = _wait(tm, task_id)
+    workspace = Path(task.workspace)
+    plan_file.write_plan(workspace, task_id, "# 计划\n\n1. x")
+
+    _lock_plan_reads(monkeypatch)
+
+    client = TestClient(app, base_url="http://localhost")
+    client.__enter__()
+    getattr(client.app, "state").task_manager = tm
+    try:
+        got = client.get(f"/api/tasks/{task_id}/plan")
+        assert got.status_code == 409
+        assert "plan" in got.json()["detail"].lower()
+
+        # Continuation refuses too: a round must not start on a plan the
+        # backend could not read (it would silently run without it).
+        sent = client.post(f"/api/tasks/{task_id}/messages", json={"input": "go"})
+        assert sent.status_code == 409
+        assert "plan" in sent.json()["detail"].lower()
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_read_plan_distinguishes_missing_from_unreadable(tmp_path, monkeypatch):
+    """#279 AC3 backend half: "" means "no plan file", never "could not read"."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    path = plan_file.plan_path(workspace, "t1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# 计划\n", encoding="utf-8")
+
+    # Missing file stays the normal empty case.
+    assert plan_file.read_plan(workspace, "absent") == ""
+
+    # A file that exists but cannot be read raises instead of reading empty.
+    _lock_plan_reads(monkeypatch)
+    with pytest.raises(plan_file.PlanError, match="cannot be read"):
+        plan_file.read_plan(workspace, "t1")
+
+
 def test_old_plan_never_reaches_the_summarizer(tmp_path):
     settings = make_settings(
         tmp_path,

@@ -110,21 +110,20 @@ async def _overflow_scenario() -> list[int]:
     return [_frame_payload(frame)["i"] for frame in frames]
 
 
-def test_slow_consumer_overflow_drops_oldest_and_stays_live(caplog, monkeypatch):
+def test_slow_consumer_overflow_drops_oldest_and_stays_live(
+    caplog, monkeypatch, app_log_capture
+):
     """#260 AC1: the outbox is bounded; overflow drops the OLDEST queued event.
 
     Policy: with a slow consumer the stream keeps the newest events (it stays
-    near-live, and a reconnect replays the rest from the bus's bounded buffer),
-    and the loss is logged — an observability stream never drops silently.
+    near-live), and the loss is logged — an observability stream never drops
+    silently. Recovery boundary: a reconnect replays the bus buffer's window;
+    events evicted from both are gone by design (see SSE_QUEUE_MAX).
     """
-    log = logging.getLogger("agent.api.sse")
-    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    app_log_capture("api.sse")
     monkeypatch.setattr(sse, "SSE_QUEUE_MAX", 3)
-    try:
-        with caplog.at_level(logging.WARNING):
-            delivered = asyncio.run(_overflow_scenario())
-    finally:
-        log.removeHandler(caplog.handler)
+    with caplog.at_level(logging.WARNING):
+        delivered = asyncio.run(_overflow_scenario())
 
     assert delivered == [2, 3, 4]
     assert "sse outbox for task t1 overflowed" in caplog.text
@@ -132,10 +131,9 @@ def test_slow_consumer_overflow_drops_oldest_and_stays_live(caplog, monkeypatch)
     assert "closed after dropping 2 event(s)" in caplog.text
 
 
-def test_prompt_consumer_never_drops(caplog):
+def test_prompt_consumer_never_drops(caplog, app_log_capture):
     """The bound only bites on a real backlog: no drop, no warning."""
-    log = logging.getLogger("agent.api.sse")
-    log.addHandler(caplog.handler)  # the app logger has propagate=False
+    app_log_capture("api.sse")
 
     async def scenario() -> list[int]:
         bus = EventBus()
@@ -150,11 +148,8 @@ def test_prompt_consumer_never_drops(caplog):
             await agen.aclose()
         return delivered
 
-    try:
-        with caplog.at_level(logging.WARNING):
-            delivered = asyncio.run(scenario())
-    finally:
-        log.removeHandler(caplog.handler)
+    with caplog.at_level(logging.WARNING):
+        delivered = asyncio.run(scenario())
 
     assert delivered == [0, 1, 2, 3]
     assert "overflowed" not in caplog.text

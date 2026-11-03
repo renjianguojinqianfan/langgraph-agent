@@ -236,6 +236,12 @@ class TaskManager:
         self._lock = threading.Lock()
         self._active_states: Dict[str, AgentState] = {}
         self._threads: Dict[str, threading.Thread] = {}
+        # #260: set once shutdown() ran to completion, so a repeat call (test
+        # teardown, a second lifespan exit) says "already complete" instead of
+        # replaying the whole release sequence. Read via getattr in shutdown()
+        # for the same half-constructed-manager reason the other attributes
+        # there are.
+        self._shutdown_complete = False
         # Issue #4: with a checkpointer mounted, langgraph hands nodes a
         # per-superstep COPY of the state, so mutating ``_active_states``
         # (legacy path) never reaches a running graph. This authoritative
@@ -529,6 +535,23 @@ class TaskManager:
             logger.info("Registered %d MCP tool(s).", added)
 
     # ── P2 item 1: graceful shutdown ──
+    @staticmethod
+    def _release_step(label: str, action: Callable[[], None]) -> bool:
+        """Run one shutdown step under one log discipline (#260).
+
+        Success logs ``shutdown: <label> done``; a failure logs a warning and
+        returns False, so the caller's final line can tell "complete" from
+        "finished with errors" without every step repeating the
+        try/except/else shape.
+        """
+        try:
+            action()
+        except Exception as exc:
+            logger.warning("shutdown: %s failed: %s", label, exc)
+            return False
+        logger.info("shutdown: %s done", label)
+        return True
+
     def shutdown(self) -> None:
         """Release process-level resources (MCP child processes).
 
@@ -538,19 +561,18 @@ class TaskManager:
         #260: every step logs. A shutdown that hung on a worker or skipped a
         resource used to leave no trace at all in the log; the operator now
         sees begin → MCP cleanup → worker join → store close → done, and a
-        warning names whatever did not complete.
+        warning names whatever did not complete. A repeat call after a
+        completed shutdown says so instead of replaying the whole sequence
+        (which read as if resources were released a second time).
         """
+        if getattr(self, "_shutdown_complete", False):
+            logger.info("shutdown: already complete; nothing to release")
+            return
         logger.info("shutdown: begin")
         failed = False
         mcp = getattr(self, "_mcp", None)
         if mcp is not None:
-            try:
-                mcp.cleanup()
-            except Exception as exc:
-                logger.warning("MCP cleanup failed: %s", exc)
-                failed = True
-            else:
-                logger.info("shutdown: MCP child processes cleaned up")
+            failed = not self._release_step("MCP cleanup", mcp.cleanup)
             self._mcp = None
         # Let in-flight workers finish committing their checkpoints BEFORE the
         # sqlite connection goes away — closing under a writing thread is what
@@ -568,23 +590,21 @@ class TaskManager:
             self._known_secrets.clear()
             self._round_models.clear()
         if alive:
+            # Terminal line for this path: the warning names the condition and
+            # its consequence, and the next shutdown() retries the join — the
+            # flag below stays unset precisely so that retry can still close
+            # the connection.
             logger.warning(
-                "shutdown: %d worker thread(s) still alive after 5s; leaving the "
-                "checkpoint connection open so they can finish writing. Process "
-                "exit will close it.",
+                "shutdown: incomplete — %d worker thread(s) still alive after "
+                "5s; leaving the checkpoint connection open so they can finish "
+                "writing. Process exit will close it.",
                 alive,
             )
             return
         logger.info("shutdown: all worker threads joined")
         conn = getattr(self, "_checkpoint_conn", None)
         if conn is not None:
-            try:
-                conn.close()
-            except Exception as exc:
-                logger.warning("checkpoint connection close failed: %s", exc)
-                failed = True
-            else:
-                logger.info("shutdown: checkpoint connection closed")
+            failed = not self._release_step("checkpoint connection close", conn.close) or failed
             self._checkpointer = None
             self._checkpoint_conn = None
         # "complete" is a claim about every step: a warning above must not be
@@ -593,6 +613,7 @@ class TaskManager:
             logger.warning("shutdown: finished with errors (see the warnings above)")
         else:
             logger.info("shutdown: complete")
+        self._shutdown_complete = True
 
     # ── creation / query ──
     @staticmethod

@@ -234,7 +234,14 @@ class _BrokenHandle:
         pass
 
 
-def test_trace_write_failure_is_counted_and_logged(tmp_path, caplog):
+class _CloseBoomHandle(_BrokenHandle):
+    """A handle whose close() fails too — the disk-full rework scenario."""
+
+    def close(self) -> None:
+        raise OSError("close boom")
+
+
+def test_trace_write_failure_is_counted_and_logged(tmp_path, caplog, app_log_capture):
     """#260 AC2: a failed write is counted and logged — never silent.
 
     ``EventBus.publish`` swallows subscriber exceptions by contract ("a bad
@@ -242,22 +249,18 @@ def test_trace_write_failure_is_counted_and_logged(tmp_path, caplog):
     signal a disk-full trace would lose every event invisibly. The publisher
     must also stay unbroken: both ``publish`` calls return normally.
     """
-    log = logging.getLogger("agent.trace")
-    log.addHandler(caplog.handler)  # the app logger has propagate=False
-    try:
-        with caplog.at_level(logging.WARNING):
-            settings = make_settings(tmp_path)
-            bus = EventBus()
-            rec = TraceRecorder(settings)
-            rec.attach(bus, "t1")
-            rec._files["t1"] = _BrokenHandle()  # swap in the failing handle
-            bus.publish("t1", "a", {"n": 1})
-            bus.publish("t1", "b", {"n": 2})
-            # Observable signal: the loss is counted per task, live.
-            assert rec.write_failures == {"t1": 2}
-            rec.close("t1")
-    finally:
-        log.removeHandler(caplog.handler)
+    app_log_capture("trace")
+    with caplog.at_level(logging.WARNING):
+        settings = make_settings(tmp_path)
+        bus = EventBus()
+        rec = TraceRecorder(settings)
+        rec.attach(bus, "t1")
+        rec._files["t1"] = _BrokenHandle()  # swap in the failing handle
+        bus.publish("t1", "a", {"n": 1})
+        bus.publish("t1", "b", {"n": 2})
+        # Observable signal: the loss is counted per task, live.
+        assert rec.write_failures == {"t1": 2}
+        rec.close("t1")
 
     # First failure logged with traceback; later ones counted, not repeated —
     # a disk-full run must not flood the log one line per event.
@@ -268,6 +271,34 @@ def test_trace_write_failure_is_counted_and_logged(tmp_path, caplog):
     assert "lost 2 event(s) to write failures" in caplog.text
     # close() pops the counter: the next era starts from a clean signal.
     assert rec.write_failures == {}
+
+
+def test_trace_close_failure_still_logs_summary_and_unsubscribes(
+    tmp_path, caplog, app_log_capture
+):
+    """#260 rework: a failing ``fh.close()`` must not skip summary/unsubscribe.
+
+    Disk-full is exactly when close() re-raises, and the old ordering put both
+    the loss summary and the bus unsubscribe behind that exception — the one
+    scenario this mechanism exists for lost both (summary invisible, callback
+    leaked into the next era).
+    """
+    app_log_capture("trace")
+    settings = make_settings(tmp_path)
+    bus = EventBus()
+    rec = TraceRecorder(settings)
+    rec.attach(bus, "t1")
+    rec._files["t1"] = _CloseBoomHandle()  # write AND close fail
+    with caplog.at_level(logging.WARNING):
+        bus.publish("t1", "a", {"n": 1})
+        rec.close("t1")  # must not raise, whatever the disk does
+        bus.publish("t1", "b", {"n": 2})  # after close — must not be appended
+
+    assert "trace file close failed for t1" in caplog.text
+    assert "lost 1 event(s) to write failures" in caplog.text
+    assert rec.write_failures == {}
+    # Unsubscribe survived the close failure: no subscriber is left behind.
+    assert not bus._subs.get("t1")
 
 
 # ── GET /api/tasks/{id}/trace ─────────────────────────────────
@@ -506,35 +537,58 @@ def test_trace_api_json_format_rejects_non_object_and_missing_fields(trace_clien
         assert expected in r.json()["detail"]
 
 
-def test_trace_api_rejects_oversized_trace(trace_client, monkeypatch):
-    """#260 AC3: the file is never read whole into memory — over cap is a 413."""
-    client, settings = trace_client
-    tid, _ = _finished_task_with_trace(client, settings)
-    monkeypatch.setattr(routes, "TRACE_MAX_BYTES", 16)
+def test_trace_api_json_format_caps_oversized_files_but_raw_streams(
+    trace_client, monkeypatch
+):
+    """#260 rework: the size cap guards the PARSING branch only.
 
-    r = client.get(f"/api/tasks/{tid}/trace")
-    assert r.status_code == 413
-    assert "byte limit" in r.json()["detail"]
+    Raw NDJSON is the frontend's only trace consumer (replay + export), and a
+    long trace used to be replayable — capping it was a product regression, so
+    the raw branch streams the file instead: no memory cost at any size, and
+    never a refusal. ``?format=json`` must parse every line, so it keeps the
+    bound (413, never a silently truncated list).
+    """
+    client, settings = trace_client
+    tid, trace_file = _finished_task_with_trace(client, settings)
+    monkeypatch.setattr(routes, "TRACE_MAX_BYTES", 16)
 
     r_json = client.get(f"/api/tasks/{tid}/trace?format=json")
     assert r_json.status_code == 413
+    assert "byte limit" in r_json.json()["detail"]
+
+    raw = client.get(f"/api/tasks/{tid}/trace")
+    assert raw.status_code == 200
+    assert raw.headers["content-type"].startswith("application/x-ndjson")
+    # Streamed byte-for-byte (compared as BYTES: on Windows the recorder's
+    # text-mode append puts \r\n on disk, and read_text would normalise it —
+    # the export-identity contract is about the bytes the client receives).
+    assert raw.content == trace_file.read_bytes()
 
 
-def test_trace_api_rejects_non_utf8_trace(trace_client):
-    """#260 AC3: a non-UTF-8 file is a clear 422, not an unhandled decode error."""
+def test_trace_api_json_format_rejects_non_utf8_trace(trace_client):
+    """#260 AC3: a non-UTF-8 file is a clear 422 on the parsing branch.
+
+    The raw branch streams bytes as-is (byte-for-byte passthrough), so the
+    decode check belongs to ``?format=json`` — the only branch that parses.
+    """
     client, settings = trace_client
     tid, trace_file = _finished_task_with_trace(client, settings)
-    trace_file.write_bytes(
-        b'{"type":"a","data":{},"ts":1}\n\xff\xfe not utf-8\n'
-    )
+    trace_file.write_bytes(b'{"type":"a","data":{},"ts":1}\n\xff\xfe not utf-8\n')
 
-    r = client.get(f"/api/tasks/{tid}/trace")
+    r = client.get(f"/api/tasks/{tid}/trace?format=json")
     assert r.status_code == 422
     assert "UTF-8" in r.json()["detail"]
 
 
-def test_trace_api_read_failure_is_logged_and_returns_500(trace_client, monkeypatch, caplog):
-    """#260 AC2: a read failure is a logged 500, not an unhandled traceback."""
+def test_trace_api_read_failure_is_logged_and_returns_500(
+    trace_client, monkeypatch, caplog, app_log_capture
+):
+    """#260 AC2: a read failure is a logged 500, not an unhandled traceback.
+
+    The response detail is deliberately generic (#260 rework): the OSError text
+    (Windows: absolute paths, lock holders) is operator information and stays
+    in the server log.
+    """
     client, settings = trace_client
     tid, _ = _finished_task_with_trace(client, settings)
 
@@ -542,15 +596,15 @@ def test_trace_api_read_failure_is_logged_and_returns_500(trace_client, monkeypa
         raise OSError("file is locked by another process")
 
     monkeypatch.setattr(Path, "open", _locked_open)
-    log = logging.getLogger("agent.api.routes")
-    log.addHandler(caplog.handler)  # the app logger has propagate=False
-    try:
-        with caplog.at_level(logging.ERROR):
-            r = client.get(f"/api/tasks/{tid}/trace")
-    finally:
-        log.removeHandler(caplog.handler)
+    app_log_capture("api.routes")
+    with caplog.at_level(logging.ERROR):
+        r = client.get(f"/api/tasks/{tid}/trace")
 
     assert r.status_code == 500
-    assert "could not be read" in r.json()["detail"]
-    assert "file is locked" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert "could not be read" in detail
+    # The raw OS error must NOT reach the client…
+    assert "file is locked" not in detail
+    # …but the operator log keeps the full cause.
+    assert "file is locked" in caplog.text
     assert f"trace read failed for task {tid}" in caplog.text

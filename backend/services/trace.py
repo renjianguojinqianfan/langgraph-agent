@@ -25,12 +25,15 @@ flush`` so the on-disk order matches the publish order. ``attach`` registers
 its callback outside the lock — the bus is never called while holding it —
 and removes it again if a concurrent :meth:`close` won the race.
 
-Write failures are never silent (#260): :class:`EventBus` swallows subscriber
-exceptions by contract ("a bad subscriber must not break the publisher"), so a
-disk-full or I/O-error trace would otherwise lose every event with no signal.
-The recorder counts the loss per task (:attr:`TraceRecorder.write_failures`),
+I/O write failures are never silent (#260): :class:`EventBus` swallows
+subscriber exceptions by contract ("a bad subscriber must not break the
+publisher"), so a disk-full trace would otherwise lose every event with no
+signal. The recorder counts the loss per task (:attr:`TraceRecorder.write_failures`),
 logs the first failure with its traceback, and logs one end-of-era summary in
 :meth:`close` — a disk full for the whole run costs exactly two log lines.
+Scope is the file I/O (``OSError`` from write / flush / close): serialization
+cannot fail for recorder-written events (``json.dumps`` runs with
+``default=str`` on plain dicts), so there is no third failure class to report.
 """
 
 from __future__ import annotations
@@ -120,7 +123,13 @@ class TraceRecorder:
                     )
 
     def close(self, task_id: str) -> None:
-        """Write ``trace_end``, unsubscribe, and close the file handle."""
+        """Write ``trace_end``, unsubscribe, and close the file handle.
+
+        Best-effort by design (#260): every step is guarded so a failing disk
+        can never skip the loss summary or leak the bus subscription. A
+        ``close()`` that dies inside ``finally: fh.close()`` used to do exactly
+        that — in the disk-full scenario this whole mechanism exists for.
+        """
         with self._lock:
             fh = self._files.pop(task_id, None)
             cb = self._cbs.pop(task_id, None)
@@ -135,8 +144,10 @@ class TraceRecorder:
                         "trace_end write failed for %s; the JSONL has no end marker",
                         task_id,
                     )
-                finally:
+                try:
                     fh.close()
+                except OSError:
+                    logger.exception("trace file close failed for %s", task_id)
             # End-of-era summary (#260): the per-event warning fires once, so a
             # run that failed from the first write would otherwise leave no
             # end-of-run trace of the loss.
@@ -148,7 +159,9 @@ class TraceRecorder:
                     task_id,
                     lost,
                 )
-        # Unsubscribe outside the lock to avoid any deadlock risk.
+        # Unsubscribe outside the lock to avoid any deadlock risk. Reached even
+        # when the file steps above failed: a leaked callback would double-write
+        # into the next era's trace (#213).
         if bus is not None and cb is not None:
             bus.unsubscribe(task_id, cb)
 

@@ -171,7 +171,7 @@ def test_shutdown_closes_connection_when_idle(tmp_path):
     assert tm._checkpointer is None
 
 
-def test_shutdown_logs_each_step(tmp_path, caplog):
+def test_shutdown_logs_each_step(tmp_path, caplog, app_log_capture):
     """#260 AC4: a normal shutdown is visible in the log, step by step.
 
     Before this, a clean shutdown logged nothing at all — an operator could
@@ -180,32 +180,24 @@ def test_shutdown_logs_each_step(tmp_path, caplog):
     settings = make_settings(tmp_path, checkpoint_enabled=True)
     tm = make_manager(settings, MockLLMClient())
     assert tm._checkpoint_conn is not None
-    log = logging.getLogger("agent.task_manager")
-    log.addHandler(caplog.handler)  # the app logger has propagate=False
-    try:
-        with caplog.at_level(logging.INFO):
-            tm.shutdown()
-    finally:
-        log.removeHandler(caplog.handler)
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
 
     assert "shutdown: begin" in caplog.text
     assert "all worker threads joined" in caplog.text
-    assert "checkpoint connection closed" in caplog.text
+    assert "shutdown: checkpoint connection close done" in caplog.text
     assert "shutdown: complete" in caplog.text
 
 
-def test_shutdown_logs_the_incomplete_path(tmp_path, caplog):
+def test_shutdown_logs_the_incomplete_path(tmp_path, caplog, app_log_capture):
     """#260 AC4: a worker outliving the join is named in the log — and the
     idle path's "complete" line must not appear for it."""
     tm = make_manager(make_settings(tmp_path), MockLLMClient())
     tm._threads["t-live"] = _AliveThread()
-    log = logging.getLogger("agent.task_manager")
-    log.addHandler(caplog.handler)  # the app logger has propagate=False
-    try:
-        with caplog.at_level(logging.INFO):
-            tm.shutdown()
-    finally:
-        log.removeHandler(caplog.handler)
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
 
     assert "still alive after 5s" in caplog.text
     assert "shutdown: complete" not in caplog.text
@@ -221,7 +213,7 @@ class _BoomConn:
         raise RuntimeError("close boom")
 
 
-def test_shutdown_logs_failures_instead_of_success_lines(tmp_path, caplog):
+def test_shutdown_logs_failures_instead_of_success_lines(tmp_path, caplog, app_log_capture):
     """#260 rework (S3): a failed step must not be followed by its success line.
 
     Two contradictory lines ("cleanup failed" + "cleaned up") make the log
@@ -232,22 +224,39 @@ def test_shutdown_logs_failures_instead_of_success_lines(tmp_path, caplog):
     tm = make_manager(settings, MockLLMClient())
     tm._mcp = _BoomMcp()
     tm._checkpoint_conn = _BoomConn()
-    log = logging.getLogger("agent.task_manager")
-    log.addHandler(caplog.handler)  # the app logger has propagate=False
-    try:
-        with caplog.at_level(logging.INFO):
-            tm.shutdown()
-    finally:
-        log.removeHandler(caplog.handler)
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
 
-    assert "MCP cleanup failed" in caplog.text
+    assert "shutdown: MCP cleanup failed" in caplog.text
     assert "mcp boom" in caplog.text
-    assert "MCP child processes cleaned up" not in caplog.text
-    assert "checkpoint connection close failed" in caplog.text
+    assert "shutdown: MCP cleanup done" not in caplog.text
+    assert "shutdown: checkpoint connection close failed" in caplog.text
     assert "close boom" in caplog.text
-    assert "checkpoint connection closed" not in caplog.text
+    assert "shutdown: checkpoint connection close done" not in caplog.text
     assert "shutdown: finished with errors" in caplog.text
     assert "shutdown: complete" not in caplog.text
+
+
+def test_second_shutdown_says_already_complete(tmp_path, caplog, app_log_capture):
+    """#260 rework (AC4): a repeat shutdown must not replay the sequence.
+
+    Replaying "begin → … → complete" read as if resources had been released a
+    second time; the flag makes the repeat an explicit no-op line instead.
+    The alive path deliberately stays un-flagged so a later call can still
+    finish the job (close the connection once the workers are gone).
+    """
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    tm = make_manager(settings, MockLLMClient())
+    tm.shutdown()
+    caplog.clear()  # only the REPEAT call's records are under test here
+    app_log_capture("task_manager")
+    with caplog.at_level(logging.INFO):
+        tm.shutdown()
+
+    assert "already complete" in caplog.text
+    assert "shutdown: begin" not in caplog.text
+    assert "checkpoint connection close done" not in caplog.text
 
 
 def test_resume_trace_failure_leaves_task_interrupted(tmp_path, monkeypatch):

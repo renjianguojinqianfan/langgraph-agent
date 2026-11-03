@@ -17,7 +17,13 @@ from typing import Any, Dict, List, Optional
 
 
 class PlanError(RuntimeError):
-    """The plan file exists but cannot be read as the agreed UTF-8 Markdown."""
+    """The plan file exists but cannot be read as the agreed UTF-8 Markdown.
+
+    Covers a non-UTF-8 file and any other I/O failure (lock, permission
+    denial, device error): the file is there, so answering "no plan" would
+    hide a real failure behind an empty string — the frontend would render an
+    empty plan and allow saving over a file it could not read (#279 AC3).
+    """
 
 
 PLAN_DIR = Path(".qianfan") / "plans"
@@ -58,16 +64,24 @@ def ensure_gitignore(workspace: Path) -> None:
 
 
 def read_plan(workspace: Path, task_id: str) -> str:
+    """The plan file's text; ``""`` means "no plan file" and nothing else.
+
+    A missing file is the normal empty case. A file that exists but cannot be
+    read raises :class:`PlanError` so the failure surfaces (GET /plan answers
+    non-200; a round refuses to start) instead of masquerading as an empty
+    plan that the UI would happily overwrite (#279 AC3 backend half).
+    """
+    path = plan_path(workspace, task_id)
     try:
-        text = plan_path(workspace, task_id).read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
     except UnicodeDecodeError as exc:
+        raise PlanError(f"plan file is not valid UTF-8: {path}") from exc
+    except OSError as exc:
         raise PlanError(
-            f"plan file is not valid UTF-8: {plan_path(workspace, task_id)}"
+            f"plan file cannot be read ({type(exc).__name__}: {exc}): {path}"
         ) from exc
-    except OSError:
-        return ""
     if text.strip():
         ensure_gitignore(workspace)
     return text

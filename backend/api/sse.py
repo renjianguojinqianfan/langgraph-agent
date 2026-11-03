@@ -9,7 +9,7 @@ import time
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
-from ..services.event_bus import Event, EventBus
+from ..services.event_bus import DEFAULT_BUFFER_SIZE, Event, EventBus
 from ..utils.logging import get_logger
 
 logger = get_logger("api.sse")
@@ -18,10 +18,16 @@ logger = get_logger("api.sse")
 #: loop thread from the task's worker thread, and that hand-off used to queue
 #: without limit: a slow consumer (backgrounded tab, stalled proxy) let the
 #: heap grow for as long as the task ran. On overflow the OLDEST queued event
-#: is dropped — the stream stays near-live, and a client that lost events can
-#: reconnect and replay them from the bus's bounded per-task buffer. Drops are
-#: logged, never silent: an observability stream losing data must be visible.
-SSE_QUEUE_MAX = 1000
+#: is dropped — the stream stays near-live. Derived from the bus's replay
+#: buffer so the two caps cannot drift.
+#:
+#: Recovery boundary, stated honestly: a reconnect replays the bus buffer's
+#: most recent events, so an event dropped from the outbox is recoverable only
+#: while it is still inside that window. Once it has also been evicted from
+#: the buffer it is gone by design — the alternative (unbounded growth) is
+#: exactly what this bound removes. Drops are logged, never silent: an
+#: observability stream losing data must be visible.
+SSE_QUEUE_MAX = DEFAULT_BUFFER_SIZE
 
 
 def sse_format(event: Event) -> str:
@@ -62,7 +68,7 @@ def sse_response(task_id: str, event_bus: EventBus, request: Request) -> Streami
             if dropped == 1:
                 logger.warning(
                     "sse outbox for task %s overflowed (cap %d); dropping oldest "
-                    "queued events — a reconnect replays them from the bus buffer",
+                    "queued events — a reconnect replays the bus buffer's window",
                     task_id,
                     SSE_QUEUE_MAX,
                 )
