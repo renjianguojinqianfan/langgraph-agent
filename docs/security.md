@@ -44,15 +44,19 @@
 
 公开仓库里的 Markdown、截图、验证证据都按**公开信息**处理。硬规则：
 
-- 不得出现 `C:\Users\<用户名>`、家目录 / 个人笔记路径、主机名、内网地址、一次性工作稿内容。
-- 文档一律用占位符：`<repo-root>` / `<workspace>` / `<tmp>` / `<knowledge-base>` / `<user>`；
+- 不得出现 `C:\Users\<user>`、家目录 / 个人笔记路径、主机名、内网地址、一次性工作稿内容。
+- 文档一律用占位符：`<repo-root>` / `<workspace>` / `<tmp>` / `<knowledge-base>` / `<user>` /
+  `<git-root>` / `<python-install>` / `<personal-notes>`（后三个为 #262 补：Git 安装根 /
+  独立 Python 安装根 / 个人笔记库根；门禁的放行清单与本行逐字一致）。
   `.pre-commit-config.yaml` 等配置用**仓库相对路径**，不写本机绝对路径。
 - **机械门（#262）**：`python scripts/check_no_machine_paths.py`（本地脚本，与
   `check_doc_links.py` 同先例，未进 CI）扫描全部 tracked Markdown、`docs/` 下验证证据
   （.json / .txt）与 tracked `lessons/`（含 HTML），命中「绝对路径且机器特有」即红。放行面是
-  **确切清单**而非形态猜测：带 `<占位符>` 段的路径、四个系统根（Windows / Program Files /
-  Program Files (x86) / ProgramData）、省略号形态——所以新写的真实路径（另一个盘符检出目录、另一个用户名的主目录）
-  照样红。代码不在扫描面：路径边界测试本来就要内嵌绝对路径输入（如临时目录下的文件）。
+  **确切清单**而非形态猜测：① 首个占位符之前的机器特有段全是通用根——`C:\Users\<user>` 放行，
+  用户名写真实值、占位符只跟在后面的形态照样红（PR #283 返工实证的两种绕过形态，由脚本自测锁定）；
+  ② 四个系统根（Windows / Program Files / Program Files (x86) / ProgramData，按带空格完整前缀切分）；
+  ③ 省略号形态（`C:\...`）——所以新写的真实路径（另一个盘符检出目录、另一个用户名的主目录）照样红。
+  代码不在扫描面：路径边界测试本来就要内嵌绝对路径输入（如临时目录下的文件）。
 - **与「历史快照不改」的边界**：暴露面清理优先于快照冻结——`docs/archive/` 只做占位符替换、
   不改语义（2026-10-24 已做一轮；规则出处见 `docs/agents/workflow.md` 步 3.5）。
 - 验证证据（`docs/assets/verification/`）落库前必须脱敏：用户名、用户配置目录、本机绝对路径
