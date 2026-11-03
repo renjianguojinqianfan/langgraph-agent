@@ -27,6 +27,12 @@ interface TaskState {
   detailError: Record<string, string>;
   /** #256: bumped by `retryDetail`; the snapshot effect keys on it. */
   detailRevision: number;
+  /**
+   * #256: the stored token expired (a 401 on any face). Global on purpose —
+   * a dead token fails every request, and the way back is dropping it and
+   * logging in again (AuthGuard only checks that a token exists).
+   */
+  authExpired: boolean;
 
   setTasks: (tasks: Task[]) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -52,6 +58,8 @@ interface TaskState {
   retryDetail: () => void;
   /** #256: mirror a saved plan version onto the task so PlanAnchor can't go stale. */
   setPlanVersion: (id: string, version: number) => void;
+  /** #256: a 401 answered; every face offers re-login while this is set. */
+  setAuthExpired: (expired: boolean) => void;
 }
 
 /** Remove ids from every per-task cache; clear the selection if it was removed. */
@@ -59,16 +67,19 @@ function dropTasks(state: TaskState, ids: Set<string>): Partial<TaskState> {
   const detail = { ...state.detail };
   const eventsByTask = { ...state.eventsByTask };
   const markers = { ...state.markers };
+  const detailError = { ...state.detailError };
   for (const id of ids) {
     delete detail[id];
     delete eventsByTask[id];
     delete markers[id];
+    delete detailError[id];
   }
   return {
     tasks: state.tasks.filter((task) => !ids.has(task.id)),
     detail,
     eventsByTask,
     markers,
+    detailError,
     currentTaskId:
       state.currentTaskId && ids.has(state.currentTaskId)
         ? null
@@ -88,9 +99,12 @@ export const useTaskStore = create<TaskState>((set) => ({
   settingsOpen: false,
   listRevision: 0,
   listError: "",
-  listLoading: false,
+  // #256: starts true — the first list answer has not arrived, and the empty
+  // copy waiting for it is the AC7 flash (effect-set true lands one frame late).
+  listLoading: true,
   detailError: {},
   detailRevision: 0,
+  authExpired: false,
 
   setTasks: (tasks) => set({ tasks }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
@@ -106,6 +120,7 @@ export const useTaskStore = create<TaskState>((set) => ({
       return { detailError };
     }),
   retryDetail: () => set((state) => ({ detailRevision: state.detailRevision + 1 })),
+  setAuthExpired: (authExpired) => set({ authExpired }),
   setPlanVersion: (id, version) =>
     set((state) => {
       const prev = state.detail[id];

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "../types";
 import { useTaskStore } from "./taskStore";
 
@@ -32,6 +32,7 @@ beforeEach(() => {
     listLoading: false,
     detailError: {},
     detailRevision: 0,
+    authExpired: false,
     historyFilter: "current",
   });
 });
@@ -108,6 +109,23 @@ describe("removeWorkspaceTasks (#241)", () => {
     expect(state.currentTaskId).toBeNull();
     expect(state.tasks.map((row) => row.id)).toEqual(["b1"]);
   });
+
+  it("#256 评审：dropTasks 连 detailError 一起清（per-task cache 不留残留）", () => {
+    useTaskStore.setState({
+      tasks: [task("a1", "E:\\a"), task("b1", "E:\\b")],
+      detailError: { a1: "任务不存在或已被删除。" },
+    });
+
+    useTaskStore.getState().removeTask("a1");
+    expect(useTaskStore.getState().detailError.a1).toBeUndefined();
+
+    useTaskStore.setState({
+      tasks: [task("a2", "E:\\a")],
+      detailError: { a2: "无法连接后台；确认服务在运行后再试。" },
+    });
+    useTaskStore.getState().removeWorkspaceTasks("E:\\a");
+    expect(useTaskStore.getState().detailError.a2).toBeUndefined();
+  });
 });
 
 describe("#256 列表失败态", () => {
@@ -162,6 +180,42 @@ describe("#256 选中任务快照失败", () => {
     // The error stays visible until the retry answers.
     expect(state.detailError.t1).toBe("炸了");
   });
+
+  it("#256 评审 AC2：detail 已 seed + GET 失败 → 错误态与 detail 并存（错误面不被遮住）", () => {
+    // SSE replay / a list row seeds the detail first; the GET then fails.
+    // TaskPanel must still be able to render the error face (and its
+    // retry / new-task entries) next to the partial task.
+    useTaskStore.setState({
+      currentTaskId: "t1",
+      detail: { t1: task("t1") },
+    });
+
+    useTaskStore.getState().setDetailError("t1", "任务不存在或已被删除。");
+
+    const state = useTaskStore.getState();
+    expect(state.detail.t1).toBeDefined();
+    expect(state.detailError.t1).toBe("任务不存在或已被删除。");
+    // The entries the composer copy points at stay reachable: the retry
+    // revision still bumps and the error persists until the retry answers.
+    useTaskStore.getState().retryDetail();
+    expect(useTaskStore.getState().detailError.t1).toBe("任务不存在或已被删除。");
+  });
+});
+
+describe("#256 authExpired（401 全局位）", () => {
+  it("setAuthExpired 记录/清除，与 detailError 互不依赖", () => {
+    useTaskStore.getState().setAuthExpired(true);
+    expect(useTaskStore.getState().authExpired).toBe(true);
+
+    useTaskStore.getState().setAuthExpired(false);
+    expect(useTaskStore.getState().authExpired).toBe(false);
+  });
+
+  it("401 置位不清 detail（重新登录后回到原任务）", () => {
+    useTaskStore.setState({ detail: { t1: task("t1") } });
+    useTaskStore.getState().setAuthExpired(true);
+    expect(useTaskStore.getState().detail.t1).toBeDefined();
+  });
 });
 
 describe("#256 PlanAnchor 版本同步", () => {
@@ -186,5 +240,17 @@ describe("#256 PlanAnchor 版本同步", () => {
     useTaskStore.getState().setPlanVersion("t1", 0);
 
     expect(useTaskStore.getState().detail).toBe(before);
+  });
+});
+
+describe("#256 AC7 首帧不闪空态", () => {
+  it("listLoading 初值 true——首个列表应答到达前显示加载态", async () => {
+    // A fresh module instance: the effect in TaskView sets the flag one frame
+    // after mount, so a false initial value flashes the empty copy first.
+    vi.resetModules();
+    const fresh = await import("./taskStore");
+    expect(fresh.useTaskStore.getState().listLoading).toBe(true);
+    vi.resetModules();
+    await import("./taskStore");
   });
 });
