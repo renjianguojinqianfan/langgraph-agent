@@ -131,14 +131,17 @@ export function planLoadState(status: number): PlanLoadState {
  * Why the plan read failed. A missing plan *file* is not a failure (the
  * backend answers 200 with empty text); these are the read failures:
  * `backend/api/routes.py` raises 404 for a vanished task and 409 for a plan
- * file that is not the agreed UTF-8 Markdown. A 2xx with an unusable
- * envelope is its own wording — "HTTP 200" in a failure line reads as a
- * contradiction.
+ * file that is not the agreed UTF-8 Markdown. A 401 is the dead token — the
+ * retry button cannot fix it, so the copy points at re-login. A 2xx with an
+ * unusable envelope is its own wording — "HTTP 200" in a failure line reads
+ * as a contradiction.
  */
 export function planLoadFailure(status: number, detail?: string): string {
   switch (status) {
     case 0:
       return "无法连接后台；确认服务在运行后重试。";
+    case 401:
+      return "登录已失效；重新登录后再试。";
     case 404:
       return "任务不存在或已被删除。";
     case 409:

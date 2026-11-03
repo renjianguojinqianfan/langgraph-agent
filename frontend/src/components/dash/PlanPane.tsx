@@ -6,6 +6,7 @@ import { isParked } from "../../lib/taskState";
 import { useTaskStore } from "../../store/taskStore";
 import type { Task } from "../../types";
 import { Button } from "../ui/Button";
+import { ReauthAction } from "../ReauthAction";
 import { Status } from "../ui/Status";
 import { parsePlanToc, type TocItem } from "./planToc";
 
@@ -58,8 +59,24 @@ export function PlanPane({ task }: { task: Task }) {
   // #256: a saved plan version must reach the store, or PlanAnchor keeps
   // showing the stale one and the next write starts from the wrong version.
   const setPlanVersion = useTaskStore((s) => s.setPlanVersion);
+  // #256 (复审): a 401 on the plan read needs the re-login entry — the retry
+  // button cannot fix a dead token. Per-source flag, like the other faces.
+  const planAuthExpired = useTaskStore((s) => s.authExpired.plan);
+  const setAuthExpired = useTaskStore((s) => s.setAuthExpired);
 
   const editable = isParked(task.status);
+
+  /**
+   * Mirror the server's version onto the task (#256, PlanAnchor). Takes the
+   * max with the store's: plan versions only ever grow, and the one non-
+   * monotonic read is the empty plan file (version 0) — which must not walk
+   * a real version back (初审 LOW：初载只 setVersion 会让锚点陈旧).
+   */
+  const applyVersion = (next: number) => {
+    const merged = Math.max(next, task.plan_version);
+    setVersion(merged);
+    setPlanVersion(task.id, merged);
+  };
 
   useEffect(() => {
     setEditing(false);
@@ -85,11 +102,17 @@ export function PlanPane({ task }: { task: Task }) {
         // empty face is what let an empty PUT overwrite the real file.
         if (planLoadState(r.status) !== "ready" || !r.data) {
           setLoadError(planLoadFailure(r.status, r.detail));
+          setAuthExpired("plan", r.status === 401);
           return;
         }
         setLoadError("");
+        setAuthExpired("plan", false);
         setText(r.data.text);
-        setVersion(r.data.version);
+        // #256 (复审 LOW): the first read syncs the anchor too — waiting for
+        // a save / 载入新版 left PlanAnchor stale whenever the server was
+        // ahead of the store. `applyVersion` takes the max, so the empty-text
+        // read (version 0) can never walk a real version back.
+        applyVersion(r.data.version);
         setLoaded(r.data.text);
       })
       .finally(() => {
@@ -112,12 +135,6 @@ export function PlanPane({ task }: { task: Task }) {
     setEditing(false);
     setNote(null);
     setConflict(null);
-  };
-
-  /** Mirror the server's version onto the task (#256, PlanAnchor). */
-  const applyVersion = (next: number) => {
-    setVersion(next);
-    setPlanVersion(task.id, next);
   };
 
   const doPut = async () => {
@@ -250,14 +267,20 @@ export function PlanPane({ task }: { task: Task }) {
           className="flex flex-col items-start gap-2 rounded-well border border-state-danger/30 bg-state-danger/5 px-3 py-2"
         >
           <span className="text-meta text-state-danger">{loadError}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setReloadToken((n) => n + 1)}
-            disabled={loading}
-          >
-            {loading ? "重试中…" : "重试"}
-          </Button>
+          {/* #256 (复审): a 401 needs the re-login entry — retrying a dead
+              token fails forever. */}
+          {planAuthExpired ? (
+            <ReauthAction />
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setReloadToken((n) => n + 1)}
+              disabled={loading}
+            >
+              {loading ? "重试中…" : "重试"}
+            </Button>
+          )}
         </div>
       )}
 

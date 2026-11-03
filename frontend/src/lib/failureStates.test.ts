@@ -121,6 +121,11 @@ describe("planLoadState (#256: 计划读败不伪装空计划)", () => {
     expect(planLoadFailure(200)).not.toContain("HTTP 200");
     expect(planLoadFailure(200)).toContain("响应异常");
   });
+
+  it("401 → 重新登录文案（复审：重试修不死 token）", () => {
+    expect(planLoadFailure(401)).toContain("重新登录");
+    expect(planLoadFailure(401)).not.toContain("HTTP 401");
+  });
 });
 
 describe("listLoadOutcome (#256 评审 S1: JSON-bodied 500 不落空态)", () => {
