@@ -172,7 +172,7 @@ export function applyToTask(
 /**
  * #189: a status refetch merges these fields only. The REST snapshot may lag the
  * live stream, so replacing the whole detail would wipe fresher steps /
- * conversation.
+ * conversation. Direction: snapshot → prev, status fields only.
  */
 export function mergeStatusSnapshot(prev: Task, snapshot: Task): Task {
   return {
@@ -187,12 +187,18 @@ export function mergeStatusSnapshot(prev: Task, snapshot: Task): Task {
  * #256: apply a refetched snapshot without letting a late one wipe the live
  * stream. A snapshot requested before the stream caught up carries fewer
  * steps than the detail already holds — that snapshot is provably older, so
- * its steps / conversation / subtasks / final answer (and the status that
- * came with them, #189) lose to the live detail. A snapshot with at least as
- * many steps is fresh and wins outright (same tie-break as before: REST is
- * authoritative).
+ * its steps / conversation / subtasks / final answer / plan version (and the
+ * status that came with them, #189) lose to the live detail. A snapshot with
+ * at least as many steps is fresh and wins outright (same tie-break as
+ * before: REST is authoritative).
+ *
+ * vs `mergeStatusSnapshot`: that one keeps prev wholesale and takes three
+ * status fields (the #189 status-only refetch); this one takes the snapshot
+ * wholesale unless it is provably stale. The step count is the staleness
+ * proxy — no event carries a monotonic sequence, and `updated_at` is written
+ * by REST only.
  */
-export function mergeSnapshot(prev: Task, snapshot: Task): Task {
+export function mergeSnapshotUnlessStale(prev: Task, snapshot: Task): Task {
   const live = prev.steps.length > snapshot.steps.length;
   if (!live) return snapshot;
   return {
@@ -201,6 +207,9 @@ export function mergeSnapshot(prev: Task, snapshot: Task): Task {
     conversation: prev.conversation,
     subtasks: prev.subtasks,
     final_answer: prev.final_answer,
+    // A saved plan version lives on the task; a stale snapshot would walk it
+    // back and the next save would start from the wrong version (AC4).
+    plan_version: prev.plan_version,
     status: prev.status,
     error: prev.error,
   };

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SSEvent, Task } from "../types";
-import { applyToTask, mergeSnapshot, needsStatusRefetch } from "./reduceTask";
+import { applyToTask, mergeSnapshotUnlessStale, needsStatusRefetch } from "./reduceTask";
 import { useTaskStore } from "./taskStore";
 
 function snapshot(overrides: Partial<Task> = {}): Task {
@@ -248,7 +248,7 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
       updated_at: "2026-10-27T00:00:01",
     });
 
-    const merged = mergeSnapshot(live(), stale);
+    const merged = mergeSnapshotUnlessStale(live(), stale);
 
     expect(merged.steps).toHaveLength(2);
     expect(merged.conversation).toHaveLength(2);
@@ -257,6 +257,21 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     // The snapshot stays authoritative for the fields the stream never owns.
     expect(merged.updated_at).toBe("2026-10-27T00:00:01");
     expect(merged.title).toBe(live().title);
+  });
+
+  it("AC4：快照更旧时保留 plan_version（迟到旧快照不把版本退回）", () => {
+    // A save synced v5 onto the live task; a snapshot requested before that
+    // save still says v1 — walking the version back would make the next save
+    // start from the wrong one (评审 AC4)。
+    const stale = snapshot({
+      status: "PENDING",
+      plan_version: 1,
+      steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+    });
+
+    const merged = mergeSnapshotUnlessStale({ ...live(), plan_version: 5 }, stale);
+
+    expect(merged.plan_version).toBe(5);
   });
 
   it("快照步骤不少于实时（新鲜）→ 快照整体胜出", () => {
@@ -274,7 +289,7 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
       updated_at: "2026-10-27T00:00:09",
     });
 
-    const merged = mergeSnapshot(live(), fresh);
+    const merged = mergeSnapshotUnlessStale(live(), fresh);
 
     expect(merged).toBe(fresh);
     expect(merged.steps).toHaveLength(3);
@@ -291,7 +306,7 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
       error: "炸了",
     });
 
-    const merged = mergeSnapshot(live(), tie);
+    const merged = mergeSnapshotUnlessStale(live(), tie);
 
     expect(merged.status).toBe("FAILED");
     expect(merged.error).toBe("炸了");
@@ -315,6 +330,27 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     expect(task.steps).toHaveLength(2);
     expect(task.steps[1].thought).toBe("第二步");
     expect(task.status).toBe("RUNNING");
+  });
+
+  it("AC4 接线：保存同步 v5 后，迟到旧快照（v1、步骤更少）不退回版本", () => {
+    // The exact #256-AC4 wiring bug: save → setPlanVersion(5) → a snapshot
+    // requested before the save lands with plan_version 1.
+    useTaskStore.setState({
+      currentTaskId: "t1",
+      detail: { t1: { ...live(), plan_version: 5 } },
+    });
+    useTaskStore.getState().upsertTask(
+      snapshot({
+        status: "PENDING",
+        plan_version: 1,
+        steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+      })
+    );
+
+    const task = useTaskStore.getState().detail["t1"];
+    expect(task.plan_version).toBe(5);
+    // PlanAnchor reads the task's version, so it stays on v5.
+    expect(task.steps).toHaveLength(2);
   });
 });
 

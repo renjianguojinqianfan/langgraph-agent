@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { SSEvent, Task, TraceMarker } from "../types";
 import { currentDir, setDirParam } from "../workspace";
-import { applyToTask, mergeSnapshot, mergeStatusSnapshot } from "./reduceTask";
+import { applyToTask, mergeSnapshotUnlessStale, mergeStatusSnapshot } from "./reduceTask";
 
 interface TaskState {
   tasks: Task[];
@@ -149,9 +149,10 @@ export const useTaskStore = create<TaskState>((set) => ({
   upsertTask: (task) =>
     set((state) => {
       // #256: a late snapshot (requested before the stream caught up) must not
-      // replace the detail wholesale — mergeSnapshot keeps the live steps.
+      // replace the detail wholesale — mergeSnapshotUnlessStale keeps the live
+      // steps (and the plan version a save synced onto the task).
       const prev = state.detail[task.id];
-      const next = prev ? mergeSnapshot(prev, task) : task;
+      const next = prev ? mergeSnapshotUnlessStale(prev, task) : task;
       const detail = { ...state.detail, [task.id]: next };
       // Membership belongs to the server's filtered GET: a task from another
       // directory must not be inserted by a detail fetch or SSE event.
