@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { apiErrorText, deleteWorkspaceTasks } from "../../api/client";
+import { historyListState, listBannerVisible, listEmptyTitle } from "../../lib/failureStates";
 import { useTaskStore } from "../../store/taskStore";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Segmented } from "../ui/Segmented";
+import { ReauthAction } from "../ReauthAction";
 import { filterByQuery, railGroups, type RailFilter } from "./group";
 import { RailFooter } from "./RailFooter";
 import { RailSearch } from "./RailSearch";
@@ -23,6 +25,11 @@ interface PendingDelete {
 export function TaskRail() {
   const tasks = useTaskStore((s) => s.tasks);
   const listError = useTaskStore((s) => s.listError);
+  const listLoading = useTaskStore((s) => s.listLoading);
+  // Per-source (复审 LOW): only the list read's own 401 drives this rail's
+  // re-login button — a detail 401 must not relabel a list transport failure.
+  const listAuthExpired = useTaskStore((s) => s.authExpired.list);
+  const retryList = useTaskStore((s) => s.retryList);
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
   const removeWorkspaceTasks = useTaskStore((s) => s.removeWorkspaceTasks);
@@ -36,6 +43,15 @@ export function TaskRail() {
 
   const visible = filterByQuery(tasks, query);
   const groups = railGroups(visible, filter);
+  // #256: which face the list may show. With rows from the last success the
+  // failure stays a one-line banner above real rows; with none it owns the
+  // pane — the empty copy would read as "no tasks here" (the #256 bug).
+  const listState = historyListState({
+    error: listError,
+    loading: listLoading,
+    rows: tasks.length,
+    visible: visible.length,
+  });
   // Count from the unfiltered list: the dialog describes the whole directory,
   // not just the rows the search box currently shows (F2).
   const directoryCounts = new Map<string, number>();
@@ -92,17 +108,59 @@ export function TaskRail() {
           onChange={setFilter}
           label="任务范围"
         />
-        {listError && (
-          <p role="status" className="text-meta text-state-danger">
-            {listError}
-          </p>
+        {listBannerVisible(listError, listState) && (
+          // AC1 + 复审 LOW: a failed refetch keeps the stale rows, but the
+          // banner still carries its retry entry — text alone left the user
+          // with no way out. The predicate keeps it visible when the search
+          // box filters every row away (state reads "empty" then).
+          <div className="flex items-center gap-2">
+            <p role="status" className="min-w-0 flex-1 text-meta text-state-danger">
+              {listError}
+            </p>
+            {listAuthExpired ? <ReauthAction /> : (
+              <Button variant="outline" size="sm" onClick={retryList}>
+                重试
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
-        {visible.length === 0 ? (
+        {listState === "error" ? (
           <div className="px-3 py-6">
-            <p className="text-body text-secondary">这里还没有任务</p>
+            <p role="alert" className="text-body text-state-danger">
+              {listError}
+            </p>
+            <p className="mt-1 text-meta text-tertiary">
+              {listAuthExpired
+                ? "重新登录后会回到这里；列表不会显示为空。"
+                : "确认后台在运行后重试；列表不会显示为空。"}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {listAuthExpired ? (
+                <ReauthAction />
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={retryList}
+                >
+                  重试
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : listState === "loading" ? (
+          <div className="px-3 py-6">
+            <p className="text-body text-tertiary">加载中…</p>
+          </div>
+        ) : listState === "empty" ? (
+          <div className="px-3 py-6">
+            {/* #256 (复审 LOW-1): "rows exist, none match the query" is a
+                different truth from "no tasks at all" — and with a failed
+                refetch on top, "这里还没有任务" was half a lie. */}
+            <p className="text-body text-secondary">{listEmptyTitle(tasks.length)}</p>
             <p className="mt-1 text-meta text-tertiary">
               {query.trim() ? "换个关键词试试。" : "在下方输入开始。"}
             </p>

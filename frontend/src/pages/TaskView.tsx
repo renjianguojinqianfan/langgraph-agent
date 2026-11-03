@@ -11,7 +11,7 @@ import {
   tabAfterClosing,
   type DashTab,
 } from "../lib/dashTabs";
-import { getTask, listTasks } from "../api/client";
+import { getTask, getTaskSnapshot, listTasksSnapshot } from "../api/client";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
@@ -19,6 +19,11 @@ import { needsStatusRefetch } from "../store/reduceTask";
 import { useTaskStore } from "../store/taskStore";
 import { SSEvent } from "../types";
 import { cx } from "../lib/cx";
+import {
+  detailLoadFailure,
+  detailLoadState,
+  listLoadOutcome,
+} from "../lib/failureStates";
 import { isParked } from "../lib/taskState";
 
 export function TaskView() {
@@ -31,6 +36,10 @@ export function TaskView() {
   const upsertTask = useTaskStore((s) => s.upsertTask);
   const setTasks = useTaskStore((s) => s.setTasks);
   const setListError = useTaskStore((s) => s.setListError);
+  const setListLoading = useTaskStore((s) => s.setListLoading);
+  const setDetailError = useTaskStore((s) => s.setDetailError);
+  const setAuthExpired = useTaskStore((s) => s.setAuthExpired);
+  const detailRevision = useTaskStore((s) => s.detailRevision);
   const historyFilter = useTaskStore((s) => s.historyFilter);
   const workspaceDir = useTaskStore((s) => s.workspaceDir);
   const refreshModels = useModelStore((s) => s.refresh);
@@ -84,15 +93,26 @@ export function TaskView() {
   useEffect(() => {
     let cancelled = false;
     const dir = historyFilter === "all" ? "all" : workspaceDir || "current";
-    listTasks(50, dir)
+    // #256: the empty copy waits for the answer — a pending list must not
+    // read as "no tasks", and a failed one must not either. `listTasksSnapshot`
+    // never rejects (a transport failure comes back as status 0), so there is
+    // no catch to write: every answer is decided in `then`.
+    setListLoading(true);
+    listTasksSnapshot(50, dir)
       .then((r) => {
-        if (!cancelled && r.data?.tasks) {
-          setTasks(r.data.tasks);
+        if (cancelled) return;
+        const outcome = listLoadOutcome(r.status, r.data?.tasks ?? null);
+        if (outcome.ok) {
+          setTasks(outcome.tasks);
           setListError("");
+          setAuthExpired("list", false);
+        } else {
+          setListError(outcome.error);
+          setAuthExpired("list", outcome.authExpired);
         }
       })
-      .catch(() => {
-        if (!cancelled) setListError("无法连接后台；确认服务在运行后再试。");
+      .finally(() => {
+        if (!cancelled) setListLoading(false);
       });
     return () => {
       cancelled = true;
@@ -100,6 +120,8 @@ export function TaskView() {
   }, [
     setTasks,
     setListError,
+    setListLoading,
+    setAuthExpired,
     historyFilter,
     listRevision,
     currentTaskId,
@@ -132,15 +154,34 @@ export function TaskView() {
   // Live SSE for the current task.
   useSSE(currentTaskId, onEvent);
 
-  // Fetch a fresh snapshot when the selected task changes.
+  // Fetch a fresh snapshot when the selected task changes. #256: the status
+  // travels with the answer — a 404 (or a dead backend) is a failed load, not
+  // a missing task that the center column may render as "新任务". The reader
+  // never rejects, so there is no catch: every answer is decided in `then`.
   useEffect(() => {
     if (!currentTaskId) return;
-    getTask(currentTaskId)
+    let cancelled = false;
+    getTaskSnapshot(currentTaskId)
       .then((r) => {
-        if (r.data) upsertTask(r.data);
-      })
-      .catch(() => {});
-  }, [currentTaskId, upsertTask]);
+        if (cancelled) return;
+        // `hasData` splits a real snapshot from a 2xx whose envelope carries
+        // none (a wrong VITE_API_BASE, an SPA-fallback HTML page): the latter
+        // is a failed load too — an empty copy would delete the detailError
+        // entry and park the column on "加载中…" forever (复审回归).
+        const state = detailLoadState(r.status, r.data !== null);
+        if (state === "ready" && r.data) {
+          setDetailError(currentTaskId, "");
+          setAuthExpired("detail", false);
+          upsertTask(r.data);
+        } else {
+          setDetailError(currentTaskId, detailLoadFailure(state, r.status));
+          setAuthExpired("detail", state === "auth");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTaskId, upsertTask, setDetailError, setAuthExpired, detailRevision]);
 
   // A round just parked: pull the authoritative record (conversation, plan,
   // steps). SSE carries the live events but is replayed on every reconnect, so
@@ -188,6 +229,14 @@ export function TaskView() {
   }, []);
 
   const task = currentTaskId ? detail ?? null : null;
+  // #256: a selected task whose snapshot failed stays a failure — never the
+  // "新任务" face (sending there would silently create a second task). While
+  // the snapshot is in flight the center column says so instead of pretending
+  // to be a new task.
+  const loadError = useTaskStore((s) =>
+    currentTaskId ? (s.detailError[currentTaskId] ?? "") : ""
+  );
+  const loading = !!currentTaskId && !task && !loadError;
 
   return (
     <div
@@ -241,6 +290,8 @@ export function TaskView() {
         >
           <TaskPanel
             task={task}
+            loadError={loadError}
+            loading={loading}
             rightOpen={rightOpen}
             onToggleRight={() => setRightOpen((v) => !v)}
             onOpenPlan={() => {

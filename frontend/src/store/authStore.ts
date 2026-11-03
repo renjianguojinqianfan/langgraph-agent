@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { loginRequest } from "../api/client";
+import { loginAttempt } from "../api/client";
+import { loginOutcome, type LoginOutcome } from "../lib/failureStates";
 
 // localStorage key must match backend/services/auth.py:TOKEN_STORAGE_KEY.
 export const AUTH_TOKEN_KEY = "lga_auth_token";
@@ -17,7 +18,8 @@ interface AuthState {
   /** null = not yet known; undefined/false = auth disabled on the backend. */
   authEnabled: boolean | null;
   setAuthEnabled: (v: boolean) => void;
-  login: (secret: string) => Promise<boolean>;
+  /** #256: "wrong-secret" and "unreachable" are different failures. */
+  login: (secret: string) => Promise<LoginOutcome>;
   logout: () => void;
 }
 
@@ -28,22 +30,17 @@ export const useAuthStore = create<AuthState>((set) => ({
   setAuthEnabled: (v) => set({ authEnabled: v }),
 
   login: async (secret) => {
-    try {
-      const res = await loginRequest(secret);
-      const token = res.data?.token;
-      if (res.data?.ok && token) {
-        try {
-          localStorage.setItem(AUTH_TOKEN_KEY, token);
-        } catch {
-          /* storage unavailable — keep in memory only */
-        }
-        set({ token });
-        return true;
+    const attempt = await loginAttempt(secret);
+    const outcome = loginOutcome(attempt.status, attempt.data?.ok === true);
+    if (outcome === "ok" && attempt.data) {
+      try {
+        localStorage.setItem(AUTH_TOKEN_KEY, attempt.data.token);
+      } catch {
+        /* storage unavailable — keep in memory only */
       }
-      return false;
-    } catch {
-      return false;
+      set({ token: attempt.data.token });
     }
+    return outcome;
   },
 
   logout: () => {

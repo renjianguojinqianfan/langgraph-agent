@@ -38,6 +38,13 @@ export function Composer() {
   const task = useTaskStore((s) =>
     s.currentTaskId ? s.detail[s.currentTaskId] : undefined
   );
+  // #256: a selected task whose snapshot failed must not accept a send —
+  // with no `task` in hand the send branch would create a second task.
+  const detailError = useTaskStore((s) =>
+    s.currentTaskId ? (s.detailError[s.currentTaskId] ?? "") : ""
+  );
+  // #256: a 401 on the detail read; the entries offered are re-login ones.
+  const detailAuthExpired = useTaskStore((s) => s.authExpired.detail);
   const setCurrent = useTaskStore((s) => s.setCurrentTask);
   const upsert = useTaskStore((s) => s.upsertTask);
   const workspaceDir = useTaskStore((s) => s.workspaceDir);
@@ -58,8 +65,8 @@ export function Composer() {
   const running = task ? isStoppable(task.status) : false;
   // A selected task whose snapshot has not arrived yet must not be treated as
   // "new task": sending would silently create a second task.
-  const loading = !!currentTaskId && !task;
-  const inputDisabled = loading || (!!task && !parked);
+  const loading = !!currentTaskId && !task && !detailError;
+  const inputDisabled = !!detailError || loading || (!!task && !parked);
   const canSend = !busy && !inputDisabled && !!text.trim();
   const mode: TaskMode = task?.mode ?? draftMode;
   const selectedModel = task
@@ -70,13 +77,17 @@ export function Composer() {
 
   // One reason line under the input; the placeholder only carries the action
   // (new task / continue) and never repeats the disable reason.
-  const disabledReason = loading
-    ? "正在加载任务…"
-    : task?.status === "PENDING"
-      ? "任务启动中，稍等片刻…"
-      : task?.status === "RUNNING"
-        ? "任务运行中；停下或等这一轮结束再发"
-        : null;
+  const disabledReason = detailError
+    ? detailAuthExpired
+      ? "登录已失效；重新登录后再试"
+      : "任务加载失败；重试或新建任务"
+    : loading
+      ? "正在加载任务…"
+      : task?.status === "PENDING"
+        ? "任务启动中，稍等片刻…"
+        : task?.status === "RUNNING"
+          ? "任务运行中；停下或等这一轮结束再发"
+          : null;
   const bottomNote = disabledReason ?? sendError;
 
   const onMode = async (next: TaskMode) => {
@@ -162,7 +173,7 @@ export function Composer() {
     }
   };
 
-  const placeholder = loading
+  const placeholder = loading || detailError
     ? "…"
     : !task
       ? "用自然语言描述一个任务，例如：联网查资料并写一份报告…"
