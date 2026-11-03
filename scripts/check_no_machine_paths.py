@@ -8,15 +8,18 @@ and every tracked file under ``lessons/`` (public HTML lessons included). Code i
 out of scope on purpose: path-boundary tests embed literals such as ``C:\tmp\x``
 as *inputs*, and system references like ``C:\Windows\...`` are legitimate.
 
-Enforces the path half of ``docs/security.md`` §3 (「不得出现 ``C:\Users<用户名>``、
-家目录 / 个人笔记路径……；文档一律用占位符」): an absolute path is a violation when
-it is machine-specific — Windows user profiles, personal checkouts, git-bash drive
-mounts (``/e/...``), POSIX homes — unless the path carries a documented
-``<placeholder>`` segment (``C:\Users<user>`` is the rule's own spelling). Only
-four system roots (``windows`` / ``program files`` / ``programdata`` …) and
-ellipsis shorthands (``C:\...``) are exempt — the allowlist is an explicit list,
-never a "looks like a temp dir" shape, so a new real path (``E:\code\demo\new``)
-still fails.
+Enforces the path half of ``docs/security.md`` §3 (「不得出现 ``C:\Users<user>``、
+家目录 / 个人笔记路径……；文档一律用占位符」). The exemptions are an **exact list**,
+never a shape guess, so a new real path (``E:\code\demo\new``) still fails:
+
+* every machine-identifying segment before the first placeholder is a generic
+  root (``C:\Users\<user>`` passes, ``C:\Users\DELL\<workspace>`` fails — a
+  placeholder only whitewashes what *follows* a generic root);
+* a system root, resolved on the raw line so spaced roots
+  (``C:\Program Files\...``) survive the token stopping at the space;
+* an ellipsis shorthand (``C:\...``).
+
+``PLACEHOLDERS`` mirrors the §3 vocabulary verbatim — doc and gate move together.
 """
 
 from __future__ import annotations
@@ -24,40 +27,110 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 
 #: Evidence formats under docs/ beyond Markdown (verification assets).
 EVIDENCE_SUFFIXES = {".json", ".txt"}
 
-#: Windows absolute path ``<drive>:\...`` / ``<drive>:/...``; the lookbehind keeps
-#: a word that merely ends in the drive letter (``note:C:\x``) from matching.
-WIN_ABS = re.compile(r"(?i)(?<![\w])[a-z]:\\[^\s\"'`|]+")
-WIN_ABS_SLASH = re.compile(r"(?i)(?<![\w])[a-z]:/[^\s\"'`|]+")
-#: git-bash drive mount: ``/e/...`` (single letter between slashes); the lookbehind
-#: keeps URLs (``reddit.com/r/x``) from matching.
-POSIX_DRIVE = re.compile(r"(?<![\w.:])/[a-z]/[^\s\"'`|]+")
-#: POSIX home directory.
-POSIX_HOME = re.compile(r"(?<![\w.])/(?:Users|home)/[^\s\"'`|]+")
+#: Documented placeholders (docs/security.md §3). A path segment that is exactly
+#: one of these is documentation, not a machine name; anything else in angle
+#: brackets (``<code>``, ``<workspace>``) is NOT a placeholder.
+PLACEHOLDERS = (
+    "<repo-root>",
+    "<workspace>",
+    "<tmp>",
+    "<knowledge-base>",
+    "<user>",
+    "<git-root>",
+    "<python-install>",
+    "<personal-notes>",
+)
 
-#: First path segments that are system-wide rather than machine-specific.
-SYSTEM_ROOTS = {"windows", "program files", "program files (x86)", "programdata"}
+#: System-wide roots; matched with their spaces on the raw line, because the
+#: token itself stops at the first space.
+SYSTEM_ROOTS = (
+    "windows",
+    "program files",
+    "program files (x86)",
+    "programdata",
+)
 
-PATH_PATTERNS = (WIN_ABS, WIN_ABS_SLASH, POSIX_DRIVE, POSIX_HOME)
+#: Roots that may precede a placeholder segment without naming the machine: the
+#: system roots plus the two profile markers (``C:\Users\<user>`` and
+#: ``/home/<user>`` are the spellings security.md §3 itself uses).
+GENERIC_ROOTS = tuple(root.lower() for root in SYSTEM_ROOTS) + ("users", "home")
+
+_PLACEHOLDER_ALT = "|".join(re.escape(p) for p in PLACEHOLDERS)
+_SYSTEM_ROOT_ALT = "|".join(re.escape(root) for root in SYSTEM_ROOTS)
+#: One unit of a path run: a documented placeholder, or any character but
+#: whitespace, quotes, backticks, pipes and angle brackets — so HTML tags
+#: (``<code>``) and following prose never glue on. Separators stay inside the
+#: run so JSON-escaped forms (``E:\\code\\demo``) match whole.
+_PATH_UNIT = rf"(?:{_PLACEHOLDER_ALT}|[^\s\"'`|<>])"
+_SEP = r"[\\/]"
+
+#: ``<drive>:\...`` / ``<drive>:/...``; the lookbehind keeps a word that merely
+#: ends in the drive letter (``note:C:\x``) from matching.
+WIN_PATH = re.compile(rf"(?i)(?<![\w])[a-z]:{_SEP}(?:{_PATH_UNIT})+")
+#: git-bash drive mount: ``/e/...`` (single letter between slashes); the
+#: lookbehind keeps URLs (``reddit.com/r/x``) from matching.
+POSIX_DRIVE = re.compile(rf"(?<![\w.:])/[a-z]{_SEP}(?:{_PATH_UNIT})+")
+#: POSIX home directory — case-sensitive on the root, so key-name prose such as
+#: ``←/→/Home/End`` does not read as a path.
+POSIX_HOME = re.compile(rf"(?<![\w.])/(?:Users|home){_SEP}(?:{_PATH_UNIT})+")
+
+#: System-root prefix, spaces and doubled separators included, resolved against
+#: the raw line rather than the (possibly space-truncated) token.
+_SYSTEM_PREFIX = re.compile(rf"(?i)[a-z]:{_SEP}+(?:{_SYSTEM_ROOT_ALT})(?={_SEP}|$)")
+_DRIVE_ONLY = re.compile(r"(?i)[a-z]:$")
 
 
-def is_violation(text: str) -> bool:
-    """Decide one matched path: documented placeholder or system root -> fine."""
-    if "<" in text:
-        return False
-    if WIN_ABS.fullmatch(text) or WIN_ABS_SLASH.fullmatch(text):
-        # ``C:\\Windows\\...`` keeps its first segment after doubled separators.
-        first = text[3:].lstrip("\\/").split("\\", 1)[0].split("/", 1)[0]
-        if set(first) <= {"."}:
-            return False  # ``C:\...`` ellipsis shorthand, not a real path
-        return first.lower() not in SYSTEM_ROOTS
-    return True
+def _segments(token: str) -> list[str]:
+    """Path segments, without the drive letter or empty doubled-separator parts."""
+    parts = [part for part in re.split(_SEP, token) if part]
+    if parts and _DRIVE_ONLY.fullmatch(parts[0]):
+        parts = parts[1:]
+    return parts
+
+
+def _segments_ok(segments: list[str]) -> bool:
+    """True when the machine-identifying part of the path is placeholders only."""
+    first_placeholder = next(
+        (i for i, seg in enumerate(segments) if seg in PLACEHOLDERS), None
+    )
+    if first_placeholder is None:
+        # No placeholder: only the ellipsis shorthand (``C:\...``) is documentation.
+        return bool(segments) and set(segments[0]) <= {"."}
+    return all(seg.lower() in GENERIC_ROOTS for seg in segments[:first_placeholder])
+
+
+def _windows_allows(line: str, match: re.Match[str]) -> bool:
+    if _SYSTEM_PREFIX.match(line, match.start()):
+        return True
+    return _segments_ok(_segments(match.group(0)))
+
+
+def _posix_allows(line: str, match: re.Match[str]) -> bool:
+    return _segments_ok(_segments(match.group(0)))
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One pattern plus its verdict — a new rule cannot fall through silently."""
+
+    pattern: re.Pattern[str]
+    allows: Callable[[str, "re.Match[str]"], bool]
+
+
+RULES = (
+    Rule(WIN_PATH, _windows_allows),
+    Rule(POSIX_DRIVE, _posix_allows),
+    Rule(POSIX_HOME, _posix_allows),
+)
 
 
 def scoped_files() -> list[Path]:
@@ -79,21 +152,29 @@ def scoped_files() -> list[Path]:
 
 def main() -> int:
     violations: list[str] = []
+    undecodable: list[str] = []
     for path in scoped_files():
         if not path.is_file():
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            continue  # binary asset (e.g. a PNG): sanitised by hand, see security.md §3
+            # Binary asset (e.g. a PNG): not text-scannable, sanitised by hand per
+            # security.md §3 — named in the output so it is never invisible.
+            undecodable.append(str(path.relative_to(ROOT)))
+            continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            for pattern in PATH_PATTERNS:
-                for match in pattern.finditer(line):
-                    if is_violation(match.group(0)):
+            for rule in RULES:
+                for match in rule.pattern.finditer(line):
+                    if not rule.allows(line, match):
                         found = match.group(0)
                         if len(found) > 80:
                             found = found[:77] + "..."
                         violations.append(f"{path.relative_to(ROOT)}:{lineno}  {found}")
+    if undecodable:
+        print(f"Skipped {len(undecodable)} undecodable (binary) file(s):")
+        for item in undecodable:
+            print(f"  {item}")
     if violations:
         print("Machine-specific absolute paths in tracked docs:")
         for item in violations:
