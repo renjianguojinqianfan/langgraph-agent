@@ -10,15 +10,21 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
+from fastapi.testclient import TestClient
+
+from backend.api.schemas import TaskStatus
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.llm.client import MockLLMClient
+from backend.main import app
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_settings
+from backend.services.persistence import Persistence
+from backend.tests.conftest import make_manager, make_settings
 
 
 def _rt(
@@ -239,3 +245,145 @@ def test_executor_entry_sweeps_across_rounds(tmp_path: Path) -> None:
         r["status"] for s in out["steps"] for r in s["tool_calls"] if r["id"] in ("c2", "c3")
     ]
     assert settled == ["skipped", "skipped"]
+
+
+# ── #255：补答插回 assistant 之后，不追到队尾 ──────────────────────────────
+def test_swept_reply_lands_before_the_new_user_message(tmp_path: Path) -> None:
+    """续说场景：``[user, assistant(c1), user(续说)]`` → 补答插在旧 assistant 之后。
+
+    旧实现把补写的 tool 回复 append 到消息末尾，顺序变成 assistant → user → tool，
+    OpenAI 协议要求 tool 回复紧随其调用。
+    """
+    rt, _ = _rt(tmp_path)
+    state = _state(
+        messages=[
+            {"role": "user", "content": "写文件"},
+            _turn("c1"),
+            {"role": "user", "content": "续说"},
+        ],
+        records=[_rec("c1", "pending")],
+    )
+    out = rt.agent(state)
+
+    assert [m["role"] for m in out["messages"][:4]] == ["user", "assistant", "tool", "user"]
+    assert out["messages"][2]["tool_call_id"] == "c1"
+    assert _orphans(out["messages"]) == []
+
+
+def test_swept_replies_follow_call_order(tmp_path: Path) -> None:
+    """一个 assistant 的多个 call 都缺答：按 ``tool_calls`` 顺序补在它后面。"""
+    rt, _ = _rt(tmp_path)
+    state = _state(
+        messages=[
+            {"role": "user", "content": "写文件"},
+            _turn("c1", "c2"),
+            {"role": "user", "content": "续说"},
+        ],
+        records=[_rec("c1", "pending"), _rec("c2", "pending")],
+    )
+    out = rt.agent(state)
+
+    assert [m["role"] for m in out["messages"][:5]] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+    ]
+    replies = [m for m in out["messages"] if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in replies] == ["c1", "c2"]
+    assert _orphans(out["messages"]) == []
+
+
+def test_sweep_inserts_after_existing_partial_answers(tmp_path: Path) -> None:
+    """部分已答的 assistant：缺失回复接在已有回复段之后，仍在 user 之前。"""
+    rt, _ = _rt(tmp_path)
+    state = _state(
+        messages=[
+            {"role": "user", "content": "写文件"},
+            _turn("c1", "c2"),
+            {"role": "tool", "tool_call_id": "c1", "content": "{}"},
+            {"role": "user", "content": "续说"},
+        ],
+        records=[_rec("c1", "success"), _rec("c2", "pending")],
+    )
+    out = rt.agent(state)
+
+    assert [m["role"] for m in out["messages"][:5]] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+    ]
+    replies = [m for m in out["messages"] if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in replies] == ["c1", "c2"]
+    assert _orphans(out["messages"]) == []
+
+
+def test_sweep_is_idempotent(tmp_path: Path) -> None:
+    """连续两次清扫不重复补答（每次进模型前都会跑）。"""
+    rt, _ = _rt(tmp_path)
+    state = _state(
+        messages=[{"role": "user", "content": "写文件"}, _turn("c1")],
+        records=[_rec("c1", "pending")],
+    )
+
+    rt._sweep_dangling_tool_calls(state)
+    rt._sweep_dangling_tool_calls(state)
+
+    assert [m["role"] for m in state["messages"]] == ["user", "assistant", "tool"]
+    assert len(_answers(state["messages"], "c1")) == 1
+
+
+def _wait_parked(tm: Any, task_id: str, timeout: float = 15.0) -> Any:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        task = tm.get_task(task_id)
+        if task and task.status in (TaskStatus.INTERRUPTED, TaskStatus.FAILED):
+            return task
+        time.sleep(0.05)
+    return tm.get_task(task_id)
+
+
+def test_continuation_keeps_protocol_order(tmp_path: Path) -> None:
+    """集成：checkpoint 尾部悬空，经 ``POST /messages`` 续说后顺序合法、无孤儿。"""
+    from backend.core.agent.graph import build_graph
+
+    settings = make_settings(tmp_path, checkpoint_enabled=True)
+    bus = EventBus()
+    persistence = Persistence(settings)
+    tm = make_manager(
+        settings,
+        MockLLMClient(final_answer="second answer"),
+        event_bus=bus,
+        persistence=persistence,
+    )
+    app.state.settings = settings
+    app.state.event_bus = bus
+    app.state.persistence = persistence
+    app.state.task_manager = tm
+    client = TestClient(app, base_url="http://localhost")
+
+    task_id = tm.create_task(title="dangling", user_input="start")
+    first = _wait_parked(tm, task_id)
+    assert first is not None and first.status == TaskStatus.INTERRUPTED
+
+    # 模拟「停下时停在 assistant(tool_calls) 之后」：checkpoint 换成悬空尾部。
+    runtime = AgentRuntime(task_id, tm, llm=MockLLMClient(), tools=[], tool_schemas=[])
+    graph = build_graph(runtime, checkpointer=tm._checkpointer)
+    graph.update_state(
+        tm._thread_config(task_id),
+        {"messages": [{"role": "user", "content": "start"}, _turn("c9")]},
+    )
+
+    r = client.post(f"/api/tasks/{task_id}/messages", json={"input": "续说"})
+    assert r.status_code == 200
+    parked = _wait_parked(tm, task_id)
+    assert parked is not None and parked.status == TaskStatus.INTERRUPTED
+
+    values = graph.get_state(tm._thread_config(task_id)).values
+    messages = list(values["messages"])
+    assert _orphans(messages) == []
+    assert [m["role"] for m in messages[:4]] == ["user", "assistant", "tool", "user"], messages
+    assert messages[2]["tool_call_id"] == "c9"
