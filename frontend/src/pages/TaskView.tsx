@@ -167,7 +167,7 @@ export function TaskView() {
           setDetailError(currentTaskId, "");
           upsertTask(r.data);
         } else {
-          setDetailError(currentTaskId, detailLoadFailure(state));
+          setDetailError(currentTaskId, detailLoadFailure(state, r.status));
         }
       })
       .catch(() => {

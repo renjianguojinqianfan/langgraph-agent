@@ -54,15 +54,23 @@ describe("detailLoadState (#256: 选中失败不伪装新任务)", () => {
     expect(detailLoadState(404)).toBe("missing");
   });
 
-  it("传输失败（0）与服务端 5xx → unreachable", () => {
-    expect(detailLoadState(0)).toBe("unreachable");
-    expect(detailLoadState(500)).toBe("unreachable");
-    expect(detailLoadState(502)).toBe("unreachable");
+  it("401 → auth（token 失效，不是服务端的错）", () => {
+    expect(detailLoadState(401)).toBe("auth");
   });
 
-  it("两种失败各有文案，都不说「新任务」", () => {
+  it("传输失败（0）→ unreachable；5xx → server（评审：500 时服务在运行，不能叫连不上）", () => {
+    expect(detailLoadState(0)).toBe("unreachable");
+    expect(detailLoadState(500)).toBe("server");
+    expect(detailLoadState(502)).toBe("server");
+  });
+
+  it("四种失败各有归因文案，都不说「新任务」", () => {
     expect(detailLoadFailure("missing")).toContain("不存在");
+    expect(detailLoadFailure("auth")).toContain("重新登录");
     expect(detailLoadFailure("unreachable")).toContain("无法连接后台");
+    expect(detailLoadFailure("server", 500)).toContain("HTTP 500");
+    // 500 的文案不得含「无法连接后台」——服务端明明在运行（评审硬项）。
+    expect(detailLoadFailure("server", 500)).not.toContain("无法连接后台");
   });
 });
 
@@ -85,6 +93,11 @@ describe("planLoadState (#256: 计划读败不伪装空计划)", () => {
     );
     expect(planLoadFailure(0)).toContain("无法连接后台");
     expect(planLoadFailure(503)).toContain("HTTP 503");
+  });
+
+  it("200 + 不合规信封 → 不产出「HTTP 200」矛盾文案（评审项）", () => {
+    expect(planLoadFailure(200)).not.toContain("HTTP 200");
+    expect(planLoadFailure(200)).toContain("响应异常");
   });
 });
 
@@ -113,10 +126,22 @@ describe("listLoadOutcome (#256 评审 S1: JSON-bodied 500 不落空态)", () =>
     if (!outcome.ok) expect(outcome.error).toContain("HTTP 500");
   });
 
-  it("401（token 失效）→ 登录已失效的专属文案", () => {
+  it("401（token 失效）→ 登录已失效的专属文案 + authExpired 标记", () => {
     const outcome = listLoadOutcome(401, null);
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error).toContain("登录已失效");
+    if (!outcome.ok) {
+      expect(outcome.error).toContain("登录已失效");
+      // AuthGuard 只查 token 存在：刷新留不住新登录，下一步必须是重新登录入口。
+      expect(outcome.error).not.toContain("刷新页面");
+      expect(outcome.authExpired).toBe(true);
+    }
+  });
+
+  it("非 401 失败 → authExpired=false", () => {
+    for (const status of [0, 500, 503]) {
+      const outcome = listLoadOutcome(status, null);
+      if (!outcome.ok) expect(outcome.authExpired).toBe(false);
+    }
   });
 
   it("传输失败（0）→ 无法连接后台", () => {

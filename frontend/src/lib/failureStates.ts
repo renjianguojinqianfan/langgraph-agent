@@ -41,20 +41,24 @@ export function historyListState(input: {
  */
 export type ListLoadOutcome =
   | { ok: true; tasks: Task[] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; authExpired: boolean };
 
 export function listLoadOutcome(status: number, tasks: Task[] | null): ListLoadOutcome {
   if (status >= 200 && status < 300 && tasks) return { ok: true, tasks };
-  return { ok: false, error: listLoadFailure(status) };
+  return { ok: false, error: listLoadFailure(status), authExpired: status === 401 };
 }
 
-/** Why the list read failed; 401 is its own face (the token expired). */
+/**
+ * Why the list read failed. 401 is its own face: the stored token expired,
+ * and reloading keeps the dead one (AuthGuard only checks that a token
+ * exists), so the next step is to drop it and log in again — never "刷新页面".
+ */
 export function listLoadFailure(status: number): string {
   switch (status) {
     case 0:
       return "无法连接后台；确认服务在运行后再试。";
     case 401:
-      return "登录已失效；刷新页面重新登录。";
+      return "登录已失效；重新登录后再试。";
     default:
       return status >= 200 && status < 300
         ? "任务列表响应异常；请重试。"
@@ -64,22 +68,36 @@ export function listLoadFailure(status: number): string {
 
 /**
  * #256: a selected task whose snapshot never arrived is not a new task.
- * `missing` (404) and `unreachable` (transport / server) are both failures;
- * neither may fall through to the "新任务" face.
+ * Every branch here is a failure; none may fall through to the "新任务"
+ * face. The buckets stay attributed separately (design.md §7): `missing`
+ * (404) vs `auth` (401) vs `unreachable` (the request never arrived — a 500
+ * means the server IS running, so it must not read as "连不上后台") vs
+ * `server` (any other non-2xx).
  */
-export type DetailLoadState = "ready" | "missing" | "unreachable";
+export type DetailLoadState = "ready" | "missing" | "auth" | "unreachable" | "server";
 
 export function detailLoadState(status: number): DetailLoadState {
   if (status === 404) return "missing";
+  if (status === 401) return "auth";
   if (status >= 200 && status < 300) return "ready";
-  return "unreachable";
+  if (status === 0) return "unreachable";
+  return "server";
 }
 
 /** Copy for the center column when the selected task's snapshot failed. */
-export function detailLoadFailure(state: DetailLoadState): string {
-  return state === "missing"
-    ? "任务不存在或已被删除。"
-    : "无法连接后台；确认服务在运行后再试。";
+export function detailLoadFailure(state: DetailLoadState, status = 0): string {
+  switch (state) {
+    case "missing":
+      return "任务不存在或已被删除。";
+    case "auth":
+      return "登录已失效；重新登录后再试。";
+    case "unreachable":
+      return "无法连接后台；确认服务在运行后再试。";
+    case "server":
+      return `服务端出错（HTTP ${status}）；稍后重试。`;
+    default:
+      return "";
+  }
 }
 
 /**
@@ -97,7 +115,9 @@ export function planLoadState(status: number): PlanLoadState {
  * Why the plan read failed. A missing plan *file* is not a failure (the
  * backend answers 200 with empty text); these are the read failures:
  * `backend/api/routes.py` raises 404 for a vanished task and 409 for a plan
- * file that is not the agreed UTF-8 Markdown.
+ * file that is not the agreed UTF-8 Markdown. A 2xx with an unusable
+ * envelope is its own wording — "HTTP 200" in a failure line reads as a
+ * contradiction.
  */
 export function planLoadFailure(status: number, detail?: string): string {
   switch (status) {
@@ -108,7 +128,9 @@ export function planLoadFailure(status: number, detail?: string): string {
     case 409:
       return `计划文件无法读取：${detail?.trim() || "内容不是约定的 UTF-8 Markdown。"}`;
     default:
-      return `计划读取失败（HTTP ${status}）。`;
+      return status >= 200 && status < 300
+        ? "计划响应异常；请重试。"
+        : `计划读取失败（HTTP ${status}）。`;
   }
 }
 
