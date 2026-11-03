@@ -879,3 +879,27 @@ def test_no_safe_cut_reports_no_compression() -> None:
     assert meta["compressed"] is False, meta
     assert meta["dropped"] == 0
     assert meta["band_evicted"] == 0
+
+
+def test_cut_recovers_after_a_legacy_orphan_reply() -> None:
+    """旧 bug 留在磁盘上的孤立 tool 回复随前缀一起丢弃，不再永久禁用压缩。
+
+    孤立回复只能证明**前缀**损坏；它落在切点左侧时对保留段无影响。若把它当成
+    全局污染，旧任务升级后 ``dropped`` 恒为 0，上下文只增不减。
+    """
+    msgs = [
+        _msg("user", "u" * 400),
+        _assistant_call("c0", "read"),
+        _tool("r0", "c0"),
+        _tool("stray", "c_old"),  # legacy orphan: no assistant before it
+        _msg("user", "next"),
+        _assistant_call("c1", "read"),
+        _tool("r1", "c1"),
+    ]
+
+    out, meta = compress_messages(msgs, budget=1, keep_recent=3)
+
+    assert meta["compressed"] is True, meta
+    assert meta["dropped"] == 4  # the orphan dies with the dropped prefix
+    assert out[1] is msgs[4]
+    assert_tool_protocol(out)

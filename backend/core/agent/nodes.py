@@ -760,12 +760,11 @@ class AgentRuntime:
         ``INTERRUPTED`` (停下, 等你说话). The task can always be continued by
         sending another message. Only an error is ``FAILED``.
 
-        The step record is marked ``done`` only when this round actually produced
-        an answer; a stop or a spent step budget leaves it ``failed`` (it did not
-        complete what it started). Only a step this round created and that is
-        still ``running`` is settled here (#255): a stop at the loop entry skips
-        the ``agent`` node's step creation, so the tail may belong to an earlier
-        round that already carries its own verdict.
+        A step this round left ``running`` is settled here: ``done`` when the
+        round produced an answer, ``failed`` on a stop / spent budget / error.
+        A step that already carries a verdict — ``tool_node`` finished it in
+        this round, or it belongs to an earlier round (a stop at the loop entry
+        skips the ``agent`` node's step creation) — is never rewritten (#255).
         """
         if state.get("stop_requested"):
             state["status"] = "INTERRUPTED"

@@ -394,22 +394,22 @@ def summarize_messages(
 def _cut_balance(messages: List[Dict[str, Any]]) -> List[bool]:
     """``out[i]`` — is the boundary *before* ``messages[i]`` protocol-safe?
 
-    Safe means every assistant ``tool_calls`` block before the boundary is fully
-    answered by the ``role: tool`` replies that follow it (#255). ``out[0]`` is
-    trivially safe, and a history whose count once goes negative is already
-    broken — no later boundary is trusted, this module repairs nothing.
+    Counts *open* assistant calls: every ``tool_calls`` entry opens one, every
+    ``tool`` reply closes one, and a surplus reply cannot open debt (the count
+    floors at zero; it only ever lives on the **dropped** side). ``out[0]`` is
+    trivially safe. Tolerating surplus replies matters: old checkpoints already
+    carry the split pairs this ticket fixes (#255), and one stale orphan must
+    not disable compression for that task forever.
     """
     out: List[bool] = [True]
     balance = 0
-    corrupt = False
     for msg in messages:
         role = msg.get("role")
         if role == "assistant":
             balance += len(msg.get("tool_calls") or [])
         elif role == "tool":
-            balance -= 1
-            corrupt = corrupt or balance < 0
-        out.append(balance == 0 and not corrupt)
+            balance = max(0, balance - 1)
+        out.append(balance == 0)
     return out
 
 
