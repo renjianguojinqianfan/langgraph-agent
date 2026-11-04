@@ -391,7 +391,7 @@ def summarize_messages(
         return f"[上下文摘要失败({detail})，已省略早期消息]"
 
 
-def _cut_balance(messages: List[Dict[str, Any]]) -> List[bool]:
+def _safe_cuts(messages: List[Dict[str, Any]]) -> List[bool]:
     """``out[i]`` — is the boundary *before* ``messages[i]`` protocol-safe?
 
     Counts *open* assistant calls: every ``tool_calls`` entry opens one, every
@@ -421,9 +421,9 @@ def _pair_safe_drop(messages: List[Dict[str, Any]], dropped: int) -> int:
     calls are still open would drop the assistant but keep or lose the reply the
     same way. Both are refused here before either strategy builds its candidate.
     """
-    balance = _cut_balance(messages)
+    safe_cuts = _safe_cuts(messages)
     while dropped > 0:
-        if balance[dropped] and messages[dropped].get("role") != "tool":
+        if safe_cuts[dropped] and messages[dropped].get("role") != "tool":
             return dropped
         dropped -= 1
     return 0
