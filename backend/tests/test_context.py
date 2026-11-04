@@ -17,6 +17,7 @@ from backend.core.agent.context import (
     EVICT_PLACEHOLDER_PREFIX,
     MESSAGE_PLACEHOLDER_PREFIX,
     NOTE_PREFIXES,
+    _squeeze_band,
     compress_messages,
     estimate_tokens,
     evict_tool_results,
@@ -909,3 +910,31 @@ def test_cut_recovers_after_a_legacy_orphan_reply() -> None:
     assert meta["dropped"] == 4  # the orphan dies with the dropped prefix
     assert out[1] is msgs[4]
     assert_tool_protocol(out)
+
+
+# ── #285: the squeeze still names a tool whose call is out of band ──────────
+def test_squeeze_note_names_a_tool_whose_call_is_out_of_band() -> None:
+    """带外调用也要在便签里点得出名字（T1.4），不许降级成 ``?``。
+
+    #255 的配对不变量让「调用在带外、回复在带内」在产品路径上不可达；这里直接
+    钉 ``_squeeze_band`` 的查名接缝，防止将来把它当死代码删掉或改坏。
+    """
+    result = [
+        _msg("user", "u" * 4000),
+        _tool("t" * 4000, "c_out"),  # 持有 c_out 的 assistant 不在 result 里
+    ]
+
+    squeezed = _squeeze_band(
+        result,
+        budget=1,
+        head=0,
+        names={"c_out": "read"},
+        head_chars=800,
+        tail_chars=400,
+        trace_ref=TRACE_REF,
+    )
+
+    assert squeezed >= 1
+    tool_notes = [m["content"] for m in result if m.get("role") == "tool"]
+    assert tool_notes and all("工具: read" in c for c in tool_notes), tool_notes
+    assert all("工具: ?" not in c for c in tool_notes), tool_notes
