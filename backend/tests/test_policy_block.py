@@ -149,7 +149,7 @@ def _last_tool_message(state: AgentState, call_id: str = "c1") -> Dict[str, Any]
 # ── 命中即拒 ─────────────────────────────────────────────────────────────────
 def test_hit_denies_the_call_without_executing_it(tmp_path):
     """命中 → 不执行 + ``{block, reason}`` 回模型。"""
-    reason = "probe is not allowed here"
+    reason = "probe 不允许在这里运行"
     settings = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": reason}))
     _rt, state, tool, tm, _bus = _run(settings)
 
@@ -159,7 +159,12 @@ def test_hit_denies_the_call_without_executing_it(tmp_path):
     assert rec["error"] == reason
     assert set(rec) == PRE_S2_RECORD_KEYS, "记录体多了一个改造前没有的键"
 
-    content = json.loads(_last_tool_message(state)["content"])
+    message = _last_tool_message(state)
+    # #285: 信封逐字节固定——键序 block → reason，中文不转义（ensure_ascii=False）。
+    assert message["content"] == json.dumps(
+        {"block": True, "reason": reason}, ensure_ascii=False
+    )
+    content = json.loads(message["content"])
     assert content["block"] is True
     assert content["reason"] == reason
 

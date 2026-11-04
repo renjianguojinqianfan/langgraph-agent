@@ -99,7 +99,7 @@ data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>
 |---|---|
 | `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；旧记录里的 `COMPLETED` 在加载时映射成 `INTERRUPTED` |
 | `TaskMode` | `plan` \| `build`（黏性任务开关，默认 `build`） |
-| `ToolCallRecord` | `id` / `tool_name` / `input` / `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
+| `ToolCallRecord` | `id` / `tool_name` / `input`（读入边界归一化：非 dict——旧 list / 标量 / provider 返回的非对象 JSON——包成 `{"value": ...}`，#255；派发读 `state["_current_tool_calls"]`，工具参数不被改写）/ `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
 | `StepRecord` | `index` / `round`（1 起的对话轮次，`0` = #265 前的旧记录）/ `thought` / `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
 | `SubTask` | `subtask_id` / `name` / `status`（`pending \| running \| completed \| failed`）/ `summary` / `artifacts[]` / `error`。`artifacts` 是**现役字段**（子任务回传用，父任务无产物账本） |
 | `ChatTurn` | `role`（user \| assistant）/ `content`；只存人读的对话，工具流量在 `Task.steps` |
