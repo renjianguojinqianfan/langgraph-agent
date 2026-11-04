@@ -98,8 +98,9 @@ def _ensure_plan_note(messages: List[Dict[str, Any]], version: int) -> None:
 def _tool_reply_message(rec: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     """The one ``role: tool`` envelope every verdict is delivered in (#46).
 
-    Only the body differs by verdict (#95 failure / #136 policy refusal); the
-    envelope and its JSON encoding stay byte-identical across call sites.
+    Only the body differs — the tool output on success, ``{ok: false, error}``
+    (#95), or ``{block: true, reason}`` (#136); the envelope and its JSON
+    encoding stay byte-identical across call sites.
     """
     return {
         "role": "tool",
@@ -681,7 +682,7 @@ class AgentRuntime:
             # wrong).
             if result.success:
                 state.setdefault("messages", []).append(
-                    {"role": "tool", "tool_call_id": rec["id"], "content": json.dumps(rec["output"], ensure_ascii=False, default=str)}
+                    _tool_reply_message(rec, rec["output"])
                 )
             else:
                 self._feed_tool_failure(state, rec)

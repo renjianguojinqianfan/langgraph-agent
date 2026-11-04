@@ -934,7 +934,7 @@ def test_squeeze_note_names_a_tool_whose_call_is_out_of_band() -> None:
         trace_ref=TRACE_REF,
     )
 
-    assert squeezed >= 1
+    assert squeezed == 2  # both band messages gave way
     tool_notes = [m["content"] for m in result if m.get("role") == "tool"]
     assert tool_notes and all("工具: read" in c for c in tool_notes), tool_notes
     assert all("工具: ?" not in c for c in tool_notes), tool_notes
