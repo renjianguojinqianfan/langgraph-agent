@@ -95,6 +95,19 @@ def _ensure_plan_note(messages: List[Dict[str, Any]], version: int) -> None:
     messages.append({"role": "assistant", "content": expected})
 
 
+def _tool_reply_message(rec: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The one ``role: tool`` envelope every verdict is delivered in (#46).
+
+    Only the body differs by verdict (#95 failure / #136 policy refusal); the
+    envelope and its JSON encoding stay byte-identical across call sites.
+    """
+    return {
+        "role": "tool",
+        "tool_call_id": rec["id"],
+        "content": json.dumps(payload, ensure_ascii=False, default=str),
+    }
+
+
 class AgentRuntime:
     """Per-task runtime that backs the LangGraph nodes."""
 
@@ -699,25 +712,13 @@ class AgentRuntime:
         assistant ``tool_calls`` entry gets exactly one reply (#46); the *body*
         is what differs (a failure's #95, a policy refusal's #136).
         """
-        state.setdefault("messages", []).append(
-            {
-                "role": "tool",
-                "tool_call_id": rec["id"],
-                "content": json.dumps(payload, ensure_ascii=False, default=str),
-            }
-        )
+        state.setdefault("messages", []).append(_tool_reply_message(rec, payload))
 
     def _tool_failure_message(self, rec: Dict[str, Any]) -> Dict[str, Any]:
         """The conversation-face reply for one un-successful call (one text, one source)."""
-        return {
-            "role": "tool",
-            "tool_call_id": rec["id"],
-            "content": json.dumps(
-                {"ok": False, "error": rec["error"] or "tool failed"},
-                ensure_ascii=False,
-                default=str,
-            ),
-        }
+        return _tool_reply_message(
+            rec, {"ok": False, "error": rec["error"] or "tool failed"}
+        )
 
     def _feed_tool_failure(self, state: AgentState, rec: Dict[str, Any]) -> None:
         """Answer one un-successful call on the conversation face (issue #95).
