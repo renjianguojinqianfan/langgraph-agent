@@ -33,6 +33,7 @@
 - 光从上方来，只上一级：页 → 栏 → 纸。发丝线只做分隔；无渐变、无辉光、无网格、无装饰边框。
 - 圆角 token：`--radius-sheet 11`、`--radius-dialog 14`、`--radius-well 8`、`--radius-composer 12`、`--radius-control 6`（2026-10-27 补全，D3）、胶囊 999；**行与页签 0**。
 - 状态色分工：`--state-ok` 只用于工具「成功」与产物/成功标记；任务状态用 `--signal-now`（运行）/ `--state-warn`（停下）/ `--state-danger`（失败）/ `--text-tertiary`（启动）。
+- **机械守卫**：机器可读镜像 `DESIGN.md` 的 frontmatter 与实现 `frontend/src/index.css` 的 `@theme` 由 `scripts/check_design_tokens.py` 按守卫表逐项比对（颜色 / 圆角 / 排版三组；字体 fallback 全串与 `fontFeature` 刻意不比，理由见脚本头注）；pre-commit 钩子 `design-token-mirror` 在提交时拦。**守卫只保「镜像 ↔ 实现」，本表本身仍由人维护**——改 §1/§2 时要人工把镜像与实现一起对齐，再跑该脚本。
 
 > **本文值为准**：旧 `#63676D`（3.26:1）不足 AA；`#9BA0A6` 与 `--rule` .06/.11 一并提亮，是为统一色阶（不改变其对比度结论）。本文用 `#A6ABB2` / `#8B9097`、`.07` / `.12`。
 

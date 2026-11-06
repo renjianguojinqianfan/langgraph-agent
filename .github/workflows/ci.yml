@@ -80,6 +80,13 @@ jobs:
       - name: Typecheck (mypy)
         run: python -m mypy
 
+      # #261：设计 token 镜像防漂移——DESIGN.md（docs/frontend-design.md 的机器可读
+      # 镜像）的 frontmatter 与 index.css 的 @theme 逐项比对。漂了不报错，只是镜像
+      # 开始说谎。纯 DESIGN.md 变更不触发本 workflow（根级 *.md 在 paths 白名单外），
+      # 那一侧由 pre-commit 钩子 design-token-mirror 在提交时兜住；index.css 变更会跑到这里。
+      - name: Design token mirror check
+        run: python scripts/check_design_tokens.py
+
       - name: Run offline test suite
         run: |
           python -m pytest backend/tests/ -q --durations=10 \

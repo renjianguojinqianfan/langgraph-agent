@@ -52,6 +52,13 @@ repos:
         files: ^backend/
         pass_filenames: false
 
+      - id: design-token-mirror
+        name: 设计 token 镜像（DESIGN.md frontmatter ↔ index.css @theme；#261）
+        entry: .venv311/Scripts/python.exe scripts/check_design_tokens.py
+        language: system
+        files: ^(DESIGN\.md|frontend/src/index\.css|scripts/check_design_tokens\.py|backend/tests/test_design_token_mirror\.py)$
+        pass_filenames: false
+
       - id: sse-event-gate
         name: SSE 事件词汇表四址对齐（#92 的机械门；npm 包装在 git-bash 不可靠，直调同一脚本）
         entry: node frontend/scripts/check-sse-event-registry.mjs

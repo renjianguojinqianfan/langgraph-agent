@@ -97,6 +97,7 @@ agent ──有 tool call──> tool ──> agent
 .\.venv311\Scripts\python.exe -m pytest backend/tests/ -q
 .\.venv311\Scripts\python.exe -m ruff check backend scripts
 .\.venv311\Scripts\python.exe -m mypy
+.\.venv311\Scripts\python.exe scripts\check_design_tokens.py
 cd frontend; npx tsc --noEmit; npm test; npm run check:sse; npm run build
 ```
 
