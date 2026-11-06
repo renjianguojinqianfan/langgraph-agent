@@ -10,8 +10,10 @@ settings the module-level app actually uses.
 from __future__ import annotations
 
 import os
-import tempfile
+import sys
 from pathlib import Path
+
+import pytest
 
 from backend.config import PROJECT_ROOT, get_settings
 
@@ -46,14 +48,29 @@ def test_default_runtime_paths_are_outside_the_checkout():
 def test_checkpoint_path_follows_the_test_root():
     root = Path(os.environ["QIANFAN_TEST_DATA_ROOT"])
     assert _is_within(get_settings().checkpoint_path, root)
+    # c2: config.py falls back to data/checkpoints when CHECKPOINT_DIR is empty
+    # or relative, so the settings assertion above is also green when conftest's
+    # direct assignment is deleted. Pin the environment variable itself.
+    assert _is_within(Path(os.environ["CHECKPOINT_DIR"]), root)
 
 
-def test_pytest_tmp_and_tempfile_fallback_stay_outside_the_checkout(tmp_path):
-    """pytest's own basetemp must not land in the checkout when OS temp is denied."""
+def test_pytest_tmp_stays_outside_the_checkout(tmp_path):
+    """pytest's own basetemp must not land in the checkout when OS temp is denied.
+
+    c6: an explicit ``PYTEST_DEBUG_TEMPROOT`` / ``--basetemp`` deliberately
+    overrides the fallback (pytest's own precedence rules); skipping is honest,
+    reporting that as a suite failure is not.
+    """
+    override = os.environ.get("PYTEST_DEBUG_TEMPROOT") or any(
+        arg.startswith("--basetemp") for arg in sys.argv
+    )
+    if override:
+        pytest.skip("explicit pytest temp-root override (#252 c6): out of scope")
     root = Path(os.environ["QIANFAN_TEST_DATA_ROOT"])
     assert not _is_within(tmp_path, PROJECT_ROOT)
+    # c3: the tempfile.gettempdir() assertion was tautological with conftest's
+    # ``tempfile.tempdir`` assignment; tmp_path is the real anchor here.
     assert _is_within(tmp_path, root)
-    assert _is_within(Path(tempfile.gettempdir()), root)
 
 
 def test_module_level_app_lifespan_uses_isolated_paths():
