@@ -11,11 +11,13 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from backend.api.schemas import ChatTurn, Task, TaskStatus
 from backend.core.llm.client import MockLLMClient
+from backend.services import plan_file
 from backend.services.persistence import Persistence, PersistenceError
 from backend.tests.conftest import make_manager, make_settings
 
@@ -361,6 +363,41 @@ def test_set_mode_save_failure_rolls_back(tmp_path, monkeypatch):
         tm.set_mode("t-parked", "plan")
 
     assert tm.get_task("t-parked").mode.value == "build"
+
+
+def test_set_model_save_failure_rolls_back(tmp_path, monkeypatch):
+    """#264: set_model now uses the same transactional seam as the other paths."""
+    settings = make_settings(tmp_path)
+    _parked_task(settings)
+    tm = make_manager(settings, MockLLMClient())
+    target = tm.models.add(
+        name="other", base_url="https://example.invalid/v1", model="other-model"
+    )
+    monkeypatch.setattr(tm.persistence, "save_task", lambda task: False)
+
+    with pytest.raises(PersistenceError):
+        tm.set_model("t-parked", target.id)
+
+    assert tm.get_task("t-parked").model == ""
+
+
+def test_set_plan_save_failure_rolls_back_fields_and_file(tmp_path, monkeypatch):
+    """#264: set_plan (missed by the ticket) is transactional on both stores."""
+    settings = make_settings(tmp_path)
+    _parked_task(settings)
+    tm = make_manager(settings, MockLLMClient())
+    assert tm.set_plan("t-parked", "old plan")["version"] == 1
+    before = tm.get_task("t-parked")
+    monkeypatch.setattr(tm.persistence, "save_task", lambda task: False)
+
+    with pytest.raises(PersistenceError):
+        tm.set_plan("t-parked", "new plan")
+
+    after = tm.get_task("t-parked")
+    assert after.plan_version == before.plan_version
+    assert after.plan_hash == before.plan_hash
+    assert after.updated_at == before.updated_at
+    assert plan_file.read_plan(Path(after.workspace), "t-parked") == "old plan"
 
 
 def test_stop_save_failure_rolls_back_status(tmp_path, monkeypatch):
