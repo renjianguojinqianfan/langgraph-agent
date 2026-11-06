@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from backend.config import PROJECT_ROOT, get_settings
+from backend.tests.conftest import _stat_snapshot, _top_level_names
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -57,15 +58,20 @@ def test_checkpoint_path_follows_the_test_root():
 def test_pytest_tmp_stays_outside_the_checkout(tmp_path):
     """pytest's own basetemp must not land in the checkout when OS temp is denied.
 
-    c6: an explicit ``PYTEST_DEBUG_TEMPROOT`` / ``--basetemp`` deliberately
-    overrides the fallback (pytest's own precedence rules); skipping is honest,
-    reporting that as a suite failure is not.
+    c6: an explicit ``PYTEST_DEBUG_TEMPROOT`` / ``PYTEST_ADDOPTS`` /
+    ``--basetemp`` deliberately overrides the fallback (pytest's own
+    precedence rules); skipping is honest, reporting that as a suite
+    failure is not. ``PYTEST_ADDOPTS`` never lands in ``sys.argv``, so it
+    has to be checked separately.
     """
-    override = os.environ.get("PYTEST_DEBUG_TEMPROOT") or any(
-        arg.startswith("--basetemp") for arg in sys.argv
+    addopts = os.environ.get("PYTEST_ADDOPTS", "")
+    override = (
+        os.environ.get("PYTEST_DEBUG_TEMPROOT")
+        or "--basetemp" in addopts
+        or any(arg.startswith("--basetemp") for arg in sys.argv)
     )
     if override:
-        pytest.skip("explicit pytest temp-root override (#252 c6): out of scope")
+        pytest.skip("explicit pytest temp-root override (#264 c6): out of scope")
     root = Path(os.environ["QIANFAN_TEST_DATA_ROOT"])
     assert not _is_within(tmp_path, PROJECT_ROOT)
     # c3: the tempfile.gettempdir() assertion was tautological with conftest's
@@ -112,3 +118,46 @@ def test_module_level_app_lifespan_does_not_touch_repo_data():
     with TestClient(app, base_url="http://localhost"):
         pass
     assert _snapshot(repo_data) == before
+
+
+def test_session_guard_stat_snapshot_detects_guarded_surface_changes(tmp_path):
+    """#264 F6: the session guard must notice writes inside its guarded surfaces."""
+    data = tmp_path / "data"
+    log = data / "logs" / "run.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("one", encoding="utf-8")
+    before = _stat_snapshot(data)
+    log.write_text("two-longer", encoding="utf-8")
+    after = _stat_snapshot(data)
+
+    assert "logs/run.log" in before
+    assert before != after
+
+
+def test_session_guard_top_level_names_detects_new_entries(tmp_path):
+    """#264 F6: the 「不新增 data/ 顶层条目」 half must notice a new entry."""
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "tasks.json").write_text("[]", encoding="utf-8")
+    before = _top_level_names(data)
+    (data / "grader-trial").mkdir()
+    after = _top_level_names(data)
+
+    assert before == {"tasks.json"}
+    assert after - before == {"grader-trial"}
+
+
+def test_session_guard_survives_mid_scan_deletion(tmp_path, monkeypatch):
+    """#264 spec-F2: a surface vanishing mid-scan degrades, it does not crash teardown."""
+    data = tmp_path / "data"
+    (data / "logs").mkdir(parents=True)
+    (data / "logs" / "run.log").write_text("x", encoding="utf-8")
+
+    def vanished(self, pattern):
+        raise FileNotFoundError("logs vanished mid-scan")
+
+    monkeypatch.setattr(Path, "rglob", vanished)
+
+    snapshot = _stat_snapshot(data)
+
+    assert "logs" in snapshot
