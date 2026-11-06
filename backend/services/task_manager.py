@@ -9,6 +9,7 @@ interrupt requirement (P0-9).
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 import uuid
@@ -388,7 +389,9 @@ class TaskManager:
 
         Request paths pass ``strict=True`` so the API reports the failure;
         worker/teardown paths log and continue because raising there would turn
-        a disk problem into an unhandled thread exception.
+        a disk problem into an unhandled thread exception. Callers that mutate a
+        record and need rollback on failure use :meth:`_mutate_task` instead of
+        this method directly.
         """
         if self.persistence.save_task(task):
             return True
@@ -398,17 +401,87 @@ class TaskManager:
         )
         if strict:
             raise PersistenceError(message)
+        logger.error(
+            "%s; the in-memory record now diverges from disk and is reconciled "
+            "from tasks.json on the next startup",
+            message,
+        )
+        return False
+
+    @staticmethod
+    def _field_snapshot(task: Task, fields: tuple[str, ...]) -> Dict[str, Any]:
+        """Shallow snapshot of ``fields`` (containers copied, values shared).
+
+        Shallow is deliberate (#264): a deep copy of a task with hundreds of
+        steps would make every mode switch pay for the whole record, while the
+        call sites only touch flat fields and the conversation list.
+        """
+        snapshot: Dict[str, Any] = {}
+        for name in fields:
+            value = getattr(task, name)
+            snapshot[name] = copy.copy(value) if isinstance(value, (list, dict, set)) else value
+        return snapshot
+
+    def _mutate_task(
+        self,
+        task: Task,
+        *,
+        changes: Dict[str, Any],
+        strict: bool,
+    ) -> bool:
+        """Apply one in-memory change and persist it as a single transaction.
+
+        :class:`Persistence` cannot roll back an in-place edit itself: the task
+        objects it hands out are the live records, so its ``previous`` snapshot
+        is the same object the caller already mutated. This seam owns that
+        rollback — snapshot the declared fields (the keys of ``changes``), apply
+        ``changes``, save; on a failed save restore the snapshot so memory and
+        ``tasks.json`` agree again.
+
+        ``strict=True`` (request paths) re-raises :class:`PersistenceError`.
+        ``strict=False`` (worker paths) deliberately does not raise: on a failed
+        save memory is restored to the last successfully persisted state
+        (memory == disk), the failure is only logged and signalled by returning
+        False, and the caller still publishes the events it intended to publish
+        and keeps running. Inside such a disk-failure window an event can thus
+        describe a transition the record does not carry; the next startup
+        reconciles from tasks.json. This is the D-10 trade-off, not silent
+        divergence.
+
+        File side effects are outside this transaction: a caller that writes the
+        plan file must restore it itself when the record save fails.
+        """
+        fields = tuple(changes)
+        previous = self._field_snapshot(task, fields)
+        try:
+            for name in fields:
+                setattr(task, name, changes[name])
+            attempted_status = task.status.value
+            if self.persistence.save_task(task):
+                return True
+        except Exception:
+            for name, value in previous.items():
+                setattr(task, name, value)
+            raise
+        for name, value in previous.items():
+            setattr(task, name, value)
+        message = (
+            f"could not persist task {task.id} ({attempted_status}); "
+            "tasks.json was left unchanged"
+        )
+        if strict:
+            raise PersistenceError(message)
         logger.error("%s; continuing without a durable record", message)
         return False
 
-    def _attach_trace(self, task_id: str, *, required: bool) -> bool:
+    def _attach_trace(self, task_id: str, *, strict: bool) -> None:
         """Attach the trace recorder; a file error must not fake a live run."""
         if self._trace is None:
-            return False
+            return
         try:
             self._trace.attach(self.event_bus, task_id)
         except OSError as exc:
-            if required:
+            if strict:
                 raise RuntimeError(
                     f"trace is unavailable for task {task_id} "
                     f"({type(exc).__name__}: {exc}); fix the trace directory and retry"
@@ -419,8 +492,6 @@ class TaskManager:
                 type(exc).__name__,
                 exc,
             )
-            return False
-        return True
 
     def _close_trace_quietly(self, task_id: str) -> None:
         if self._trace is None:
@@ -588,6 +659,14 @@ class TaskManager:
         # Credential hygiene is independent of the DB: this must run even when
         # a worker outlived the join (early return below) or no store was ever
         # mounted, otherwise an early return silently keeps API keys in memory.
+        # c5 trade-off (kept explicit): ``_round_models`` is cleared
+        # unconditionally here (a side effect of R3), so a worker that outlives
+        # shutdown can no longer hand the parent round's model to a subagent and
+        # re-resolves it. The window is process exit only, and keeping
+        # ``_known_secrets`` unconditional too is the safer half of the pair.
+        # N3: this lock is held for the in-memory clears above only — every
+        # critical section is short and at most one tasks.json write happens
+        # later; a timed acquire would add failure modes for no measured gain.
         with self._lock:
             self._known_secrets.clear()
             self._round_models.clear()
@@ -697,16 +776,11 @@ class TaskManager:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
-            previous_model = task.model
-            previous_updated_at = task.updated_at
-            task.model = model_id
-            task.updated_at = _now()
-            try:
-                self._save_task(task, strict=True)
-            except PersistenceError:
-                task.model = previous_model
-                task.updated_at = previous_updated_at
-                raise
+            self._mutate_task(
+                task,
+                changes={"model": model_id, "updated_at": _now()},
+                strict=True,
+            )
         return {"ok": True, "model": model_id}
 
     # Profile mutations go through the manager so the per-profile client cache
@@ -841,7 +915,7 @@ class TaskManager:
         # (no worker, no trace file, no in-memory ghost). The trace itself is
         # observability, so a file error degrades instead of blocking the task.
         self._save_task(task, strict=True)
-        self._attach_trace(task_id, required=False)
+        self._attach_trace(task_id, strict=False)
         self.event_bus.publish(
             task_id,
             "task_created",
@@ -960,9 +1034,11 @@ class TaskManager:
             return
         tokens = set_runtime_context(task_id, Path(task.workspace))
 
-        task.status = TaskStatus.RUNNING
-        task.updated_at = _now()
-        self._save_task(task, strict=False)
+        self._mutate_task(
+            task,
+            changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
+            strict=False,
+        )
 
         try:
             # The directory may have disappeared while the task was queued.
@@ -1013,13 +1089,19 @@ class TaskManager:
             task = self.persistence.load_task(task_id) or task
             self._finalize_terminal(task, final)
         except Exception as exc:  # pragma: no cover - defensive
-            task.status = TaskStatus.FAILED
-            task.error = self.redact(str(exc))
-            logger.error("run() crashed for task %s: %s", task_id, task.error)
-            task.updated_at = _now()
-            self._save_task(task, strict=False)
+            error = self.redact(str(exc))
+            logger.error("run() crashed for task %s: %s", task_id, error)
+            self._mutate_task(
+                task,
+                changes={
+                    "status": TaskStatus.FAILED,
+                    "error": error,
+                    "updated_at": _now(),
+                },
+                strict=False,
+            )
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": task.error}
+                task_id, "task_failed", {"task_id": task_id, "error": error}
             )
         finally:
             self._active_states.pop(task_id, None)
@@ -1066,16 +1148,11 @@ class TaskManager:
             self._stop_flags[task_id] = True
 
         if live and task is not None:
-            previous_status = task.status
-            previous_updated_at = task.updated_at
-            task.status = TaskStatus.INTERRUPTED
-            task.updated_at = _now()
-            try:
-                self._save_task(task, strict=True)
-            except PersistenceError:
-                task.status = previous_status
-                task.updated_at = previous_updated_at
-                raise
+            self._mutate_task(
+                task,
+                changes={"status": TaskStatus.INTERRUPTED, "updated_at": _now()},
+                strict=True,
+            )
             # Claim the announcement before publishing: _finalize_terminal will
             # see the claim and stay quiet, so a human stop is one event, not two.
             if self._claim_interrupt(task_id):
@@ -1361,16 +1438,14 @@ class TaskManager:
             # _resume_run re-checks before proceeding.
             # Open the trace BEFORE flipping the record: a trace-file failure
             # must leave the task parked, never RUNNING without a worker.
-            self._attach_trace(task_id, required=True)
-            previous_status = task.status
-            previous_updated_at = task.updated_at
-            task.status = TaskStatus.RUNNING
-            task.updated_at = _now()
+            self._attach_trace(task_id, strict=True)
             try:
-                self._save_task(task, strict=True)
+                self._mutate_task(
+                    task,
+                    changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
+                    strict=True,
+                )
             except PersistenceError:
-                task.status = previous_status
-                task.updated_at = previous_updated_at
                 self._close_trace_quietly(task_id)
                 raise
             self.event_bus.publish(
@@ -1487,10 +1562,15 @@ class TaskManager:
             logger.error("resume() crashed for task %s: %s", task_id, message)
             task = self.persistence.load_task(task_id)
             if task is not None:
-                task.status = TaskStatus.FAILED
-                task.error = message
-                task.updated_at = _now()
-                self._save_task(task, strict=False)
+                self._mutate_task(
+                    task,
+                    changes={
+                        "status": TaskStatus.FAILED,
+                        "error": message,
+                        "updated_at": _now(),
+                    },
+                    strict=False,
+                )
             self.event_bus.publish(
                 task_id, "task_failed", {"task_id": task_id, "error": message}
             )
@@ -1529,16 +1609,11 @@ class TaskManager:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
-            previous_mode = task.mode
-            previous_updated_at = task.updated_at
-            task.mode = chosen
-            task.updated_at = _now()
-            try:
-                self._save_task(task, strict=True)
-            except PersistenceError:
-                task.mode = previous_mode
-                task.updated_at = previous_updated_at
-                raise
+            self._mutate_task(
+                task,
+                changes={"mode": chosen, "updated_at": _now()},
+                strict=True,
+            )
         return {"ok": True, "mode": chosen.value}
 
     def get_plan(self, task_id: str) -> Dict[str, Any]:
@@ -1572,17 +1647,34 @@ class TaskManager:
                     "(INTERRUPTED or FAILED)"
                 )
             self._require_workspace(task)
+            previous_plan = plan_file.read_plan(Path(task.workspace), task_id)
             try:
                 plan_file.write_plan(Path(task.workspace), task_id, text)
             except ValueError as exc:
                 raise RuntimeError(str(exc)) from None
             digest = plan_file.plan_hash(text)
+            next_version = task.plan_version
             if text.strip() and digest != task.plan_hash:
-                task.plan_version += 1
-            task.plan_hash = digest
-            task.updated_at = _now()
-            self._save_task(task, strict=True)
-            version = task.plan_version
+                next_version += 1
+            try:
+                self._mutate_task(
+                    task,
+                    changes={
+                        "plan_version": next_version,
+                        "plan_hash": digest,
+                        "updated_at": _now(),
+                    },
+                    strict=True,
+                )
+            except PersistenceError:
+                # The plan file is a second store: restore it too, otherwise the
+                # record and the file disagree about which plan is current.
+                try:
+                    plan_file.write_plan(Path(task.workspace), task_id, previous_plan)
+                except (OSError, ValueError):
+                    logger.exception("plan file rollback failed for task %s", task_id)
+                raise
+            version = next_version
         return {"ok": True, "version": version}
 
     def _continue(self, task_id: str, *, user_text: Optional[str]) -> Dict[str, Any]:
@@ -1625,25 +1717,26 @@ class TaskManager:
                 raise self._no_checkpoint_error(task_id)
             # Same attach-before-flip contract as resume(): a trace-file error
             # must leave the task parked with no worker and no user turn added.
-            self._attach_trace(task_id, required=True)
-            previous_status = task.status
-            previous_error = task.error
-            previous_updated_at = task.updated_at
-            previous_turns = len(task.conversation)
-            if user_text is not None:
-                task.conversation.append(ChatTurn(role="user", content=user_text))
-            task.status = TaskStatus.RUNNING
-            # B1 (#219): a new round starts clean; the previous failure reason
-            # must not linger on a task that is running again.
-            task.error = None
-            task.updated_at = _now()
+            self._attach_trace(task_id, strict=True)
+            turn_added = (
+                [*task.conversation, ChatTurn(role="user", content=user_text)]
+                if user_text is not None
+                else task.conversation
+            )
             try:
-                self._save_task(task, strict=True)
+                self._mutate_task(
+                    task,
+                    changes={
+                        "status": TaskStatus.RUNNING,
+                        # B1 (#219): a new round starts clean; the previous failure
+                        # reason must not linger on a task that is running again.
+                        "error": None,
+                        "updated_at": _now(),
+                        "conversation": turn_added,
+                    },
+                    strict=True,
+                )
             except PersistenceError:
-                task.status = previous_status
-                task.error = previous_error
-                task.updated_at = previous_updated_at
-                del task.conversation[previous_turns:]
                 self._close_trace_quietly(task_id)
                 raise
             self.event_bus.publish(
@@ -1727,10 +1820,15 @@ class TaskManager:
             logger.error("continuation crashed for task %s: %s", task_id, message)
             task = self.persistence.load_task(task_id)
             if task is not None:
-                task.status = TaskStatus.FAILED
-                task.error = message
-                task.updated_at = _now()
-                self._save_task(task, strict=False)
+                self._mutate_task(
+                    task,
+                    changes={
+                        "status": TaskStatus.FAILED,
+                        "error": message,
+                        "updated_at": _now(),
+                    },
+                    strict=False,
+                )
             self.event_bus.publish(
                 task_id, "task_failed", {"task_id": task_id, "error": message}
             )

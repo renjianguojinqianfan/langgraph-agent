@@ -28,24 +28,58 @@ from typing import Any, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+#: The data/ surfaces the offline suite is allowed to write (#264 N1). The
+#: session guard used to compare EVERY entry under data/, so a developer's
+#: background service writing historical artifacts mid-run (grader-trial/,
+#: snapshots/, browser-evidence/ …) failed the suite with a misleading
+#: "the tests modified data/" message. Narrow the comparison to the surfaces
+#: this suite owns, and separately forbid new top-level entries.
+_GUARDED_DATA_SURFACES = ("tasks.json", "models.json", "logs", "traces", "checkpoints")
 
-def _snapshot_tree(root: Path) -> dict[str, tuple[str, int, int]]:
-    """Content + mtime snapshot of a directory tree (dirs included)."""
-    if not root.is_dir():
-        return {}
+
+def _stat_snapshot(root: Path) -> dict[str, tuple[str, int, int]]:
+    """Stat snapshot (kind/mtime_ns/size) of the guarded surfaces — no content read.
+
+    Hashing ~570 entries (traces, screenshots) would cost far more than it
+    catches; mtime+size is the agreed trade-off (#264 c4).
+    """
     snapshot: dict[str, tuple[str, int, int]] = {}
-    for path in root.rglob("*"):
-        stat = path.stat()
-        snapshot[path.relative_to(root).as_posix()] = (
-            "dir" if path.is_dir() else "file",
-            stat.st_mtime_ns,
-            stat.st_size,
-        )
+    for name in _GUARDED_DATA_SURFACES:
+        path = root / name
+        if not path.exists():
+            continue
+        try:
+            # #264 spec-F2: rglob materialises eagerly and only catches
+            # PermissionError itself; a directory deleted mid-scan (the racing
+            # writer N2 guards against) raises FileNotFoundError from scandir.
+            # Fall back to the surface root rather than crash teardown.
+            candidates = [path] if path.is_file() else [path, *path.rglob("*")]
+        except OSError:
+            candidates = [path]
+        for candidate in candidates:
+            try:
+                stat = candidate.stat()
+            except OSError:
+                # N2: a file deleted mid-scan (or a racing writer) must not
+                # crash the guard itself in teardown with an obscure error.
+                continue
+            snapshot[candidate.relative_to(root).as_posix()] = (
+                "dir" if candidate.is_dir() else "file",
+                stat.st_mtime_ns,
+                stat.st_size,
+            )
     return snapshot
 
 
+def _top_level_names(root: Path) -> set[str]:
+    if not root.is_dir():
+        return set()
+    return {path.name for path in root.iterdir()}
+
+
 # #252 AC1: taken before any backend import, so collection-time writes count too.
-_REPO_DATA_AT_START = _snapshot_tree(_PROJECT_ROOT / "data")
+_REPO_DATA_TOP_LEVEL = _top_level_names(_PROJECT_ROOT / "data")
+_REPO_DATA_AT_START = _stat_snapshot(_PROJECT_ROOT / "data")
 
 # ── Throwaway runtime directories (MUST run before any `backend.config` import) ──
 # ``backend.main`` builds a module-level app whose lifespan enters the
@@ -71,6 +105,9 @@ if os.name == "nt":
         _TEST_ROOT_CANDIDATES.append(Path(_local_app_data) / "Temp")
 else:
     _TEST_ROOT_CANDIDATES.append(Path(tempfile.gettempdir()))
+# N4: the sibling-of-checkout fallback is intentional, load-bearing behaviour
+# (sandboxes can deny writes under OS temp even when a single mkdir probe
+# succeeds). It is the documented last resort — do not remove it as "unused".
 _TEST_ROOT_CANDIDATES.append(_PROJECT_ROOT.parent)
 
 
@@ -159,7 +196,7 @@ for _k in (
 os.environ.pop("LANGGRAPH_STRICT_MSGPACK", None)
 
 # Ensure `import backend...` works regardless of the current working directory.
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = _PROJECT_ROOT
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -191,21 +228,32 @@ def _guard_repo_data_untouched():
     """#252 AC1: the whole session leaves the checkout's ``data/`` intact.
 
     Per-test tmp_path isolation is covered elsewhere; this session-level guard
-    catches the aggregate case — any file or directory the suite creates, edits
-    or deletes under the checkout's data/ between collection and the last test.
+    catches the aggregate case — any guarded surface (tasks.json / models.json /
+    logs / traces / checkpoints) the suite creates, edits or deletes under the
+    checkout's data/ between collection and the last test, plus any new or
+    removed top-level entry. Historical manual artifacts are deliberately out
+    of the comparison (#264 N1), so a background service writing them mid-run
+    cannot fail the suite.
     """
     yield
-    after = _snapshot_tree(_PROJECT_ROOT / "data")
+    data_dir = _PROJECT_ROOT / "data"
+    after = _stat_snapshot(data_dir)
     changed = sorted(
         name
         for name in set(_REPO_DATA_AT_START) | set(after)
         if _REPO_DATA_AT_START.get(name) != after.get(name)
     )
-    assert not changed, (
-        "the test session modified the checkout's data/: "
-        + ", ".join(changed[:20])
-        + (" ..." if len(changed) > 20 else "")
-    )
+    after_top_level = _top_level_names(data_dir)
+    added_top = sorted(after_top_level - _REPO_DATA_TOP_LEVEL)
+    removed_top = sorted(_REPO_DATA_TOP_LEVEL - after_top_level)
+    problems: list[str] = []
+    if changed:
+        problems.append("modified: " + ", ".join(changed[:20]) + (" ..." if len(changed) > 20 else ""))
+    if added_top:
+        problems.append("new top-level entries: " + ", ".join(added_top))
+    if removed_top:
+        problems.append("removed top-level entries: " + ", ".join(removed_top))
+    assert not problems, "the test session modified the checkout's data/: " + "; ".join(problems)
 
 
 def make_settings(tmp_path: Path, **overrides) -> Settings:
