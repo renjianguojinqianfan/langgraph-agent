@@ -1,0 +1,444 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-05T22:30:29+08:00",
+  "title": "Design System: LangGraph 自主任务 Agent（qianfan）",
+  "extensions": {
+    "colorMeta": {
+      "page-ink": {
+        "role": "neutral",
+        "displayName": "页底炭黑",
+        "canonical": "#0A0A0B",
+        "tonalRamp": [
+          "#252527",
+          "#404044",
+          "#5B5B62",
+          "#757580",
+          "#95959D",
+          "#B5B5BA",
+          "#D5D5D7",
+          "#F2F2F2"
+        ]
+      },
+      "column-ink": {
+        "role": "neutral",
+        "displayName": "栏面",
+        "canonical": "#131316",
+        "tonalRamp": [
+          "#252528",
+          "#3F3F45",
+          "#595964",
+          "#727283",
+          "#93939F",
+          "#B4B4BB",
+          "#D5D5D8",
+          "#F2F2F3"
+        ]
+      },
+      "sheet-ink": {
+        "role": "neutral",
+        "displayName": "纸面",
+        "canonical": "#17171B",
+        "tonalRamp": [
+          "#252528",
+          "#3F3F46",
+          "#585864",
+          "#717184",
+          "#9292A0",
+          "#B4B4BB",
+          "#D5D5D8",
+          "#F2F2F3"
+        ]
+      },
+      "well-ink": {
+        "role": "neutral",
+        "displayName": "槽底",
+        "canonical": "#121215",
+        "tonalRamp": [
+          "#252528",
+          "#3F3F46",
+          "#595964",
+          "#717184",
+          "#9292A0",
+          "#B4B4BB",
+          "#D5D5D8",
+          "#F2F2F3"
+        ]
+      },
+      "hover-ink": {
+        "role": "neutral",
+        "displayName": "悬停底",
+        "canonical": "#202027",
+        "tonalRamp": [
+          "#242428",
+          "#3E3E46",
+          "#575766",
+          "#6F6F86",
+          "#9090A2",
+          "#B3B3BC",
+          "#D4D4D8",
+          "#F2F2F3"
+        ]
+      },
+      "text-primary": {
+        "role": "neutral",
+        "displayName": "主文字",
+        "canonical": "#E8E8EA",
+        "tonalRamp": [
+          "#252527",
+          "#404044",
+          "#5B5B62",
+          "#757580",
+          "#95959D",
+          "#B5B5BA",
+          "#D5D5D7",
+          "#F2F2F2"
+        ]
+      },
+      "text-secondary": {
+        "role": "neutral",
+        "displayName": "次文字",
+        "canonical": "#A6ABB2",
+        "tonalRamp": [
+          "#252628",
+          "#3F4245",
+          "#595D64",
+          "#727983",
+          "#93989F",
+          "#B4B7BB",
+          "#D5D6D8",
+          "#F2F2F3"
+        ]
+      },
+      "text-tertiary": {
+        "role": "neutral",
+        "displayName": "三文字",
+        "canonical": "#8B9097",
+        "tonalRamp": [
+          "#252627",
+          "#404245",
+          "#5A5E62",
+          "#747981",
+          "#94989E",
+          "#B5B7BA",
+          "#D5D6D7",
+          "#F2F2F2"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "发丝线",
+        "canonical": "rgba(255,255,255,.07)",
+        "tonalRamp": [
+          "rgba(255,255,255,0.02)",
+          "rgba(255,255,255,0.04)",
+          "rgba(255,255,255,0.06)",
+          "rgba(255,255,255,0.08)",
+          "rgba(255,255,255,0.1)",
+          "rgba(255,255,255,0.12)",
+          "rgba(255,255,255,0.14)",
+          "rgba(255,255,255,0.16)"
+        ]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "控件环",
+        "canonical": "rgba(255,255,255,.12)",
+        "tonalRamp": [
+          "rgba(255,255,255,0.02)",
+          "rgba(255,255,255,0.04)",
+          "rgba(255,255,255,0.06)",
+          "rgba(255,255,255,0.08)",
+          "rgba(255,255,255,0.1)",
+          "rgba(255,255,255,0.12)",
+          "rgba(255,255,255,0.14)",
+          "rgba(255,255,255,0.16)"
+        ]
+      },
+      "signal-now": {
+        "role": "primary",
+        "displayName": "信号蓝",
+        "canonical": "#4C8DFF",
+        "tonalRamp": [
+          "#142138",
+          "#18376D",
+          "#124AAA",
+          "#045AF1",
+          "#4281F0",
+          "#88ABE7",
+          "#C2D1EA",
+          "#EEF1F6"
+        ]
+      },
+      "text-on-signal": {
+        "role": "neutral",
+        "displayName": "信号底字形",
+        "canonical": "#0A0A0B",
+        "tonalRamp": [
+          "#252527",
+          "#404044",
+          "#5B5B62",
+          "#757580",
+          "#95959D",
+          "#B5B5BA",
+          "#D5D5D7",
+          "#F2F2F2"
+        ]
+      },
+      "state-ok": {
+        "role": "tertiary",
+        "displayName": "成功",
+        "canonical": "#3FB97F",
+        "tonalRamp": [
+          "#1D2F27",
+          "#2D5743",
+          "#398460",
+          "#40B57D",
+          "#6EC49B",
+          "#A0CFB9",
+          "#CCE0D7",
+          "#F0F4F2"
+        ]
+      },
+      "state-warn": {
+        "role": "tertiary",
+        "displayName": "停下 / 警告",
+        "canonical": "#D9A441",
+        "tonalRamp": [
+          "#322A1A",
+          "#5F4B26",
+          "#916E2C",
+          "#CA922B",
+          "#D3AA5F",
+          "#D7C198",
+          "#E4DAC9",
+          "#F5F3EF"
+        ]
+      },
+      "state-danger": {
+        "role": "tertiary",
+        "displayName": "失败 / 危险",
+        "canonical": "#E5534B",
+        "tonalRamp": [
+          "#341A19",
+          "#622623",
+          "#972B26",
+          "#D32B22",
+          "#DA5F58",
+          "#DB9894",
+          "#E5C9C7",
+          "#F5EFEF"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "任务标题、回答标题、对话框标题；页面唯一 h1。"
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "对话、回答、计划与输入框正文。"
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "标签、按钮、说明与相对时间。"
+      },
+      "machine": {
+        "displayName": "Machine",
+        "purpose": "路径、工具名、计数、时长、时间、ID；tabular-nums。"
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "代码块、文件预览、工具入参出参。"
+      },
+      "invite": {
+        "displayName": "Invite",
+        "purpose": "未选任务时的邀请句；全系统唯一 >15.5px 的字号。"
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "control-transition",
+        "value": "150ms ease",
+        "purpose": "hover / 颜色 / 按压缩放的状态确认。"
+      },
+      {
+        "name": "drawer-transition",
+        "value": "220ms cubic-bezier(.32,.72,0,1)",
+        "purpose": "窄屏左右栏抽屉滑入滑出。"
+      },
+      {
+        "name": "press-scale",
+        "value": "transform 150ms ease",
+        "purpose": "按钮按下时缩到 .96。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "right-rail-drawer",
+        "value": "1180px",
+        "purpose": "右栏变抽屉；JS 侧对齐 1179.98px。"
+      },
+      {
+        "name": "left-rail-drawer",
+        "value": "860px",
+        "purpose": "左栏变抽屉；JS 侧对齐 859.98px。"
+      },
+      {
+        "name": "path-chip-narrow",
+        "value": "1400px",
+        "purpose": "任务头路径芯片收窄。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "信号蓝底 + 深色字形，只用于「此刻可操作」的动作（发送等）。",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">发送</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:0;border-radius:var(--radius-control);background:var(--color-signal-now);color:var(--color-on-signal);font-family:var(--font-sans);font-size:12px;font-weight:500;line-height:1.6;cursor:pointer;transition:background-color 150ms ease,transform 150ms ease}.ds-btn-primary:hover{background:rgb(76 141 255 / 90%)}.ds-btn-primary:active{transform:scale(.96)}.ds-btn-primary:focus-visible{outline:2px solid var(--color-signal-now);outline-offset:2px}"
+    },
+    {
+      "name": "Quiet Icon Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "无底图标按钮；hover 才出现悬停底，图标 16px 内联 SVG。",
+      "html": "<button class=\"ds-btn-quiet\" type=\"button\" aria-label=\"设置\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" aria-hidden=\"true\"><path d=\"M8 3v10M3 8h10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg></button>",
+      "css": ".ds-btn-quiet{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:var(--radius-control);background:transparent;color:var(--color-secondary);cursor:pointer;transition:background-color 150ms ease,color 150ms ease}.ds-btn-quiet:hover{background:var(--color-surface-hover);color:var(--color-primary)}.ds-btn-quiet:active{transform:scale(.96)}.ds-btn-quiet:focus-visible{outline:2px solid var(--color-signal-now);outline-offset:2px}"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "1px 控件环描边，用于次级动作（新建任务等）。",
+      "html": "<button class=\"ds-btn-outline\" type=\"button\">新建任务</button>",
+      "css": ".ds-btn-outline{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 12px;border:1px solid var(--color-rule-strong);border-radius:var(--radius-control);background:transparent;color:var(--color-primary);font-family:var(--font-sans);font-size:12px;font-weight:500;line-height:1.6;cursor:pointer;transition:background-color 150ms ease}.ds-btn-outline:hover{background:var(--color-surface-hover)}.ds-btn-outline:focus-visible{outline:2px solid var(--color-signal-now);outline-offset:2px}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "删除类动作专用：危险色描边 / 字形，10% 危险色 hover 底。",
+      "html": "<button class=\"ds-btn-danger\" type=\"button\">删除</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 12px;border:1px solid rgba(229,83,75,.4);border-radius:var(--radius-control);background:transparent;color:var(--color-state-danger);font-family:var(--font-sans);font-size:12px;font-weight:500;line-height:1.6;cursor:pointer;transition:background-color 150ms ease}.ds-btn-danger:hover{background:rgba(229,83,75,.1)}.ds-btn-danger:focus-visible{outline:2px solid var(--color-signal-now);outline-offset:2px}"
+    },
+    {
+      "name": "Composer Textarea",
+      "kind": "input",
+      "refersTo": "composer-input",
+      "description": "常驻输入框：槽底、12px 圆角、13px/1.85 正文；focus 描边换信号蓝并带 2px 环。",
+      "html": "<textarea class=\"ds-composer\" rows=\"3\" placeholder=\"接着续说一句，任务从这里继续…\"></textarea>",
+      "css": ".ds-composer{display:block;box-sizing:border-box;width:100%;min-height:64px;resize:none;border:1px solid var(--color-rule-strong);border-radius:var(--radius-composer);background:var(--color-surface-well);padding:10px 12px;color:var(--color-primary);font-family:var(--font-sans);font-size:13px;line-height:1.85;overscroll-behavior:contain}.ds-composer::placeholder{color:var(--color-tertiary)}.ds-composer:focus-visible{border-color:var(--color-signal-now);outline:2px solid var(--color-signal-now);outline-offset:2px}"
+    },
+    {
+      "name": "Model Select",
+      "kind": "input",
+      "refersTo": "model-select",
+      "description": "原生 select 的 chip 形态：槽底、6px 圆角、次文字色。",
+      "html": "<select class=\"ds-select\" aria-label=\"模型\"><option>默认配置</option></select>",
+      "css": ".ds-select{box-sizing:border-box;max-width:220px;height:28px;padding:4px 8px;border:1px solid var(--color-rule-strong);border-radius:var(--radius-control);background:var(--color-surface-well);color:var(--color-secondary);font-family:var(--font-sans);font-size:12px;line-height:1.6;cursor:pointer}.ds-select:focus-visible{outline:2px solid var(--color-signal-now);outline-offset:2px}"
+    },
+    {
+      "name": "Tab Chip",
+      "kind": "nav",
+      "refersTo": "tab-active",
+      "description": "右栏页签：36 高、无圆角；激活态主文字色 + 底边 2px 脊线。",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\" aria-label=\"右栏页签\"><div class=\"ds-tab ds-tab-active\" role=\"tab\" aria-selected=\"true\" tabindex=\"0\">文件</div><div class=\"ds-tab\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">计划</div><div class=\"ds-tab\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">事件</div></div>",
+      "css": ".ds-tabs{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--color-rule);background:var(--color-surface-column)}.ds-tab{display:flex;align-items:center;height:36px;padding:0 10px;color:var(--color-tertiary);font-family:var(--font-sans);font-size:12px;line-height:1.6;cursor:pointer;transition:color 150ms ease}.ds-tab:hover{color:var(--color-secondary)}.ds-tab-active{position:relative;color:var(--color-primary)}.ds-tab-active::after{content:\"\";position:absolute;left:6px;right:6px;bottom:0;height:2px;background:var(--color-primary)}.ds-tab:focus-visible{outline:2px solid var(--color-signal-now);outline-offset:2px}"
+    },
+    {
+      "name": "Selected Task Row",
+      "kind": "custom",
+      "refersTo": "task-row-selected",
+      "description": "左栏任务行：行形状、0 圆角；hover 换悬停底，选中只换主文字色 + 左侧 2px 内嵌脊线。",
+      "html": "<div class=\"ds-task-row ds-task-row-selected\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\"><span class=\"ds-task-main\"><span class=\"ds-task-title\">先写一份简短计划并停下</span><span class=\"ds-task-meta\"><span class=\"ds-status-dot\"></span><span class=\"ds-status-word\">已停下</span><time class=\"ds-task-time\">4 分钟前</time></span></span></div>",
+      "css": ".ds-task-row{display:flex;align-items:flex-start;box-sizing:border-box;padding:8px 10px;border-radius:0;color:var(--color-secondary);font-family:var(--font-sans);cursor:pointer;transition:background-color 150ms ease,color 150ms ease}.ds-task-row:hover{background:var(--color-surface-hover);color:var(--color-primary)}.ds-task-row-selected{color:var(--color-primary);box-shadow:inset 2px 0 0 var(--color-primary)}.ds-task-main{min-width:0;flex:1}.ds-task-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.375}.ds-task-meta{display:flex;align-items:center;gap:8px;margin-top:4px}.ds-status-dot{width:6px;height:6px;border-radius:999px;background:var(--color-state-warn)}.ds-status-word{font-size:12px;line-height:1.6;color:var(--color-secondary)}.ds-task-time{color:var(--color-tertiary);font-family:var(--font-mono);font-size:11px;line-height:1.5;font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Settings Dialog",
+      "kind": "custom",
+      "refersTo": "dialog",
+      "description": "原生 dialog：栏面底、14px 圆角、80% 页底遮罩；头部标题 15.5/600。",
+      "html": "<dialog class=\"ds-dialog\" open><header class=\"ds-dialog-head\"><h2>设置</h2></header><p class=\"ds-dialog-body\">模型配置与 Key 状态。</p></dialog>",
+      "css": ".ds-dialog{box-sizing:border-box;width:min(760px,calc(100vw - 2rem));max-height:min(85vh,calc(100dvh - 2rem));padding:0;border:1px solid var(--color-rule);border-radius:var(--radius-dialog);background:var(--color-surface-column);color:var(--color-primary)}.ds-dialog::backdrop{background:rgb(10 10 11 / 80%)}.ds-dialog-head{display:flex;align-items:center;gap:12px;margin:0;padding:16px 20px;border-bottom:1px solid var(--color-rule)}.ds-dialog-head h2{margin:0;font-family:var(--font-sans);font-size:15.5px;font-weight:600;line-height:1.4;letter-spacing:-.01em}.ds-dialog-body{margin:0;padding:20px;color:var(--color-secondary);font-family:var(--font-sans);font-size:13px;line-height:1.85}"
+    },
+    {
+      "name": "Well Surface",
+      "kind": "card",
+      "refersTo": "well",
+      "description": "代码块 / 工具入参出参 / 文件预览的槽底容器：8px 圆角、12px 内边距、mono 12/1.7。",
+      "html": "<pre class=\"ds-well\">1  hello</pre>",
+      "css": ".ds-well{margin:0;box-sizing:border-box;max-height:420px;overflow:auto;padding:12px;border-radius:var(--radius-well);background:var(--color-surface-well);color:var(--color-secondary);font-family:var(--font-mono);font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word}"
+    }
+  ],
+  "narrative": {
+    "northStar": "安静的监控台",
+    "overview": "界面是一台不抢戏的记录仪：左边是任务的历史，中间是正在发生的对话，右边是工作区的文件、计划与事件。它不表演「AI 很忙」，只让人看清这一刻发生了什么、需要人做什么。设计上的野心全部花在精确与克制上：机器事实用等宽字体对齐，人话用 Inter 说清楚，颜色只在必须区分状态时出现。\n\n深浅只有三级明度（页 → 栏 → 槽），分隔靠 1px 发丝线，没有阴影、渐变、辉光或装饰边框。动效只做状态变化的确认（150ms 的颜色与 0.96 的按压缩放），不做氛围动画；抽屉用 220ms 的 cubic-bezier(.32,.72,0,1) 滑动，prefers-reduced-motion 下全部停用。",
+    "keyCharacteristics": [
+      "三栏记录结构：264 / 流式（内容测度 760）/ 420；行、条、平铺正文三种对象形状。",
+      "近黑炭底 + 低饱和灰阶；一个信号蓝只标「此刻 / 可操作」，三个状态色只用于状态点与状态词。",
+      "Inter 负责人话与标题，JetBrains Mono 负责机器事实（路径、工具名、计数、时间），数字一律 tabular-nums。",
+      "扁平、发丝线分层、零阴影；选中态用墨色 + 2px 内嵌脊线，不用信号蓝。",
+      "状态与计划版本永远来自任务快照（REST）；SSE 只给节奏，不做假进度、不反写状态。"
+    ],
+    "rules": [
+      {
+        "name": "The One Signal Rule",
+        "body": "信号蓝只出现在五处（运行点、发送键、焦点环、链接与行内代码、当前文件）。选中态一律用墨色 + 2px 内嵌脊线，信号蓝不参与选中；扩张这五处必须先改这条规则。",
+        "section": "colors"
+      },
+      {
+        "name": "The No-Chrome Rule",
+        "body": "无渐变、无辉光、无网格、无装饰边框；发丝线只做分隔，不做装饰。",
+        "section": "colors"
+      },
+      {
+        "name": "The State-Color Rule",
+        "body": "状态色只做状态点与状态词，不做大块底色；--state-ok 不用于任务状态（任务状态用信号蓝 / 警告 / 危险 / 三文字）。",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono-Is-Meaning Rule",
+        "body": "等宽字体是语义不是纹理：只写机器拥有的事实。中文标签、状态词、标题永远用 Inter。",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular-Numbers Rule",
+        "body": "用于比较的数字一律 tabular-nums，且不截断。",
+        "section": "typography"
+      },
+      {
+        "name": "The One-H1 Rule",
+        "body": "页面唯一 h1 是任务标题；回答标题从 h2 起；计划文档从 h2 起、小节用 h3。",
+        "section": "typography"
+      },
+      {
+        "name": "The Three-Shapes Rule",
+        "body": "三种对象三种形状：记录 = 行（无卡、无圆角）、子智能体 = 条（压在对话上方）、回答 = 平铺正文（不套纸面）。",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat-by-Default Rule",
+        "body": "表面默认是平的；box-shadow 只允许出现在两处：分段控件与选中态的 2px 内嵌脊线（inset），以及 active:scale-[.96] 的按压反馈。新增外阴影必须先改这条规则。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do 用记录与行组织信息：状态词 + 色点同时出现，数字用 tabular-nums。",
+      "Do 把机器事实交给 mono，人话交给 Inter；一个信号蓝只标「此刻 / 可操作」。",
+      "Do 禁用时说明原因，错误说清「原因 + 下一步」；空态说明这里为什么空。",
+      "Do 让回答正文直接承担成品；每轮的过程收进 TurnProcess 折叠行。",
+      "Do 用 1px 发丝线与三级明度表达层次；选中态用 2px 内嵌脊线。"
+    ],
+    "donts": [
+      "Don't 用中圆点串元信息、用信号蓝做选中色、把一切做成同圆角同阴影的卡片。",
+      "Don't 在自由 Markdown 上猜进度、造动画或假进度条；不做「看起来忙」的表演。",
+      "Don't 用 SSE 回放改写任务状态；状态与计划版本只认任务快照（REST）。",
+      "Don't 加渐变、辉光、外阴影、装饰边框或大圆角卡片；这些是这套系统的反参考。",
+      "Don't 在内容区引入第二张「纸面」；#265 起回答是平铺正文，只有设置对话框内部有纸面。"
+    ]
+  }
+}
