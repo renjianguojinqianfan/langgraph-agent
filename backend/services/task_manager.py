@@ -426,7 +426,6 @@ class TaskManager:
         self,
         task: Task,
         *,
-        fields: tuple[str, ...],
         changes: Dict[str, Any],
         strict: bool,
     ) -> bool:
@@ -435,16 +434,25 @@ class TaskManager:
         :class:`Persistence` cannot roll back an in-place edit itself: the task
         objects it hands out are the live records, so its ``previous`` snapshot
         is the same object the caller already mutated. This seam owns that
-        rollback — snapshot the declared fields, apply ``changes``, save; on a
-        failed save restore the snapshot so memory and ``tasks.json`` agree
-        again. ``strict=True`` re-raises :class:`PersistenceError` (request
-        paths); ``strict=False`` logs and returns False (worker paths).
+        rollback — snapshot the declared fields (the keys of ``changes``), apply
+        ``changes``, save; on a failed save restore the snapshot so memory and
+        ``tasks.json`` agree again.
+
+        ``strict=True`` (request paths) re-raises :class:`PersistenceError`.
+        ``strict=False`` (worker paths) deliberately does not raise: on a failed
+        save memory is restored to the last successfully persisted state
+        (memory == disk), the failure is only logged and signalled by returning
+        False, and the caller still publishes the events it intended to publish
+        and keeps running. Inside such a disk-failure window an event can thus
+        describe a transition the record does not carry; the next startup
+        reconciles from tasks.json. This is the D-10 trade-off, not silent
+        divergence.
 
         File side effects are outside this transaction: a caller that writes the
         plan file must restore it itself when the record save fails.
         """
+        fields = tuple(changes)
         previous = self._field_snapshot(task, fields)
-        attempted_status = task.status.value
         try:
             for name in fields:
                 setattr(task, name, changes[name])
@@ -770,7 +778,6 @@ class TaskManager:
                 raise RuntimeError(f"task {task_id} not found")
             self._mutate_task(
                 task,
-                fields=("model", "updated_at"),
                 changes={"model": model_id, "updated_at": _now()},
                 strict=True,
             )
@@ -1029,7 +1036,6 @@ class TaskManager:
 
         self._mutate_task(
             task,
-            fields=("status", "updated_at"),
             changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
             strict=False,
         )
@@ -1087,7 +1093,6 @@ class TaskManager:
             logger.error("run() crashed for task %s: %s", task_id, error)
             self._mutate_task(
                 task,
-                fields=("status", "error", "updated_at"),
                 changes={
                     "status": TaskStatus.FAILED,
                     "error": error,
@@ -1145,7 +1150,6 @@ class TaskManager:
         if live and task is not None:
             self._mutate_task(
                 task,
-                fields=("status", "updated_at"),
                 changes={"status": TaskStatus.INTERRUPTED, "updated_at": _now()},
                 strict=True,
             )
@@ -1438,7 +1442,6 @@ class TaskManager:
             try:
                 self._mutate_task(
                     task,
-                    fields=("status", "updated_at"),
                     changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
                     strict=True,
                 )
@@ -1561,7 +1564,6 @@ class TaskManager:
             if task is not None:
                 self._mutate_task(
                     task,
-                    fields=("status", "error", "updated_at"),
                     changes={
                         "status": TaskStatus.FAILED,
                         "error": message,
@@ -1609,7 +1611,6 @@ class TaskManager:
                 raise RuntimeError(f"task {task_id} not found")
             self._mutate_task(
                 task,
-                fields=("mode", "updated_at"),
                 changes={"mode": chosen, "updated_at": _now()},
                 strict=True,
             )
@@ -1658,7 +1659,6 @@ class TaskManager:
             try:
                 self._mutate_task(
                     task,
-                    fields=("plan_version", "plan_hash", "updated_at"),
                     changes={
                         "plan_version": next_version,
                         "plan_hash": digest,
@@ -1726,7 +1726,6 @@ class TaskManager:
             try:
                 self._mutate_task(
                     task,
-                    fields=("status", "error", "updated_at", "conversation"),
                     changes={
                         "status": TaskStatus.RUNNING,
                         # B1 (#219): a new round starts clean; the previous failure
@@ -1823,7 +1822,6 @@ class TaskManager:
             if task is not None:
                 self._mutate_task(
                     task,
-                    fields=("status", "error", "updated_at"),
                     changes={
                         "status": TaskStatus.FAILED,
                         "error": message,
