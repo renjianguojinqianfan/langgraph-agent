@@ -28,7 +28,7 @@ from typing import Any, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-#: The data/ surfaces the offline suite is allowed to write (#252 N1). The
+#: The data/ surfaces the offline suite is allowed to write (#264 N1). The
 #: session guard used to compare EVERY entry under data/, so a developer's
 #: background service writing historical artifacts mid-run (grader-trial/,
 #: snapshots/, browser-evidence/ …) failed the suite with a misleading
@@ -41,14 +41,21 @@ def _stat_snapshot(root: Path) -> dict[str, tuple[str, int, int]]:
     """Stat snapshot (kind/mtime_ns/size) of the guarded surfaces — no content read.
 
     Hashing ~570 entries (traces, screenshots) would cost far more than it
-    catches; mtime+size is the agreed trade-off (#252 c4).
+    catches; mtime+size is the agreed trade-off (#264 c4).
     """
     snapshot: dict[str, tuple[str, int, int]] = {}
     for name in _GUARDED_DATA_SURFACES:
         path = root / name
         if not path.exists():
             continue
-        candidates = [path] if path.is_file() else [path, *path.rglob("*")]
+        try:
+            # #264 spec-F2: rglob materialises eagerly and only catches
+            # PermissionError itself; a directory deleted mid-scan (the racing
+            # writer N2 guards against) raises FileNotFoundError from scandir.
+            # Fall back to the surface root rather than crash teardown.
+            candidates = [path] if path.is_file() else [path, *path.rglob("*")]
+        except OSError:
+            candidates = [path]
         for candidate in candidates:
             try:
                 stat = candidate.stat()
@@ -225,7 +232,7 @@ def _guard_repo_data_untouched():
     logs / traces / checkpoints) the suite creates, edits or deletes under the
     checkout's data/ between collection and the last test, plus any new or
     removed top-level entry. Historical manual artifacts are deliberately out
-    of the comparison (#252 N1), so a background service writing them mid-run
+    of the comparison (#264 N1), so a background service writing them mid-run
     cannot fail the suite.
     """
     yield
