@@ -388,16 +388,24 @@ def test_set_plan_save_failure_rolls_back_fields_and_file(tmp_path, monkeypatch)
     tm = make_manager(settings, MockLLMClient())
     assert tm.set_plan("t-parked", "old plan")["version"] == 1
     before = tm.get_task("t-parked")
+    # F1: Persistence.load_task returns the live record (persistence.py:136-138),
+    # so comparing two task objects is tautological — set_plan mutates that same
+    # object. Capture scalars instead; this goes red if the field rollback in
+    # _mutate_task is ever removed.
+    before_version = before.plan_version
+    before_hash = before.plan_hash
+    before_updated_at = before.updated_at
+    workspace = Path(before.workspace)
     monkeypatch.setattr(tm.persistence, "save_task", lambda task: False)
 
     with pytest.raises(PersistenceError):
         tm.set_plan("t-parked", "new plan")
 
     after = tm.get_task("t-parked")
-    assert after.plan_version == before.plan_version
-    assert after.plan_hash == before.plan_hash
-    assert after.updated_at == before.updated_at
-    assert plan_file.read_plan(Path(after.workspace), "t-parked") == "old plan"
+    assert after.plan_version == before_version
+    assert after.plan_hash == before_hash
+    assert after.updated_at == before_updated_at
+    assert plan_file.read_plan(workspace, "t-parked") == "old plan"
 
 
 def test_stop_save_failure_rolls_back_status(tmp_path, monkeypatch):
