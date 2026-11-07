@@ -62,7 +62,7 @@ export interface Task {
   user_input: string;
   /** Absolute directory this task reads/writes (ADR 0010). */
   workspace: string;
-  /** Model profile id (M1); empty means the global default. */
+  /** Model entry id in the v2 catalog (#243); empty means the global default. */
   model: string;
   status: TaskStatus;
   mode: TaskMode;
@@ -117,7 +117,9 @@ export interface CreateTaskRequest {
   mode?: TaskMode;
   /** Page-supplied directory (`?dir=`); absent -> backend launch directory. */
   workspace?: string;
-  /** Model profile id; absent -> the global default. */
+  /** Model entry id; absent -> the global default. The create face takes an
+   * entry id only — a catalog-outside model is added to the catalog first
+   * (D-34; the `{provider, model}` double form exists on the switch face). */
   model?: string;
 }
 
@@ -125,7 +127,15 @@ export interface CreateTaskRequest {
 
 export type ModelKeySource = "pasted" | "env" | "none";
 
-/** Public model profile: the key itself never leaves the backend. */
+/** Provider protocol (D-34/D-35). Both values are implemented as of #298:
+ * `openai-compatible` (chat/completions) and `anthropic` (Messages,
+ * non-streaming). Two limits remain server-enforced: model discovery supports
+ * only OpenAI-compatible, and Anthropic rejects `thinking` /
+ * `reasoning_effort` parameters at the write face (readable 400). */
+export type ModelProtocol = "openai-compatible" | "anthropic";
+
+/** Public v1-shaped model profile: the legacy `/api/models` compatibility
+ * projection (old fields + `provider_id` / `protocol`); keys never travel. */
 export interface ModelProfile {
   id: string;
   name: string;
@@ -135,11 +145,67 @@ export interface ModelProfile {
   preset: boolean;
   key_set: boolean;
   key_source: ModelKeySource;
+  /** #243 P2-2: the provider this entry belongs to (v2 projection). */
+  provider_id: string;
+  protocol: ModelProtocol;
 }
 
 export interface ModelsData {
   default: string;
   models: ModelProfile[];
+}
+
+/** One API host (D-34): several model entries share its address / key /
+ * protocol. Only key_set / key_source ever leave the backend. */
+export interface Provider {
+  id: string;
+  name: string;
+  protocol: ModelProtocol;
+  base_url: string;
+  api_key_env: string;
+  preset: boolean;
+  key_set: boolean;
+  key_source: ModelKeySource;
+}
+
+export interface ProvidersData {
+  providers: Provider[];
+  default: string;
+}
+
+/** One selectable model entry under a provider (`Task.model` stores its id). */
+export interface ModelEntry {
+  id: string;
+  provider_id: string;
+  model: string;
+  name: string;
+}
+
+/** One candidate from `POST /api/providers/{id}/models/discover` (preview,
+ * never persisted); `added` means it is already in the catalog. */
+export interface DiscoverCandidate {
+  model: string;
+  name: string;
+  added: boolean;
+}
+
+export interface ProviderCreateRequest {
+  id: string;
+  name: string;
+  protocol: ModelProtocol;
+  base_url: string;
+  api_key_env: string;
+  /** Write-only: never echoed back. */
+  key: string;
+}
+
+export interface ProviderUpdateRequest {
+  name?: string;
+  protocol?: ModelProtocol;
+  base_url?: string;
+  api_key_env?: string;
+  /** Write-only; an empty string clears the pasted key. */
+  key?: string;
 }
 
 export interface ApiResponse<T = any> {

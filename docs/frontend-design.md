@@ -82,13 +82,13 @@
 | `ToolRow` | 槽底；工具名与参数 mono、可截断 + `title`；结果词只用**终态**三值：成功 / 失败 / 未执行（`success / failed / skipped`；`pending` 是进行中，不改结果词。原因写进 `error`；不新增 `blocked` 状态）。 |
 | `PlanAnchor` | 对话里一行入口：「计划 v3 · 状态」（版本 = `Task.plan_version`；状态词由 `Task.status` 派生，不是计划自己的字段）；点开切右栏计划页；不复制全文。 |
 | `AnswerSheet` | 平铺回答正文（#265 按 dsh 形态去掉纸面、阴影与 provenance 头部）；Markdown（标题 / 列表 / 代码 / 行内代码）；空回答显示「（空回答）」。每轮的过程与计数在上一行的 `TurnProcess`，回答本身不再重复。 |
-| `Composer` | 模式段 + 模型控件（原生 `<select>`，chip 形态、不新做浮层）+ 输入 + 发送（蓝底 + `--text-on-signal` 字形，6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
+| `Composer` | 模式段 + 模型控件（原生 `<select>` + `<optgroup>` 按 Provider 分组，chip 形态、不新做浮层；`目录外模型…` 分支给 Provider + 裸模型 ID，切换走 `{provider, model}` 自动建 manual 条目）+ 输入 + 发送（蓝底 + `--text-on-signal` 字形，6.18:1；不用白字 3.20:1）；Enter 发送、Shift+Enter 换行，提示只出现一处；运行中禁用并说明原因。 |
 | `FilePane` | 平铺清单由客户端按 `/` 分组；点文件名在第三栏开预览页签（同一路径复用页签），列表行保留下载；>2000 条明示截断。 |
 | `FilePreviewTab` | 每个打开文件一个页签（#266）：正文在页签内就地显示，预览 ≤200KB，超出明示「已截断」；同一路径复用页签；关闭页签回到相邻页签（优先左侧），无页签时回文件列表；从文件列表打开后焦点落在新页签上。失败按 HTTP 状态分行：415 二进制 / 400 路径越界 / 404 文件不存在 / 409 工作区不存在；下载入口在所有状态都保留。文件列表面板保持挂载，切回时保留滚动位置；预览首次被激活且右栏可见时才取数（隐藏页签不发请求）。 |
 | `PlanPane` | 渲染 Markdown + 标题目录；版本 / 状态徽标；**编辑在「已停下」或「失败」（B1 已放宽，见 §9）可用**；运行中点编辑给出原因而不是藏按钮；保存提示「下一条消息生效」。 |
 | `EventPane` | 时间 mono + 类型词 + 摘要；不做可点假象；注明事件只做旁证、状态以快照为准。心跳（`heartbeat`）不进用户可见账本：store 只追加 `isLedgerType` 事件（当前 = 除 heartbeat 外全部），EventPane 再按同一判定过滤；Trace 仍保留原始流。 |
 | `TraceFace` | 保留现役 `TraceTab` 能力（`GET /trace`，NDJSON 回放 / 导出）；入口在右栏事件页底部，打开时中栏临时全宽显示并带返回；本期不重构。 |
-| `SettingsDialog` | 原生 `<dialog>`（焦点圈定 / Esc / 归还焦点）；模型 CRUD 与 Key 状态；删除 / 清除 Key 二次确认。 |
+| `SettingsDialog` | 原生 `<dialog>`（焦点圈定 / Esc / 归还焦点）；Provider 卡片列表（名称 / ID / 地址 / 协议 / Key 状态 / 设为默认 / 编辑 / 删除二次确认）+「添加模型提供商」（第三方预设 / 自定义两页签；预设来自后端 `preset` 卡片，后端没有预设目录时不虚构）；每卡模型目录（获取可用模型 = 预览勾选后加入、手动添加、逐条测试 / 删除）；Key 只写不读，编辑时可清除粘贴 Key。 |
 
 ### 现役组件 → 目标组件（实施对照）
 
@@ -124,7 +124,7 @@
 ## 5. 交互规则
 
 - **计划**：对话一行入口 + 右栏计划页；展示 Markdown 与标题目录；**不做打勾清单**（无状态源）。编辑仅在停下 / 失败（B1 已放宽 `PUT /plan`，见 §9）；运行中点编辑给出原因而不是藏按钮。保存 = 整份 PUT；提示「下一条消息生效」；发现外部改动提示「载入新版 / 覆盖保存」。可选非阻断动作「切到执行并继续」= 切模式 + 聚焦输入框，不发送。
-- **模式 / 模型**：都在 composer（下一轮生效）；任务头只读显示模式词。不引入确认闸门（ADR 0008）。
+- **模式 / 模型**：都在 composer（下一轮生效）；模型按 Provider → 模型分组，目录外模型 ID 经 `目录外模型…` 分支切换（现有任务走 `{provider, model}` 自动建 manual 条目，新建任务先加入目录再创建）；任务头只读显示模式词。不引入确认闸门（ADR 0008）。
 - **停止 / 续说**：停止在任务头；不设独立「继续」按钮——发下一条消息即续说；placeholder 与状态词承接语义。
 - **文件**：不承诺目录懒加载、mtime、新旧标记（后端没有）；只承诺平铺清单 + 页签式文本预览 + 下载 + 截断提示。预览失败按 HTTP 状态给原因与下一步（二进制 / 越界 / 不存在 / 工作区不存在），不合并成一句「无法预览」。
 - **历史**：默认当前目录；「全部」按目录分组、行上标目录名；行显示状态词 + 相对时间；交接提示本期不做（无后台身份数据）。删除（#241）：行内二次确认逐条删、目录分组对话框整批删；只删历史（任务后台进程一并终止），运行中拒绝。
@@ -186,6 +186,24 @@
 - [ ] 切换任务：上一条任务的 sendError / switchNote 不带到新任务（reset effect）。
 - [ ] Enter 发送 / Shift+Enter 换行 / 输入法组合中（isComposing）Enter 不发送。
 - [ ] 读屏：底部原因行 `role=status` 可播报；`textarea` / `select` 的 `aria-label` 与 `aria-describedby` 与拆分前一致。
+
+### P2-3 Provider 设置与 Composer 模型切换手测清单（#243，D-37）
+
+机械面由 `lib/modelCatalog.ts` 的纯函数断言覆盖（分组 / 默认动作 / 表单校验 / 发现预览 / 失败文案）；下列为组件接线与真实网络走查项。
+
+- [ ] 设置页按 Provider 成卡：名称 / ID / 地址 / 协议 / Key 状态（已设（粘贴|环境变量）/ 未设）可见（ID 为小号等宽文本，同时进入卡片操作按钮的可访问名称）；首次打开加载失败时显示原因与「重试」按钮（后台恢复后点击继续）；DevTools Network 看 `GET /providers` 与 `GET /models`，响应只有 `key_set` / `key_source`，任何响应与页面都不出现 Key 明文。
+- [ ] 新建（自定义模型 API）：填 ID / 名称 / 地址 / 协议 / 环境变量名 / Key；ID 大写或数字开头、地址非 http(s)、环境变量名非法时字段错误可读（原因 + 下一步）；HTTP 400 服务端原因原样显示不吞。
+- [ ] 新建协议选 Anthropic 并保存：创建 / 编辑成功（非流式适配器已可用，卡片协议显示「Anthropic 原生（非流式）」）；提示文案明示两项剩余限制「模型目录发现暂不支持；thinking / reasoning_effort 对 Anthropic 暂不支持」。已有 anthropic 卡可改名称 / 地址 / 环境变量 / Key；服务端对不支持的参数组合给出可读 400 时原样显示原因。
+- [ ] 新建（第三方模型供应商）：后端有 `preset` 卡片时列出（如「默认配置」），选中自动带地址 / 协议 / 环境变量；没有预设时给出「改用自定义」下一步；未选预设时创建按钮禁用并说明原因。
+- [ ] 编辑 Provider：ID 只读；改名称 / 地址 / 协议生效；写 Key 只写不读（保存后状态变已设）；粘贴 Key 的「清除已保存的 Key」二次确认后回退到环境变量 / 未设。
+- [ ] 删除 Provider：卡上「删除」需二次确认，确认态明文说明「会级联删除该 Provider 下全部模型条目与 Key；引用它的任务下一轮会失败」；最后一模型的 Provider 删除被 409 拒绝并显示原因与下一步，不破坏其余卡。
+- [ ] 设为默认：点某 Provider 卡的「设为默认」→ 该卡出现「默认」标记、其首条目在目录行标「默认」，原 Provider 的标记消失；刷新 / 重开设置后标记保持。该 Provider 已是默认时按钮禁用并说明原因；目录为空时按钮禁用并提示先添加模型。
+- [ ] 模型目录：手动添加模型 ID / 显示名；空 ID、重复 ID 错误可读；Enter 连按只发一次请求；逐条「测试」能给出连接结果；逐条删除需二次确认（确认态说明引用它的任务下一轮会失败），目录最后一条被 409 拒绝并提示。
+- [ ] 获取可用模型：Key 错 → 「认证失败（HTTP 401）…」；地址错 → HTTP / 超时原因；两者都带「也可以手动添加模型 ID」；预览勾选后点「加入目录」才落库。**关闭/重开残留**：获取预览后不加入 → 关闭设置 → 编辑该 Provider 的地址 / Key → 重开 → 旧预览、删除确认、添加表单与错误提示均不出现（临时状态随会话清空）。Anthropic 卡的「获取可用模型」禁用并给出手动添加提示（服务端对 anthropic 的发现请求仍返回「协议暂不支持发现」，页面显示原因与下一步）。
+- [ ] Composer：`<select>` 按 Provider `<optgroup>` 分组；切换模型后任务持久化（刷新仍在）；运行中切换显示「下一轮生效」，停止 / 失败态切换成功显示「已切换」；切换任务后 switchNote 不串。
+- [ ] Composer 旧任务：`Task.model` 为条目 id 时显示条目名称；条目已被删 / 目录外时回退显示原始 id 且仍可发送（不静默改投默认模型）。
+- [ ] Composer 目录外模型：现有任务选「目录外模型…」，填 Provider + 裸模型 ID → 切换成功、自动进目录、Composer 出现该条目；新建任务同路径先加入目录再创建；切换失败显示原因 + 下一步（Provider 地址 / Key / 协议）；断网显示「无法连接后台」。
+- [ ] 读屏 / 键盘：模型 select、目录外 Provider / 模型输入、发现与加入目录复选框均有 `aria-label`；卡片按钮名称在 Provider 间唯一（含模型行的测试 / 删除）；模型切换结果（含「下一轮生效」与失败原因）与设置页加载态走 `role=status`，Provider 卡片目录操作错误走 `role=alert`；Tab 顺序不跳出对话框，Esc 只关最上层对话框。
 
 ## 7. 空 / 错 / 加载
 
@@ -250,3 +268,5 @@
 - 2026-11-07（P1-1 / #257）：窄屏抽屉断点收敛到 `frontend/src/lib/breakpoints.ts` 单一来源（`(width < 860px)` / `(width < 1180px)`，与 CSS `max-[860px]` / `max-[1180px]` 同界，860 / 1180 恰好仍是宽屏，取代 859.98 / 1179.98 写法）；`drawerView` 派生遮罩 / 背景 inert / 变宽与 Trace 的关闭信号；`useDrawerFocus` 负责触发元素记录、焦点移入、Esc / Tab 圈定、关闭先撤 inert 再归还焦点（inert 由 `lib/inertLedger` 记账撤销）；§6 增窄屏抽屉手测清单。
 - 2026-11-07（P1-2 / #258）：长内容断行契约收敛到 `lib/longContent`（`LONG_TEXT`，用于 Markdown 根 / 用户气泡 / 失败块 / 工具入参出参，静态源码守卫防回退）；工具长入参「展开全部 / 收起」（`lib/toolInput`，800 code point 阈值）；事件账本 heartbeat 不进用户面（`lib/eventLedger.isLedgerType` 排除 + `ledgerEvents` 去重 / 100 上限 / 倒序；store `applyEvent` 早退且只替换真正变化的 slice；Trace 保留原始流）；请求 / 渲染去重（选中已停下任务 parked 快照只拉一次、PlanPane 初载不自触发、`task_created` 回放不 bump `listRevision`、Markdown `memo` + 结构守卫）；Composer / FilePane 错误文案带原因与下一步、文件面板「重试」、状态行 `role=status`；§6 增 P1-2 手测清单。
 - 2026-11-07（P2-1 / #232）：Composer 拆分——`lib/composerState` 纯函数 `composerView`（状态矩阵与逐字文案，入参含 `sendError` 以保住 `bottomNote` 纯函数）与 `clearedDraft`；`hooks/useComposerSend` 收口 text / busy / sendError 与 `createTask` / `sendMessage`（返回同一份 `view` 供组件渲染，避免双算），`hooks/useComposerControls` 收口 draftMode / draftModel / switchNote 与 `putMode` / `putTaskModel` + `getTask`；`Composer.tsx` 276 → 164 行，只留结构、Enter 处理与 reset effect；`BACKEND_UNREACHABLE` 抽 `lib/copy`；行为与逐字文案不变，§6 增拆分手测清单。
+- 2026-11-07（P2-3 / #243，D-37）：设置页 Provider 化——`store/modelStore` 改为「Provider 卡片（`GET /providers`）+ 扁平模型条目（`GET /models` 兼容投影，一次请求覆盖全部条目 id）」双读；`components/settings` 拆为 `SettingsDialog`（卡片列表编排）+ `ProviderCard`（卡片事实 / 设为默认 / 编辑 / 删除二次确认 / 模型目录 / 发现预览）+ `ProviderDialog`（新建两页签：第三方预设 / 自定义，编辑 id 只读、Key 只写、清除粘贴 Key 二次确认）；`lib/modelCatalog` 收敛分组、默认动作（全局默认是条目级，卡上「设为默认」取该 Provider 首条目）、表单校验、发现勾选与失败文案（原因 + 下一步）；Composer 模型控件改原生 `<select>` + `<optgroup>`，新增「目录外模型…」行（现有任务走 `PUT /tasks/{id}/model` 的 `{provider, model}` 自动建 manual 条目；新建任务因创建接口只收条目 id，先 `POST /providers/{id}/models` 再创建），旧 `Task.model` 条目 id 用回退 option 兼容显示；旧 `/api/models` 消费点保留（不再有扁平设置表单的写路径，投影读仍是条目映射的唯一读取）；§6 增 P2-3 手测清单。
+- 2026-11-07（P2-3 / #243，rebase 到 #298 合并后）：协议文案按已合并事实更新——Anthropic 原生（非流式）创建 / 编辑可用（不再有「保存 400 / 后端 PR B」说法）；提示明示两项剩余限制：模型目录发现仅 OpenAI 兼容支持、thinking / reasoning_effort 对 Anthropic 暂不支持；§6 对应手测项与纯函数断言同步（`PROTOCOL_OPTIONS` 的 hint 不得回退到旧 400 文案）。
