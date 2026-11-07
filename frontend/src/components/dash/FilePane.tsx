@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listFiles } from "../../api/client";
 import { cx } from "../../lib/cx";
-import { filesLoadFailure, filesPaneState } from "../../lib/failureStates";
+import { filesLoadFailure, filesPaneState, filesPaneStatusText } from "../../lib/failureStates";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
@@ -83,14 +83,11 @@ export function FilePane({
     task.status === "RUNNING"
       ? "任务运行中；写入工作区的文件会出现在这里。"
       : "工作区还没有文件。任务写下文件后会出现在这里。";
+  // #258 终审: a non-empty note wins on every face (rows included) so a failed
+  // poll over an already-loaded list still shows the reason + retry.
   const statusText =
-    state === "error"
-      ? (note ?? "")
-      : state === "loading"
-        ? "加载中…"
-        : state === "empty"
-          ? emptyCopy
-          : "";
+    filesPaneStatusText(state, note ?? "") ||
+    (state === "loading" ? "加载中…" : state === "empty" ? emptyCopy : "");
 
   return (
     <div className="flex flex-col gap-4">

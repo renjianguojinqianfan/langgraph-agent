@@ -4,6 +4,7 @@ import {
   detailLoadState,
   filesLoadFailure,
   filesPaneState,
+  filesPaneStatusText,
   historyListState,
   listBannerVisible,
   listEmptyTitle,
@@ -328,5 +329,22 @@ describe("filesPaneState (D-31 / #258 AC5: 失败不伪装空面)", () => {
 
   it("rows when idle with data", () => {
     expect(filesPaneState({ error: "", loading: false, count: 2 })).toBe("rows");
+  });
+});
+
+describe("filesPaneStatusText (#258 终审: rows+note 也不丢失败原因)", () => {
+  it("error face shows the note", () => {
+    expect(filesPaneStatusText("error", "无法连接后台；…")).toBe("无法连接后台；…");
+  });
+
+  it("rows face keeps showing the failed-refresh reason", () => {
+    expect(filesPaneStatusText("rows", "文件列表读取失败（HTTP 500）；重试")).toBe(
+      "文件列表读取失败（HTTP 500）；重试"
+    );
+  });
+
+  it("no note → empty status text on loading / empty", () => {
+    expect(filesPaneStatusText("loading", "")).toBe("");
+    expect(filesPaneStatusText("empty", "")).toBe("");
   });
 });

@@ -229,6 +229,15 @@ export function filesPaneState(input: {
   return "empty";
 }
 
+/** What the file pane's live region must say. A non-empty note wins on every
+ * face — including `rows`, where the list stays and only the failure prompt
+ * changes (a refresh/poll failure must not blank the reason, #258 终审). */
+export function filesPaneStatusText(state: FilesPaneState, note: string): string {
+  if (note) return note;
+  void state;
+  return "";
+}
+
 /**
  * #256: the login page must tell "wrong secret" from "cannot reach the
  * backend" — retrying a password never fixes a dead server.

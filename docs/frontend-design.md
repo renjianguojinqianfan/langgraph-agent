@@ -169,6 +169,7 @@
 - [ ] 流式回答期间 Markdown 持续更新，结束后不再无谓重渲染（React DevTools Profiler 抽查）。
 - [ ] 发送失败（断开后台）显示「无法连接后台；确认服务在运行后再试」，读屏有播报（`role=status`）。
 - [ ] 文件面板失败显示原因 + 下一步，「重试」可用；加载 / 空 / 失败状态读屏可感知（`role=status`）。
+- [ ] 运行中任务单次 poll 失败（列表已有文件）→ 仍显示原因与「重试」，读屏播报原因。
 - [ ] 对比度：`text-state-danger` / `text-tertiary` 在 `bg-surface-page` / `bg-surface-well` 上仍达 §1 标准（本片未改 token）。
 
 注（已知窄竞态，接受）：缓存任务为 RUNNING 且 SSE 回放先于快照返回时，Network 可能出现 2 次 GET；改动前同存，不作为回归门槛。
