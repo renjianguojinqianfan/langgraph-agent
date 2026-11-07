@@ -297,12 +297,14 @@ def test_anthropic_model_builds_the_adapter_and_fails_readably_without_a_key(
     assert isinstance(client, AnthropicClient)
     assert client.model == "claude-3"
 
-    # thinking/reasoning_effort are not translated in this slice (ADR 0011):
-    # configuring them must fail readably, never be silently dropped. Go
-    # through the manager so its client cache is invalidated like the API path.
-    tm.update_model_entry("claude", entry.id, thinking=True)
+    # thinking / reasoning_effort are refused at the write face for an
+    # anthropic card (MEDIUM-2a): writable-but-never-runnable is worse than a
+    # readable 400. The adapter's constructor keeps the same guard as defense
+    # in depth.
     with pytest.raises(ValueError, match="thinking"):
-        tm.llm_for_task_id(task_id)
+        tm.update_model_entry("claude", entry.id, thinking=True)
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        tm.update_model_entry("claude", entry.id, reasoning_effort="high")
 
 
 # ── discovery ──
@@ -778,5 +780,127 @@ def test_model_entry_put_validation_and_404s(tmp_path):
             if m["id"] == entry["id"]
         )
         assert stored["temperature"] is None
+    finally:
+        client.__exit__(None, None, None)
+
+
+# ── PR #298 返工：API 侧的可运行性拒绝与参数清空 ──
+def test_api_can_clear_sampling_params_to_the_fallback(tmp_path):
+    client, tm = _client(tmp_path)
+    try:
+        _create_provider(client, temperature=0.3, max_tokens=1024, thinking=True)
+        entry = client.post(
+            "/api/providers/bailian/models",
+            json={
+                "model": "qwen-max",
+                "temperature": 0.9,
+                "max_tokens": 2048,
+                "thinking": False,
+            },
+        ).json()["data"]
+
+        cleared = client.put(
+            f"/api/providers/bailian/models/{entry['id']}",
+            json={"temperature": None, "max_tokens": None, "thinking": None},
+        )
+        assert cleared.status_code == 200
+        data = cleared.json()["data"]
+        assert data["temperature"] is None
+        assert data["max_tokens"] is None
+        assert data["thinking"] is None
+
+        # Effective projection falls back to the provider-level values.
+        legacy = next(
+            m
+            for m in client.get("/api/models").json()["data"]["models"]
+            if m["id"] == entry["id"]
+        )
+        assert legacy["temperature"] == 0.3
+        assert legacy["max_tokens"] == 1024
+        assert legacy["thinking"] is True
+
+        # The provider-level parameters can be cleared the same way; omitting a
+        # field still keeps it (only explicit null clears).
+        provider = client.put(
+            "/api/providers/bailian",
+            json={"temperature": None, "max_tokens": None, "thinking": None},
+        )
+        assert provider.status_code == 200
+        provider_data = provider.json()["data"]
+        assert provider_data["temperature"] is None
+        assert provider_data["max_tokens"] is None
+        assert provider_data["thinking"] is None
+
+        kept = client.put("/api/providers/bailian", json={"name": "Renamed"})
+        assert kept.json()["data"]["temperature"] is None
+        assert kept.json()["data"]["name"] == "Renamed"
+
+        legacy = next(
+            m
+            for m in client.get("/api/models").json()["data"]["models"]
+            if m["id"] == entry["id"]
+        )
+        assert legacy["temperature"] is None
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_anthropic_write_face_checks_params_at_api_level(tmp_path):
+    client, tm = _client(tmp_path)
+    try:
+        refused = client.post(
+            "/api/providers",
+            json={
+                "id": "claude",
+                "base_url": "https://api.anthropic.test/v1",
+                "protocol": PROTOCOL_ANTHROPIC,
+                "thinking": True,
+            },
+        )
+        assert refused.status_code == 400
+        assert "thinking" in refused.json()["detail"]
+
+        # openai-compatible cards may enable thinking ...
+        _create_provider(client, thinking=True)
+        # ... but switching protocol while it is set is a readable 400.
+        blocked = client.put(
+            "/api/providers/bailian", json={"protocol": PROTOCOL_ANTHROPIC}
+        )
+        assert blocked.status_code == 400
+        assert "thinking" in blocked.json()["detail"]
+
+        # Clearing thinking and switching in one request works.
+        switched = client.put(
+            "/api/providers/bailian",
+            json={"thinking": None, "protocol": PROTOCOL_ANTHROPIC},
+        )
+        assert switched.status_code == 200
+        assert switched.json()["data"]["protocol"] == PROTOCOL_ANTHROPIC
+
+        entry = client.post(
+            "/api/providers/bailian/models", json={"model": "claude-3"}
+        ).json()["data"]
+        assert (
+            client.put(
+                f"/api/providers/bailian/models/{entry['id']}",
+                json={"thinking": True},
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/api/providers/bailian/models",
+                json={"model": "m2", "temperature": 1.2},
+            ).status_code
+            == 400
+        )
+        # temperature <= 1 is accepted for anthropic
+        assert (
+            client.post(
+                "/api/providers/bailian/models",
+                json={"model": "m3", "temperature": 0.9},
+            ).status_code
+            == 200
+        )
     finally:
         client.__exit__(None, None, None)

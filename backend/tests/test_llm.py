@@ -718,3 +718,61 @@ def test_openai_client_forwards_d36_params_through_extra_body(monkeypatch):
     assert "max_tokens" not in default_payload
     assert "extra_body" not in default_payload
 
+
+# ── PR #298 返工：thinking=False / max_tokens=None / 连续同角色消息 ──
+def test_anthropic_client_treats_thinking_false_as_off():
+    captured: List[Dict[str, Any]] = []
+    client = build_llm_client(
+        protocol=PROTOCOL_ANTHROPIC,
+        base_url="https://api.anthropic.com",
+        model="claude-3",
+        key="sk",
+        thinking=False,
+        transport=_anthropic_capture(captured),
+    )
+    assert isinstance(client, AnthropicClient)
+    client.complete([{"role": "user", "content": "hi"}])
+
+    payload = captured[-1]["payload"]
+    assert "thinking" not in payload
+    assert "reasoning_effort" not in payload
+
+
+def test_anthropic_client_falls_back_when_per_call_max_tokens_is_none():
+    captured: List[Dict[str, Any]] = []
+    client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk",
+        "claude-3",
+        5,
+        transport=_anthropic_capture(captured),
+    )
+    client.complete([{"role": "user", "content": "hi"}], max_tokens=None)
+    assert captured[-1]["payload"]["max_tokens"] == 4096
+
+
+def test_anthropic_client_keeps_consecutive_same_role_messages():
+    """Plan notes can produce user, assistant, user, user; mapping must not crash.
+
+    Anthropic's API merges consecutive same-role turns server-side; this pins
+    our client-side behaviour (one message per input, no local merging).
+    """
+    captured: List[Dict[str, Any]] = []
+    client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk",
+        "claude-3",
+        5,
+        transport=_anthropic_capture(captured),
+    )
+    client.complete(
+        [
+            {"role": "user", "content": "plan this"},
+            {"role": "assistant", "content": "plan"},
+            {"role": "user", "content": "next"},
+            {"role": "user", "content": "again"},
+        ]
+    )
+    roles = [message["role"] for message in captured[-1]["payload"]["messages"]]
+    assert roles == ["user", "assistant", "user", "user"]
+

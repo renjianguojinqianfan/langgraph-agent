@@ -12,7 +12,11 @@ from fastapi.testclient import TestClient
 
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.main import app
-from backend.services.model_store import CredentialsError, ModelStore
+from backend.services.model_store import (
+    PROTOCOL_ANTHROPIC,
+    CredentialsError,
+    ModelStore,
+)
 from backend.tests.conftest import make_manager, make_settings
 
 SENTINEL = "model-key-sentinel-do-not-leak"
@@ -1311,3 +1315,123 @@ def test_legacy_projection_carries_effective_sampling_params(tmp_path):
     profile = store.public_profile(entry.id)
     assert profile["temperature"] == 0.4
     assert profile["max_tokens"] == 77
+
+
+# ── PR #298 返工：写面拒绝不可运行组合 / 参数显式清空 / 温度按协议 ──
+def test_anthropic_write_face_rejects_unrunnable_thinking(tmp_path):
+    store, _ = _store(tmp_path)
+    with pytest.raises(ValueError, match="thinking"):
+        store.add_provider(
+            id="claude",
+            name="Claude",
+            protocol=PROTOCOL_ANTHROPIC,
+            base_url="https://api.anthropic.test/v1",
+            thinking=True,
+        )
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        store.add_provider(
+            id="claude",
+            name="Claude",
+            protocol=PROTOCOL_ANTHROPIC,
+            base_url="https://api.anthropic.test/v1",
+            reasoning_effort="high",
+        )
+
+    # An openai-compatible card may enable thinking; switching it to anthropic
+    # while the field is still set must be refused at the write face.
+    store.add_provider(
+        id="gw",
+        name="GW",
+        base_url="https://gw.test/v1",
+        thinking=True,
+        reasoning_effort="high",
+    )
+    with pytest.raises(ValueError, match="thinking"):
+        store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC)
+    store.update_provider("gw", thinking=None, reasoning_effort=None)
+    assert store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC).protocol == (
+        PROTOCOL_ANTHROPIC
+    )
+
+    with pytest.raises(ValueError, match="thinking"):
+        store.add_model("gw", model="m1", thinking=True)
+
+
+def test_anthropic_write_face_checks_entry_overrides(tmp_path):
+    store, _ = _store(tmp_path)
+    store.add_provider(id="gw", name="GW", base_url="https://gw.test/v1")
+    entry = store.add_model("gw", model="m1", thinking=True)
+    with pytest.raises(ValueError, match="thinking"):
+        store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC)
+
+    # Clearing only the entry override makes the provider switch runnable.
+    store.update_model("gw", entry.id, thinking=None)
+    assert store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC).protocol == (
+        PROTOCOL_ANTHROPIC
+    )
+
+
+def test_sampling_params_can_be_cleared_back_to_the_fallback(tmp_path):
+    store, _ = _store(tmp_path)
+    store.add_provider(
+        id="p1",
+        name="P1",
+        base_url="https://gw.test/v1",
+        temperature=0.3,
+        max_tokens=1024,
+    )
+    entry = store.add_model(
+        "p1", model="m1", temperature=0.9, max_tokens=2048, thinking=True
+    )
+    assert store.get(entry.id).temperature == 0.9
+
+    # Explicit None clears an override; omitted fields keep their value.
+    cleared = store.update_model(
+        "p1", entry.id, temperature=None, max_tokens=None, thinking=None
+    )
+    assert cleared.temperature is None
+    assert cleared.max_tokens is None
+    assert cleared.thinking is None
+    profile = store.get(entry.id)
+    assert profile.temperature == 0.3  # provider fallback
+    assert profile.max_tokens == 1024
+    assert profile.thinking is None  # provider default is not set here
+
+    kept = store.update_model("p1", entry.id, name="Renamed")
+    assert kept.name == "Renamed"
+    assert kept.temperature is None
+
+    # Clearing the provider-level value falls back to the client default (None).
+    store.update_provider("p1", temperature=None, max_tokens=None)
+    assert store.get(entry.id).temperature is None
+    assert store.get(entry.id).max_tokens is None
+
+
+def test_temperature_range_is_protocol_specific(tmp_path):
+    store, _ = _store(tmp_path)
+    # openai-compatible keeps the 0..2 range
+    store.add_provider(id="gw", name="GW", base_url="https://gw.test/v1", temperature=1.5)
+    # anthropic only accepts 0..1
+    with pytest.raises(ValueError, match="temperature"):
+        store.add_provider(
+            id="claude",
+            name="Claude",
+            protocol=PROTOCOL_ANTHROPIC,
+            base_url="https://api.anthropic.test/v1",
+            temperature=1.5,
+        )
+    store.add_provider(
+        id="claude",
+        name="Claude",
+        protocol=PROTOCOL_ANTHROPIC,
+        base_url="https://api.anthropic.test/v1",
+    )
+    with pytest.raises(ValueError, match="temperature"):
+        store.add_model("claude", model="m", temperature=1.2)
+    with pytest.raises(ValueError, match="temperature"):
+        store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC)
+
+    store.update_provider("gw", temperature=0.9)
+    assert store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC).protocol == (
+        PROTOCOL_ANTHROPIC
+    )
