@@ -29,6 +29,7 @@ import pytest
 from backend.config import Settings
 from backend.core.mcp.client import McpClientManager, McpServerConfig
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
+from backend.server_lock import pid_alive
 from backend.tests.conftest import make_isolated_settings
 from backend.utils.sandbox import MCP_ENV_ALLOWLIST
 
@@ -72,35 +73,76 @@ def _kill_pid(pid: int) -> None:
         os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
 
 
+def _wait_for_pid(pid_file: Path, timeout: float = 10.0) -> int:
+    """Wait until the echo server writes its PID; fail loudly on timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pid_file.exists():
+            try:
+                return int(pid_file.read_text(encoding="utf-8").strip())
+            except ValueError:
+                pass
+        time.sleep(0.1)
+    raise AssertionError("echo server PID file was not written")
+
+
+def _wait_pid_dead(pid: int, timeout: float = 10.0) -> None:
+    """Poll until ``pid`` is gone; fail loudly instead of asserting a race."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"MCP child process {pid} is still alive after cleanup")
+
+
+@pytest.fixture
+def mcp_managers():
+    """D-17: every manager built here is cleaned up in fixture teardown.
+
+    The old tests called ``mgr.cleanup()`` at the end of each body; an
+    assertion failure before that line leaked the MCP child process.
+    Registering cleanup in the fixture makes the failure path safe without
+    touching any assertion.
+    """
+    created: list[McpClientManager] = []
+
+    def make(settings):
+        mgr = McpClientManager(settings)
+        created.append(mgr)
+        return mgr
+
+    yield make
+    for mgr in created:
+        mgr.cleanup()
+
+
 # ─────────────────── zero regression ───────────────────
-def test_mcp_empty_servers_yields_no_tools(tmp_path):
+def test_mcp_empty_servers_yields_no_tools(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path, mcp_servers="[]")
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     assert tools == []
     assert mgr.status_list() == []
-    mgr.cleanup()
 
 
-def test_mcp_disabled_yields_no_tools(tmp_path):
+def test_mcp_disabled_yields_no_tools(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path, mcp_enabled=False, mcp_servers=json.dumps(
         [{"name": "echo", "command": sys.executable, "args": [ECHO_SERVER], "enabled": True}]
     ))
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     assert tools == []
-    mgr.cleanup()
 
 
-def test_mcp_invalid_json_continues(tmp_path):
+def test_mcp_invalid_json_continues(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path, mcp_servers="{not json}")
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     assert tools == []
-    mgr.cleanup()
 
 
-def test_mcp_disabled_server_skipped(tmp_path):
+def test_mcp_disabled_server_skipped(tmp_path, mcp_managers):
     """A server with enabled=false is reported disabled and never connected."""
     s = _echo_settings(
         tmp_path,
@@ -111,20 +153,19 @@ def test_mcp_disabled_server_skipped(tmp_path):
             ]
         ),
     )
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     names = {t["server"] for t in tools}
     assert names == {"on"}
     statuses = {st.name: st.to_dict() for st in mgr.status_list()}
     assert statuses["off"]["status"] == "disabled"
     assert statuses["on"]["status"] == "connected"
-    mgr.cleanup()
 
 
 # ─────────────────── connect + discovery ───────────────────
-def test_mcp_connect_lists_tools_with_schema(tmp_path):
+def test_mcp_connect_lists_tools_with_schema(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     assert len(tools) == 2
     by_name = {t["name"]: t for t in tools}
@@ -137,10 +178,9 @@ def test_mcp_connect_lists_tools_with_schema(tmp_path):
     status = mgr.status_list()[0]
     assert status.status == "connected"
     assert status.tools_count == 2
-    mgr.cleanup()
 
 
-def test_mcp_connect_failure_isolated(tmp_path):
+def test_mcp_connect_failure_isolated(tmp_path, mcp_managers):
     """A bad command only marks that server error — startup continues."""
     s = _echo_settings(
         tmp_path,
@@ -151,13 +191,12 @@ def test_mcp_connect_failure_isolated(tmp_path):
             ]
         ),
     )
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     assert {t["server"] for t in tools} == {"echo"}
     statuses = {st.name: st.to_dict() for st in mgr.status_list()}
     assert statuses["bad"]["status"] == "error"
     assert statuses["echo"]["status"] == "connected"
-    mgr.cleanup()
 
 
 def test_mcp_sanitize_name():
@@ -167,9 +206,9 @@ def test_mcp_sanitize_name():
 
 
 # ─────────────────── call forwarding + ToolResult mapping ───────────────────
-def test_mcp_call_tool_success(tmp_path):
+def test_mcp_call_tool_success(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     mgr.connect_all()
     tool = McpTool(
         server_name="echo",
@@ -184,10 +223,9 @@ def test_mcp_call_tool_success(tmp_path):
     assert res.data["server"] == "echo"
     assert res.data["tool"] == "echo"
     assert res.data["text"] == "echo:hello"
-    mgr.cleanup()
 
 
-def test_mcp_killed_server_returns_failure_not_crash(tmp_path):
+def test_mcp_killed_server_returns_failure_not_crash(tmp_path, mcp_managers):
     pid_file = tmp_path / "echo.pid"
     s = _echo_settings(
         tmp_path,
@@ -204,7 +242,7 @@ def test_mcp_killed_server_returns_failure_not_crash(tmp_path):
             ]
         ),
     )
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     mgr.connect_all()
     tool = McpTool(
         server_name="echo",
@@ -218,23 +256,12 @@ def test_mcp_killed_server_returns_failure_not_crash(tmp_path):
     assert tool.run(text="pre").success is True
 
     # Kill the server process; the next call must fail cleanly (no crash).
-    deadline = time.time() + 10
-    pid = None
-    while time.time() < deadline:
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text(encoding="utf-8").strip())
-                break
-            except ValueError:
-                pass
-        time.sleep(0.1)
-    assert pid, "echo server PID file was not written"
+    pid = _wait_for_pid(pid_file)
     _kill_pid(pid)
 
     res = tool.run(text="after")
     assert res.success is False
     assert res.error  # explicit error message
-    mgr.cleanup()
 
 
 def test_mcp_tool_reports_exception_type_when_message_is_empty(tmp_path):
@@ -285,14 +312,14 @@ def test_mcp_tool_reports_exception_type_when_timeout_message_is_empty(tmp_path)
 
 
 # ─────────────────── danger classification ───────────────────
-def test_mcp_self_reported_annotations_drive_the_danger_signal(tmp_path):
+def test_mcp_self_reported_annotations_drive_the_danger_signal(tmp_path, mcp_managers):
     """The server's self-reported annotations (via ``connect_all``) reach McpTool.
 
     #57 replaced the verb table with the protocol's own hints; #138 later retired
     the confirmation gate, so the classification is inert metadata now.
     """
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     discovered = {t["name"]: t for t in mgr.connect_all()}
     read_tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
@@ -306,24 +333,22 @@ def test_mcp_self_reported_annotations_drive_the_danger_signal(tmp_path):
     )
     assert read_tool.danger_signal == "safe"
     assert write_tool.danger_signal == "dangerous"
-    mgr.cleanup()
 
 
-def test_mcp_unreported_tool_reads_as_unknown(tmp_path):
+def test_mcp_unreported_tool_reads_as_unknown(tmp_path, mcp_managers):
     """AC2：server 两个 hint 都没给 → ``unknown``，不当作 safe。"""
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     mgr.connect_all()
     unreported = McpTool(
         server_name="echo", tool_name="quiet", description="Nobody knows.",
         input_schema={}, manager=mgr, settings=s,
     )
     assert unreported.danger_signal == "unknown"
-    mgr.cleanup()
 
 
 # ─────────────────── child environment (#254) ───────────────────
-def test_mcp_child_env_is_allowlisted_only(tmp_path, monkeypatch):
+def test_mcp_child_env_is_allowlisted_only(tmp_path, monkeypatch, mcp_managers):
     """A third-party MCP server gets the allowlist, not the parent environment.
 
     The audit for #254 found ``_connect`` passed ``dict(os.environ)`` to the
@@ -352,7 +377,7 @@ def test_mcp_child_env_is_allowlisted_only(tmp_path, monkeypatch):
             ]
         ),
     )
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     mgr.connect_all()
     try:
         assert dump.exists(), "echo server did not dump its environment"
@@ -383,9 +408,9 @@ def test_mcp_child_env_is_allowlisted_only(tmp_path, monkeypatch):
 
 
 # ─────────────────── cleanup ───────────────────
-def test_mcp_cleanup_idempotent(tmp_path):
+def test_mcp_cleanup_idempotent(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     mgr.connect_all()
     mgr.cleanup()
     mgr.cleanup()  # second call safe
@@ -393,6 +418,43 @@ def test_mcp_cleanup_idempotent(tmp_path):
     # Calls after cleanup fail cleanly.
     with pytest.raises(RuntimeError):
         mgr.call_tool("echo", "echo", {"text": "x"})
+
+
+def test_mcp_cleanup_after_a_failing_step_kills_the_child(tmp_path, mcp_managers):
+    """D-17：用例中途抛错时也必须清理，清理后 MCP 子进程不存活。
+
+    用 echo server 写出的 PID 作真子进程证据：失败步骤之后只走 cleanup
+    （与 fixture finalizer 同一条清理路径），不依赖用例体末尾的善后代码。
+    """
+    pid_file = tmp_path / "echo.pid"
+    s = _echo_settings(
+        tmp_path,
+        mcp_servers=json.dumps(
+            [
+                {
+                    "name": "echo",
+                    "command": sys.executable,
+                    "args": [ECHO_SERVER],
+                    "env": {"ECHO_PID_FILE": str(pid_file)},
+                    "enabled": True,
+                }
+            ]
+        ),
+    )
+    mgr = mcp_managers(s)
+    mgr.connect_all()
+    pid = _wait_for_pid(pid_file)
+    assert pid_alive(pid)
+
+    with pytest.raises(RuntimeError, match="simulated mid-test failure"):
+        try:
+            raise RuntimeError("simulated mid-test failure")  # 模拟用例体中某步抛错
+        finally:
+            mgr.cleanup()  # 与 fixture finalizer 同一条清理路径
+
+    assert mgr._closed is True
+    assert mgr._sessions == {}
+    _wait_pid_dead(pid)
 
 
 def test_mcp_manager_config_validation():
