@@ -49,7 +49,7 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from . import plan_file
 from .event_bus import EventBus
-from .model_store import ModelStore
+from .model_store import IMPLEMENTED_PROTOCOLS, PROTOCOL_OPENAI, ModelStore
 from .persistence import Persistence, PersistenceError
 from .trace import TraceRecorder
 
@@ -707,8 +707,20 @@ class TaskManager:
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
     def _build_llm(self, profile: Any, key: str) -> LLMClient:
+        """Build one client for a resolved model entry (D-33 projection).
+
+        Protocol dispatch is not part of this phase: only the OpenAI-compatible
+        adapter exists, so a provider on another protocol must fail loudly here
+        instead of silently talking the wrong wire format.
+        """
         if key:
             self._known_secrets.add(key)
+        protocol = getattr(profile, "protocol", PROTOCOL_OPENAI) or PROTOCOL_OPENAI
+        if protocol not in IMPLEMENTED_PROTOCOLS:
+            raise RuntimeError(
+                f"model protocol {protocol!r} is not supported yet; use an "
+                "OpenAI-compatible provider (the Anthropic adapter lands separately)"
+            )
         if self._llm_factory is not None:
             return self._llm_factory(profile, key)
         from ..core.llm.openai_compat import OpenAICompatibleClient
@@ -781,10 +793,43 @@ class TaskManager:
                 changes={"model": model_id, "updated_at": _now()},
                 strict=True,
             )
-        return {"ok": True, "model": model_id}
+            return {
+                "ok": True,
+                "model": model_id,
+                "task": task.model_dump(mode="json"),
+            }
 
-    # Profile mutations go through the manager so the per-profile client cache
-    # cannot keep serving the old address / key after an edit.
+    def set_task_model(
+        self, task_id: str, *, provider: str, model: str
+    ) -> Dict[str, Any]:
+        """Switch a task to \u0060{provider, model}\u0060; the entry is created on demand.
+
+        D-34: a raw model id outside the catalog stays usable and becomes a
+        ``source: manual`` entry; switching to the same pair twice reuses it.
+        """
+        with self._lock:
+            if self.models.get_provider(provider) is None:
+                raise KeyError(provider)
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} not found")
+            entry = self.models.ensure_model_entry(provider, model)
+            self._mutate_task(
+                task,
+                changes={"model": entry.id, "updated_at": _now()},
+                strict=True,
+            )
+            self._llm_clients.pop(entry.id, None)
+            return {
+                "ok": True,
+                "model": entry.id,
+                "task": task.model_dump(mode="json"),
+            }
+
+    # Model mutations go through the manager so the client cache cannot keep
+    # serving an old address / key. A provider edit or a key rotation can affect
+    # every model entry under that provider, so the whole cache is dropped
+    # (clients are cheap to rebuild; a stale credential is not).
     def add_model_profile(self, **fields: Any) -> Any:
         with self._lock:
             return self.models.add(**fields)
@@ -797,7 +842,7 @@ class TaskManager:
         with self._lock:
             old_key = self.models.key_for(model_id)
             profile = self.models.update(model_id, **fields)
-            self._llm_clients.pop(model_id, None)
+            self._llm_clients.clear()
             if old_key:
                 self._known_secrets.add(old_key)
         return profile
@@ -806,7 +851,7 @@ class TaskManager:
         with self._lock:
             old_key = self.models.key_for(model_id)
             self.models.delete(model_id)
-            self._llm_clients.pop(model_id, None)
+            self._llm_clients.clear()
             if old_key:
                 self._known_secrets.add(old_key)
 
@@ -814,9 +859,44 @@ class TaskManager:
         with self._lock:
             old_key = self.models.key_for(model_id)
             self.models.set_key(model_id, key)
-            self._llm_clients.pop(model_id, None)
+            self._llm_clients.clear()
             if old_key:
                 self._known_secrets.add(old_key)
+
+    # Provider / catalog mutations (D-34): same cache rule as above.
+    def add_provider(self, **fields: Any) -> Dict[str, Any]:
+        with self._lock:
+            provider = self.models.add_provider(**fields)
+            return self.models.provider_public(provider.id)
+
+    def update_provider(self, provider_id: str, **fields: Any) -> Dict[str, Any]:
+        with self._lock:
+            old_key = self.models.provider_key_for(provider_id)
+            provider = self.models.update_provider(provider_id, **fields)
+            self._llm_clients.clear()
+            if old_key:
+                self._known_secrets.add(old_key)
+            return self.models.provider_public(provider.id)
+
+    def delete_provider(self, provider_id: str) -> None:
+        with self._lock:
+            old_key = self.models.provider_key_for(provider_id)
+            self.models.delete_provider(provider_id)
+            self._llm_clients.clear()
+            if old_key:
+                self._known_secrets.add(old_key)
+
+    def add_model_entry(
+        self, provider_id: str, *, model: str, name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        with self._lock:
+            entry = self.models.add_model(provider_id, model=model, name=name)
+            return self.models.model_public(entry.id)
+
+    def delete_model_entry(self, provider_id: str, model_id: str) -> None:
+        with self._lock:
+            self.models.delete_model(provider_id, model_id)
+            self._llm_clients.pop(model_id, None)
 
     def test_model(self, model_id: str) -> Dict[str, Any]:
         """Send one minimal request; the key never appears in the answer."""

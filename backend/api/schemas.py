@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TaskStatus(str, Enum):
@@ -148,7 +148,21 @@ class UpdatePlanRequest(BaseModel):
 
 
 class TaskModelRequest(BaseModel):
-    model: str
+    """Model switch payload (D-34).
+
+    ``{model: <entry-id>}`` keeps the pre-P2-3 shape; ``{provider, model}``
+    names a raw model under that provider and its catalog entry is created on
+    demand (source ``manual``). Both forms are required to carry ``model``.
+    """
+
+    model: Optional[str] = None
+    provider: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _require_model(self) -> "TaskModelRequest":
+        if not (self.model or "").strip():
+            raise ValueError("`model` is required")
+        return self
 
 
 class ModelCreateRequest(BaseModel):
@@ -167,6 +181,32 @@ class ModelUpdateRequest(BaseModel):
 
 class ModelKeyRequest(BaseModel):
     key: str = ""
+
+
+class ProviderCreateRequest(BaseModel):
+    """A provider card (D-34). `key` is write-only: no response echoes it."""
+
+    id: str
+    name: str = ""
+    protocol: str = "openai-compatible"
+    base_url: str
+    api_key_env: str = "LLM_API_KEY"
+    key: str = ""
+
+
+class ProviderUpdateRequest(BaseModel):
+    """Partial provider edit; `id` is immutable and therefore not a field."""
+
+    name: Optional[str] = None
+    protocol: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key_env: Optional[str] = None
+    key: Optional[str] = None
+
+
+class ProviderModelCreateRequest(BaseModel):
+    model: str
+    name: Optional[str] = None
 
 
 class SendMessageRequest(BaseModel):

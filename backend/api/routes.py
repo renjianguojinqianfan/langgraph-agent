@@ -29,7 +29,12 @@ from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
 from ..services.event_bus import EventBus
-from ..services.model_store import CredentialsError
+from ..services.model_store import (
+    PROTOCOL_OPENAI,
+    CredentialsError,
+    ProviderDiscoveryError,
+    require_implemented_protocol,
+)
 from ..services.persistence import PersistenceError
 from ..services.plan_file import PlanError
 from ..services.task_manager import TaskManager
@@ -42,6 +47,9 @@ from .schemas import (
     ModelCreateRequest,
     ModelKeyRequest,
     ModelUpdateRequest,
+    ProviderCreateRequest,
+    ProviderModelCreateRequest,
+    ProviderUpdateRequest,
     SendMessageRequest,
     TaskModelRequest,
     UpdateModeRequest,
@@ -241,13 +249,32 @@ def update_task_model(
     request: Request,
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
-    """Switch a task's model; the next message uses it (ADR 0010 decision 7)."""
+    """Switch a task's model; the next message uses it (ADR 0010 decision 7).
+
+    D-34 accepts either an existing model entry id (``{model}``) or a raw
+    ``{provider, model}`` pair; the latter creates a ``source: manual`` entry
+    on demand. Both forms return the updated task.
+    """
     if _tm(request).get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
-    try:
-        result = _tm(request).set_model(task_id, payload.model)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+    if payload.provider:
+        try:
+            result = _tm(request).set_task_model(
+                task_id, provider=payload.provider, model=payload.model or ""
+            )
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail=f"provider not found: {payload.provider}"
+            ) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+    else:
+        try:
+            result = _tm(request).set_model(task_id, payload.model or "")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
     return _envelope(data=result)
 
 
@@ -358,6 +385,165 @@ def test_model(
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
     return _envelope(data=result)
+
+
+# ── providers + model catalog (#243 P2-2 / D-34) ──
+@router.get("/providers")
+def list_providers(
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Provider cards plus the global default model entry id.
+
+    Credentials never leave the process: each card reports only key_set /
+    key_source.
+    """
+    store = _tm(request).models
+    return _envelope(
+        data={"providers": store.list_providers(), "default": store.default_id}
+    )
+
+
+@router.post("/providers")
+def create_provider(
+    payload: ProviderCreateRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    protocol = (payload.protocol or PROTOCOL_OPENAI).strip()
+    try:
+        # D-35: anthropic is a stored value but has no adapter yet (PR B), so
+        # the write face refuses it instead of producing a task-drivable card.
+        require_implemented_protocol(protocol)
+        created = _tm(request).add_provider(
+            id=payload.id,
+            name=payload.name,
+            protocol=protocol,
+            base_url=payload.base_url,
+            api_key_env=payload.api_key_env,
+            key=payload.key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except CredentialsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _envelope(data=created)
+
+
+@router.put("/providers/{provider_id}")
+def update_provider(
+    provider_id: str,
+    payload: ProviderUpdateRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Partial edit; the provider id is immutable (D-34).
+
+    The protocol is checked against the implemented set for the same reason as
+    creation: a card with no adapter must not become task-selectable.
+    """
+    fields = payload.model_dump(exclude_none=True)
+    if "protocol" in fields:
+        fields["protocol"] = str(fields["protocol"]).strip() or PROTOCOL_OPENAI
+    try:
+        if "protocol" in fields:
+            require_implemented_protocol(fields["protocol"])
+        updated = _tm(request).update_provider(provider_id, **fields)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="provider not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except CredentialsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _envelope(data=updated)
+
+
+@router.delete("/providers/{provider_id}")
+def delete_provider(
+    provider_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Delete a provider and its model entries; the last model is refused."""
+    try:
+        _tm(request).delete_provider(provider_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="provider not found") from None
+    except CredentialsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _envelope(data={"ok": True})
+
+
+@router.get("/providers/{provider_id}/models")
+def list_provider_models(
+    provider_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """One provider's catalog plus the global default model entry id."""
+    store = _tm(request).models
+    try:
+        models = store.list_models(provider_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="provider not found") from None
+    return _envelope(data={"models": models, "default": store.default_id})
+
+
+@router.post("/providers/{provider_id}/models")
+def create_provider_model(
+    provider_id: str,
+    payload: ProviderModelCreateRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    try:
+        created = _tm(request).add_model_entry(
+            provider_id, model=payload.model, name=payload.name
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="provider not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return _envelope(data=created)
+
+
+@router.delete("/providers/{provider_id}/models/{model_id}")
+def delete_provider_model(
+    provider_id: str,
+    model_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    try:
+        _tm(request).delete_model_entry(provider_id, model_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="model not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _envelope(data={"ok": True})
+
+
+@router.post("/providers/{provider_id}/models/discover")
+def discover_provider_models(
+    provider_id: str,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Preview the provider's available models; never persisted (D-34).
+
+    Bounded time / response size, redirects refused, and the error text is
+    redacted so a key can never reach the caller.
+    """
+    manager = _tm(request)
+    try:
+        candidates = manager.models.discover_models(provider_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="provider not found") from None
+    except ProviderDiscoveryError as exc:
+        raise HTTPException(status_code=400, detail=manager.redact(str(exc))) from None
+    return _envelope(data={"models": candidates})
 
 
 @router.put("/tasks/{task_id}/mode")
