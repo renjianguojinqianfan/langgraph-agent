@@ -176,9 +176,9 @@
 
 ### 10.1 前端测试与手测纪律（2026-11-07，P0-4 / #282）
 
-- **拍板：本批不引入 jsdom / @testing-library（D-23）**。可复核理由：jsdom 没有布局与 `inert` 语义，焦点 / 命中 / 滚动断言只能断属性；需要为 `matchMedia` / `scrollIntoView` / `showModal` 等打 stub；新增依赖会改 `package.json` + lockfile，CI frontend job 变重；并行 worktree 共用 junction `node_modules` 时每次都要重建，冲突成本高于收益。
+- **拍板：本批不引入 jsdom / @testing-library（D-23）**。可复核理由：jsdom 没有布局与 `inert` 语义，焦点 / 命中 / 滚动断言只能断属性；需要为 `matchMedia` / `scrollIntoView` / `showModal` 等打 stub；新增依赖会改 `package.json` + lockfile，CI frontend job 变重；依赖变更会牵动主检出安装，跨分支锁文件漂移时 worktree 还需重建依赖。**成本口径取 D-23 的「评估」分支**：不引入即不做安装实测，避免 lockfile 污染与 CI 重跑（#282 裁定）。
 - **替代与纪律（D-24）**：状态派生抽成纯函数（`lib/failureStates` 等），交互断言落在 zustand store 上；每片保留一条手测 checklist。**新增 / 修改状态面孔或组件接线的 PR 必须带一条纯函数或 store 断言 + 一条手测 checklist 项**；纯布局 / 视觉改动可只手测。
-- **store 级样板**：`frontend/src/store/taskStore.test.ts` 的「D-24 接线断言模板（#282）」——用 store action 写入后再经 `lib/failureStates` 的组合判定断言「列表 500 + 零行 = 失败而非空态」。
+- **store 级样板**：`frontend/src/store/taskStore.test.ts` 的「D-24 接线断言模板（#282）」——用 store action 写入后再经 `lib/failureStates` 的组合判定断言「列表 500 + 零行 = 失败而非空态」（样板只钉 store → 判定这一层；组件是否消费该判定由手测兜底）。
 
 ## 11. 指针（先读哪份）
 
