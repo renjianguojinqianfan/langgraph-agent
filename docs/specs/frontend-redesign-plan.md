@@ -18,7 +18,7 @@ F0 文档与票 → F1 #189 + vitest 接缝 → B1 失败可续说/改计划 →
 
 - B1 与前端各片无代码冲突，放在 F4 之前，让 Composer 一次上「失败可续说」，不留过渡禁用态。
 - F2 是 F3–F8 的地基；F2 之前只有 F1、B1 可并行。
-- **测试接缝 = vitest，只测纯逻辑**（reducer、相对时间、字节数、分组），组件不做渲染测试。
+- **测试接缝 = vitest，只测纯逻辑**（reducer、相对时间、字节数、分组），组件不做渲染测试。（2026-11-07：已由 `docs/frontend-design.md` §10.1 取代——不引 jsdom，改纯函数 / store 断言 + 手测清单纪律）
 - **UI 层零新增依赖**：只借 beautiful-ui 的形态与交互规则，不装组件包；组件 props 留 `clsx`/`cn` 升级缝。
 - **本文件是活文档**：未交付增量的判据可以随实施校准；已交付部分不改写，现状写进 `README.md` / `docs/architecture.md`。
 
@@ -196,7 +196,7 @@ F0 文档与票 → F1 #189 + vitest 接缝 → B1 失败可续说/改计划 →
 | A2 | #54 :168-173 vs :236 | 分期「待拍板」四期 vs 备注「仍按四期执行」 | 四期横切作废；改为 F1–F9 + B1 竖切 |
 | A3 | #54 :91 / :166 vs 设计定居 #189 段 | 「Zustand store、SSE 处理一行不动」 vs #189 必须修在 store | store 可动（#189、reducer 提取、F7 的 subtask 实时态）；SSE 事件词汇表不动 |
 | A4 | #54 :36 / :101-105 vs ADR 0010 | 「后端仅新增两个只读文件端点」 vs `GET /tasks/{id}/files`、`/files/preview`、`/files/download` 已交付 | §6 作废，引用现役任务作用域端点；本章不新增文件端点 |
-| A5 | #54 :130 vs 本轮 | 「本 spec 不引入前端测试框架」 vs 引入 vitest | 改为：纯逻辑用 vitest，组件不做渲染测试 |
+| A5 | #54 :130 vs 本轮 | 「本 spec 不引入前端测试框架」 vs 引入 vitest | 改为：纯逻辑用 vitest，组件不做渲染测试（2026-11-07：已由 `docs/frontend-design.md` §10.1 取代——不引 jsdom，改纯函数 / store 断言 + 手测清单纪律） |
 | A6 | #54 :114 vs 本轮 | `react-markdown` + `remark-gfm`「待批」 vs 已批 | 追加段记录批准清单（Inter、Markdown 两包、vitest；UI 零新增） |
 | A7 | #54 :181 vs B1 | 「本章不动后端 API」 vs 放宽 messages / plan 到 FAILED | 唯一例外：这两个端点 + `architecture.md:140/:142` + ADR 0008 注；SSE 面不动 |
 | A8 | #54 标题 vs 设计定居 | 标题「四栏方向」 vs 三栏 | 标题改「三栏」；原文不删 |
