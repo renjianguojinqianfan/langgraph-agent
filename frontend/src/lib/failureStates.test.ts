@@ -3,6 +3,7 @@ import {
   detailLoadFailure,
   detailLoadState,
   filesLoadFailure,
+  filesPaneState,
   historyListState,
   listBannerVisible,
   listEmptyTitle,
@@ -302,5 +303,25 @@ describe("filesLoadFailure (D-31 / #258 AC5)", () => {
     for (const status of [0, 400, 401, 404, 409, 415, 200, 500, 503]) {
       expect(filesLoadFailure(status).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("filesPaneState (D-31 / #258 AC5: 失败不伪装空面)", () => {
+  it("error wins over loading and over a stale row count", () => {
+    expect(filesPaneState({ error: "boom", loading: true, count: 3 })).toBe("error");
+    expect(filesPaneState({ error: "boom", loading: false, count: 0 })).toBe("error");
+  });
+
+  it("loading wins when there is no error", () => {
+    expect(filesPaneState({ error: "", loading: true, count: 0 })).toBe("loading");
+    expect(filesPaneState({ error: "", loading: true, count: 3 })).toBe("loading");
+  });
+
+  it("empty only when idle with no rows and no error", () => {
+    expect(filesPaneState({ error: "", loading: false, count: 0 })).toBe("empty");
+  });
+
+  it("rows when idle with data", () => {
+    expect(filesPaneState({ error: "", loading: false, count: 2 })).toBe("rows");
   });
 });

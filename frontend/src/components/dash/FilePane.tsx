@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listFiles } from "../../api/client";
-import { filesLoadFailure } from "../../lib/failureStates";
+import { cx } from "../../lib/cx";
+import { filesLoadFailure, filesPaneState } from "../../lib/failureStates";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
@@ -52,6 +53,8 @@ export function FilePane({
           setFiles(r.data.files ?? []);
           setTruncated(!!r.data.truncated);
         })
+        // `reqWithStatus` never rejects (a transport failure already comes back
+        // as status 0) — kept as defence in depth, not a silent dead path.
         .catch(() => {
           if (!cancelled) setNote(filesLoadFailure(0));
         })
@@ -73,6 +76,21 @@ export function FilePane({
   }, [task.id, task.status, visible, reloadToken]);
 
   const groups = groupFiles(files);
+  // D-31 / #258 AC5: one face at a time — a failed read never also shows the
+  // empty copy (same rule as historyListState, #256).
+  const state = filesPaneState({ error: note ?? "", loading, count: files.length });
+  const emptyCopy =
+    task.status === "RUNNING"
+      ? "任务运行中；写入工作区的文件会出现在这里。"
+      : "工作区还没有文件。任务写下文件后会出现在这里。";
+  const statusText =
+    state === "error"
+      ? (note ?? "")
+      : state === "loading"
+        ? "加载中…"
+        : state === "empty"
+          ? emptyCopy
+          : "";
 
   return (
     <div className="flex flex-col gap-4">
@@ -82,15 +100,35 @@ export function FilePane({
         </p>
       )}
 
-      {files.length === 0 ? (
-        <p role="status" className="text-body text-tertiary">
-          {loading
-            ? "加载中…"
-            : task.status === "RUNNING"
-              ? "任务运行中；写入工作区的文件会出现在这里。"
-              : "工作区还没有文件。任务写下文件后会出现在这里。"}
+      {/* Persistent live region (D-24 / AC5): inserting a populated node is not
+          announced by most screen readers — an always-mounted region is. It is
+          the only status face (error / loading / empty); rows render below. */}
+      <div
+        role="status"
+        aria-live="polite"
+        className={cx("flex flex-wrap items-center gap-2", state === "rows" && "sr-only")}
+      >
+        <p
+          className={cx(
+            "min-w-0 flex-1",
+            note ? "text-meta text-state-danger" : "text-body text-tertiary"
+          )}
+        >
+          {statusText}
         </p>
-      ) : (
+        {state === "error" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            disabled={loading}
+          >
+            {loading ? "重试中…" : "重试"}
+          </Button>
+        )}
+      </div>
+
+      {state === "rows" && (
         groups.map((group) => (
           <section key={group.dir || "__root"}>
             <div
@@ -123,21 +161,6 @@ export function FilePane({
         ))
       )}
 
-      {note && (
-        <div className="flex flex-wrap items-center gap-2">
-          <p role="status" className="min-w-0 flex-1 text-meta text-state-danger">
-            {note}
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setReloadToken((n) => n + 1)}
-            disabled={loading}
-          >
-            {loading ? "重试中…" : "重试"}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

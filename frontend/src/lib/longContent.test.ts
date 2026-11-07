@@ -6,7 +6,13 @@ import markdownSource from "./markdown.tsx?raw";
 import userBubbleSource from "../components/center/UserBubble.tsx?raw";
 import failureBlockSource from "../components/center/FailureBlock.tsx?raw";
 import toolRowSource from "../components/center/ToolRow.tsx?raw";
-import taskViewSource from "../pages/TaskView.tsx?raw";
+
+/** Whole-src raw map for the global-hiding guard (D-28 判据: 全局隐藏即红). */
+const RAW_SOURCES = import.meta.glob("/src/**/*.{ts,tsx,css}", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
 
 /** 判据（#258 AC1 / D-28）：4 个面都必须引用同一契约常量；删掉任一面上的
  * `LONG_TEXT` 引用 → 本测试红。没有 jsdom 也能量测「组件带断行契约类」，
@@ -29,7 +35,11 @@ describe("long-content contract (D-28 / #258 AC1)", () => {
     expect(source).toMatch(/className=\{[^}]*LONG_TEXT[^}]*\}/);
   });
 
-  it("does not paper over the regression with global overflow-x hidden", () => {
-    expect(taskViewSource).not.toContain("overflow-x-hidden");
+  it("no global overflow-x hidden anywhere in src (would hide the regression)", () => {
+    const offenders = Object.entries(RAW_SOURCES)
+      .filter(([path]) => !/\.test\.tsx?$/.test(path))
+      .filter(([, source]) => source.includes("overflow-x-hidden"))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
   });
 });

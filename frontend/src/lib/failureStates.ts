@@ -211,6 +211,20 @@ export function filesLoadFailure(status: number, detail?: string): string {
   }
 }
 
+/** What the workspace file pane may show. Same discipline as the history
+ * list (#256): a failed read is never also the empty face. */
+export type FilesPaneState = "error" | "loading" | "empty" | "rows";
+
+export function filesPaneState(input: {
+  error: string;
+  loading: boolean;
+  count: number;
+}): FilesPaneState {
+  if (input.error) return "error";
+  if (input.loading) return "loading";
+  return input.count === 0 ? "empty" : "rows";
+}
+
 /**
  * #256: the login page must tell "wrong secret" from "cannot reach the
  * backend" — retrying a password never fixes a dead server.

@@ -24,10 +24,6 @@ export function shouldRefetchParked(
   return !isParked(prev.status as TaskStatus) && isParked(nextStatus as TaskStatus);
 }
 
-/** #256 plan-version merge, extracted so "only ever grows" is testable. */
-export function nextPlanVersion(current: number, incoming: number): number {
-  return Math.max(current, incoming);
-}
 
 /** D-30 / #258 AC4: only a `task_created` for an id the list does not know yet
  * may bump `listRevision`; a replayed event for a known task must not refetch

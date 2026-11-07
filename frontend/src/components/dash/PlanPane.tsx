@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { apiErrorText, getPlanSnapshot, putPlan } from "../../api/client";
 import { Markdown } from "../../lib/markdown";
 import { planLoadFailure, planLoadState } from "../../lib/failureStates";
-import { nextPlanVersion } from "../../lib/requestPlan";
+import { LONG_TEXT } from "../../lib/longContent";
+import { nextPlanVersion } from "../../lib/planVersion";
 import { isParked } from "../../lib/taskState";
 import { useTaskStore } from "../../store/taskStore";
 import type { Task } from "../../types";
@@ -29,7 +30,7 @@ function PlanToc({ items }: { items: TocItem[] }) {
                   .getElementById(item.slug)
                   ?.scrollIntoView({ block: "start" });
               }}
-              className="flex min-h-6 items-center text-meta text-secondary hover:text-primary"
+              className={`${LONG_TEXT} flex min-h-6 items-center text-meta text-secondary hover:text-primary`}
             >
               {item.text}
             </a>

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  nextPlanVersion,
-  shouldBumpListRevision,
-  shouldRefetchParked,
-} from "./requestPlan";
+import { shouldBumpListRevision, shouldRefetchParked } from "./requestPlan";
 
 describe("shouldRefetchParked (#258 AC4 / D-30)", () => {
   it("does not refetch when the first status comes from a snapshot", () => {
@@ -35,13 +31,6 @@ describe("shouldRefetchParked (#258 AC4 / D-30)", () => {
   });
 });
 
-describe("nextPlanVersion (#256 max 语义)", () => {
-  it("takes the max in both directions", () => {
-    expect(nextPlanVersion(3, 5)).toBe(5);
-    expect(nextPlanVersion(5, 3)).toBe(5);
-    expect(nextPlanVersion(4, 4)).toBe(4);
-  });
-});
 
 describe("shouldBumpListRevision (#258 AC4)", () => {
   it("bumps only for a genuinely new id", () => {
