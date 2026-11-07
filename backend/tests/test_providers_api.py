@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.core.llm.anthropic_native import AnthropicClient
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.main import app
 from backend.services import model_store as model_store_module
@@ -129,9 +130,9 @@ def test_provider_validation_errors_map_to_400(tmp_path):
         assert duplicate.status_code == 400
         assert "already exists" in duplicate.json()["detail"]
 
-        # A2 keeps the anthropic write face closed until its adapter lands (PR B):
-        # a stored-but-unimplemented protocol must not become task-selectable.
-        refused = client.post(
+        # PR B contract change: both supported protocols are now writable
+        # (the A2 assertion here was "anthropic create/edit -> 400").
+        anthropic = client.post(
             "/api/providers",
             json={
                 "id": "claude",
@@ -139,16 +140,13 @@ def test_provider_validation_errors_map_to_400(tmp_path):
                 "protocol": PROTOCOL_ANTHROPIC,
             },
         )
-        assert refused.status_code == 400
-        assert "协议尚未实现" in refused.json()["detail"]
-        ids = {p["id"] for p in client.get("/api/providers").json()["data"]["providers"]}
-        assert "claude" not in ids
-        assert (
-            client.put(
-                "/api/providers/bailian", json={"protocol": PROTOCOL_ANTHROPIC}
-            ).status_code
-            == 400
+        assert anthropic.status_code == 200
+        assert anthropic.json()["data"]["protocol"] == PROTOCOL_ANTHROPIC
+        switched = client.put(
+            "/api/providers/bailian", json={"protocol": PROTOCOL_ANTHROPIC}
         )
+        assert switched.status_code == 200
+        assert switched.json()["data"]["protocol"] == PROTOCOL_ANTHROPIC
     finally:
         client.__exit__(None, None, None)
 
@@ -241,6 +239,11 @@ def test_task_model_switch_accepts_entry_id_and_provider_pair(tmp_path):
             "model": "qwen-raw",
             "name": "qwen-raw",
             "source": "manual",
+            # D-36: absent sampling overrides are stored explicitly as None.
+            "temperature": None,
+            "max_tokens": None,
+            "thinking": None,
+            "reasoning_effort": None,
         }
 
         # The same pair reuses one entry instead of growing the catalog.
@@ -268,7 +271,9 @@ def test_task_model_switch_accepts_entry_id_and_provider_pair(tmp_path):
         client.__exit__(None, None, None)
 
 
-def test_anthropic_model_fails_loudly_until_the_adapter_lands(tmp_path, monkeypatch):
+def test_anthropic_model_builds_the_adapter_and_fails_readably_without_a_key(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
     settings = make_settings(tmp_path, use_mock_llm=False)
     tm = make_manager(settings, None)
@@ -281,7 +286,22 @@ def test_anthropic_model_fails_loudly_until_the_adapter_lands(tmp_path, monkeypa
     )
     entry = tm.models.add_model("claude", model="claude-3")
     task_id = tm.create_task("m", "hi", model=entry.id)
-    with pytest.raises(RuntimeError, match="not supported yet"):
+
+    # PR B contract change: this used to fail with "protocol not supported".
+    # Now the real adapter is built and a missing key is the readable failure.
+    with pytest.raises(ValueError, match="no API key"):
+        tm.llm_for_task_id(task_id)
+
+    tm.models.set_provider_key("claude", "sk-test")
+    client = tm.llm_for_task_id(task_id)
+    assert isinstance(client, AnthropicClient)
+    assert client.model == "claude-3"
+
+    # thinking/reasoning_effort are not translated in this slice (ADR 0011):
+    # configuring them must fail readably, never be silently dropped. Go
+    # through the manager so its client cache is invalidated like the API path.
+    tm.update_model_entry("claude", entry.id, thinking=True)
+    with pytest.raises(ValueError, match="thinking"):
         tm.llm_for_task_id(task_id)
 
 
@@ -616,31 +636,30 @@ def test_provider_create_with_key_rolls_back_when_the_key_write_fails(tmp_path, 
         client.__exit__(None, None, None)
 
 
-# ── 返工批次 2（LOW-4 收窄）：已有 anthropic 卡片仍可编辑其它字段 ──
-def test_existing_anthropic_provider_stays_editable_for_other_fields(
-    tmp_path, monkeypatch
-):
+# ── PR B：两种协议都可创建 / 编辑 ──
+def test_anthropic_provider_is_creatable_and_protocol_editable(tmp_path, monkeypatch):
     monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
     client, tm = _client(tmp_path)
     try:
-        tm.models.add_provider(
-            id="claude",
-            name="Claude",
+        created = _create_provider(
+            client,
+            "claude",
             protocol=PROTOCOL_ANTHROPIC,
             base_url="https://api.anthropic.test/v1",
-            api_key_env=_TEST_ENV_NAME,
         )
-        renamed = client.put("/api/providers/claude", json={"name": "Renamed"})
-        assert renamed.status_code == 200
-        assert renamed.json()["data"]["name"] == "Renamed"
-        assert renamed.json()["data"]["protocol"] == PROTOCOL_ANTHROPIC
+        assert created["protocol"] == PROTOCOL_ANTHROPIC
 
-        # An explicit protocol=anthropic change is still refused until PR B.
-        refused = client.put(
+        # Contract change: an explicit protocol=anthropic edit is a normal edit
+        # now (A2 answered 400 "协议尚未实现").
+        updated = client.put(
             "/api/providers/claude", json={"protocol": PROTOCOL_ANTHROPIC}
         )
-        assert refused.status_code == 400
-        assert "协议尚未实现" in refused.json()["detail"]
+        assert updated.status_code == 200
+        assert updated.json()["data"]["protocol"] == PROTOCOL_ANTHROPIC
+
+        unknown = client.put("/api/providers/claude", json={"protocol": "grpc"})
+        assert unknown.status_code == 400
+        assert "不支持" in unknown.json()["detail"]
     finally:
         client.__exit__(None, None, None)
 
@@ -667,5 +686,97 @@ def test_unknown_protocol_says_unsupported_not_pr_b(tmp_path):
         assert updated.status_code == 400
         assert "不支持" in updated.json()["detail"]
         assert "PR B" not in updated.json()["detail"]
+    finally:
+        client.__exit__(None, None, None)
+
+
+# ── PR B / D-36：采样参数走 Provider 与模型条目两级 ──
+def test_sampling_params_round_trip_through_the_api(tmp_path, monkeypatch):
+    monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        created = _create_provider(
+            client,
+            temperature=0.3,
+            max_tokens=1024,
+            thinking=False,
+            reasoning_effort="low",
+        )
+        assert created["temperature"] == 0.3
+        assert created["max_tokens"] == 1024
+        assert created["thinking"] is False
+        assert created["reasoning_effort"] == "low"
+
+        entry = client.post(
+            "/api/providers/bailian/models",
+            json={"model": "qwen-max", "temperature": 0.9, "max_tokens": 2048},
+        ).json()["data"]
+        assert entry["temperature"] == 0.9
+        assert entry["max_tokens"] == 2048
+
+        updated = client.put(
+            f"/api/providers/bailian/models/{entry['id']}",
+            json={"temperature": 0.5, "reasoning_effort": "high"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["data"]["temperature"] == 0.5
+        assert updated.json()["data"]["reasoning_effort"] == "high"
+        assert updated.json()["data"]["max_tokens"] == 2048
+
+        stored = next(
+            m
+            for m in client.get("/api/providers/bailian/models").json()["data"]["models"]
+            if m["id"] == entry["id"]
+        )
+        assert stored["temperature"] == 0.5
+        assert stored["reasoning_effort"] == "high"
+
+        # The legacy flat projection carries the effective D-36 values
+        # (entry override wins over the provider default).
+        legacy = next(
+            m
+            for m in client.get("/api/models").json()["data"]["models"]
+            if m["id"] == entry["id"]
+        )
+        assert legacy["temperature"] == 0.5
+        assert legacy["max_tokens"] == 2048
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_model_entry_put_validation_and_404s(tmp_path):
+    client, tm = _client(tmp_path)
+    try:
+        _create_provider(client)
+        entry = client.post(
+            "/api/providers/bailian/models", json={"model": "qwen-max"}
+        ).json()["data"]
+
+        assert (
+            client.put(
+                f"/api/providers/bailian/models/{entry['id']}",
+                json={"temperature": 3},
+            ).status_code
+            == 400
+        )
+        assert (
+            client.put(
+                "/api/providers/bailian/models/nope", json={"temperature": 0.5}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.put(
+                "/api/providers/nope/models/nope", json={"temperature": 0.5}
+            ).status_code
+            == 404
+        )
+        # The failed validation did not change the stored entry.
+        stored = next(
+            m
+            for m in client.get("/api/providers/bailian/models").json()["data"]["models"]
+            if m["id"] == entry["id"]
+        )
+        assert stored["temperature"] is None
     finally:
         client.__exit__(None, None, None)
