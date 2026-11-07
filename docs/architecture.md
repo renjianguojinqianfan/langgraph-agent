@@ -181,7 +181,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 - 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset}], models: [{id, provider_id, model, name, source}]}`。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
 - 迁移：v1（无 `schema_version` 的扁平 `models` 列表）首次加载迁移为同 id 的 Provider（`protocol: openai-compatible`，base_url / api_key_env / preset 原样）+ 同 id 模型条目（model / name，`source: migrated`）；`Task.model` / `default` / credentials 键不变；迁移前把**原始字节**复制为 `models.json.bak-v1`（仅首次，已有备份不覆盖），二次加载不改文件、不再备份；坏文件 / 未来 schema 版本 quarantine + seed。
 - 协议：Provider 可存 `openai-compatible` / `anthropic`；**本片只有 OpenAI 兼容有适配器**——**显式设置 `protocol=anthropic` 的创建/编辑被拒**（400「协议尚未实现」）；库里已有的 anthropic 卡片（手工编辑 / 迁移数据）仍可编辑其它字段，但任务运行到它时显式失败；发现接口对 anthropic 返回 400「协议暂不支持发现」（Anthropic 适配器在 PR B，D-35）。
-- 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) `2）。
+- 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) §2）。
 - 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），供 P2-3 前的设置页使用；Provider 卡片走 `/api/providers`。
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
