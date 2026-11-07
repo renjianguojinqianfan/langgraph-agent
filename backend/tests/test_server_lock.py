@@ -310,6 +310,10 @@ raise SystemExit(cli.main([]))
 """
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root)
+    # CI 的 Windows runner 是英文 locale（cp1252）：子进程 stdout 是管道时，
+    # cli.main([]) 的中文交接提示（cli.py:117）会 UnicodeEncodeError。这里只钉
+    # 真子进程的 stdio 编码；产品级控制台编码属 P3-1/P3-3，本片不改 cli 打印。
+    env["PYTHONIOENCODING"] = "utf-8"
     subprocess.run(
         [sys.executable, "-c", child, str(marker)],
         cwd=root,
