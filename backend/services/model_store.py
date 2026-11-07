@@ -61,8 +61,11 @@ _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DISCOVER_TIMEOUT_SEC = 10.0
 DISCOVER_MAX_BYTES = 1_000_000
 
-#: Wall-clock seam for the TOTAL discovery deadline (tests replace this one
-#: function; httpx's own timeout alone only bounds each operation).
+#: Clock seam for the discovery **body-phase** deadline (tests replace this one
+#: function). It cuts slow-drip bodies off; connect / write / header waits are
+#: still bounded only by httpx's per-operation timeout, so the overall request
+#: ceiling is the sum of those phases, not a strict total (LOW-A rework: the
+#: earlier "total wall clock" wording overstated it).
 _monotonic = time.monotonic
 
 
@@ -79,13 +82,20 @@ class ProviderDiscoveryError(RuntimeError):
 
 
 def require_implemented_protocol(protocol: str) -> None:
-    """Reject a stored-but-unimplemented protocol on the HTTP write face.
+    """Reject an explicit unimplemented-protocol create/edit on the write face.
 
     D-34 keeps ``protocol`` on the provider card; D-35 adds the Anthropic
-    adapter in a later slice (PR B). Until then creating/editing such a
-    provider over the API must fail readably instead of producing one that any
-    task would silently drive with the OpenAI client.
+    adapter in a later slice (PR B). Until then, explicitly *setting*
+    ``protocol=anthropic`` on create/edit must fail readably instead of
+    producing a task-drivable card with no adapter. A card that already exists
+    on disk (hand-edited / migrated data) stays editable for its other fields;
+    using one from a task fails loudly at run time (TaskManager._build_llm).
     """
+    if protocol not in SUPPORTED_PROTOCOLS:
+        # A protocol this build never intends to speak is not "coming in PR B".
+        raise ValueError(
+            f"不支持的协议：{protocol!r}；可选：{', '.join(SUPPORTED_PROTOCOLS)}"
+        )
     if protocol not in IMPLEMENTED_PROTOCOLS:
         raise ValueError(
             f"协议尚未实现：{protocol!r} 的适配器在后续片（PR B）落地；"
@@ -148,6 +158,9 @@ class ModelStore:
         self.providers: Dict[str, Provider] = {}
         self.model_entries: Dict[str, ModelEntry] = {}
         self.default_id = DEFAULT_MODEL_ID
+        #: A v1 file was loaded but its backup could not be written (fail-closed
+        #: migration). Every later save retries the backup before writing v2.
+        self._v1_backup_pending = False
         self._load()
 
     # ── seeding / persistence ──
@@ -338,6 +351,10 @@ class ModelStore:
         default = str(raw.get("default") or "")
         self.default_id = default if default in entries else next(iter(entries))
         if not self._write_migrated_v2():
+            # The v1 file stays on disk; a later save must retry the backup
+            # before it is allowed to write v2 (otherwise the rollback promise
+            # silently lapses on the first unrelated mutation).
+            self._v1_backup_pending = True
             return
         logger.info(
             "migrated %d model profile(s) to schema v%d (backup: %s)",
@@ -395,7 +412,37 @@ class ModelStore:
             return False
         return True
 
+    def _retry_pending_v1_backup(self) -> None:
+        """Refuse to write v2 while the failed v1 backup is still missing.
+
+        The migration can fail closed (backup unwritable) while the process
+        keeps serving the migrated view from memory. A later, unrelated save
+        must not quietly write v2 to disk without the backup: retry the backup
+        first; if it still fails, raise a readable error and leave the v1 file
+        untouched. The next save (or the next start) retries again.
+        """
+        if not self._v1_backup_pending:
+            return
+        try:
+            original = self.data_file.read_bytes()
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot read {self.data_file} to back it up before writing "
+                f"models.json v2: {exc}. The v1 file was left unchanged; retry "
+                "once the file is readable."
+            ) from exc
+        if not self._backup_v1(original):
+            raise RuntimeError(
+                f"cannot back up {self.data_file} to "
+                f"{self.data_file.name}.bak-v1 before writing models.json v2. "
+                "The v1 file was left unchanged: fix write access to "
+                f"{self.data_file.parent} and retry (the next save or restart "
+                "retries the backup)."
+            )
+        self._v1_backup_pending = False
+
     def _save(self) -> None:
+        self._retry_pending_v1_backup()
         self.data_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": SCHEMA_VERSION,
@@ -684,13 +731,28 @@ class ModelStore:
             api_key_env=api_key_env,
             preset=False,
         )
+        # Persist the provider first, then write the key: a credentials failure
+        # must not leave an orphaned secret keyed by an id the store never
+        # accepted. The other half of that trade-off is compensation — a failed
+        # key write rolls the card back so the user is not stuck with a
+        # half-created provider whose retry answers "already exists" (and the
+        # 409 reason is not replaced by that 400 on the next attempt).
         self.providers[provider.id] = provider
         self._save()
-        # The key is written after the provider is durable: a credentials write
-        # failure must not leave an orphaned secret keyed by an id that was
-        # never accepted.
         if key.strip():
-            self.set_provider_key(provider.id, key)
+            try:
+                self.set_provider_key(provider.id, key)
+            except CredentialsError:
+                self.providers.pop(provider.id, None)
+                try:
+                    self._save()
+                except OSError as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "rollback after a failed key write could not persist %s: %s",
+                        self.data_file,
+                        exc,
+                    )
+                raise
         return provider
 
     def update_provider(
@@ -964,11 +1026,13 @@ def discover_provider_models(
 ) -> List[Dict[str, str]]:
     """Fetch `GET <base_url>/models` and return `[{model, name}, ...]`.
 
-    One request to the provider's own address only: bounded wall clock, bounded
-    response size, redirects refused (a redirect would silently move the
-    request off the configured host), and no persistence. Error text is built
-    here and never interpolates the key. `transport` exists for tests
-    (`httpx.MockTransport`) — production callers pass nothing.
+    One request to the provider's own address only: bounded time (httpx's
+    per-operation timeout plus a body-phase wall-clock deadline — not a strict
+    total, see the deadline comment below), bounded response size, redirects
+    refused (a redirect would silently move the request off the configured
+    host), and no persistence. Error text is built here and never interpolates
+    the key. `transport` exists for tests (`httpx.MockTransport`) — production
+    callers pass nothing.
     """
     if provider.protocol != PROTOCOL_OPENAI:
         raise ProviderDiscoveryError(
@@ -987,6 +1051,11 @@ def discover_provider_models(
             follow_redirects=False,
             transport=transport,
         ) as client:
+            # Cheap guard before the stream starts: it only rules out a body
+            # read that begins after the body-phase deadline; connect/write and
+            # header waits remain bounded by httpx's per-operation timeout.
+            if _monotonic() > deadline:
+                raise ProviderDiscoveryError(timeout_message)
             with client.stream("GET", url, headers=headers) as response:
                 status = response.status_code
                 if 300 <= status < 400:
@@ -1002,8 +1071,9 @@ def discover_provider_models(
                 chunks: List[bytes] = []
                 size = 0
                 for chunk in response.iter_bytes():
-                    # Total wall clock, not just httpx's per-operation timeout:
-                    # a slow-drip body must not hold the request thread forever.
+                    # Body-phase wall clock: a slow-drip body must not hold the
+                    # request thread forever. Connect/header phases are not
+                    # covered here (httpx's per-operation timeout bounds them).
                     if _monotonic() > deadline:
                         raise ProviderDiscoveryError(timeout_message)
                     size += len(chunk)
