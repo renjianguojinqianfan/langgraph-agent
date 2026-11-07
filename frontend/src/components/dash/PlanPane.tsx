@@ -3,7 +3,7 @@ import { apiErrorText, getPlanSnapshot, putPlan } from "../../api/client";
 import { Markdown } from "../../lib/markdown";
 import { planLoadFailure, planLoadState } from "../../lib/failureStates";
 import { LONG_TEXT } from "../../lib/longContent";
-import { nextPlanVersion } from "../../lib/planVersion";
+import { nextPlanVersion, shouldReloadOnPlanVersion } from "../../lib/planVersion";
 import { isParked } from "../../lib/taskState";
 import { useTaskStore } from "../../store/taskStore";
 import type { Task } from "../../types";
@@ -72,6 +72,11 @@ export function PlanPane({ task }: { task: Task }) {
   // latest version through a ref instead; `applyVersion` keeps it in sync.
   const latestVersionRef = useRef(task.plan_version);
   latestVersionRef.current = task.plan_version;
+  // #258 终稿: the version this pane last synced (load / save / retry). A
+  // store-side version ahead of it means an external change needs one refetch.
+  const lastSyncedVersionRef = useRef(0);
+  // A load currently in flight — the version effect must not queue a second GET.
+  const loadInFlightRef = useRef(false);
 
   /**
    * Mirror the server's version onto the task (#256, PlanAnchor). Takes the
@@ -84,11 +89,14 @@ export function PlanPane({ task }: { task: Task }) {
     // The store write renders a tick later; keep the ref authoritative for
     // any further read in this cycle.
     latestVersionRef.current = merged;
+    lastSyncedVersionRef.current = merged;
     setVersion(merged);
     setPlanVersion(task.id, merged);
   };
 
   useEffect(() => {
+    lastSyncedVersionRef.current = 0;
+    loadInFlightRef.current = false;
     setEditing(false);
     setNote(null);
     setConflict(null);
@@ -102,6 +110,7 @@ export function PlanPane({ task }: { task: Task }) {
   useEffect(() => {
     if (editing) return;
     let cancelled = false;
+    loadInFlightRef.current = true;
     setLoading(true);
     // `getPlanSnapshot` never rejects (transport failure → status 0), so every
     // answer is decided in `then` — no catch to write here.
@@ -126,12 +135,30 @@ export function PlanPane({ task }: { task: Task }) {
         setLoaded(r.data.text);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          loadInFlightRef.current = false;
+          setLoading(false);
+        }
       });
     return () => {
       cancelled = true;
+      loadInFlightRef.current = false;
     };
   }, [task.id, task.status, editing, reloadToken]);
+
+  // #258 终稿（MEDIUM）: after D-30 removed `task.plan_version` from the load
+  // effect, an external version bump (detailRevision snapshot / another tab's
+  // save) could leave stale text on screen. Reload once when the store moved
+  // ahead of what we synced; `loadInFlightRef` coalesces with a simultaneous
+  // status-triggered load so the same render never fires two GETs.
+  const storedVersion = task.plan_version;
+  useEffect(() => {
+    if (editing || loadInFlightRef.current) return;
+    if (!shouldReloadOnPlanVersion(storedVersion, lastSyncedVersionRef.current)) {
+      return;
+    }
+    setReloadToken((n) => n + 1);
+  }, [storedVersion, editing]);
 
   const startEdit = () => {
     setLoaded(text);

@@ -171,6 +171,8 @@
 - [ ] 文件面板失败显示原因 + 下一步，「重试」可用；加载 / 空 / 失败状态读屏可感知（`role=status`）。
 - [ ] 对比度：`text-state-danger` / `text-tertiary` 在 `bg-surface-page` / `bg-surface-well` 上仍达 §1 标准（本片未改 token）。
 
+注（已知窄竞态，接受）：缓存任务为 RUNNING 且 SSE 回放先于快照返回时，Network 可能出现 2 次 GET；改动前同存，不作为回归门槛。
+
 ## 7. 空 / 错 / 加载
 
 - 空（未选任务）：一句 21px 邀请 + 一行副说明；composer 可用。

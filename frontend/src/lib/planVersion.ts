@@ -4,3 +4,10 @@
 export function nextPlanVersion(current: number, incoming: number): number {
   return Math.max(current, incoming);
 }
+
+/** Should the plan pane refetch because the store's version moved ahead of the
+ * one this pane last synced? `>` only: equal versions are already in sync, and
+ * a smaller stored version is stale, not a reason to reload (#258 终稿). */
+export function shouldReloadOnPlanVersion(synced: number, current: number): boolean {
+  return current > synced;
+}
