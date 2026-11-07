@@ -71,10 +71,11 @@ agent ──有 tool call──> tool ──> agent
 
 ## 模型
 
-- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页在 P2-3 前仍按扁平档案展示，旧 `/api/models` 接口保留为兼容投影，行为不变。预设只有 **DeepSeek**；协议字段已有 OpenAI 兼容 / Anthropic 两种，但 **Anthropic 适配器尚未接线**（单独一片），当前可用的仍是 OpenAI 兼容。
+- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页在 P2-3 前仍按扁平档案展示，旧 `/api/models` 接口保留为兼容投影，行为不变。预设只有 **DeepSeek**；协议支持 **OpenAI 兼容** 与 **Anthropic 原生**（非流式）；Anthropic 的「获取可用模型」暂不支持，`thinking` / `reasoning_effort` 也暂不可配（见 [ADR 0011](docs/adr/0011-model-config-two-protocols.md)）。
 - 旧的 `data/models.json`（扁平 profile）首次启动自动迁移为 Provider + 模型目录，迁移前把原文件备份为 `models.json.bak-v1`（幂等，只备份一次）。
 - Key 两种来源：界面粘贴（存 `~/.qianfan/credentials.json`，仓库外，按 Provider 记）优先；其次配置里写的环境变量名（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）。接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无），不回 Key 本身。
 - 新建任务默认用全局默认，创建前也可先选一套；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。
+- 采样参数挂在模型条目上、Provider 可给默认值：`temperature`（缺省 0.2）、`max_tokens`、`thinking` / `reasoning_effort`（仅 OpenAI 兼容路径经 `extra_body` 透传；Anthropic 路径配置了会明确报错）。
 - 粘贴的 Key 是明文落盘，同账号的 bash 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
 - **保存 Key 失败**：Key 文件在仓库外的 `~/.qianfan/`；进程被沙箱/权限边界挡住写该目录时，界面会显示后端返回的原因与下一步（#244）——用普通终端启动 qianfan，或改用该配置的环境变量。
 

@@ -29,6 +29,7 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 > | 0008 | 现役 | 单 loop + 计划/执行两模式，取代完成验证栈（决策 1–8） | 本文退役 0005–0007；修订 0002 / 0003 / 0004 |
 > | 0009 | 现役（2026-10-22 已交付） | 最简 agent 一章：pi 式工具面、计划文件、一条命令启动 | 本章退役 0003 / 0004 |
 > | 0010 | 现役（2026-10-22 已交付） | 日常形态：启动目录即工作区、共用后台、模型配置 | 修订 0009 决策 4 / 6 / 7 |
+> | 0011 | 现役（2026-11-07 已交付） | 模型配置双协议：Provider 层 + Anthropic 原生适配器（D-35 / D-36） | 修订 0010 决策 7「只 OpenAI 兼容」 |
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
 > dirs (`.qoder/`, `.trae/`, `.mimosa/`), which are untracked by design. Full rule table:
@@ -105,8 +106,9 @@ D1–D9), `0002` (moat discipline — **部分退役**：「受保护文件零�
 见 0008「三笔账」3),
 `0008` (single loop + plan/build two modes — **0005–0007 已随之退役；
 0003 随 C2 删除熔断后退役**),
-`0009` (minimal-agent chapter: pi-style tool face, plan file, one-command start)
-and `0010` (daily form: launch dir = workspace owned by the task, one shared server, model profiles)
+`0009` (minimal-agent chapter: pi-style tool face, plan file, one-command start),
+`0010` (daily form: launch dir = workspace owned by the task, one shared server, model profiles)
+and `0011` (two provider protocols: OpenAI-compatible + Anthropic native adapter)
 are the live ADRs today. Beyond them, the equivalent
 frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (conftest isolation,
 dependency matrix, quality-gate baseline). Treat a contradiction with those
