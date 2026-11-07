@@ -1435,3 +1435,28 @@ def test_temperature_range_is_protocol_specific(tmp_path):
     assert store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC).protocol == (
         PROTOCOL_ANTHROPIC
     )
+
+
+def test_protocol_switch_revalidates_entry_level_temperature(tmp_path):
+    """MEDIUM (PR #298 rework batch 2): an entry override legal for OpenAI (1.5)
+    is above Anthropic's 0..1; switching protocol must refuse it."""
+    store, _ = _store(tmp_path)
+    store.add_provider(id="gw", name="GW", base_url="https://gw.test/v1")
+    entry = store.add_model("gw", model="m1", temperature=1.5)
+    with pytest.raises(ValueError, match="temperature"):
+        store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC)
+
+    # Clearing the entry override lets the switch through (0.9 provider default
+    # is legal for both protocols).
+    store.update_provider("gw", temperature=0.9)
+    store.update_model("gw", entry.id, temperature=None)
+    assert store.update_provider("gw", protocol=PROTOCOL_ANTHROPIC).protocol == (
+        PROTOCOL_ANTHROPIC
+    )
+
+    # A provider-level 1.5 is refused by the same switch too.
+    store.add_provider(id="gw2", name="GW2", base_url="https://gw2.test/v1")
+    store.add_model("gw2", model="m1")
+    store.update_provider("gw2", temperature=1.5)
+    with pytest.raises(ValueError, match="temperature"):
+        store.update_provider("gw2", protocol=PROTOCOL_ANTHROPIC)

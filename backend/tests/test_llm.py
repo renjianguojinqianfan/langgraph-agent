@@ -615,6 +615,17 @@ def test_anthropic_timeout_connection_and_bad_json_are_readable():
     with pytest.raises(RuntimeError, match="超时"):
         timeout_client.complete([{"role": "user", "content": "hi"}])
 
+    # No configured timeout must not render as "(Nones)".
+    no_budget_client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk-secret",
+        "claude-3",
+        transport=httpx.MockTransport(timeout_handler),
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        no_budget_client.complete([{"role": "user", "content": "hi"}])
+    assert "None" not in str(excinfo.value)
+
     def connect_handler(request):
         raise httpx.ConnectError("refused")
 
@@ -718,6 +729,14 @@ def test_openai_client_forwards_d36_params_through_extra_body(monkeypatch):
     assert "max_tokens" not in default_payload
     assert "extra_body" not in default_payload
 
+    # Per-call kwargs win for every D-36 knob, not only temperature/max_tokens.
+    configured.complete(
+        [{"role": "user", "content": "hi"}],
+        thinking=False,
+        reasoning_effort="low",
+    )
+    assert captured[-1]["extra_body"] == {"thinking": False, "reasoning_effort": "low"}
+
 
 # ── PR #298 返工：thinking=False / max_tokens=None / 连续同角色消息 ──
 def test_anthropic_client_treats_thinking_false_as_off():
@@ -775,4 +794,3 @@ def test_anthropic_client_keeps_consecutive_same_role_messages():
     )
     roles = [message["role"] for message in captured[-1]["payload"]["messages"]]
     assert roles == ["user", "assistant", "user", "user"]
-
