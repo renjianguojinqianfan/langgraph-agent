@@ -26,6 +26,7 @@ import {
   pickableCandidates,
   protocolLabel,
   providerDefaultAction,
+  providerLabel,
   providerUpdateBody,
   PROTOCOL_ANTHROPIC,
   PROTOCOL_OPENAI,
@@ -199,6 +200,18 @@ describe("providerDefaultAction (global default is a model entry id)", () => {
 
   it("disables on an empty catalog with the next step", () => {
     expect(providerDefaultAction([], "e1").disabledReason).toBe("先给这个 Provider 添加模型");
+  });
+});
+
+describe("providerLabel (card heading / accessible name)", () => {
+  it("keeps the display name and appends the id shown on the card", () => {
+    expect(providerLabel(deepseek())).toBe("DeepSeek（deepseek）");
+    expect(providerLabel(bailian())).toBe("百炼（bailian）");
+  });
+
+  it("does not repeat an id used as the name and falls back to the id", () => {
+    expect(providerLabel(deepseek({ name: "deepseek" }))).toBe("deepseek");
+    expect(providerLabel(deepseek({ name: "   " }))).toBe("deepseek");
   });
 });
 

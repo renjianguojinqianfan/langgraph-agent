@@ -21,6 +21,7 @@ import {
   protocolLabel,
   providerDefaultAction,
   providerDeleteFailure,
+  providerLabel,
   toggleDiscoveryPick,
 } from "../../lib/modelCatalog";
 import type { DiscoverCandidate, ModelEntry, Provider } from "../../types";
@@ -240,6 +241,9 @@ export function ProviderCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-tertiary">
+        <span>
+          ID：<span className="font-mono">{provider.id}</span>
+        </span>
         <span>协议：{protocolLabel(provider.protocol)}</span>
         <span>
           环境变量：<span className="font-mono">{provider.api_key_env}</span>
@@ -253,14 +257,14 @@ export function ProviderCard({
           onClick={makeDefault}
           disabled={!defaultAction.entryId}
           title={defaultAction.disabledReason || undefined}
-          aria-label={`设为默认：${provider.name || provider.id}`}
+          aria-label={`设为默认：${providerLabel(provider)}`}
         >
           设为默认
         </Button>
         <Button
           size="sm"
           onClick={onEdit}
-          aria-label={`编辑 Provider：${provider.name || provider.id}`}
+          aria-label={`编辑 Provider：${providerLabel(provider)}`}
         >
           编辑
         </Button>
@@ -270,7 +274,7 @@ export function ProviderCard({
               size="sm"
               variant="danger"
               onClick={removeProvider}
-              aria-label={`确认删除 Provider：${provider.name || provider.id}`}
+              aria-label={`确认删除 Provider：${providerLabel(provider)}`}
             >
               确认删除
             </Button>
@@ -283,7 +287,7 @@ export function ProviderCard({
             size="sm"
             variant="danger"
             onClick={() => setArmed(true)}
-            aria-label={`删除 Provider：${provider.name || provider.id}`}
+            aria-label={`删除 Provider：${providerLabel(provider)}`}
           >
             删除
           </Button>
@@ -331,7 +335,7 @@ export function ProviderCard({
                   <Button
                     size="sm"
                     onClick={() => test(entry.id)}
-                    aria-label={`测试模型：${provider.name || provider.id} / ${entry.model}`}
+                    aria-label={`测试模型：${providerLabel(provider)} / ${entry.model}`}
                   >
                     测试
                   </Button>
@@ -339,7 +343,7 @@ export function ProviderCard({
                     size="sm"
                     variant="danger"
                     onClick={() => removeModel(entry.id)}
-                    aria-label={`删除模型：${provider.name || provider.id} / ${entry.model}`}
+                    aria-label={`删除模型：${providerLabel(provider)} / ${entry.model}`}
                   >
                     删除
                   </Button>
@@ -371,7 +375,7 @@ export function ProviderCard({
           <div className="flex flex-col gap-2 border-t border-rule pt-2">
             <div className="flex flex-wrap items-center gap-2">
               <input
-                aria-label={`目录外的模型 ID：${provider.name || provider.id}`}
+                aria-label={`目录外的模型 ID：${providerLabel(provider)}`}
                 value={addModel}
                 placeholder="模型 ID，例如 qwen-max"
                 onChange={(event) => setAddModel(event.target.value)}
@@ -384,7 +388,7 @@ export function ProviderCard({
                 className="h-7 min-w-0 flex-1 rounded-control border border-rule bg-surface-sheet px-2 font-mono text-machine text-primary placeholder:text-tertiary"
               />
               <input
-                aria-label={`模型显示名称（可选）：${provider.name || provider.id}`}
+                aria-label={`模型显示名称（可选）：${providerLabel(provider)}`}
                 value={addName}
                 placeholder="显示名称（可选）"
                 onChange={(event) => setAddName(event.target.value)}
@@ -434,7 +438,7 @@ export function ProviderCard({
                 <li key={candidate.model} className="flex items-center gap-2 text-meta">
                   <input
                     type="checkbox"
-                    aria-label={`加入 ${candidate.model}`}
+                    aria-label={`加入 ${candidate.model}：${providerLabel(provider)}`}
                     checked={candidate.added || picked.includes(candidate.model)}
                     disabled={candidate.added || addingPicked}
                     onChange={() => setPicked((prev) => toggleDiscoveryPick(prev, candidate.model))}

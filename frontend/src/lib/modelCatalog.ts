@@ -149,6 +149,15 @@ export const KEY_SOURCE_LABEL: Record<ModelKeySource, string> = {
   none: "无",
 };
 
+/** Card / action label: display name plus the id that is shown on the card
+ * (user story 67 lists id, name and address as card facts). Keeping the id in
+ * the accessible name keeps two providers with the same display name distinct. */
+export function providerLabel(provider: Pick<Provider, "id" | "name">): string {
+  const name = provider.name.trim();
+  if (!name || name === provider.id) return provider.id;
+  return `${name}（${provider.id}）`;
+}
+
 /** Card fact: "已设（粘贴 / 环境变量）" or "未设"; the key itself never ships. */
 export function keyStateText(
   provider: Pick<Provider, "key_set" | "key_source">
