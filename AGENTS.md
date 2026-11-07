@@ -54,7 +54,7 @@
 # 判据与已排除项见 docs/harness-bash-false-red.md。
 
 # Windows 敏感面（与 CI backend-windows-smoke 同清单；改路径 / 进程 / os 分支时跑）
-.\.venv311\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py backend/tests/test_test_isolation.py -q -rs
+.\.venv311\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py backend/tests/test_test_isolation.py backend/tests/test_server_lock.py -q -rs
 
 # 质量门禁（与 CI backend-test 同命令；工具链：pip install -r requirements-dev.txt）
 .\.venv311\Scripts\python.exe -m ruff check backend scripts
@@ -80,7 +80,7 @@ npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面�
 
 - **触发词指针**：沙箱 / 预演合并 / 临时 worktree 跑门禁的判据与配方 → [`docs/agents/verification-notes.md`](docs/agents/verification-notes.md)（渐进披露，不内联；bash 假红专篇见 [`docs/harness-bash-false-red.md`](docs/harness-bash-false-red.md)）。
 - 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。pre-commit entry 用仓库相对 `.venv311`，无本机绝对路径。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
-- **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单（**机械守卫**：`backend/tests/test_smoke_list_parity.py` 解析两处断言集合相等，漂移即红）；**进程树 / 子进程类由 B1（#197）起逐个验证并纳入**（连跑 3 次稳定才入清单）；新增同类文件仍按「一个文件一个 PR + 连跑 3 次观察」纳入，抖先修环境适配、不放宽断言；当前清单以上面那条命令为准。
+- **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单（**机械守卫**：`backend/tests/test_smoke_list_parity.py` 解析两处断言集合相等，且做 **Windows-only 标记扫描**——`backend/tests/test_*.py` 出现 `os.name` / `sys.platform` / `WinDLL` / `taskkill` 必须已在清单，已知例外走显式白名单 + 理由；漂移即红）；**进程树 / 子进程类由 B1（#197）起逐个验证并纳入**（连跑 3 次稳定才入清单）；新增同类文件仍按「一个文件一个 PR + 连跑 3 次观察」纳入，抖先修环境适配、不放宽断言；当前清单以上面那条命令为准。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。
 - 既有测试只增不减、不得跳过或放宽；文档不写现役测试计数（数字必腐，以实跑为准）。
 - 改接口 / 配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
