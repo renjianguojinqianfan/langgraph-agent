@@ -86,7 +86,7 @@
 | `FilePane` | 平铺清单由客户端按 `/` 分组；点文件名在第三栏开预览页签（同一路径复用页签），列表行保留下载；>2000 条明示截断。 |
 | `FilePreviewTab` | 每个打开文件一个页签（#266）：正文在页签内就地显示，预览 ≤200KB，超出明示「已截断」；同一路径复用页签；关闭页签回到相邻页签（优先左侧），无页签时回文件列表；从文件列表打开后焦点落在新页签上。失败按 HTTP 状态分行：415 二进制 / 400 路径越界 / 404 文件不存在 / 409 工作区不存在；下载入口在所有状态都保留。文件列表面板保持挂载，切回时保留滚动位置；预览首次被激活且右栏可见时才取数（隐藏页签不发请求）。 |
 | `PlanPane` | 渲染 Markdown + 标题目录；版本 / 状态徽标；**编辑在「已停下」或「失败」（B1 已放宽，见 §9）可用**；运行中点编辑给出原因而不是藏按钮；保存提示「下一条消息生效」。 |
-| `EventPane` | 时间 mono + 类型词 + 摘要；不做可点假象；注明事件只做旁证、状态以快照为准。 |
+| `EventPane` | 时间 mono + 类型词 + 摘要；不做可点假象；注明事件只做旁证、状态以快照为准。心跳（`heartbeat`）不进用户可见账本：store 只追加 `isLedgerType` 事件（当前 = 除 heartbeat 外全部），EventPane 再按同一判定过滤；Trace 仍保留原始流。 |
 | `TraceFace` | 保留现役 `TraceTab` 能力（`GET /trace`，NDJSON 回放 / 导出）；入口在右栏事件页底部，打开时中栏临时全宽显示并带返回；本期不重构。 |
 | `SettingsDialog` | 原生 `<dialog>`（焦点圈定 / Esc / 归还焦点）；模型 CRUD 与 Key 状态；删除 / 清除 Key 二次确认。 |
 
@@ -160,6 +160,20 @@
 - [ ] 读屏播报抽屉为 dialog：名称「任务列表」/「工作区与文件」，`aria-modal=true`。
 - [ ] 仅用 Tab / Shift+Tab / Esc 完成「开 → 用 → 关」全流程，焦点不丢。
 
+### P1-2 手测清单（#258）
+
+- [ ] 400 字符 token / 2000 字单词 / 长 URL / CJK+emoji：对话与计划页均按字符断行，无整页横向滚动。
+- [ ] 工具调用展开后，超长入参出现「展开全部 / 收起」，展开后不再受 `max-h` 限制（仍可横向滚动）。
+- [ ] 事件页无 heartbeat 条目；Trace 回放（打开完整 Trace）仍能看到原始流。
+- [ ] DevTools Network：选中已停下任务只发一次快照 GET（无并列第二次 `getTask`）；长任务运行期间无 list GET 风暴。
+- [ ] 流式回答期间 Markdown 持续更新，结束后不再无谓重渲染（React DevTools Profiler 抽查）。
+- [ ] 发送失败（断开后台）显示「无法连接后台；确认服务在运行后再试」，读屏有播报（`role=status`）。
+- [ ] 文件面板失败显示原因 + 下一步，「重试」可用；加载 / 空 / 失败状态读屏可感知（`role=status`）。
+- [ ] 运行中任务单次 poll 失败（列表已有文件）→ 仍显示原因与「重试」，读屏播报原因。
+- [ ] 对比度：`text-state-danger` / `text-tertiary` 在 `bg-surface-page` / `bg-surface-well` 上仍达 §1 标准（本片未改 token）。
+
+注（已知窄竞态，接受）：缓存任务为 RUNNING 且 SSE 回放先于快照返回时，Network 可能出现 2 次 GET；改动前同存，不作为回归门槛。
+
 ## 7. 空 / 错 / 加载
 
 - 空（未选任务）：一句 21px 邀请 + 一行副说明；composer 可用。
@@ -221,3 +235,4 @@
 - 2026-10-31（#265 二次返工）：构建模式回答先 strip 再入账（尾随换行不再让本轮回答从对话里消失）；计划提示追加时同样过 redact；无主压缩标记不再塞进最前的「历史执行过程」，改为对话末尾中性的「上下文压缩记录」；抽出 `CompressMarker`。
 - 2026-11-07（P0-4 / #282）：前端测试栈拍板——本批不引 jsdom / @testing-library（D-23），改「纯函数 / store 断言 + 手测 checklist」纪律（D-24，见 §10.1）；历史计划「组件不做渲染测试」的声明加取代注。
 - 2026-11-07（P1-1 / #257）：窄屏抽屉断点收敛到 `frontend/src/lib/breakpoints.ts` 单一来源（`(width < 860px)` / `(width < 1180px)`，与 CSS `max-[860px]` / `max-[1180px]` 同界，860 / 1180 恰好仍是宽屏，取代 859.98 / 1179.98 写法）；`drawerView` 派生遮罩 / 背景 inert / 变宽与 Trace 的关闭信号；`useDrawerFocus` 负责触发元素记录、焦点移入、Esc / Tab 圈定、关闭先撤 inert 再归还焦点（inert 由 `lib/inertLedger` 记账撤销）；§6 增窄屏抽屉手测清单。
+- 2026-11-07（P1-2 / #258）：长内容断行契约收敛到 `lib/longContent`（`LONG_TEXT`，用于 Markdown 根 / 用户气泡 / 失败块 / 工具入参出参，静态源码守卫防回退）；工具长入参「展开全部 / 收起」（`lib/toolInput`，800 code point 阈值）；事件账本 heartbeat 不进用户面（`lib/eventLedger.isLedgerType` 排除 + `ledgerEvents` 去重 / 100 上限 / 倒序；store `applyEvent` 早退且只替换真正变化的 slice；Trace 保留原始流）；请求 / 渲染去重（选中已停下任务 parked 快照只拉一次、PlanPane 初载不自触发、`task_created` 回放不 bump `listRevision`、Markdown `memo` + 结构守卫）；Composer / FilePane 错误文案带原因与下一步、文件面板「重试」、状态行 `role=status`；§6 增 P1-2 手测清单。

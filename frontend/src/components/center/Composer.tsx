@@ -16,6 +16,10 @@ import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Segmented } from "../ui/Segmented";
 
+/** One reason+next-step copy for a transport failure, reused by the two
+ * switch paths and the send path (D-31 / #258 AC5 LOW: no stray literals). */
+const BACKEND_UNREACHABLE = "无法连接后台；确认服务在运行后再试。";
+
 const MODE_OPTIONS: Array<{ value: TaskMode; label: string; title: string }> = [
   { value: "plan", label: "计划", title: "只读工具；产出可改的计划" },
   {
@@ -106,7 +110,7 @@ export function Composer() {
         setSwitchNote(apiErrorText(r));
       }
     } catch {
-      setSwitchNote("切换失败");
+      setSwitchNote(`切换失败：${BACKEND_UNREACHABLE}`);
     }
   };
 
@@ -127,7 +131,7 @@ export function Composer() {
         setSwitchNote(apiErrorText(r));
       }
     } catch {
-      setSwitchNote("切换失败");
+      setSwitchNote(`切换失败：${BACKEND_UNREACHABLE}`);
     }
   };
 
@@ -167,7 +171,7 @@ export function Composer() {
         }
       }
     } catch {
-      setSendError("发送失败");
+      setSendError(`发送失败：${BACKEND_UNREACHABLE}`);
     } finally {
       setBusy(false);
     }
@@ -257,6 +261,7 @@ export function Composer() {
       <div className="mt-2 flex items-center gap-2 text-meta">
         <span
           id="composer-reason"
+          role="status"
           className="min-w-0 flex-1 truncate text-tertiary"
           title={bottomNote ?? undefined}
         >

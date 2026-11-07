@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { SSEvent, Task, TraceMarker } from "../types";
 import { currentDir, setDirParam } from "../workspace";
+import { isLedgerType } from "../lib/eventLedger";
+import { shouldBumpListRevision } from "../lib/requestPlan";
 import { applyToTask, mergeSnapshotUnlessStale, mergeStatusSnapshot } from "./reduceTask";
 
 interface TaskState {
@@ -198,19 +200,25 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   applyEvent: (ev) =>
     set((state) => {
+      // D-29 / #258 AC3: heartbeat is keep-alive, not a fact about the task —
+      // early return so no slice (detail/tasks/markers/events/revision) moves.
+      if (!isLedgerType(ev.type)) return {};
       const id: string | undefined = ev.data?.task_id ?? state.currentTaskId ?? undefined;
       if (!id) return {};
       // `applyToTask` ignores a replayed `task_created` once a snapshot exists
       // (#189): the persisted snapshot, not event replay, is authoritative.
       // A list row is a full Task snapshot too, so it seeds a missing detail
       // instead of letting the stale replay replace the row.
-      const known = state.tasks.find((t) => t.id === id);
-      const next = applyToTask(state.detail[id] ?? known, id, ev);
-
       const existing = state.tasks.find((t) => t.id === id);
-      const tasks = existing
-        ? state.tasks.map((t) => (t.id === id ? next : t))
-        : state.tasks;
+      const storedDetail = state.detail[id];
+      const next = applyToTask(storedDetail ?? existing, id, ev);
+
+      // D-29 reference equality: only replace a slice when it actually changed.
+      const detail = next !== storedDetail ? { ...state.detail, [id]: next } : state.detail;
+      const tasks =
+        existing && next !== existing
+          ? state.tasks.map((t) => (t.id === id ? next : t))
+          : state.tasks;
 
       // Track flow markers (context compressed) per task so the message stream
       // can render them without losing cross-task isolation. Reconnect replays
@@ -225,18 +233,25 @@ export const useTaskStore = create<TaskState>((set) => ({
         markers = { ...markers, [id]: [...kept, marker].slice(-200) };
       }
 
+      // D-29: the store buffer records ledger events only (heartbeat already
+      // returned above; isLedgerType keeps the single source explicit).
       const events = state.eventsByTask[id] ?? [];
-
-      return {
-        detail: { ...state.detail, [id]: next },
-        tasks,
-        markers,
-        eventsByTask: {
-          ...state.eventsByTask,
-          [id]: [...events, ev].slice(-500),
-        },
-        listRevision:
-          ev.type === "task_created" ? state.listRevision + 1 : state.listRevision,
+      const eventsByTask = {
+        ...state.eventsByTask,
+        [id]: [...events, ev].slice(-500),
       };
+
+      // D-30 / #258 AC4: a replayed task_created for a row we already list must
+      // not refetch the history; only a genuinely new id bumps the revision.
+      const listRevision =
+        ev.type === "task_created" &&
+        shouldBumpListRevision(
+          state.tasks.map((t) => t.id),
+          id
+        )
+          ? state.listRevision + 1
+          : state.listRevision;
+
+      return { detail, tasks, markers, eventsByTask, listRevision };
     }),
 }));

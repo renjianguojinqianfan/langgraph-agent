@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiErrorText, getPlanSnapshot, putPlan } from "../../api/client";
 import { Markdown } from "../../lib/markdown";
 import { planLoadFailure, planLoadState } from "../../lib/failureStates";
+import { LONG_TEXT } from "../../lib/longContent";
+import { nextPlanVersion, shouldReloadOnPlanVersion } from "../../lib/planVersion";
 import { isParked } from "../../lib/taskState";
 import { useTaskStore } from "../../store/taskStore";
 import type { Task } from "../../types";
@@ -28,7 +30,7 @@ function PlanToc({ items }: { items: TocItem[] }) {
                   .getElementById(item.slug)
                   ?.scrollIntoView({ block: "start" });
               }}
-              className="flex min-h-6 items-center text-meta text-secondary hover:text-primary"
+              className={`${LONG_TEXT} flex min-h-6 items-center text-meta text-secondary hover:text-primary`}
             >
               {item.text}
             </a>
@@ -65,6 +67,16 @@ export function PlanPane({ task }: { task: Task }) {
   const setAuthExpired = useTaskStore((s) => s.setAuthExpired);
 
   const editable = isParked(task.status);
+  // D-30: the load effect no longer keys on `task.plan_version` (a save synced
+  // it back through the store and re-triggered a second GET). Read the store's
+  // latest version through a ref instead; `applyVersion` keeps it in sync.
+  const latestVersionRef = useRef(task.plan_version);
+  latestVersionRef.current = task.plan_version;
+  // #258 终稿: the version this pane last synced (load / save / retry). A
+  // store-side version ahead of it means an external change needs one refetch.
+  const lastSyncedVersionRef = useRef(0);
+  // A load currently in flight — the version effect must not queue a second GET.
+  const loadInFlightRef = useRef(false);
 
   /**
    * Mirror the server's version onto the task (#256, PlanAnchor). Takes the
@@ -73,12 +85,18 @@ export function PlanPane({ task }: { task: Task }) {
    * a real version back (初审 LOW：初载只 setVersion 会让锚点陈旧).
    */
   const applyVersion = (next: number) => {
-    const merged = Math.max(next, task.plan_version);
+    const merged = nextPlanVersion(latestVersionRef.current, next);
+    // The store write renders a tick later; keep the ref authoritative for
+    // any further read in this cycle.
+    latestVersionRef.current = merged;
+    lastSyncedVersionRef.current = merged;
     setVersion(merged);
     setPlanVersion(task.id, merged);
   };
 
   useEffect(() => {
+    lastSyncedVersionRef.current = 0;
+    loadInFlightRef.current = false;
     setEditing(false);
     setNote(null);
     setConflict(null);
@@ -92,6 +110,7 @@ export function PlanPane({ task }: { task: Task }) {
   useEffect(() => {
     if (editing) return;
     let cancelled = false;
+    loadInFlightRef.current = true;
     setLoading(true);
     // `getPlanSnapshot` never rejects (transport failure → status 0), so every
     // answer is decided in `then` — no catch to write here.
@@ -116,12 +135,30 @@ export function PlanPane({ task }: { task: Task }) {
         setLoaded(r.data.text);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          loadInFlightRef.current = false;
+          setLoading(false);
+        }
       });
     return () => {
       cancelled = true;
+      loadInFlightRef.current = false;
     };
-  }, [task.id, task.plan_version, task.status, editing, reloadToken]);
+  }, [task.id, task.status, editing, reloadToken]);
+
+  // #258 终稿（MEDIUM）: after D-30 removed `task.plan_version` from the load
+  // effect, an external version bump (detailRevision snapshot / another tab's
+  // save) could leave stale text on screen. Reload once when the store moved
+  // ahead of what we synced; `loadInFlightRef` coalesces with a simultaneous
+  // status-triggered load so the same render never fires two GETs.
+  const storedVersion = task.plan_version;
+  useEffect(() => {
+    if (editing || loadInFlightRef.current) return;
+    if (!shouldReloadOnPlanVersion(storedVersion, lastSyncedVersionRef.current)) {
+      return;
+    }
+    setReloadToken((n) => n + 1);
+  }, [storedVersion, editing]);
 
   const startEdit = () => {
     setLoaded(text);
@@ -209,8 +246,13 @@ export function PlanPane({ task }: { task: Task }) {
     setNote("已载入新版；继续编辑后再保存。");
   };
 
-  const toc = parsePlanToc(text);
-  const headingIds = new Map(toc.map((item) => [item.line, item.slug]));
+  // D-30: cache by text so `headingIds` is referentially stable across
+  // unrelated re-renders — otherwise the memoized Markdown never hits.
+  const toc = useMemo(() => parsePlanToc(text), [text]);
+  const headingIds = useMemo(
+    () => new Map(toc.map((item) => [item.line, item.slug] as const)),
+    [toc]
+  );
   // #256: with the plan unread, the editor holds nothing true — no edit, no
   // save; the only way forward is reading it again.
   const saveBlocked = !!loadError;

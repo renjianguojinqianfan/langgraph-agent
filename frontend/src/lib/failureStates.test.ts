@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   detailLoadFailure,
   detailLoadState,
+  filesLoadFailure,
+  filesPaneState,
+  filesPaneStatusText,
   historyListState,
   listBannerVisible,
   listEmptyTitle,
@@ -272,5 +275,76 @@ describe("loginOutcome (#256: 口令错误 ≠ 传输失败)", () => {
 
   it("200 但信封不 ok → unreachable（不当成口令错误）", () => {
     expect(loginOutcome(200, false)).toBe("unreachable");
+  });
+});
+
+describe("filesLoadFailure (D-31 / #258 AC5)", () => {
+  it("each status maps to a reason + next step", () => {
+    expect(filesLoadFailure(0)).toContain("无法连接后台");
+    expect(filesLoadFailure(401)).toContain("重新登录");
+    expect(filesLoadFailure(404)).toContain("任务不存在");
+    expect(filesLoadFailure(409)).toContain("工作区不存在");
+    expect(filesLoadFailure(400)).toContain("请求非法");
+    expect(filesLoadFailure(415)).toContain("内容类型");
+  });
+
+  it("a 2xx bad envelope is not written as HTTP 200", () => {
+    expect(filesLoadFailure(200)).toContain("响应异常");
+    expect(filesLoadFailure(200)).not.toContain("HTTP 200");
+    expect(filesLoadFailure(204)).toContain("响应异常");
+  });
+
+  it("non-2xx keeps the status code and the sanitized detail", () => {
+    expect(filesLoadFailure(503)).toContain("HTTP 503");
+    expect(filesLoadFailure(500, "disk on fire")).toContain("disk on fire");
+    expect(filesLoadFailure(500, "   ")).not.toContain("：   ");
+  });
+
+  it("never returns an empty line", () => {
+    for (const status of [0, 400, 401, 404, 409, 415, 200, 500, 503]) {
+      expect(filesLoadFailure(status).length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("filesPaneState (D-31 / #258 AC5: 失败不伪装空面)", () => {
+  it("rows already on screen stay rows even when the refresh failed", () => {
+    expect(filesPaneState({ error: "boom", loading: false, count: 3 })).toBe("rows");
+    expect(filesPaneState({ error: "boom", loading: true, count: 3 })).toBe("rows");
+  });
+
+  it("error owns the pane only when there are no rows", () => {
+    expect(filesPaneState({ error: "boom", loading: true, count: 0 })).toBe("error");
+    expect(filesPaneState({ error: "boom", loading: false, count: 0 })).toBe("error");
+  });
+
+  it("loading wins when there are no rows and no error", () => {
+    expect(filesPaneState({ error: "", loading: true, count: 0 })).toBe("loading");
+    expect(filesPaneState({ error: "", loading: true, count: 3 })).toBe("rows");
+  });
+
+  it("empty only when idle with no rows and no error", () => {
+    expect(filesPaneState({ error: "", loading: false, count: 0 })).toBe("empty");
+  });
+
+  it("rows when idle with data", () => {
+    expect(filesPaneState({ error: "", loading: false, count: 2 })).toBe("rows");
+  });
+});
+
+describe("filesPaneStatusText (#258 终审: rows+note 也不丢失败原因)", () => {
+  it("error face shows the note", () => {
+    expect(filesPaneStatusText("error", "无法连接后台；…")).toBe("无法连接后台；…");
+  });
+
+  it("rows face keeps showing the failed-refresh reason", () => {
+    expect(filesPaneStatusText("rows", "文件列表读取失败（HTTP 500）；重试")).toBe(
+      "文件列表读取失败（HTTP 500）；重试"
+    );
+  });
+
+  it("no note → empty status text on loading / empty", () => {
+    expect(filesPaneStatusText("loading", "")).toBe("");
+    expect(filesPaneStatusText("empty", "")).toBe("");
   });
 });

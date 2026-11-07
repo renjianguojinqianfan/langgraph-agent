@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getTaskSnapshot, listTasksSnapshot } from "./client";
-import { detailLoadFailure, detailLoadState, listLoadOutcome } from "../lib/failureStates";
+import { getTaskSnapshot, listFiles, listTasksSnapshot } from "./client";
+import {
+  detailLoadFailure,
+  detailLoadState,
+  filesLoadFailure,
+  listLoadOutcome,
+} from "../lib/failureStates";
 
 /** Stub global fetch the way the status-preserving readers see it. */
 function stubFetch(impl: () => Promise<{ status: number; json: () => Promise<unknown> }>) {
@@ -116,5 +121,62 @@ describe("getTaskSnapshot (#256 复审：2xx 空信封不走死路)", () => {
     expect(r.status).toBe(404);
     expect(detailLoadState(r.status, r.data !== null)).toBe("missing");
     expect(detailLoadFailure("missing", r.status)).toContain("不存在");
+  });
+});
+
+/** D-31 / #258 AC5：文件列表读取保留 HTTP status，失败文案按状态给原因与下一步。 */
+describe("listFiles (#258 AC5: 文件列表失败按状态命名)", () => {
+  it("200 + files → files/truncated 原样带回", async () => {
+    const files = [{ path: "a.txt", size: 3 }];
+    stubFetch(async () => ({
+      status: 200,
+      json: async () => ({ data: { files, truncated: true } }),
+    }));
+
+    const r = await listFiles("t1");
+    expect(r.status).toBe(200);
+    expect(r.data).toEqual({ files, truncated: true });
+  });
+
+  it("404 / 409 各自映射到任务 vs 工作区原因", async () => {
+    stubFetch(async () => ({
+      status: 404,
+      json: async () => ({ detail: "task not found" }),
+    }));
+    const gone = await listFiles("gone");
+    expect(gone.status).toBe(404);
+    expect(gone.data).toBeNull();
+    expect(filesLoadFailure(gone.status, gone.detail)).toContain("任务不存在");
+
+    stubFetch(async () => ({
+      status: 409,
+      json: async () => ({ detail: "workspace missing" }),
+    }));
+    const noWs = await listFiles("t1");
+    expect(noWs.status).toBe(409);
+    expect(filesLoadFailure(noWs.status, noWs.detail)).toContain("工作区不存在");
+  });
+
+  it("500 + detail → 状态码与 detail 都进入文案", async () => {
+    stubFetch(async () => ({
+      status: 500,
+      json: async () => ({ detail: "boom" }),
+    }));
+    const r = await listFiles("t1");
+    expect(r.status).toBe(500);
+    expect(r.data).toBeNull();
+    expect(filesLoadFailure(r.status, r.detail)).toContain("HTTP 500");
+    expect(filesLoadFailure(r.status, r.detail)).toContain("boom");
+  });
+
+  it("fetch 抛错（传输失败）→ status 0，文案指向后台不可达", async () => {
+    stubFetch(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+
+    const r = await listFiles("t1");
+    expect(r.status).toBe(0);
+    expect(r.data).toBeNull();
+    expect(filesLoadFailure(r.status)).toContain("无法连接后台");
   });
 });
