@@ -108,12 +108,17 @@ describe("composerView (#232 / D-32 state matrix)", () => {
     expect(view.failed).toBe(true);
     expect(view.parked).toBe(true);
     expect(view.inputDisabled).toBe(false);
+    expect(view.disabledReason).toBeNull();
     expect(view.placeholder).toBe("任务出错，接着说一句继续…");
   });
 
   it("canSend also needs non-blank text and no busy request", () => {
     expect(present({ text: "   " }).canSend).toBe(false);
-    expect(present({ text: "hi", busy: true }).canSend).toBe(false);
+    const busy = present({ text: "hi", busy: true });
+    expect(busy.canSend).toBe(false);
+    // Busy only disables the send button — the textarea stays editable so the
+    // user can keep typing (same as the pre-split Composer).
+    expect(busy.inputDisabled).toBe(false);
   });
 
   it("bottomNote prefers the disable reason over the send error", () => {

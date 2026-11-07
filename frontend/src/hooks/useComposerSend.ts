@@ -102,5 +102,8 @@ export function useComposerSend({
     upsert,
   ]);
 
-  return { text, setText, busy, sendError, reset, onSubmit };
+  // The component renders the same view — computed once here so the guard the
+  // submit path sees and the matrix the UI renders can never disagree (LOW
+  // from PR #295 review: the view used to be built twice).
+  return { text, setText, busy, sendError, reset, onSubmit, view };
 }

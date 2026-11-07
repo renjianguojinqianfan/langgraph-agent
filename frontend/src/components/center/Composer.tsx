@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { useComposerControls } from "../../hooks/useComposerControls";
 import { useComposerSend } from "../../hooks/useComposerSend";
-import { composerView } from "../../lib/composerState";
 import { shouldSendOnEnter } from "../../lib/keys";
 import { profileName, useModelStore } from "../../store/modelStore";
 import { useTaskStore } from "../../store/taskStore";
@@ -52,6 +51,7 @@ export function Composer() {
     sendError,
     reset: resetSend,
     onSubmit,
+    view,
   } = useComposerSend({
     task,
     currentTaskId,
@@ -69,15 +69,6 @@ export function Composer() {
     resetSend();
   }, [currentTaskId, resetControls, resetSend]);
 
-  const view = composerView({
-    task,
-    currentTaskId,
-    detailError,
-    detailAuthExpired,
-    text,
-    busy,
-    sendError,
-  });
   const mode: TaskMode = task?.mode ?? draftMode;
   const selectedModel = task
     ? task.model || defaultModelId
