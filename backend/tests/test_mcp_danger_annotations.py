@@ -32,6 +32,7 @@ from backend.services.event_bus import EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
+from backend.tests.conftest import make_isolated_settings
 
 ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
 
@@ -47,7 +48,7 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
         artifacts_dir=str(tmp_path / "artifacts"),
     )
     base.update(overrides)
-    return Settings(**base)
+    return make_isolated_settings(**base)
 
 
 def _echo_settings(tmp_path: Path, **overrides: Any) -> Settings:
@@ -70,7 +71,7 @@ def _echo_settings(tmp_path: Path, **overrides: Any) -> Settings:
         ),
     )
     base.update(overrides)
-    return Settings(**base)
+    return make_isolated_settings(**base)
 
 
 class _NullManager:

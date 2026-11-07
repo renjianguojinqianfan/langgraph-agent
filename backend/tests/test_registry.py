@@ -86,7 +86,7 @@ def test_conflict_build_tools_instantiates_first(clean_registry):
 
     register(First)
     register(Second)
-    tools = build_tools(Settings())
+    tools = build_tools(Settings(_env_file=None))
     dup = [t for t in tools if t.name == "dup_qa"]
     assert len(dup) == 1
     assert dup[0].run().data == {"which": "first"}

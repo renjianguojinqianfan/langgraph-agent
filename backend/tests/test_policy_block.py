@@ -34,7 +34,7 @@ from backend.core.llm.client import MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.core.tools.registry import build_tools
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_isolated_settings, make_manager, make_settings
 
 TASK_ID = "t_policy_block"
 
@@ -273,7 +273,9 @@ def policy_logs():
 
 
 def _policy(*rules: Dict[str, Any]) -> DangerPolicy:
-    return DangerPolicy.from_settings(Settings(policy_rules=json.dumps(list(rules))))
+    return DangerPolicy.from_settings(
+        make_isolated_settings(policy_rules=json.dumps(list(rules)))
+    )
 
 
 def test_rows_without_a_tool_are_not_rules():
@@ -430,14 +432,14 @@ def test_a_whole_table_written_wrong_is_loud(policy_logs):
     """
     for raw in ("nope", '{"tool": "probe"}', '["probe"]', '[{"reason": "no tool"}]'):
         before = len(policy_logs.messages())
-        assert DangerPolicy.from_settings(Settings(policy_rules=raw)).rules == ()
+        assert DangerPolicy.from_settings(Settings(_env_file=None, policy_rules=raw)).rules == ()
         assert len(policy_logs.messages()) > before, f"{raw!r} 整表失效却没有一声"
 
 
 def test_an_explicitly_empty_table_stays_silent(policy_logs):
     """`""` / `[]` / `null` 是「我就是要空表」，不该被当成写坏（否则每台机器都刷 warning）。"""
     for raw in ("", "[]", "[ ]", "null"):
-        DangerPolicy.from_settings(Settings(policy_rules=raw))
+        DangerPolicy.from_settings(Settings(_env_file=None, policy_rules=raw))
     assert policy_logs.messages() == []
 
 
@@ -450,9 +452,9 @@ def test_settings_expose_the_rule_table_as_a_list(tmp_path):
     s = _settings(tmp_path, policy_rules=_rules({"tool": "probe", "reason": "no"}))
     assert s.policy_rules_list == [{"tool": "probe", "reason": "no"}]
     for raw in ("", "nope", '{"tool": "probe"}', "null"):
-        assert Settings(policy_rules=raw).policy_rules_list == [], f"{raw!r} 不该产出规则"
+        assert Settings(_env_file=None, policy_rules=raw).policy_rules_list == [], f"{raw!r} 不该产出规则"
     # 非 dict 的条目原样透出（由消费者出声处置）
-    assert Settings(policy_rules='[1, {"tool": "a"}]').policy_rules_list == [1, {"tool": "a"}]
+    assert Settings(_env_file=None, policy_rules='[1, {"tool": "a"}]').policy_rules_list == [1, {"tool": "a"}]
 
 
 # ── 死规则告警（#145） ──────────────────────────────────────────────────────

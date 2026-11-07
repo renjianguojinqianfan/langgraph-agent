@@ -518,6 +518,7 @@ def test_trace_api_existing_task_without_trace_file_returns_404(trace_client):
 
 def test_trace_api_disabled_returns_404(tmp_path):
     settings = Settings(
+        _env_file=None,
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         trace_dir=str(tmp_path / "traces"),

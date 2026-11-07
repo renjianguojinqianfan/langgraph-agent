@@ -29,6 +29,7 @@ import pytest
 from backend.config import Settings
 from backend.core.mcp.client import McpClientManager, McpServerConfig
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
+from backend.tests.conftest import make_isolated_settings
 from backend.utils.sandbox import MCP_ENV_ALLOWLIST
 
 ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
@@ -54,7 +55,7 @@ def _echo_settings(tmp_path: Path, **overrides) -> Settings:
         ),
     )
     base.update(overrides)
-    return Settings(**base)
+    return make_isolated_settings(**base)
 
 
 def _kill_pid(pid: int) -> None:

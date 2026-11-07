@@ -39,7 +39,7 @@ from backend.services.event_bus import EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
-from backend.tests.conftest import make_settings
+from backend.tests.conftest import make_isolated_settings, make_settings
 
 ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
 
@@ -63,12 +63,13 @@ def _echo_settings(tmp_path: Path, **overrides) -> Settings:
         ),
     )
     base.update(overrides)
-    return Settings(**base)
+    return make_isolated_settings(**base)
 
 
 # ─────────────────── settings parsing edge cases ───────────────────
 def test_mcp_servers_list_parsing(tmp_path):
     s = Settings(
+        _env_file=None,
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         mcp_servers=json.dumps([{"name": "a", "command": "x"}, {"name": "b", "command": "y"}]),
@@ -76,15 +77,15 @@ def test_mcp_servers_list_parsing(tmp_path):
     assert len(s.mcp_servers_list) == 2
 
     # Invalid JSON -> empty list (no crash).
-    assert Settings(mcp_servers="{not json}").mcp_servers_list == []
+    assert Settings(_env_file=None, mcp_servers="{not json}").mcp_servers_list == []
 
     # Non-list JSON -> empty list.
-    assert Settings(mcp_servers='"hello"').mcp_servers_list == []
-    assert Settings(mcp_servers='{"a": 1}').mcp_servers_list == []
+    assert Settings(_env_file=None, mcp_servers='"hello"').mcp_servers_list == []
+    assert Settings(_env_file=None, mcp_servers='{"a": 1}').mcp_servers_list == []
 
     # Empty / whitespace -> empty list.
-    assert Settings(mcp_servers="").mcp_servers_list == []
-    assert Settings(mcp_servers="   ").mcp_servers_list == []
+    assert Settings(_env_file=None, mcp_servers="").mcp_servers_list == []
+    assert Settings(_env_file=None, mcp_servers="   ").mcp_servers_list == []
 
 
 def test_mcp_config_skips_non_dict_and_missing_fields(tmp_path):

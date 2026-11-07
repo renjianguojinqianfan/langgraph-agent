@@ -35,7 +35,7 @@ from backend.core.agent.prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
 from backend.core.agent.state import AgentState
 from backend.core.llm.client import LLMResponse
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_settings
+from backend.tests.conftest import make_isolated_settings, make_settings
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -452,7 +452,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # conftest 隔离行已在进程级设了 CONTEXT_INJECT_ENABLED=false：先清掉再构造。
     monkeypatch.delenv("CONTEXT_INJECT_ENABLED", raising=False)
     monkeypatch.delenv("CONTEXT_INJECT_SKILLS_BUDGET", raising=False)
-    settings = Settings()
+    settings = make_isolated_settings()
     assert settings.context_inject_enabled is True
     assert settings.context_inject_skills_budget == 4000
 
@@ -574,11 +574,15 @@ def test_summary_call_excludes_the_injected_block(tmp_path: Path, tmp_home: Path
 # ─ 4.9 config parsing ───────────────────────────────────────────────────────
 def test_env_override_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONTEXT_INJECT_ENABLED", "false")
-    settings = Settings(data_dir=str(tmp_path), artifacts_dir=str(tmp_path / "artifacts"))
+    settings = make_isolated_settings(
+        data_dir=str(tmp_path), artifacts_dir=str(tmp_path / "artifacts")
+    )
     assert settings.context_inject_enabled is False
 
 
 def test_env_override_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONTEXT_INJECT_SKILLS_BUDGET", "1000")
-    settings = Settings(data_dir=str(tmp_path), artifacts_dir=str(tmp_path / "artifacts"))
+    settings = make_isolated_settings(
+        data_dir=str(tmp_path), artifacts_dir=str(tmp_path / "artifacts")
+    )
     assert settings.context_inject_skills_budget == 1000

@@ -25,11 +25,11 @@ from unittest.mock import patch
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.bash import BashTool, find_bash
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_isolated_settings, make_manager, make_settings
 
 
 def _bash_settings(tmp_path: Path, **overrides: Any) -> Settings:
-    return Settings(
+    return make_isolated_settings(
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         trace_dir=str(tmp_path / "traces"),
