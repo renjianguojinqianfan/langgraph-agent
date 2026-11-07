@@ -174,6 +174,19 @@
 
 注（已知窄竞态，接受）：缓存任务为 RUNNING 且 SSE 回放先于快照返回时，Network 可能出现 2 次 GET；改动前同存，不作为回归门槛。
 
+### P2-1 Composer 拆分手测清单（#232，D-32）
+
+拆分为 `lib/composerState.ts`（`composerView` / `clearedDraft`）+ `hooks/useComposerSend` + `hooks/useComposerControls`；行为、逐字文案、aria 与禁用规则均不变，下列为 hooks 接线的走查项。
+
+- [ ] 新建任务：输入后 Enter / 发送 → 创建成功进入该任务；发送中按钮禁用；只有「已发出」的草稿被清空（发送中继续输入的文字保留）。
+- [ ] 已停下任务续说：消息进入同一对话（同 thread_id / checkpoint）；失败时草稿不丢且显示服务端原因。
+- [ ] 状态矩阵：未选任务 / 加载中 / 加载失败（401 与非 401）/ PENDING / RUNNING / INTERRUPTED / FAILED 的禁用原因与 placeholder 与拆分前逐字一致（`composerState.test.ts` 钉文案，走查确认渲染）。
+- [ ] 模式切换：未选任务只改草稿；已有任务走 `PUT` 并刷新快照；运行中显示「下一轮生效」；断网显示「切换失败：无法连接后台；确认服务在运行后再试。」。
+- [ ] 模型切换：同上；选择当前模型时不发请求。
+- [ ] 切换任务：上一条任务的 sendError / switchNote 不带到新任务（reset effect）。
+- [ ] Enter 发送 / Shift+Enter 换行 / 输入法组合中（isComposing）Enter 不发送。
+- [ ] 读屏：底部原因行 `role=status` 可播报；`textarea` / `select` 的 `aria-label` 与 `aria-describedby` 与拆分前一致。
+
 ## 7. 空 / 错 / 加载
 
 - 空（未选任务）：一句 21px 邀请 + 一行副说明；composer 可用。
@@ -235,4 +248,5 @@
 - 2026-10-31（#265 二次返工）：构建模式回答先 strip 再入账（尾随换行不再让本轮回答从对话里消失）；计划提示追加时同样过 redact；无主压缩标记不再塞进最前的「历史执行过程」，改为对话末尾中性的「上下文压缩记录」；抽出 `CompressMarker`。
 - 2026-11-07（P0-4 / #282）：前端测试栈拍板——本批不引 jsdom / @testing-library（D-23），改「纯函数 / store 断言 + 手测 checklist」纪律（D-24，见 §10.1）；历史计划「组件不做渲染测试」的声明加取代注。
 - 2026-11-07（P1-1 / #257）：窄屏抽屉断点收敛到 `frontend/src/lib/breakpoints.ts` 单一来源（`(width < 860px)` / `(width < 1180px)`，与 CSS `max-[860px]` / `max-[1180px]` 同界，860 / 1180 恰好仍是宽屏，取代 859.98 / 1179.98 写法）；`drawerView` 派生遮罩 / 背景 inert / 变宽与 Trace 的关闭信号；`useDrawerFocus` 负责触发元素记录、焦点移入、Esc / Tab 圈定、关闭先撤 inert 再归还焦点（inert 由 `lib/inertLedger` 记账撤销）；§6 增窄屏抽屉手测清单。
+- 2026-11-07（P2-1 / #232）：Composer 拆分——`lib/composerState` 纯函数 `composerView`（状态矩阵与逐字文案，入参含 `sendError` 以保住 `bottomNote` 纯函数）与 `clearedDraft`；`hooks/useComposerSend` 收口 text / busy / sendError 与 `createTask` / `sendMessage`，`hooks/useComposerControls` 收口 draftMode / draftModel / switchNote 与 `putMode` / `putTaskModel` + `getTask`；`Composer.tsx` 只留结构、Enter 处理与 reset effect；`BACKEND_UNREACHABLE` 抽 `lib/copy`；行为与逐字文案不变，§6 增拆分手测清单。
 - 2026-11-07（P1-2 / #258）：长内容断行契约收敛到 `lib/longContent`（`LONG_TEXT`，用于 Markdown 根 / 用户气泡 / 失败块 / 工具入参出参，静态源码守卫防回退）；工具长入参「展开全部 / 收起」（`lib/toolInput`，800 code point 阈值）；事件账本 heartbeat 不进用户面（`lib/eventLedger.isLedgerType` 排除 + `ledgerEvents` 去重 / 100 上限 / 倒序；store `applyEvent` 早退且只替换真正变化的 slice；Trace 保留原始流）；请求 / 渲染去重（选中已停下任务 parked 快照只拉一次、PlanPane 初载不自触发、`task_created` 回放不 bump `listRevision`、Markdown `memo` + 结构守卫）；Composer / FilePane 错误文案带原因与下一步、文件面板「重试」、状态行 `role=status`；§6 增 P1-2 手测清单。
