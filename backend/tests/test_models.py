@@ -636,3 +636,440 @@ def test_key_write_failure_returns_409_with_reason(tmp_path, monkeypatch):
         assert tm.models.get(model_id) is not None
     finally:
         client.__exit__(None, None, None)
+
+# ── #243 P2-2 (D-33): models.json v2 + v1 migration ──
+_V1_PROFILES = [
+    {
+        "id": "aaaabbbbcccc",
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "api_key_env": "LLM_API_KEY",
+        "preset": True,
+    },
+    {
+        "id": "ddddeeeeffff",
+        "name": "Bailian",
+        "base_url": "https://dashscope.test/v1",
+        "model": "qwen-max",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "preset": False,
+    },
+]
+
+
+def _write_v1_models(tmp_path, default="aaaabbbbcccc"):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    payload = {"default": default, "models": _V1_PROFILES}
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    (settings.data_path / "models.json").write_text(text, encoding="utf-8")
+    return settings, text
+
+
+def test_v1_models_json_migrates_to_providers_and_catalog(tmp_path):
+    settings, original = _write_v1_models(tmp_path)
+    home = tmp_path / "home"
+    credentials = home / ".qianfan" / "credentials.json"
+    credentials.parent.mkdir(parents=True)
+    credentials.write_text(json.dumps({"ddddeeeeffff": SENTINEL}), encoding="utf-8")
+
+    store = ModelStore(settings, home_dir=home)
+
+    raw = json.loads(store.data_file.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["default"] == "aaaabbbbcccc"
+    providers = {provider["id"]: provider for provider in raw["providers"]}
+    assert set(providers) == {"aaaabbbbcccc", "ddddeeeeffff"}
+    assert providers["aaaabbbbcccc"] == {
+        "id": "aaaabbbbcccc",
+        "name": "DeepSeek",
+        "protocol": "openai-compatible",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key_env": "LLM_API_KEY",
+        "preset": True,
+    }
+    assert providers["ddddeeeeffff"]["api_key_env"] == "DASHSCOPE_API_KEY"
+    assert providers["ddddeeeeffff"]["preset"] is False
+    entries = {entry["id"]: entry for entry in raw["models"]}
+    assert entries["aaaabbbbcccc"] == {
+        "id": "aaaabbbbcccc",
+        "provider_id": "aaaabbbbcccc",
+        "model": "deepseek-chat",
+        "name": "DeepSeek",
+        "source": "migrated",
+    }
+    assert entries["ddddeeeeffff"]["provider_id"] == "ddddeeeeffff"
+    assert entries["ddddeeeeffff"]["model"] == "qwen-max"
+
+    # Backup: written before the rewrite, byte-identical to the v1 file.
+    backup = store.data_file.with_name("models.json.bak-v1")
+    assert backup.is_file()
+    assert backup.read_text(encoding="utf-8") == original
+
+    # Task.model / default / credentials keys keep working unchanged.
+    assert store.default_id == "aaaabbbbcccc"
+    assert store.get("aaaabbbbcccc").model == "deepseek-chat"
+    assert store.get("ddddeeeeffff").base_url == "https://dashscope.test/v1"
+    assert store.key_for("ddddeeeeffff") == SENTINEL
+    assert store.key_source("ddddeeeeffff") == "pasted"
+    assert SENTINEL not in store.data_file.read_text(encoding="utf-8")
+    assert json.loads(credentials.read_text(encoding="utf-8")) == {"ddddeeeeffff": SENTINEL}
+
+    # Legacy flat projection keeps the old fields and adds provider_id/protocol.
+    listing = store.list_public()
+    projected = next(m for m in listing["models"] if m["id"] == "ddddeeeeffff")
+    assert projected["provider_id"] == "ddddeeeeffff"
+    assert projected["protocol"] == "openai-compatible"
+    assert projected["base_url"] == "https://dashscope.test/v1"
+    assert projected["model"] == "qwen-max"
+    assert projected["key_set"] is True
+    assert projected["key_source"] == "pasted"
+
+
+def test_v1_migration_is_idempotent_and_backs_up_once(tmp_path):
+    settings, original = _write_v1_models(tmp_path)
+    home = tmp_path / "home"
+    store = ModelStore(settings, home_dir=home)
+    after_first = store.data_file.read_bytes()
+    backups = settings.data_path.glob("models.json.bak-v1")
+    assert [backup.name for backup in backups] == ["models.json.bak-v1"]
+
+    reloaded = ModelStore(settings, home_dir=home)
+
+    # A v2 file is read as-is: no rewrite and no second backup.
+    assert reloaded.data_file.read_bytes() == after_first
+    assert [backup.name for backup in settings.data_path.glob("models.json.bak-v1")] == [
+        "models.json.bak-v1"
+    ]
+    backup = reloaded.data_file.with_name("models.json.bak-v1")
+    assert backup.read_text(encoding="utf-8") == original
+    assert reloaded.list_public()["default"] == "aaaabbbbcccc"
+
+
+def test_existing_v1_backup_is_never_overwritten(tmp_path):
+    settings, _ = _write_v1_models(tmp_path)
+    backup = settings.data_path / "models.json.bak-v1"
+    backup.write_text("first migration backup", encoding="utf-8")
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.default_id == "aaaabbbbcccc"
+    assert backup.read_text(encoding="utf-8") == "first migration backup"
+
+
+def test_v1_default_falls_back_to_the_first_profile_when_unknown(tmp_path):
+    settings, _ = _write_v1_models(tmp_path, default="does-not-exist")
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+    assert store.default_id == "aaaabbbbcccc"
+
+
+def test_migrated_profile_ids_still_pin_tasks(tmp_path):
+    settings, _ = _write_v1_models(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = tm.create_task("m", "hi", model="ddddeeeeffff")
+    assert (tm.get_task(task_id).model or "") == "ddddeeeeffff"
+
+
+def test_seeded_models_json_uses_schema_v2(tmp_path):
+    store, _ = _store(tmp_path)
+    raw = json.loads(store.data_file.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["default"] == "default"
+    assert [provider["id"] for provider in raw["providers"]] == ["default"]
+    assert raw["providers"][0]["protocol"] == "openai-compatible"
+    assert [entry["id"] for entry in raw["models"]] == ["default"]
+    assert raw["models"][0]["provider_id"] == "default"
+
+
+def test_bad_v2_file_is_quarantined_and_reseeded(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    (settings.data_path / "models.json").write_text(
+        json.dumps({"schema_version": 2, "providers": [], "models": []}),
+        encoding="utf-8",
+    )
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.get("default") is not None
+    assert list(settings.data_path.glob("models.json.corrupt-*"))
+    assert json.loads(store.data_file.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_v1_backup_is_a_byte_for_byte_copy(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    payload = {"default": "aaaabbbbcccc", "models": _V1_PROFILES}
+    original = (
+        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8").replace(b"\r\n", b"\n")
+    )
+    (settings.data_path / "models.json").write_bytes(original)
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    backup = store.data_file.with_name("models.json.bak-v1")
+    assert backup.read_bytes() == original
+
+
+# ── store-level Provider / catalog CRUD (unwired by A2 yet) ──
+def test_provider_crud_store_level(tmp_path):
+    store, _ = _store(tmp_path)
+    # The seeded provider is the built-in DeepSeek preset.
+    assert store.provider_public("default")["preset"] is True
+
+    provider = store.add_provider(
+        id="bailian",
+        name="Bailian",
+        base_url="https://dashscope.test/v1",
+        api_key_env="DASHSCOPE_API_KEY",
+    )
+    assert provider.id == "bailian"
+    assert store.get_provider("bailian") == provider
+    assert store.provider_public("bailian")["key_set"] is False
+
+    with pytest.raises(ValueError):
+        store.add_provider(id="Bad_ID", name="x", base_url="https://x.test/v1")
+    with pytest.raises(ValueError):
+        store.add_provider(id="bailian", name="x", base_url="https://x.test/v1")
+    with pytest.raises(ValueError):
+        store.add_provider(id="grpc", name="x", base_url="https://x.test/v1", protocol="grpc")
+    with pytest.raises(ValueError):
+        store.add_provider(id="ftp", name="x", base_url="ftp://x.test/v1")
+    with pytest.raises(KeyError):
+        store.update_provider("nope", name="x")
+    with pytest.raises(KeyError):
+        store.delete_provider("nope")
+
+    updated = store.update_provider(
+        "bailian", name="Renamed", base_url="https://dashscope.test/v2"
+    )
+    assert updated.id == "bailian"
+    assert updated.name == "Renamed"
+    assert store.get_provider("bailian").base_url == "https://dashscope.test/v2"
+
+    # Editing the built-in preset address turns it into a custom provider.
+    changed = store.update_provider("default", base_url="https://custom.test/v1")
+    assert changed.preset is False
+
+    store.update_provider("bailian", key=SENTINEL)
+    public = store.provider_public("bailian")
+    assert public["key_set"] is True
+    assert public["key_source"] == "pasted"
+    assert SENTINEL not in json.dumps(store.list_providers())
+    assert SENTINEL not in store.data_file.read_text(encoding="utf-8")
+
+    entry = store.add_model("bailian", model="m1")
+    store.set_default(entry.id)
+    store.delete_provider("bailian")
+    assert store.get_provider("bailian") is None
+    assert store.get(entry.id) is None
+    assert store.default_id == "default"
+    assert SENTINEL not in store.credentials_file.read_text(encoding="utf-8")
+
+
+def test_model_catalog_store_level(tmp_path):
+    store, _ = _store(tmp_path)
+    store.add_provider(id="bailian", name="Bailian", base_url="https://dashscope.test/v1")
+    first = store.add_model("bailian", model="qwen-max", name="Qwen Max")
+    assert first.provider_id == "bailian"
+    assert first.source == "manual"
+    assert first.name == "Qwen Max"
+
+    with pytest.raises(KeyError):
+        store.add_model("nope", model="m")
+    with pytest.raises(ValueError):
+        store.add_model("bailian", model="qwen-max")
+    with pytest.raises(ValueError):
+        store.add_model("bailian", model="   ")
+
+    # Same provider+model reuses the entry; a new model becomes manual.
+    assert store.ensure_model_entry("bailian", "qwen-max").id == first.id
+    raw = store.ensure_model_entry("bailian", "qwen-raw")
+    assert raw.source == "manual"
+    assert raw.model == "qwen-raw"
+    assert [m["model"] for m in store.list_models("bailian")] == ["qwen-max", "qwen-raw"]
+
+    store.set_default(raw.id)
+    store.delete_model("bailian", raw.id)
+    assert store.default_id != raw.id
+    assert store.get_provider("bailian") is not None
+    with pytest.raises(KeyError):
+        store.delete_model("bailian", "nope")
+    with pytest.raises(KeyError):
+        store.list_models("nope")
+
+
+def test_last_model_and_last_provider_are_protected(tmp_path):
+    store, _ = _store(tmp_path)
+    with pytest.raises(ValueError):
+        store.delete_model("default", "default")
+    with pytest.raises(ValueError):
+        store.delete_provider("default")
+
+
+# ── HIGH rework: an empty model must be rejected, not silently dropped ──
+def test_models_with_an_empty_model_are_rejected_without_mutating(tmp_path):
+    store, _ = _store(tmp_path)
+    with pytest.raises(ValueError):
+        store.add(name="Blank", base_url="https://example.test/v1", model="")
+    with pytest.raises(ValueError):
+        store.add(name="Blank", base_url="https://example.test/v1", model="   ")
+    assert [m["id"] for m in store.list_public()["models"]] == ["default"]
+
+    second = store.add(name="Second", base_url="https://example.test/v1", model=" m2 ")
+    assert store.get(second.id).model == "m2"
+    before = asdict(store.get(second.id))
+    with pytest.raises(ValueError):
+        store.update(second.id, model="")
+    assert asdict(store.get(second.id)) == before
+
+
+def test_a_valid_model_still_exists_after_a_reload(tmp_path):
+    store, settings = _store(tmp_path)
+    second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
+
+    reloaded = ModelStore(settings, home_dir=tmp_path / "home")
+
+    entry = reloaded.get(second.id)
+    assert entry is not None
+    assert entry.model == "m2"
+
+
+def test_models_api_rejects_an_empty_model(tmp_path):
+    client, tm = _client(tmp_path, None)
+    try:
+        blank = client.post(
+            "/api/models",
+            json={"name": "Blank", "base_url": "https://example.test/v1", "model": ""},
+        )
+        assert blank.status_code == 400
+        valid = client.post(
+            "/api/models",
+            json={"name": "Ok", "base_url": "https://example.test/v1", "model": "m1"},
+        )
+        assert valid.status_code == 200
+        model_id = valid.json()["data"]["id"]
+        assert client.put(f"/api/models/{model_id}", json={"model": "  "}).status_code == 400
+        entry = next(
+            m for m in client.get("/api/models").json()["data"]["models"] if m["id"] == model_id
+        )
+        assert entry["model"] == "m1"
+        # The pre-fix path accepted "" and the next load silently dropped it.
+        reloaded = ModelStore(tm.settings, home_dir=tm.settings.data_path / "home")
+        assert reloaded.get(model_id) is not None
+        assert reloaded.get(model_id).model == "m1"
+    finally:
+        client.__exit__(None, None, None)
+
+
+def _write_v2_file(tmp_path, payload):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    (settings.data_path / "models.json").write_text(json.dumps(payload), encoding="utf-8")
+    return settings
+
+
+def test_v2_load_drops_unknown_protocols_and_keeps_anthropic(tmp_path):
+    providers = [
+        {
+            "id": "keep",
+            "name": "Keep",
+            "protocol": "openai-compatible",
+            "base_url": "https://keep.test/v1",
+        },
+        {
+            "id": "weird",
+            "name": "Weird",
+            "protocol": "grpc",
+            "base_url": "https://weird.test/v1",
+        },
+        {
+            "id": "claude",
+            "name": "Claude",
+            "protocol": "anthropic",
+            "base_url": "https://api.anthropic.test/v1",
+        },
+    ]
+    models = [
+        {"id": "keep", "provider_id": "keep", "model": "m1", "name": "M1", "source": "manual"},
+        {
+            "id": "weird-model",
+            "provider_id": "weird",
+            "model": "m2",
+            "name": "M2",
+            "source": "manual",
+        },
+        {
+            "id": "claude-model",
+            "provider_id": "claude",
+            "model": "claude-3",
+            "name": "C",
+            "source": "manual",
+        },
+    ]
+    settings = _write_v2_file(
+        tmp_path,
+        {
+            "schema_version": 2,
+            "default": "keep",
+            "providers": providers,
+            "models": models,
+        },
+    )
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    # An unknown protocol is dropped like any other unreadable entry; the
+    # anthropic provider is storable (the adapter, and with it any use, lands
+    # in PR B) and round-trips through the loader unchanged.
+    assert set(store.providers) == {"keep", "claude"}
+    assert set(store.model_entries) == {"keep", "claude-model"}
+    assert store.default_id == "keep"
+    assert store.get("claude-model").protocol == "anthropic"
+
+
+def test_v2_file_with_only_unknown_protocols_is_quarantined(tmp_path):
+    settings = _write_v2_file(
+        tmp_path,
+        {
+            "schema_version": 2,
+            "default": "weird",
+            "providers": [
+                {
+                    "id": "weird",
+                    "name": "Weird",
+                    "protocol": "grpc",
+                    "base_url": "https://weird.test/v1",
+                }
+            ],
+            "models": [
+                {
+                    "id": "weird",
+                    "provider_id": "weird",
+                    "model": "m",
+                    "name": "M",
+                    "source": "manual",
+                }
+            ],
+        },
+    )
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.get("default") is not None
+    assert list(settings.data_path.glob("models.json.corrupt-*"))
+
+
+def test_newer_schema_version_is_moved_aside_not_rewritten(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    future = json.dumps({"schema_version": 99, "providers": [], "models": []})
+    (settings.data_path / "models.json").write_text(future, encoding="utf-8")
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.get("default") is not None
+    quarantined = list(settings.data_path.glob("models.json.corrupt-*"))
+    assert quarantined
+    assert quarantined[0].read_text(encoding="utf-8") == future
