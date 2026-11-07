@@ -5,7 +5,7 @@ status: accepted
 # 模型配置双协议：Provider 层 + Anthropic 原生适配器
 
 > 2026-11-07 由 spec #287 Phase 2 切片 P2-2（PR B）落地；拍板点已在 spec #287 的 D-35 / D-36 记录。
-> 本文只记决策与边界，不复制实施细节；数据结构与 API 的现役事实以 `docs/architecture.md` `3.3 为准。
+> 本文只记决策与边界，不复制实施细节；数据结构与 API 的现役事实以 `docs/architecture.md` 的 §3.3 为准。
 > 修订 [ADR 0010](0010-launch-dir-workspace-and-model-profiles.md) 决策 7 与「被否的选项」里的
 > 「接口格式 = 只 OpenAI 兼容」。
 
@@ -33,13 +33,16 @@ Provider + 模型目录落进 `data/models.json` v2（PR A1/A2），但当时只
 4. **thinking / reasoning_effort 在 Anthropic 路径上暂不支持（本片边界）**：Anthropic extended
    thinking 的工具循环要求把上一轮 assistant 的 thinking block **连同 signature** 原样回传，而本仓
    历史是从 OpenAI 风格 messages 重建的，signature 无处保存。本片选择：D-36 的 `thinking` /
-   `reasoning_effort` 字段照常持久化，但**构造 Anthropic 客户端时显式报错**（不静默忽略）；
-   OpenAI 兼容路径按 D-36 走 `extra_body` 原样透传。开 Anthropic thinking 需先解决签名保留
-   （另开票 / 后续片），届时同步 reasoning 持久化面。
+   `reasoning_effort` 字段照常持久化，但**写面（store 校验）在 protocol=anthropic 且有效值为
+   开启 / 非空时直接拒绝**（400 可读），运行期构造客户端再守一层；OpenAI 兼容路径按 D-36 走
+   `extra_body` 原样透传。参数可显式 `null` 清空，所以「先清空再切 anthropic」是可走通的。
+   开 Anthropic thinking 需先解决签名保留（另开票 / 后续片），届时同步 reasoning 持久化面。
 5. **采样参数（D-36）**：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 挂在模型
    条目，Provider 可作为默认值、entry 覆盖；`temperature` 缺省 0.2（请求构造不再硬编码在调用点）；
    Anthropic 的 `max_tokens` 必填，缺省 4096（Provider / entry 可覆盖）；OpenAI 兼容路径不设缺省
-   `max_tokens`。
+   `max_tokens`。temperature 合法范围按协议：openai-compatible 0–2、anthropic 0–1（写面校验）。
+   参数更新支持显式 `null` 清空（省略 = 不改）：清空后回落到 Provider 默认 / 客户端缺省，
+   这也是把已配置的 thinking / 参数从卡片上撤掉的唯一路径。
 6. **发现接口口径（D-34）**：`/api/providers/{id}/models/discover` 只支持 OpenAI 兼容协议的
    `GET <base_url>/models`；anthropic 返回 400「协议暂不支持发现」，不猜、不落库。
 
