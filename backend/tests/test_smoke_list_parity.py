@@ -15,8 +15,13 @@ job）此前只靠「两边保持同一清单」的文档约定维持一致，�
 **盲区（有意写明，不宣称覆盖）**：扫描只看 backend/tests/test_*.py 的文本。
 test_test_isolation.py 与 test_server_lock.py 自身不含这四类标记——它们的
 Windows 分支分别在 conftest.py:98-105（os.name=="nt" 临时根探测）与
-backend/server_lock.py:129-162（ctypes/WinDLL）；这两个文件进清单靠 D-13 的
-单独 PR + 3 连跑证据，标记扫描覆盖不到它们，也不该被当成它们已覆盖的证明。
+backend/server_lock.py:126-166（ctypes/WinDLL 分支，WinDLL 在 :144）；这两个
+文件进清单靠 D-13 的单独 PR + 3 连跑证据，标记扫描覆盖不到它们，也不该被当成
+它们已覆盖的证明。
+
+另一处已知限制：ci.yml 的注释文件表位于 job key 之前，不在本守卫的解析面——
+「pytest 命令里加了文件、注释表漏了理由行」不会红，只能人工核对（本 PR 已核
+13/13）；双址集合相等与标记扫描都管不到那张表。
 """
 
 from __future__ import annotations
@@ -199,3 +204,11 @@ def test_every_marker_file_is_covered_by_the_smoke_list() -> None:
         assert rel in texts, f"锚点文件不存在：{rel}"
         assert _windows_only_markers(texts[rel]), f"{rel} 不再含 Windows-only 标记，请更新锚点"
     assert _marker_scan_violations(texts, smoke) == {}
+
+
+def test_marker_scan_allowlist_entries_carry_a_reason() -> None:
+    """自测④：白名单条目必须带非空理由，防止未来「空理由静默豁免」把扫描架空。
+
+    当前白名单为空：本断言此刻是格式锚（非空转），未来填入例外时生效。
+    """
+    assert all(reason.strip() for reason in _WINDOWS_ONLY_ALLOWLIST.values())
