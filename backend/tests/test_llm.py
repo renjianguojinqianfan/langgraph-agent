@@ -13,19 +13,25 @@ import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
+import httpx
+import pytest
+
 from backend.config import Settings
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
+from backend.core.llm.anthropic_native import AnthropicClient
 from backend.core.llm.client import (
     LLMClient,
     LLMResponse,
     MockLLMClient,
     make_default_mock_client,
 )
+from backend.core.llm.factory import build_llm_client
 from backend.core.llm.openai_compat import (
     OpenAICompatibleClient,
     create_llm_client,
 )
+from backend.core.llm.protocols import PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI
 from backend.services.event_bus import EventBus
 
 
@@ -351,3 +357,440 @@ def test_executor_omits_reasoning_content_key_when_provider_has_none(settings):
 
     assert "reasoning_content" not in _assistants(llm.requests[1])[-1]
     assert all("reasoning_content" not in a for a in _assistants(state["messages"]))
+
+# ── D-35: 协议分派与 Anthropic 适配器 ──
+def test_build_llm_client_dispatches_on_protocol():
+    openai_client = build_llm_client(
+        protocol=PROTOCOL_OPENAI,
+        base_url="https://gw.test/v1",
+        model="m",
+        key="sk-x",
+        timeout=5,
+    )
+    assert isinstance(openai_client, OpenAICompatibleClient)
+
+    anthropic_client = build_llm_client(
+        protocol=PROTOCOL_ANTHROPIC,
+        base_url="https://api.anthropic.com",
+        model="claude-3",
+        key="sk-y",
+        timeout=5,
+    )
+    assert isinstance(anthropic_client, AnthropicClient)
+    assert anthropic_client.model == "claude-3"
+
+    with pytest.raises(ValueError, match="不支持"):
+        build_llm_client(
+            protocol="grpc",
+            base_url="https://x.test/v1",
+            model="m",
+            key="",
+        )
+
+
+_ANTHROPIC_MESSAGES: List[Dict[str, Any]] = [
+    {"role": "system", "content": "you are helpful"},
+    {"role": "user", "content": "write a file"},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "write", "arguments": json.dumps({"path": "a.txt"})},
+            }
+        ],
+    },
+    {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    {"role": "assistant", "content": "done"},
+]
+
+_OPENAI_TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "write",
+            "description": "write file",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
+        },
+    }
+]
+
+
+def _anthropic_capture(captured):
+    def handler(request):
+        captured.append(
+            {
+                "url": str(request.url),
+                "headers": {k.lower(): v for k, v in request.headers.items()},
+                "payload": json.loads(request.content),
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {
+                        "type": "tool_use",
+                        "id": "c2",
+                        "name": "write",
+                        "input": {"path": "b.txt"},
+                    },
+                ]
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def test_anthropic_client_maps_openai_messages_and_tools():
+    captured: List[Dict[str, Any]] = []
+    client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk-secret",
+        "claude-3",
+        5,
+        transport=_anthropic_capture(captured),
+    )
+
+    response = client.complete(_ANTHROPIC_MESSAGES, tools=_OPENAI_TOOLS)
+
+    request = captured[-1]
+    assert request["url"] == "https://api.anthropic.com/v1/messages"
+    assert request["headers"]["x-api-key"] == "sk-secret"
+    assert request["headers"]["anthropic-version"] == "2023-06-01"
+    payload = request["payload"]
+    assert payload["model"] == "claude-3"
+    assert payload["system"] == "you are helpful"
+    assert payload["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "write a file"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "c1",
+                    "name": "write",
+                    "input": {"path": "a.txt"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "c1", "content": "ok"}],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+    ]
+    assert payload["tools"] == [
+        {
+            "name": "write",
+            "description": "write file",
+            "input_schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
+        }
+    ]
+
+    assert response.content == "hello"
+    assert response.tool_calls == [
+        {"id": "c2", "name": "write", "arguments": {"path": "b.txt"}}
+    ]
+    assert response.raw["content"][1]["type"] == "tool_use"
+
+
+def test_anthropic_client_accepts_a_v1_base_url():
+    captured: List[Dict[str, Any]] = []
+    client = AnthropicClient(
+        "https://api.anthropic.com/v1/",
+        "sk",
+        "claude-3",
+        5,
+        transport=_anthropic_capture(captured),
+    )
+    client.complete([{"role": "user", "content": "hi"}])
+    assert captured[-1]["url"] == "https://api.anthropic.com/v1/messages"
+
+
+def test_anthropic_client_defaults_and_per_call_overrides():
+    captured: List[Dict[str, Any]] = []
+    transport = _anthropic_capture(captured)
+
+    default_client = AnthropicClient(
+        "https://api.anthropic.com", "sk", "claude-3", 5, transport=transport
+    )
+    default_client.complete([{"role": "user", "content": "hi"}])
+    assert captured[-1]["payload"]["temperature"] == 0.2
+    assert captured[-1]["payload"]["max_tokens"] == 4096
+
+    configured = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk",
+        "claude-3",
+        5,
+        temperature=0.7,
+        max_tokens=1234,
+        transport=transport,
+    )
+    configured.complete([{"role": "user", "content": "hi"}])
+    assert captured[-1]["payload"]["temperature"] == 0.7
+    assert captured[-1]["payload"]["max_tokens"] == 1234
+
+    configured.complete([{"role": "user", "content": "hi"}], max_tokens=1)
+    assert captured[-1]["payload"]["max_tokens"] == 1
+
+
+def test_anthropic_client_refuses_thinking_and_reasoning_effort():
+    def handler(request):  # pragma: no cover - must never be called
+        raise AssertionError("no request expected")
+
+    transport = httpx.MockTransport(handler)
+    with pytest.raises(ValueError, match="thinking"):
+        AnthropicClient(
+            "https://api.anthropic.com",
+            "sk",
+            "claude-3",
+            5,
+            thinking=True,
+            transport=transport,
+        )
+    with pytest.raises(ValueError, match="thinking"):
+        AnthropicClient(
+            "https://api.anthropic.com",
+            "sk",
+            "claude-3",
+            5,
+            reasoning_effort="high",
+            transport=transport,
+        )
+    with pytest.raises(NotImplementedError, match="非流式"):
+        AnthropicClient(
+            "https://api.anthropic.com", "sk", "claude-3", 5, transport=transport
+        ).stream([{"role": "user", "content": "hi"}])
+
+
+def test_anthropic_client_requires_a_key():
+    with pytest.raises(ValueError, match="no API key"):
+        AnthropicClient("https://api.anthropic.com", "", "claude-3", 5)
+
+
+@pytest.mark.parametrize(
+    "status, fragment",
+    [(401, "认证失败"), (403, "认证失败"), (429, "限流"), (400, "请求被拒绝"), (500, "服务错误")],
+)
+def test_anthropic_http_errors_are_readable_and_never_echo_the_key(status, fragment):
+    def handler(request):
+        return httpx.Response(status, json={"error": {"message": "bad"}})
+
+    client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk-secret",
+        "claude-3",
+        5,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        client.complete([{"role": "user", "content": "hi"}])
+    message = str(excinfo.value)
+    assert fragment in message
+    assert "sk-secret" not in message
+
+
+def test_anthropic_timeout_connection_and_bad_json_are_readable():
+    def timeout_handler(request):
+        raise httpx.TimeoutException("timed out")
+
+    timeout_client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk-secret",
+        "claude-3",
+        5,
+        transport=httpx.MockTransport(timeout_handler),
+    )
+    with pytest.raises(RuntimeError, match="超时"):
+        timeout_client.complete([{"role": "user", "content": "hi"}])
+
+    # No configured timeout must not render as "(Nones)".
+    no_budget_client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk-secret",
+        "claude-3",
+        transport=httpx.MockTransport(timeout_handler),
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        no_budget_client.complete([{"role": "user", "content": "hi"}])
+    assert "None" not in str(excinfo.value)
+
+    def connect_handler(request):
+        raise httpx.ConnectError("refused")
+
+    connect_client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk-secret",
+        "claude-3",
+        5,
+        transport=httpx.MockTransport(connect_handler),
+    )
+    with pytest.raises(RuntimeError, match="无法连接"):
+        connect_client.complete([{"role": "user", "content": "hi"}])
+
+    def html_handler(request):
+        return httpx.Response(200, text="<html>nope</html>")
+
+    bad_json_client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk-secret",
+        "claude-3",
+        5,
+        transport=httpx.MockTransport(html_handler),
+    )
+    with pytest.raises(RuntimeError, match="合法 JSON"):
+        bad_json_client.complete([{"role": "user", "content": "hi"}])
+
+
+def test_anthropic_client_rejects_unsupported_input_shapes():
+    def handler(request):  # pragma: no cover - validation happens before I/O
+        raise AssertionError("no request expected")
+
+    client = AnthropicClient(
+        "https://api.anthropic.com", "sk", "claude-3", 5, transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(ValueError, match="arguments are not valid JSON"):
+        client.complete(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "function": {"name": "write", "arguments": "{bad"},
+                        }
+                    ],
+                }
+            ]
+        )
+    with pytest.raises(ValueError, match="unsupported role"):
+        client.complete([{"role": "toolx", "content": "hi"}])
+    with pytest.raises(ValueError, match="tool_call_id"):
+        client.complete([{"role": "tool", "content": "hi"}])
+    with pytest.raises(ValueError, match="function.name"):
+        client.complete(
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {}}],
+        )
+
+
+# ── D-36: OpenAI 兼容路径的参数映射（extra_body 透传） ──
+def test_openai_client_forwards_d36_params_through_extra_body(monkeypatch):
+    import openai
+
+    captured: List[Dict[str, Any]] = []
+
+    def _create(**kwargs):
+        captured.append(kwargs)
+        message = SimpleNamespace(content="ok", tool_calls=None, reasoning_content="")
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)], model_dump=lambda: {}
+        )
+
+    def _fake_openai(**kwargs):
+        return SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=_create))
+        )
+
+    monkeypatch.setattr(openai, "OpenAI", _fake_openai)
+
+    configured = OpenAICompatibleClient(
+        "https://gw.test/v1",
+        "sk-test",
+        "m",
+        timeout=5,
+        temperature=0.7,
+        max_tokens=256,
+        thinking=True,
+        reasoning_effort="high",
+    )
+    configured.complete([{"role": "user", "content": "hi"}])
+    payload = captured[-1]
+    assert payload["temperature"] == 0.7
+    assert payload["max_tokens"] == 256
+    assert payload["extra_body"] == {"thinking": True, "reasoning_effort": "high"}
+
+    default = OpenAICompatibleClient("https://gw.test/v1", "sk-test", "m", timeout=5)
+    default.complete([{"role": "user", "content": "hi"}])
+    default_payload = captured[-1]
+    assert default_payload["temperature"] == 0.2
+    assert "max_tokens" not in default_payload
+    assert "extra_body" not in default_payload
+
+    # Per-call kwargs win for every D-36 knob, not only temperature/max_tokens.
+    configured.complete(
+        [{"role": "user", "content": "hi"}],
+        thinking=False,
+        reasoning_effort="low",
+    )
+    assert captured[-1]["extra_body"] == {"thinking": False, "reasoning_effort": "low"}
+
+
+# ── PR #298 返工：thinking=False / max_tokens=None / 连续同角色消息 ──
+def test_anthropic_client_treats_thinking_false_as_off():
+    captured: List[Dict[str, Any]] = []
+    client = build_llm_client(
+        protocol=PROTOCOL_ANTHROPIC,
+        base_url="https://api.anthropic.com",
+        model="claude-3",
+        key="sk",
+        thinking=False,
+        transport=_anthropic_capture(captured),
+    )
+    assert isinstance(client, AnthropicClient)
+    client.complete([{"role": "user", "content": "hi"}])
+
+    payload = captured[-1]["payload"]
+    assert "thinking" not in payload
+    assert "reasoning_effort" not in payload
+
+
+def test_anthropic_client_falls_back_when_per_call_max_tokens_is_none():
+    captured: List[Dict[str, Any]] = []
+    client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk",
+        "claude-3",
+        5,
+        transport=_anthropic_capture(captured),
+    )
+    client.complete([{"role": "user", "content": "hi"}], max_tokens=None)
+    assert captured[-1]["payload"]["max_tokens"] == 4096
+
+
+def test_anthropic_client_keeps_consecutive_same_role_messages():
+    """Plan notes can produce user, assistant, user, user; mapping must not crash.
+
+    Anthropic's API merges consecutive same-role turns server-side; this pins
+    our client-side behaviour (one message per input, no local merging).
+    """
+    captured: List[Dict[str, Any]] = []
+    client = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk",
+        "claude-3",
+        5,
+        transport=_anthropic_capture(captured),
+    )
+    client.complete(
+        [
+            {"role": "user", "content": "plan this"},
+            {"role": "assistant", "content": "plan"},
+            {"role": "user", "content": "next"},
+            {"role": "user", "content": "again"},
+        ]
+    )
+    roles = [message["role"] for message in captured[-1]["payload"]["messages"]]
+    assert roles == ["user", "assistant", "user", "user"]

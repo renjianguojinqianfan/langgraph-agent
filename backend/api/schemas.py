@@ -184,7 +184,11 @@ class ModelKeyRequest(BaseModel):
 
 
 class ProviderCreateRequest(BaseModel):
-    """A provider card (D-34). `key` is write-only: no response echoes it."""
+    """A provider card (D-34). `key` is write-only: no response echoes it.
+
+    D-36: the four sampling fields are provider-level defaults; a model entry
+    may override them. All are optional (None = client default).
+    """
 
     id: str
     name: str = ""
@@ -192,6 +196,10 @@ class ProviderCreateRequest(BaseModel):
     base_url: str
     api_key_env: str = "LLM_API_KEY"
     key: str = ""
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
 
 
 class ProviderUpdateRequest(BaseModel):
@@ -202,11 +210,30 @@ class ProviderUpdateRequest(BaseModel):
     base_url: Optional[str] = None
     api_key_env: Optional[str] = None
     key: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
 
 
 class ProviderModelCreateRequest(BaseModel):
     model: str
     name: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
+
+
+class ProviderModelUpdateRequest(BaseModel):
+    """Partial entry edit (D-36); `id` / `provider_id` / `source` are immutable."""
+
+    model: Optional[str] = None
+    name: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
 
 
 class SendMessageRequest(BaseModel):

@@ -26,7 +26,7 @@ ADR 0009 定了「`qianfan` 一条命令启动」，但没有回答「在哪儿�
 4. **计划文件路径改为 `<任务目录>/.qianfan/plans/<task_id>.md`**，目录里放一个只含 `*` 的 `.gitignore`（pytest / ruff 缓存目录的做法），不出现在用户项目的 `git status` 里。计划的其余语义（系统替模型存文件、计划模式严格只读、整份重写、删了算无计划、执行模式下模型改文件算更新）全部照 ADR 0009 决策 7 / 8 与决策日志 §0.4。先例：opencode 把计划放在项目内 `.opencode/plans/`（`packages/opencode/src/session/session.ts:331-335`）。
 5. **搜索与文件列表跳过 `.git` 与 `.gitignore` 忽略的文件**：作用于 `glob` / `grep` 与界面的工作区文件列表；`read` 点名读仍可读。由 git 自己判断（本章本来就要求 Git Bash），不加依赖；非 git 目录只跳过 `.git`。先例：pi 的 find / grep「Respects .gitignore」（`packages/coding-agent/src/core/tools/find.ts:78`、`grep.ts:78`）。
 6. **安全姿态不变，外加三条**：照 ADR 0009 决策 4 / 5（只让本机访问、危险规则默认空表、bash 拿账号权限、工作目录不是围墙）。在用户主目录或盘根启动**不检查**，README 写清（pi 的立场；codex 的目录信任提示 `tui/src/onboarding/trust_directory.rs` 被否）。删除 `backend/Dockerfile` 与 `docker-compose.yml`（不用 Docker；compose 监听 `0.0.0.0` 即审计 F1）；`start.py` 只作改前端时的热重载开发启动。
-7. **多套模型配置，任务中途可换**：设置页管理多套「地址 + 模型 + Key」；内置预设只有 DeepSeek，其余用「自定义」。只支持 **OpenAI 兼容**接口（所列各家都提供）。思考内容（`reasoning_content`）现已原样回传（`backend/core/agent/nodes.py:390-391,445-446,507-508`；DeepSeek 带工具时不回传会报 400）；中途换模型后，历史里带着上一家的思考内容，要实测下一家不报错，必要时在换模型时剥离。有一个全局默认，任务可以中途换、下一条消息生效、正在跑的那一步不变；子代理跟随父任务的模型；trace 每次调用记下所用模型。先例：dsh（`packages/client/ui-model-selection/README.md:14`）、opencode（`packages/opencode/src/session/prompt.ts:663-687`）、pi（`src/core/agent-session.ts:637`）都是「全局默认 + 会话中途可换」。现有 `.env` 的 `LLM_*` 自动成为第一套配置。
+7. **多套模型配置，任务中途可换**：设置页管理多套「地址 + 模型 + Key」；内置预设只有 DeepSeek，其余用「自定义」。只支持 **OpenAI 兼容**接口（所列各家都提供）。思考内容（`reasoning_content`）现已原样回传（`backend/core/agent/nodes.py:390-391,445-446,507-508`；DeepSeek 带工具时不回传会报 400）；中途换模型后，历史里带着上一家的思考内容，要实测下一家不报错，必要时在换模型时剥离。有一个全局默认，任务可以中途换、下一条消息生效、正在跑的那一步不变；子代理跟随父任务的模型；trace 每次调用记下所用模型。先例：dsh（`packages/client/ui-model-selection/README.md:14`）、opencode（`packages/opencode/src/session/prompt.ts:663-687`）、pi（`src/core/agent-session.ts:637`）都是「全局默认 + 会话中途可换」。现有 `.env` 的 `LLM_*` 自动成为第一套配置。〔2026-11-07 由 [ADR 0011](0011-model-config-two-protocols.md) 修订：协议扩为 OpenAI 兼容 + Anthropic；Provider + 模型目录与其余语义不变。〕
 8. **Key 两种来源都留**：每套配置可以引用一个环境变量名（界面显示「已设 / 未设」），也可以在界面里粘贴，存进**仓库外**的 `~/.qianfan/credentials.json`；先用粘贴的那份，没有再读环境变量。环境变量只读启动时继承的那份。模型配置清单本身（不含 Key）存在仓库 `data/` 里。先例：dsh 凭据文件 > 启动时环境变量（`packages/credentials/credentials-local/README.md:71-78`）、pi `auth.json` > 环境变量（`docs/models.md:23`）、opencode `auth.json`（`packages/opencode/src/auth/index.ts:10,79`）——三家都允许落盘明文，都没用系统钥匙串。
 9. **Coding Plan 不做预设**：百炼、智谱、火山方舟的 Coding Plan 条款禁止在自建客户端 / 应用后端里调用（违规可能停订阅、封 Key），Kimi Code 仅限交互式使用且禁止伪造客户端标识；只有 MiniMax M Plan 写明任意 OpenAI / Anthropic 协议工具可用。用户可以用「自定义」自行填写，后果自担；README 写明原因。
 10. **前端先保后端**：本章沿用现有样式，只做最小接线（工作区文件列表、计划区原文显示 + 整份编辑、「当前目录 / 全部」切换、任务目录标注、模型设置页、输入框旁的模型下拉）。Markdown 排版、[beautiful-ui](https://github.com/slev12397/beautiful-ui)、#54 重设计放下一章一起定。〔2026-11-03 #262 注：计划区改渲染 Markdown 已由 #54 / F 系列落地，见 [`frontend-design.md`](../frontend-design.md) §4 `PlanPane`；本条的「原文显示」只描述本章当时的最小接线。〕
@@ -76,7 +76,7 @@ ADR 0009 定了「`qianfan` 一条命令启动」，但没有回答「在哪儿�
 ## 重开条件
 
 - 给别人用、跨平台或打包 exe——属分发那一章，另起 ADR。
-- 要支持 Anthropic 原生协议或账号订阅登录（OAuth）。
+- 要支持 Anthropic 原生协议（**已由 [ADR 0011](0011-model-config-two-protocols.md) 达成**，2026-11-07）或账号订阅登录（OAuth，仍未做）。
 - 某家 Coding Plan 条款放开第三方客户端，再议预设。
 - 需要多个后台并行（例如不同端口各跑一套）——先换掉 `tasks.json` 的单写者存储。
 - 工作区要回到「固定沙箱目录」，或计划文件要搬出工作区。

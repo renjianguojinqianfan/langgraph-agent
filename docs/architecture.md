@@ -38,14 +38,15 @@ backend/
 ├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
 ├── server_lock.py       单实例锁（一台机器只允许一个后台）
 ├── api/
-│   ├── routes.py        35 条 REST 路由（§3.3）；统一 {code,data,message} 信封
+│   ├── routes.py        36 条 REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
 │   ├── sse.py           SSE 流组装（15s heartbeat）
 ├── core/
 │   ├── agent/           graph.py 拓扑 · nodes.py 三节点 · state.py AgentState
 │   │                    prompts.py 两套 system · context.py 压缩/驱逐 · inject.py 两层注入
 │   │                    policy.py 危险动作钩子 · subagent.py 子任务运行时
-│   ├── llm/             client.py（LLMClient 抽象 + MockLLMClient）· openai_compat.py
+│   ├── llm/             client.py（LLMClient 抽象 + MockLLMClient）· protocols.py 协议词汇
+│   │                    factory.py 单一分派 · openai_compat.py · anthropic_native.py
 │   ├── tools/           base.py 契约 · registry.py @register · file_io.py（read/write/edit/ls/glob/grep）
 │   │                    bash.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
 │   ├── mcp/             MCP 客户端（stdio 现役；http 预留）
@@ -164,11 +165,12 @@ START → agent ──有 tool call──→ tool ──→ agent
 | PUT | `/api/models/{id}/key` | 写入粘贴的 Key（只写；写到该条目所属 Provider） | `{key}` | `{ok, key_set, key_source}`；404/409 |
 | POST | `/api/models/{id}/test` | 测试该条目所属 Provider + 模型连通性 | — | 测试结果；404 |
 | GET | `/api/providers` | Provider 卡片列表 + 全局默认模型条目 id | — | `{providers: [...], default}`；只回 `key_set` / `key_source` |
-| POST | `/api/providers` | 新建 Provider（**id 必填**且须匹配 `^[a-z][a-z0-9_-]*$`；`key` 只写） | `{id, name?, protocol?, base_url, api_key_env?, key?}` | public provider；重复 id / 非法 / anthropic（A2）→ 400 |
-| PUT | `/api/providers/{id}` | 编辑 Provider（id 不可改；`key` 只写，传 `""` 清空） | `{name?, protocol?, base_url?, api_key_env?, key?}` | public provider；404/400；写 Key 失败 → 409 |
+| POST | `/api/providers` | 新建 Provider（**id 必填**且须匹配 `^[a-z][a-z0-9_-]*$`；`key` 只写） | `{id, name?, protocol?, base_url, api_key_env?, key?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | public provider（含 D-36 默认值）；重复 id / 非法协议或参数 → 400 |
+| PUT | `/api/providers/{id}` | 编辑 Provider（id 不可改；`key` 只写，传 `""` 清空） | `{name?, protocol?, base_url?, api_key_env?, key?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | public provider；404/400（含未知协议 / 不可运行组合）；写 Key 失败 → 409。**null 语义**：`protocol` / `key` 传 null = 忽略；D-36 参数传 null = 清空（省略 = 不改） |
 | DELETE | `/api/providers/{id}` | 删除 Provider 及其模型条目（撤销 Key；最后一个模型拒绝） | — | `{ok}`；404 / 409 |
 | GET | `/api/providers/{id}/models` | 该 Provider 的模型目录 | — | `{models: [...], default}`；404 |
-| POST | `/api/providers/{id}/models` | 手动添加模型条目（`source: manual`） | `{model, name?}` | 条目；重名 / 空 model → 400；404 |
+| POST | `/api/providers/{id}/models` | 手动添加模型条目（`source: manual`） | `{model, name?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | 条目；重名 / 空 model / 非法参数 → 400；404 |
+| PUT | `/api/providers/{id}/models/{model_id}` | 编辑模型条目（D-36 参数覆盖） | `{model?, name?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | 条目；404 / 400。**null 语义**：D-36 参数传 null = 清空回落到 Provider；`model` / `name` 传 null = 不改 |
 | DELETE | `/api/providers/{id}/models/{model_id}` | 删除模型条目（默认自动改指活条目） | — | `{ok}`；404 / 最后一个模型 → 409 |
 | POST | `/api/providers/{id}/models/discover` | 预览上游 `/models` 清单（**不落库**；anthropic → 400） | — | `{models: [{model, name, added}]}`；404 / 400（超时、大小上限、认证、重定向、格式；错误文本不含 Key） |
 | POST | `/api/auth/token` | 登录签发（`auth_enabled` 关闭时回 `{ok, note}`） | `{token}` | 关闭：`{ok, note}`；开启：`{token, expires_at, ok}`；错误口令 → 401 |
@@ -176,11 +178,12 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 > 契约细节（状态码、字段形状）以 [`backend/api/routes.py`](../backend/api/routes.py) 与运行时 Swagger `/docs` 为准；本表与路由的「方法+路径」由人工维护，无自动守卫——新增/删除端点时**必须**同步本表。
 
-**模型配置 v2（D-33 / D-34）**
+**模型配置 v2（D-33 / D-34 / D-35 / D-36）**
 
-- 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset}], models: [{id, provider_id, model, name, source}]}`。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
+- 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset, temperature?, max_tokens?, thinking?, reasoning_effort?}], models: [{id, provider_id, model, name, source, temperature?, max_tokens?, thinking?, reasoning_effort?}]}`（`?` = D-36 可选参数，缺省不写；旧文件缺这些键 = None）。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
 - 迁移：v1（无 `schema_version` 的扁平 `models` 列表）首次加载迁移为同 id 的 Provider（`protocol: openai-compatible`，base_url / api_key_env / preset 原样）+ 同 id 模型条目（model / name，`source: migrated`）；`Task.model` / `default` / credentials 键不变；迁移前把**原始字节**复制为 `models.json.bak-v1`（仅首次，已有备份不覆盖），二次加载不改文件、不再备份；坏文件 / 未来 schema 版本 quarantine + seed。
-- 协议：Provider 可存 `openai-compatible` / `anthropic`；**本片只有 OpenAI 兼容有适配器**——**显式设置 `protocol=anthropic` 的创建/编辑被拒**（400「协议尚未实现」）；库里已有的 anthropic 卡片（手工编辑 / 迁移数据）仍可编辑其它字段，但任务运行到它时显式失败；发现接口对 anthropic 返回 400「协议暂不支持发现」（Anthropic 适配器在 PR B，D-35）。
+- 协议（D-35）：Provider 可存 `openai-compatible` / `anthropic`，两种都可创建 / 编辑 / 被任务使用；未知协议 → 400「不支持的协议」。Anthropic 适配器为 **httpx 非流式 `complete()`**（`backend/core/llm/anthropic_native.py`，经统一工厂 `core/llm/factory.py` 分派）；`stream()` 显式报错。**Anthropic 路径暂不支持 `thinking` / `reasoning_effort`**（需要保留 thinking 签名，见 ADR 0011）——**写面在 protocol=anthropic 且有效值为开启 / 非空时直接 400**（不可运行组合不落卡），运行期构造客户端再守一层；显式传 `null` 清空后可切换。发现接口对 anthropic 仍返回 400「协议暂不支持发现」（Anthropic 无标准目录端点）。
+- 采样参数（D-36）：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 可挂在 Provider（默认值）与模型条目（覆盖）；`temperature` 缺省 0.2（不再硬编码在调用点），合法范围按协议（openai-compatible 0–2 / anthropic 0–1）；Anthropic 的 `max_tokens` 必填、缺省 4096，OpenAI 兼容路径不设缺省 `max_tokens`；`thinking` / `reasoning_effort` 在 OpenAI 兼容路径经 `extra_body` 透传**已校验值**（`reasoning_effort` 限 low / medium / high）。参数更新支持显式 `null` 清空（省略 = 不改），清空后回落 Provider 默认 / 客户端缺省。
 - 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) §2）。
 - 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），供 P2-3 前的设置页使用；Provider 卡片走 `/api/providers`。
 
@@ -295,7 +298,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 > 与 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」同源；冲突时以 AGENTS.md 的硬规则为准。
 
 1. **配置管理**：所有配置经 [`backend/config.py`](../backend/config.py) 的 `Settings`（pydantic-settings）从 `.env` / 环境变量读取；业务代码用 `get_settings()` 单例，**禁止**硬编码 Key/路径。例外：`ModelStore` 自带 `data/models.json`（Provider + 模型目录）与仓库外 `~/.qianfan/credentials.json`（Key 只在那里，按 Provider id 取）。
-2. **LLM 接入**：业务只依赖 `LLMClient` 抽象；`LLMResponse{content, tool_calls, raw, reasoning_content}`。现役实现 = `OpenAICompatibleClient`（唯一真实供应商路径，OpenAI 兼容）+ `MockLLMClient`（离线脚本）。**选哪套模型不再是硬编码分支**：由 `ModelStore` 的 Provider + 模型条目（`data/models.json` v2）+ 任务 `Task.model` / 全局默认决定；预设只有 DeepSeek，其余用自定义 `base_url`。Provider 的 `protocol` 已持久化，但当前只有 `openai-compatible` 有适配器——显式设置 `protocol=anthropic` 的创建/编辑被拒；已存在的 anthropic 卡片可编辑其它字段、任务运行到它时显式失败（D-35，PR B）。
+2. **LLM 接入**：业务只依赖 `LLMClient` 抽象；`LLMResponse{content, tool_calls, raw, reasoning_content}`。现役真实实现 = `OpenAICompatibleClient`（OpenAI 兼容）+ `AnthropicClient`（Anthropic Messages API，httpx 非流式 `complete()`），另有离线 `MockLLMClient`；协议分派收敛在 `core/llm/factory.py` 一处（Settings 种子路径与任务路径共用）。**选哪套模型不再是硬编码分支**：由 `ModelStore` 的 Provider + 模型条目（`data/models.json` v2）+ 任务 `Task.model` / 全局默认决定；预设只有 DeepSeek，其余用自定义 `base_url`；协议与 D-36 参数随 Provider / 条目持久化（ADR 0011）。
 3. **工具接口**：`name / description / args_schema(JSON Schema) / requires_confirm / registers_artifact / run(**kwargs) -> ToolResult`。`run` 不得抛未捕获异常（内核兜底）；新工具 `@register` 即被自动发现。**现状**：`requires_confirm` 是确认闸门退役后的**兼容字段，已无消费者**；`registers_artifact` 只剩子任务产物收集在用；MCP 工具不经 `@register`，由 `task_manager` 追加。
 4. **事件/消息协议**：后端 → 前端只经 SSE（§3.4）；`data` 字段名与后端模型一致；`frontend/src/types/index.ts` 与 `schemas.py` 字段对齐（单一来源 `schemas.py`）。字段级无机械守卫，只有事件**类型名**有。
 5. **错误口径**：见 §3.5（失败两个面 + 规则拒绝第三形状 + 只执行一次）。

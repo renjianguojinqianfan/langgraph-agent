@@ -49,6 +49,7 @@ from .schemas import (
     ModelUpdateRequest,
     ProviderCreateRequest,
     ProviderModelCreateRequest,
+    ProviderModelUpdateRequest,
     ProviderUpdateRequest,
     SendMessageRequest,
     TaskModelRequest,
@@ -412,9 +413,7 @@ def create_provider(
 ) -> ApiResponse:
     protocol = (payload.protocol or PROTOCOL_OPENAI).strip()
     try:
-        # D-35: an explicit protocol=anthropic create is refused until the
-        # adapter lands (PR B). A card that already exists on disk stays
-        # editable for its other fields and fails loudly when a task runs it.
+        # D-35: both supported protocols have clients; an unknown one is a 400.
         require_implemented_protocol(protocol)
         created = _tm(request).add_provider(
             id=payload.id,
@@ -423,6 +422,10 @@ def create_provider(
             base_url=payload.base_url,
             api_key_env=payload.api_key_env,
             key=payload.key,
+            temperature=payload.temperature,
+            max_tokens=payload.max_tokens,
+            thinking=payload.thinking,
+            reasoning_effort=payload.reasoning_effort,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -440,13 +443,18 @@ def update_provider(
 ) -> ApiResponse:
     """Partial edit; the provider id is immutable (D-34).
 
-    Only an explicit protocol change is checked against the implemented set: an
-    existing anthropic card (hand-edited / migrated data) can still be edited
-    for its other fields; running a task on it fails loudly in the manager.
+    A protocol change is validated against the supported set (unknown → 400);
+    the D-36 sampling defaults are editable here as well.
     """
-    fields = payload.model_dump(exclude_none=True)
-    if "protocol" in fields:
+    # exclude_unset distinguishes "omitted" (leave unchanged) from an explicit
+    # null (clear the D-36 override and fall back to the provider/default).
+    fields = payload.model_dump(exclude_unset=True)
+    if fields.get("protocol") is None:
+        fields.pop("protocol", None)
+    elif "protocol" in fields:
         fields["protocol"] = str(fields["protocol"]).strip() or PROTOCOL_OPENAI
+    if fields.get("key") is None:
+        fields.pop("key", None)
     try:
         if "protocol" in fields:
             require_implemented_protocol(fields["protocol"])
@@ -502,13 +510,39 @@ def create_provider_model(
 ) -> ApiResponse:
     try:
         created = _tm(request).add_model_entry(
-            provider_id, model=payload.model, name=payload.name
+            provider_id,
+            model=payload.model,
+            name=payload.name,
+            temperature=payload.temperature,
+            max_tokens=payload.max_tokens,
+            thinking=payload.thinking,
+            reasoning_effort=payload.reasoning_effort,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="provider not found") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return _envelope(data=created)
+
+
+@router.put("/providers/{provider_id}/models/{model_id}")
+def update_provider_model(
+    provider_id: str,
+    model_id: str,
+    payload: ProviderModelUpdateRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Partial edit of one catalog entry (D-36 sampling overrides live here)."""
+    try:
+        updated = _tm(request).update_model_entry(
+            provider_id, model_id, **payload.model_dump(exclude_unset=True)
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="model not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return _envelope(data=updated)
 
 
 @router.delete("/providers/{provider_id}/models/{model_id}")
