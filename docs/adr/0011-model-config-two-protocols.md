@@ -35,7 +35,7 @@ Provider + 模型目录落进 `data/models.json` v2（PR A1/A2），但当时只
    历史是从 OpenAI 风格 messages 重建的，signature 无处保存。本片选择：D-36 的 `thinking` /
    `reasoning_effort` 字段照常持久化，但**写面（store 校验）在 protocol=anthropic 且有效值为
    开启 / 非空时直接拒绝**（400 可读），运行期构造客户端再守一层；OpenAI 兼容路径按 D-36 走
-   `extra_body` 原样透传。参数可显式 `null` 清空，所以「先清空再切 anthropic」是可走通的。
+   `extra_body` 透传已校验值（`reasoning_effort` 限 low / medium / high）。参数可显式 `null` 清空，所以「先清空再切 anthropic」是可走通的。
    开 Anthropic thinking 需先解决签名保留（另开票 / 后续片），届时同步 reasoning 持久化面。
 5. **采样参数（D-36）**：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 挂在模型
    条目，Provider 可作为默认值、entry 覆盖；`temperature` 缺省 0.2（请求构造不再硬编码在调用点）；

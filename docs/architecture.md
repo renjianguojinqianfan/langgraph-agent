@@ -166,11 +166,11 @@ START → agent ──有 tool call──→ tool ──→ agent
 | POST | `/api/models/{id}/test` | 测试该条目所属 Provider + 模型连通性 | — | 测试结果；404 |
 | GET | `/api/providers` | Provider 卡片列表 + 全局默认模型条目 id | — | `{providers: [...], default}`；只回 `key_set` / `key_source` |
 | POST | `/api/providers` | 新建 Provider（**id 必填**且须匹配 `^[a-z][a-z0-9_-]*$`；`key` 只写） | `{id, name?, protocol?, base_url, api_key_env?, key?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | public provider（含 D-36 默认值）；重复 id / 非法协议或参数 → 400 |
-| PUT | `/api/providers/{id}` | 编辑 Provider（id 不可改；`key` 只写，传 `""` 清空；参数传 `null` 清空、省略=不改） | `{name?, protocol?, base_url?, api_key_env?, key?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | public provider；404/400（含未知协议 / 不可运行组合）；写 Key 失败 → 409 |
+| PUT | `/api/providers/{id}` | 编辑 Provider（id 不可改；`key` 只写，传 `""` 清空） | `{name?, protocol?, base_url?, api_key_env?, key?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | public provider；404/400（含未知协议 / 不可运行组合）；写 Key 失败 → 409。**null 语义**：`protocol` / `key` 传 null = 忽略；D-36 参数传 null = 清空（省略 = 不改） |
 | DELETE | `/api/providers/{id}` | 删除 Provider 及其模型条目（撤销 Key；最后一个模型拒绝） | — | `{ok}`；404 / 409 |
 | GET | `/api/providers/{id}/models` | 该 Provider 的模型目录 | — | `{models: [...], default}`；404 |
 | POST | `/api/providers/{id}/models` | 手动添加模型条目（`source: manual`） | `{model, name?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | 条目；重名 / 空 model / 非法参数 → 400；404 |
-| PUT | `/api/providers/{id}/models/{model_id}` | 编辑模型条目（D-36 参数覆盖；传 `null` 清空回落到 Provider） | `{model?, name?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | 条目；404 / 400 |
+| PUT | `/api/providers/{id}/models/{model_id}` | 编辑模型条目（D-36 参数覆盖） | `{model?, name?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | 条目；404 / 400。**null 语义**：D-36 参数传 null = 清空回落到 Provider；`model` / `name` 传 null = 不改 |
 | DELETE | `/api/providers/{id}/models/{model_id}` | 删除模型条目（默认自动改指活条目） | — | `{ok}`；404 / 最后一个模型 → 409 |
 | POST | `/api/providers/{id}/models/discover` | 预览上游 `/models` 清单（**不落库**；anthropic → 400） | — | `{models: [{model, name, added}]}`；404 / 400（超时、大小上限、认证、重定向、格式；错误文本不含 Key） |
 | POST | `/api/auth/token` | 登录签发（`auth_enabled` 关闭时回 `{ok, note}`） | `{token}` | 关闭：`{ok, note}`；开启：`{token, expires_at, ok}`；错误口令 → 401 |
@@ -180,10 +180,10 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 **模型配置 v2（D-33 / D-34 / D-35 / D-36）**
 
-- 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset}], models: [{id, provider_id, model, name, source}]}`。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
+- 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset, temperature?, max_tokens?, thinking?, reasoning_effort?}], models: [{id, provider_id, model, name, source, temperature?, max_tokens?, thinking?, reasoning_effort?}]}`（`?` = D-36 可选参数，缺省不写；旧文件缺这些键 = None）。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
 - 迁移：v1（无 `schema_version` 的扁平 `models` 列表）首次加载迁移为同 id 的 Provider（`protocol: openai-compatible`，base_url / api_key_env / preset 原样）+ 同 id 模型条目（model / name，`source: migrated`）；`Task.model` / `default` / credentials 键不变；迁移前把**原始字节**复制为 `models.json.bak-v1`（仅首次，已有备份不覆盖），二次加载不改文件、不再备份；坏文件 / 未来 schema 版本 quarantine + seed。
 - 协议（D-35）：Provider 可存 `openai-compatible` / `anthropic`，两种都可创建 / 编辑 / 被任务使用；未知协议 → 400「不支持的协议」。Anthropic 适配器为 **httpx 非流式 `complete()`**（`backend/core/llm/anthropic_native.py`，经统一工厂 `core/llm/factory.py` 分派）；`stream()` 显式报错。**Anthropic 路径暂不支持 `thinking` / `reasoning_effort`**（需要保留 thinking 签名，见 ADR 0011）——**写面在 protocol=anthropic 且有效值为开启 / 非空时直接 400**（不可运行组合不落卡），运行期构造客户端再守一层；显式传 `null` 清空后可切换。发现接口对 anthropic 仍返回 400「协议暂不支持发现」（Anthropic 无标准目录端点）。
-- 采样参数（D-36）：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 可挂在 Provider（默认值）与模型条目（覆盖）；`temperature` 缺省 0.2（不再硬编码在调用点），合法范围按协议（openai-compatible 0–2 / anthropic 0–1）；Anthropic 的 `max_tokens` 必填、缺省 4096，OpenAI 兼容路径不设缺省 `max_tokens`；`thinking` / `reasoning_effort` 在 OpenAI 兼容路径经 `extra_body` 原样透传。参数更新支持显式 `null` 清空（省略 = 不改），清空后回落 Provider 默认 / 客户端缺省。
+- 采样参数（D-36）：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 可挂在 Provider（默认值）与模型条目（覆盖）；`temperature` 缺省 0.2（不再硬编码在调用点），合法范围按协议（openai-compatible 0–2 / anthropic 0–1）；Anthropic 的 `max_tokens` 必填、缺省 4096，OpenAI 兼容路径不设缺省 `max_tokens`；`thinking` / `reasoning_effort` 在 OpenAI 兼容路径经 `extra_body` 透传**已校验值**（`reasoning_effort` 限 low / medium / high）。参数更新支持显式 `null` 清空（省略 = 不改），清空后回落 Provider 默认 / 客户端缺省。
 - 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) §2）。
 - 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），供 P2-3 前的设置页使用；Provider 卡片走 `/api/providers`。
 
