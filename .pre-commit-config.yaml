@@ -17,11 +17,14 @@
 # 版本由 frontend/package.json 钉——「零第二版本源」的承诺只覆盖 Python 侧。
 # 本机绝对路径不进公开仓库：entry 一律用仓库相对路径（安装说明见 README「质量门禁」）。
 #
-# 实测（2026-10-07，本机，供后人调档位参考）：
+# 实测（2026-10-07 初测，2026-11-07 补 doc-links；本机，供后人调档位参考）：
 #   ruff ~1s · mypy 冷启 27s / 热 3s · check:sse 0.6s · tsc 1.7s ·
-#   pytest 全量 93s——pytest 因此不进钩子，由 CI backend-test 兜底。
+#   doc-links ~0.6s（pre-commit 整体约 2.3s）· pytest 全量 93s——pytest 因此
+#   不进钩子，由 CI backend-test 兜底。
 #   docs-only 提交零钩子等待——唯一例外 docs/architecture.md：它是 SSE 事件面
 #   四址之一（§3.4 表），刻意保留触发（该文件本也触发全套 CI）。
+#   doc-links 只兜「改 tracked Markdown」这一面；CI paths 白名单不因此变化——
+#   纯 docs 变更按仓库惯例可直推，靠这个钩子而不是 CI 兜底（#261 D-20）。
 #
 # 逃生门：SKIP=<hook-id> 跳单个钩子；git commit --no-verify 全跳。
 # 技术开口不等于无记录——跳了要在 PR / 提交说明里写清为什么（[OVERRIDE] 文化）。
@@ -57,6 +60,13 @@ repos:
         entry: .venv311/Scripts/python.exe scripts/check_design_tokens.py
         language: system
         files: ^(DESIGN\.md|frontend/src/index\.css|scripts/check_design_tokens\.py|backend/tests/test_design_token_mirror\.py)$
+        pass_filenames: false
+
+      - id: doc-links
+        name: 文档链接（tracked Markdown 相对链接；只跑检查不改文件）
+        entry: .venv311/Scripts/python.exe scripts/check_doc_links.py
+        language: system
+        files: ^(docs/.*\.md|[^/]*\.md)$
         pass_filenames: false
 
       - id: sse-event-gate
