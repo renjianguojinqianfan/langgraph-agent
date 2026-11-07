@@ -1073,3 +1073,26 @@ def test_newer_schema_version_is_moved_aside_not_rewritten(tmp_path):
     quarantined = list(settings.data_path.glob("models.json.corrupt-*"))
     assert quarantined
     assert quarantined[0].read_text(encoding="utf-8") == future
+
+
+def test_migration_keeps_the_v1_file_when_the_backup_cannot_be_written(
+    tmp_path, monkeypatch
+):
+    settings, _ = _write_v1_models(tmp_path)
+    before = (settings.data_path / "models.json").read_bytes()
+    import pathlib
+
+    def deny(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(pathlib.Path, "write_bytes", deny)
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    # Fail-closed: the migrated view is served from memory ...
+    assert store.default_id == "aaaabbbbcccc"
+    assert store.get("aaaabbbbcccc").model == "deepseek-chat"
+    # ... while the v1 file stays byte-for-byte as it was: no v2 rewrite and
+    # no missing backup to restore from (the next start retries the migration).
+    assert store.data_file.read_bytes() == before
+    assert not store.data_file.with_name("models.json.bak-v1").exists()
