@@ -61,9 +61,11 @@ class OpenAICompatibleClient(LLMClient):
 
         `temperature` falls back to the documented 0.2 when neither the
         provider/entry config nor the caller sets it (behaviour-compatible with
-        the pre-D-36 hard-coded value). `thinking` / `reasoning_effort` go
-        through the SDK's `extra_body` because they are vendor-specific wire
-        fields rather than part of the OpenAI chat schema.
+        the pre-D-36 hard-coded value). All four knobs use the same precedence:
+        an explicit per-call kwarg wins over the provider/entry config.
+        `thinking` / `reasoning_effort` go through the SDK's `extra_body`
+        because they are vendor-specific wire fields rather than part of the
+        OpenAI chat schema.
         """
         temperature = kwargs.get("temperature", self.temperature)
         payload: Dict[str, Any] = {
@@ -73,10 +75,12 @@ class OpenAICompatibleClient(LLMClient):
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         extra_body: Dict[str, Any] = {}
-        if self.thinking is not None:
-            extra_body["thinking"] = self.thinking
-        if self.reasoning_effort is not None:
-            extra_body["reasoning_effort"] = self.reasoning_effort
+        thinking = kwargs.get("thinking", self.thinking)
+        if thinking is not None:
+            extra_body["thinking"] = thinking
+        reasoning_effort = kwargs.get("reasoning_effort", self.reasoning_effort)
+        if reasoning_effort is not None:
+            extra_body["reasoning_effort"] = reasoning_effort
         if extra_body:
             payload["extra_body"] = extra_body
         return payload

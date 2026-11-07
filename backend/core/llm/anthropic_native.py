@@ -108,8 +108,11 @@ class AnthropicClient(LLMClient):
             ) as client:
                 response = client.post(self._messages_url(), json=payload, headers=headers)
         except httpx.TimeoutException as exc:
+            # The client may have no configured timeout (httpx default applies);
+            # never render that as "(Nones)".
+            budget = f"（{self.timeout}s）" if self.timeout is not None else ""
             raise RuntimeError(
-                f"Anthropic 请求超时（{self.timeout}s）：检查 API 地址是否可达。"
+                f"Anthropic 请求超时{budget}：检查 API 地址是否可达。"
             ) from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(f"无法连接 Anthropic API：{type(exc).__name__}") from exc

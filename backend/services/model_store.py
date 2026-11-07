@@ -676,12 +676,24 @@ class ModelStore:
         """Check every entry's effective params against the provider protocol.
 
         A protocol switch (openai-compatible -> anthropic) must not leave an
-        entry behind that overrides thinking=True / reasoning_effort: the card
-        would be writable but never runnable (MEDIUM-2a).
+        entry behind that only ran under the old rules: a thinking entry, or an
+        entry-level temperature=1.5 which is legal for OpenAI-compatible but
+        above Anthropic's 0..1 (MEDIUM-2a / PR #298 rework batch 2). The check
+        uses the *effective* values (entry override else provider default).
         """
         for entry in self.model_entries.values():
             if entry.provider_id != provider.id:
                 continue
+            temperature = (
+                entry.temperature
+                if entry.temperature is not None
+                else provider.temperature
+            )
+            max_tokens = (
+                entry.max_tokens
+                if entry.max_tokens is not None
+                else provider.max_tokens
+            )
             thinking = (
                 entry.thinking if entry.thinking is not None else provider.thinking
             )
@@ -689,6 +701,13 @@ class ModelStore:
                 entry.reasoning_effort
                 if entry.reasoning_effort is not None
                 else provider.reasoning_effort
+            )
+            self._validate_model_params(
+                protocol=provider.protocol,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                thinking=thinking,
+                reasoning_effort=reasoning_effort,
             )
             self._validate_protocol_params(
                 protocol=provider.protocol,
