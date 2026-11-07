@@ -73,9 +73,9 @@ jobs:
 
       # ruff / mypy 的规则集与排除面全部写在 pyproject.toml（含每条「刻意不启用」
       # 的理由）。基线要求全净：这两步一旦变红，就是新代码带进来的，不是历史债。
-      # mypy 不传路径：files=["backend"] 由配置文件给出，生产与测试同一把闸。
+      # mypy 不传路径：files=["backend", "start.py"] 由配置文件给出，生产、测试与根脚本同一把闸。
       - name: Lint (ruff)
-        run: python -m ruff check backend scripts
+        run: python -m ruff check backend scripts start.py
 
       - name: Typecheck (mypy)
         run: python -m mypy
