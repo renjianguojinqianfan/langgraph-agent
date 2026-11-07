@@ -95,10 +95,10 @@ agent ──有 tool call──> tool ──> agent
 ```bash
 .\.venv311\Scripts\python.exe -m pip install -r requirements-dev.txt   # ruff / mypy / pre-commit
 .\.venv311\Scripts\python.exe -m pytest backend/tests/ -q
-.\.venv311\Scripts\python.exe -m ruff check backend scripts
+.\.venv311\Scripts\python.exe -m ruff check backend scripts start.py
 .\.venv311\Scripts\python.exe -m mypy
 .\.venv311\Scripts\python.exe scripts\check_design_tokens.py
-cd frontend; npx tsc --noEmit; npm test; npm run check:sse; npm run build
+cd frontend; npm run typecheck; npm test; npm run check:sse; npm run build
 ```
 
 提交前钩子每台机器装一次：`.\.venv311\Scripts\python.exe -m pre_commit install`。

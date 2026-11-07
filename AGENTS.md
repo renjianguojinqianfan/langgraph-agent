@@ -23,7 +23,7 @@
 | 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /api/tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源）；停下时可整份改（`PUT /api/tasks/{id}/plan` 写文件），改动随后续消息生效 | `docs/adr/0008`（决策 1–8）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/plan_file.py`（计划文件）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
 | 工具挂载与失败回传 | MCP 工具由 `task_manager` 显式追加（不经 `@register`）；工具每次调用**只执行一次**，失败原因原样回给模型——**无自动重试、无熔断**（ADR 0003 已退役） | `backend/services/task_manager.py`（MCP 追加）+ `backend/core/agent/nodes.py::tool_node` |
 | 密钥 | Key 只存在仓库外的 `~/.qianfan/credentials.json`（界面粘贴）或配置里写的环境变量（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）；不进仓库、日志、trace、SSE；接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无）；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文 | `backend/services/model_store.py` + `.env.example` 注释 + [docs/security.md](docs/security.md)（明文决策 / 轮换 / 暴露面） |
-| 质量门禁 | `ruff check backend scripts` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
+| 质量门禁 | `ruff check backend scripts start.py` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
 | 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部把 `DATA_DIR` / `ARTIFACTS_DIR` / `TRACE_DIR` / `CHECKPOINT_DIR` 指到检出外的临时根（**assign，不是 `setdefault`**），并把 pytest 自己的临时根钉到同一处；模块级 `TestClient` 的 lifespan 不写仓库 `data/`（#252；**接受「进程级重定向 + 会话级守卫」而非逐用例 `create_app` 注入**）；会话守卫只比对套件会碰的面（`tasks.json` / `models.json` / `logs` / `traces` / `checkpoints`）并禁止增删 `data/` 顶层条目（#264 N1）；**跑离线套件时不要同时开后台服务**（并发写入会污染守卫快照）；其余离线覆盖块（`setdefault` 语义）保持原样；SDK **自读**的 LangSmith / LangChain 开关与 Key 另由同文件的 pop 块摘除（#84）；langgraph 的 `LANGGRAPH_STRICT_MSGPACK` 同样在 import 前 pop（#212）——「离线全绿」不靠开发者 shell 恰好没设变量 | `backend/tests/conftest.py` 顶部（代码即权威）+ `test_test_isolation.py`、`test_langsmith_offline_guard.py`、`test_strict_msgpack_guard.py` |
 | 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn 区间不动，starlette 显式钉 `>=1.3.1,<2`（覆盖 2026 同批 CVE，修复线 1.3.1，见 #198）；`qianfan` 的安装入口只多一个 build 期 setuptools，运行期依赖仍只以 `requirements.txt` 为源，mcp 的 `uvicorn>=0.31.1` 元数据用根目录 `overrides.txt` 覆盖（区间不变） | `requirements.txt` 注释 + `pyproject.toml` 头注 |
 | 真实模型验证 | 发布前 / 换供应商时，按 [9 个场景](docs/manual-verification.md) **启服务、在网页端手动跑一遍**（CI 不再跑真模型）；README **不记**跑过的时间与模型 | `docs/manual-verification.md` + [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
@@ -36,7 +36,7 @@
 |---|---|---|
 | 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：qoder 实施 + `code-review` 自评审 + `neat-freak` 文档收尾（步 3.5，能力面/接口/配置语义变了必须同步文档）+ 提 PR；opencode 独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
-| 前端改动 | `frontend/package.json` + `.github/workflows/ci.yml` 的 frontend-build job；视觉 / 交互 / 组件**设计规则（已交付）**加读 [`docs/frontend-design.md`](docs/frontend-design.md) | `npm ci` 口径；`npm run typecheck` / `npm test` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse`；设计 token 面（`DESIGN.md` ↔ `index.css` `@theme`）→ `python scripts/check_design_tokens.py`；键盘与 #189 回归见设计基线 §6 / §10 |
+| 前端改动 | `frontend/package.json` + `.github/workflows/ci.yml` 的 frontend-build job；视觉 / 交互 / 组件**设计规则（已交付）**加读 [`docs/frontend-design.md`](docs/frontend-design.md) | `npm ci` 口径；`npm run typecheck`（双项目：`tsconfig.json` + `tsconfig.node.json`）/ `npm test` 与 `npm run build` 通过；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse`；设计 token 面（`DESIGN.md` ↔ `index.css` `@theme`）→ `python scripts/check_design_tokens.py`；键盘与 #189 回归见设计基线 §6 / §10 |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/archive/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑）+ `backend/services/plan_file.py`（计划文件） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源） |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
@@ -57,7 +57,7 @@
 .\.venv311\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py backend/tests/test_test_isolation.py backend/tests/test_server_lock.py -q -rs
 
 # 质量门禁（与 CI backend-test 同命令；工具链：pip install -r requirements-dev.txt）
-.\.venv311\Scripts\python.exe -m ruff check backend scripts
+.\.venv311\Scripts\python.exe -m ruff check backend scripts start.py
 .\.venv311\Scripts\python.exe -m mypy
 
 # 文档链接（改 docs/ 或根级 md 必跑；只校验 tracked Markdown 的相对链接）
@@ -74,7 +74,7 @@
 cd frontend; npm run dev
 
 # 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm test → npm run check:sse → npm run build
-npx tsc --noEmit     # 本地快检，0 错误
+npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.node.json  # 本地快检，双项目 0 错误
 npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面必跑，细则见 docs/architecture.md §3.4
 ```
 

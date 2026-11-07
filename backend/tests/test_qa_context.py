@@ -162,6 +162,7 @@ def _runtime_with(settings: Settings, event_bus: EventBus) -> AgentRuntime:
 
 def test_build_messages_compresses_and_writes_state():
     settings = Settings(
+        _env_file=None,
         context_token_budget=50,
         context_keep_recent=4,
         context_max_messages=0,
@@ -186,7 +187,7 @@ def test_build_messages_compresses_and_writes_state():
 
 
 def test_build_messages_no_compression_returns_unchanged():
-    settings = Settings(context_token_budget=1_000_000, context_keep_recent=10)
+    settings = Settings(_env_file=None, context_token_budget=1_000_000, context_keep_recent=10)
     bus = EventBus()
     rt = _runtime_with(settings, bus)
 

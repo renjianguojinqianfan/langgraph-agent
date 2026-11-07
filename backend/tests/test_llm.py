@@ -99,13 +99,13 @@ def test_make_default_mock_client_is_runnable():
 
 # ── create_llm_client factory ──
 def test_factory_returns_mock_when_use_mock_llm_true():
-    s = Settings(use_mock_llm=True, llm_provider="openai")
+    s = Settings(_env_file=None, use_mock_llm=True, llm_provider="openai")
     client = create_llm_client(s)
     assert isinstance(client, MockLLMClient)
 
 
 def test_factory_returns_openai_client_for_deepseek_provider():
-    s = Settings(use_mock_llm=False, llm_provider="deepseek", llm_base_url="", llm_api_key="sk-test")
+    s = Settings(_env_file=None, use_mock_llm=False, llm_provider="deepseek", llm_base_url="", llm_api_key="sk-test")
     client = create_llm_client(s)
     assert isinstance(client, OpenAICompatibleClient)
     assert "deepseek" in client.base_url
@@ -113,14 +113,14 @@ def test_factory_returns_openai_client_for_deepseek_provider():
 
 def test_factory_without_a_preset_falls_back_to_deepseek():
     # M1: DeepSeek is the only built-in preset; openai / ollama are gone.
-    s = Settings(use_mock_llm=False, llm_provider="ollama", llm_base_url="", llm_api_key="")
+    s = Settings(_env_file=None, use_mock_llm=False, llm_provider="ollama", llm_base_url="", llm_api_key="")
     client = create_llm_client(s)
     assert isinstance(client, OpenAICompatibleClient)
     assert "deepseek" in client.base_url
 
 
 def test_factory_uses_explicit_base_url_when_provided():
-    s = Settings(use_mock_llm=False, llm_provider="openai", llm_base_url="https://my.gw/v1", llm_api_key="x")
+    s = Settings(_env_file=None, use_mock_llm=False, llm_provider="openai", llm_base_url="https://my.gw/v1", llm_api_key="x")
     client = create_llm_client(s)
     assert client.base_url == "https://my.gw/v1"
 
@@ -152,7 +152,7 @@ def test_factory_reads_mock_llm_script_path(tmp_path):
             "final_answer": "mock confirm demo finished.",
         },
     )
-    client = create_llm_client(Settings(use_mock_llm=True, mock_llm_script_path=path))
+    client = create_llm_client(Settings(_env_file=None, use_mock_llm=True, mock_llm_script_path=path))
 
     assert isinstance(client, MockLLMClient)
     assert client.plan == ["Run a probe command"]
@@ -170,16 +170,16 @@ def test_factory_falls_back_to_default_script_when_injected_script_unreadable(tm
     expected = [tc["name"] for tc in make_default_mock_client().tool_calls]
 
     missing = create_llm_client(
-        Settings(use_mock_llm=True, mock_llm_script_path=str(tmp_path / "absent.json"))
+        Settings(_env_file=None, use_mock_llm=True, mock_llm_script_path=str(tmp_path / "absent.json"))
     )
     assert [tc["name"] for tc in missing.tool_calls] == expected
 
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")
-    invalid = create_llm_client(Settings(use_mock_llm=True, mock_llm_script_path=str(broken)))
+    invalid = create_llm_client(Settings(_env_file=None, use_mock_llm=True, mock_llm_script_path=str(broken)))
     assert [tc["name"] for tc in invalid.tool_calls] == expected
 
-    unset = create_llm_client(Settings(use_mock_llm=True, mock_llm_script_path=""))
+    unset = create_llm_client(Settings(_env_file=None, use_mock_llm=True, mock_llm_script_path=""))
     assert [tc["name"] for tc in unset.tool_calls] == expected
 
 
@@ -195,7 +195,7 @@ def test_llm_client_passes_bounded_request_timeout(monkeypatch):
             captured.update(kwargs)
 
     monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
-    s = Settings(use_mock_llm=False, llm_base_url="https://gw/v1", llm_api_key="x", llm_model="m")
+    s = Settings(_env_file=None, use_mock_llm=False, llm_base_url="https://gw/v1", llm_api_key="x", llm_model="m")
     create_llm_client(s)
     assert captured.get("timeout") == s.llm_request_timeout_sec
     assert 0 < s.llm_request_timeout_sec < 600, "must stay below the SDK default"

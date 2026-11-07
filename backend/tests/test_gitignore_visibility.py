@@ -16,12 +16,13 @@ import pytest
 from backend.config import Settings
 from backend.core.tools.file_io import GlobTool, GrepTool, LsTool, ReadTool
 from backend.core.workspace_files import workspace_files
+from backend.tests.conftest import make_isolated_settings
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
 
 
 def _settings(tmp_path: Path, workspace: Path) -> Settings:
-    return Settings(
+    return make_isolated_settings(
         data_dir=str(tmp_path / "data"),
         artifacts_dir=str(workspace),
         trace_dir=str(tmp_path / "traces"),

@@ -14,6 +14,7 @@ from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.services.event_bus import EventBus
+from backend.tests.conftest import make_isolated_settings
 
 
 class _FailTool(BaseTool):
@@ -81,7 +82,7 @@ def test_tool_node_executes_each_call_once():
     deterministic failure ran three times. The model must instead see the single
     failure and decide what to do next.
     """
-    settings = Settings()
+    settings = Settings(_env_file=None)
     tool = _FailTool(settings)
     bus = EventBus()
     events = []
@@ -101,7 +102,7 @@ def test_tool_node_executes_each_call_once():
 
 
 def test_tool_node_unknown_tool_does_not_crash():
-    settings = Settings()
+    settings = Settings(_env_file=None)
     bus = EventBus()
     events = []
     bus.subscribe("t2", lambda e: events.append(e))
@@ -138,7 +139,7 @@ def test_tool_node_unknown_tool_does_not_crash():
 
 def _bus_runtime(tools: list, task_id: str = "t95") -> tuple:
     """An ``AgentRuntime`` plus the list its events land in."""
-    settings = Settings()
+    settings = make_isolated_settings()
     bus = EventBus()
     events: list = []
     bus.subscribe(task_id, lambda e: events.append(e))

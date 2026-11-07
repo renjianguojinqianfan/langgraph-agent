@@ -78,7 +78,7 @@ known-first-party = ["backend"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["backend"]            # 生产 + 测试全覆盖（spec US11：合入时基线全净）
+files = ["backend", "start.py"]  # 生产 + 测试 + 根脚本（#261 D-19）全覆盖（spec US11：合入时基线全净）
 ignore_missing_imports = true  # 无 stub 的三方库（mcp / duckduckgo_search 等）不报噪音
 warn_unused_ignores = true     # 防止 `# type: ignore` 沉淀成新的债
 show_error_codes = true

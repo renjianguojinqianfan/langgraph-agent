@@ -88,7 +88,7 @@ class _FakeDDGS:
 
 def test_web_search_returns_structured_results():
     with patch("duckduckgo_search.DDGS", _FakeDDGS):
-        tool = WebSearchTool(Settings(search_provider="duckduckgo"))
+        tool = WebSearchTool(Settings(_env_file=None, search_provider="duckduckgo"))
         res = tool.run(query="latest AI agents", max_results=3)
     assert res.success is True
     results = res.data["results"]
@@ -98,7 +98,7 @@ def test_web_search_returns_structured_results():
 
 
 def test_web_search_requires_query():
-    tool = WebSearchTool(Settings())
+    tool = WebSearchTool(Settings(_env_file=None))
     res = tool.run(query="   ")
     assert res.success is False
     assert "query" in res.error.lower()

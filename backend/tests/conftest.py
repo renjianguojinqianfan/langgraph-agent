@@ -256,6 +256,29 @@ def _guard_repo_data_untouched():
     assert not problems, "the test session modified the checkout's data/: " + "; ".join(problems)
 
 
+def make_isolated_settings(**overrides):
+    """D-18: construct ``Settings`` with the developer's ``.env`` disabled.
+
+    Runtime ``pydantic-settings`` 2.16.1 accepts ``_env_file`` (verified with
+    ``inspect.signature``), but pydantic v2's ``dataclass_transform`` makes mypy
+    synthesise a field-only ``Settings.__init__`` that lacks it. This
+    deliberately **unannotated** factory is the single seam for call sites whose
+    enclosing function is annotated: the repo's mypy policy only checks
+    annotated bodies (see ``pyproject.toml``), and no ``type: ignore`` /
+    ``noqa`` may be added here or anywhere else. Every direct ``Settings(...)``
+    call still has to spell ``_env_file=`` (pinned by
+    ``test_settings_isolation.py``).
+
+    Known cost of this seam (decision B, #261 D-18): the 12 annotated call
+    sites lose mypy's field-name checking for ``Settings(...)``. pydantic's
+    ``extra='ignore'`` silently drops unknown field names, so a typo in a path
+    field would fall back to the default (possibly a repository-relative path)
+    instead of failing at import — the session data guard in this file is the
+    backstop that turns such a mistake red. Accepted trade-off, recorded here.
+    """
+    return Settings(_env_file=None, **overrides)
+
+
 def make_settings(tmp_path: Path, **overrides) -> Settings:
     """Build an isolated :class:`Settings` rooted at ``tmp_path``.
 
@@ -286,7 +309,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         mcp_enabled=False,
     )
     base.update(overrides)
-    return Settings(**base)
+    return make_isolated_settings(**base)
 
 
 def make_manager(
@@ -325,6 +348,46 @@ def make_manager(
     if _request is not None:
         _request.addfinalizer(tm.shutdown)
     return tm
+
+
+def cleanup_managers(managers: list) -> None:
+    """D-17 / #261 AC3: clean up every manager, then re-raise the first failure.
+
+    A single failing ``cleanup()`` must not skip the remaining managers, and the
+    loop lives here (not inline in the fixture) so it has direct unit tests:
+    deleting the fixture's teardown call no longer hides behind green tests.
+    """
+    errors: list[Exception] = []
+    for manager in managers:
+        try:
+            manager.cleanup()
+        except Exception as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
+
+
+@pytest.fixture
+def mcp_managers():
+    """#261 AC3: every ``McpClientManager`` built here is cleaned up in teardown.
+
+    The old tests called ``mgr.cleanup()`` at the end of each body; an assertion
+    failure before that line leaked the MCP child process. Registering cleanup
+    in the fixture makes the failure path safe without touching any assertion.
+    ``make.created`` exposes the list so tests can prove the registration.
+    """
+    from backend.core.mcp.client import McpClientManager
+
+    created: list = []
+
+    def make(settings):
+        manager = McpClientManager(settings)
+        created.append(manager)
+        return manager
+
+    make.created = created
+    yield make
+    cleanup_managers(created)
 
 
 @pytest.fixture

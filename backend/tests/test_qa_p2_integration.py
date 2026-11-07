@@ -98,6 +98,7 @@ def test_smoke_race_regression_multiple_runs(tmp_path):
 def test_mcp_tools_are_mounted(tmp_path):
     """MCP tools appear alongside the built-ins."""
     settings = Settings(
+        _env_file=None,
         data_dir=str(tmp_path),
         artifacts_dir=str(tmp_path / "artifacts"),
         mcp_enabled=True,

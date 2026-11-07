@@ -2,6 +2,12 @@
 
 Wires configuration, the event bus, persistence and the task manager into
 ``app.state`` and exposes the REST + SSE API under ``/api``.
+
+``create_app(settings)`` is the assembly seam (D-16): the module-level ``app``
+is built from the process settings so ``uvicorn backend.main:app`` keeps
+working, while tests can build a throwaway app with their own ``Settings`` and
+assert against the real middleware stack (CORS / TrustedHost / lifespan /
+routes) instead of a hand-built probe.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 
 from .api.routes import router
-from .config import get_settings
+from .config import Settings, get_settings
 from .services.auth import (
     TokenIssuer,
     auth_state_message,
@@ -37,72 +43,10 @@ settings = get_settings()
 ensure_startup_auth_configured(settings)
 logger.info(auth_state_message(settings))
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings.data_path.mkdir(parents=True, exist_ok=True)
-    settings.artifacts_path.mkdir(parents=True, exist_ok=True)
-    app.state.settings = settings
-    app.state.event_bus = EventBus()
-    app.state.persistence = Persistence(settings)
-    # P1 item 5: token issuer (used by verify_token when auth_enabled=True).
-    app.state.auth = TokenIssuer(settings.auth_token, settings.auth_token_ttl_sec)
-    app.state.task_manager = TaskManager(
-        settings,
-        app.state.event_bus,
-        app.state.persistence,
-        default_workspace=Path.cwd(),
-    )
-    yield
-    # P2 item 1: gracefully shut down MCP child processes on app exit so no
-    # stdio subprocess survives the server. #260: the shutdown path itself
-    # logs each step (TaskManager.shutdown); a failure here must reach the log
-    # file as well, not only stdout.
-    logger.info("app shutdown: releasing task manager resources")
-    try:
-        app.state.task_manager.shutdown()
-    except Exception:  # pragma: no cover - defensive
-        logger.exception("task_manager.shutdown failed")
-
-
-app = FastAPI(title="LangGraph Autonomous Task Agent", version="0.1.0", lifespan=lifespan)
-
-
-@app.exception_handler(PersistenceError)
-async def _persistence_error_handler(
-    _request: Request, exc: PersistenceError
-) -> JSONResponse:
-    """A failed tasks.json write is a server-side failure, not a silent 200."""
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 # DNS-rebinding guard (ADR 0009 decision 5): the service is opened as localhost,
 # so any other Host name is refused before routing. Independent of
 # ``settings.host`` on purpose — this chapter does not support remote access.
-# Added last = outermost.
 TRUSTED_HOSTS = ["127.0.0.1", "localhost"]
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
-
-app.include_router(router, prefix="/api")
-
-
-@app.get("/health")
-def health(request: Request) -> dict:
-    s = getattr(request.app.state, "settings", settings)
-    return {
-        "status": "ok",
-        "mock_llm": s.use_mock_llm,
-        "auth_enabled": s.auth_enabled,  # P1 item 5: frontend login gate
-        # W2: the launcher's one-time identity, so a second launch can tell
-        # this backend apart from an unrelated program on the same port.
-        "instance": os.environ.get("QIANFAN_INSTANCE", ""),
-    }
 
 
 def mount_frontend(app: FastAPI, dist: Path) -> bool:
@@ -121,4 +65,75 @@ def mount_frontend(app: FastAPI, dist: Path) -> bool:
     return True
 
 
-mount_frontend(app, settings.frontend_dist_path)
+def create_app(settings: Settings) -> FastAPI:
+    """Assemble the HTTP app around ``settings`` (D-16 test seam).
+
+    Production calls this once with the process settings; tests pass their own
+    throwaway ``Settings`` and get the same middleware order and routes:
+    CORSMiddleware is added first, TrustedHost last (= outermost).
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        settings.data_path.mkdir(parents=True, exist_ok=True)
+        settings.artifacts_path.mkdir(parents=True, exist_ok=True)
+        app.state.settings = settings
+        app.state.event_bus = EventBus()
+        app.state.persistence = Persistence(settings)
+        # P1 item 5: token issuer (used by verify_token when auth_enabled=True).
+        app.state.auth = TokenIssuer(settings.auth_token, settings.auth_token_ttl_sec)
+        app.state.task_manager = TaskManager(
+            settings,
+            app.state.event_bus,
+            app.state.persistence,
+            default_workspace=Path.cwd(),
+        )
+        yield
+        # P2 item 1: gracefully shut down MCP child processes on app exit so no
+        # stdio subprocess survives the server. #260: the shutdown path itself
+        # logs each step (TaskManager.shutdown); a failure here must reach the log
+        # file as well, not only stdout.
+        logger.info("app shutdown: releasing task manager resources")
+        try:
+            app.state.task_manager.shutdown()
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("task_manager.shutdown failed")
+
+    app = FastAPI(title="LangGraph Autonomous Task Agent", version="0.1.0", lifespan=lifespan)
+
+    @app.exception_handler(PersistenceError)
+    async def _persistence_error_handler(
+        _request: Request, exc: PersistenceError
+    ) -> JSONResponse:
+        """A failed tasks.json write is a server-side failure, not a silent 200."""
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    # Added last = outermost.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
+
+    app.include_router(router, prefix="/api")
+
+    @app.get("/health")
+    def health(request: Request) -> dict:
+        s = getattr(request.app.state, "settings", settings)
+        return {
+            "status": "ok",
+            "mock_llm": s.use_mock_llm,
+            "auth_enabled": s.auth_enabled,  # P1 item 5: frontend login gate
+            # W2: the launcher's one-time identity, so a second launch can tell
+            # this backend apart from an unrelated program on the same port.
+            "instance": os.environ.get("QIANFAN_INSTANCE", ""),
+        }
+
+    mount_frontend(app, settings.frontend_dist_path)
+    return app
+
+
+app = create_app(settings)
