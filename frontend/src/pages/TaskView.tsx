@@ -14,6 +14,7 @@ import {
 import { getTask, getTaskSnapshot, listTasksSnapshot } from "../api/client";
 import { useIsLeftDrawer, useIsRightDrawer } from "../lib/breakpoints";
 import { drawerView, type DrawerSide } from "../lib/drawer";
+import { useDrawerFocus } from "../hooks/useDrawerFocus";
 import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
 import { needsStatusRefetch } from "../store/reduceTask";
@@ -26,14 +27,6 @@ import {
   listLoadOutcome,
 } from "../lib/failureStates";
 import { isParked } from "../lib/taskState";
-
-/** Mirror `inert` into `aria-hidden` so the accessibility tree follows focus. */
-function setInert(el: HTMLElement | null, inert: boolean) {
-  if (!el) return;
-  el.inert = inert;
-  if (inert) el.setAttribute("aria-hidden", "true");
-  else el.removeAttribute("aria-hidden");
-}
 
 export function TaskView() {
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
@@ -69,7 +62,7 @@ export function TaskView() {
   const railRef = useRef<HTMLElement>(null);
   const dashRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
-  const navRef = useRef<HTMLElement>(null);
+  const skipNavRef = useRef<HTMLElement>(null);
   const view = drawerView({
     leftNarrow: isLeftDrawer,
     rightNarrow: isRightDrawer,
@@ -79,17 +72,28 @@ export function TaskView() {
   const railInert = isLeftDrawer && view.justify !== "left";
   const dashInert = isRightDrawer && view.justify !== "right";
 
-  // A translated drawer is still in the tab order; inert removes it from focus
-  // and the accessibility tree while the visual slide animation stays intact.
-  // When a drawer IS justified, the rest of the page (center column + the other
-  // aside) goes inert instead; the scrim button is a sibling, so it stays the
-  // pointer path until Phase B's focus layer lands.
-  useEffect(() => {
-    setInert(railRef.current, railInert);
-    setInert(dashRef.current, dashInert);
-    setInert(mainRef.current, view.backgroundInert);
-    setInert(navRef.current, view.backgroundInert);
-  }, [railInert, dashInert, view.backgroundInert]);
+  // D-27: the hook is the only writer of `inert`/`aria-hidden` (background
+  // targets while justified, off-screen drawer edges when narrow-but-closed)
+  // and owns focus entry/trap/Esc/restore. `active` follows D-26's `justify`,
+  // so a drawer that stopped being narrow or hid behind Trace never traps.
+  const containerRef = view.justify === "right" ? dashRef : railRef;
+  const inertTargets =
+    view.justify === "left"
+      ? [mainRef, dashRef, skipNavRef]
+      : view.justify === "right"
+        ? [mainRef, railRef, skipNavRef]
+        : [];
+  useDrawerFocus({
+    active: view.justify !== null,
+    containerRef,
+    inertTargets,
+    backgroundInert: view.backgroundInert,
+    edges: [
+      { ref: railRef, inert: railInert },
+      { ref: dashRef, inert: dashInert },
+    ],
+    onClose: () => setOpen(null),
+  });
 
   // D-26: widening past the breakpoint (or opening Trace) closes the drawer, so
   // no scrim can outlive the state that justified it.
@@ -263,7 +267,7 @@ export function TaskView() {
       }}
     >
       {task && !traceOpen && (
-        <nav ref={navRef} aria-label="跳到对话记录">
+        <nav ref={skipNavRef} aria-label="跳到对话记录">
           <a
             href="#conversation"
             className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-control focus:bg-surface-sheet focus:px-3 focus:py-1.5 focus:text-meta focus:text-primary"
@@ -276,13 +280,25 @@ export function TaskView() {
       <aside
         id="task-rail"
         ref={railRef}
-        aria-label="任务历史"
+        aria-label={view.justify === "left" ? "任务列表" : "任务历史"}
+        role={view.justify === "left" ? "dialog" : undefined}
+        aria-modal={view.justify === "left" ? true : undefined}
         className={cx(
           "w-[264px] shrink-0 bg-surface-column border-r border-rule",
           "max-[860px]:fixed max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:z-30 max-[860px]:w-[264px] max-[860px]:max-w-[80vw] max-[860px]:transition-transform max-[860px]:duration-[220ms] max-[860px]:ease-[cubic-bezier(.32,.72,0,1)]",
           open === "left" ? "max-[860px]:translate-x-0" : "max-[860px]:-translate-x-full"
         )}
       >
+        {view.justify === "left" && (
+          <div className="flex shrink-0 justify-end border-b border-rule px-2 py-2">
+            <IconButton
+              type="button"
+              aria-label="关闭任务列表"
+              icon="close"
+              onClick={() => setOpen(null)}
+            />
+          </div>
+        )}
         <TaskRail />
       </aside>
 
@@ -326,13 +342,25 @@ export function TaskView() {
       <aside
         id="task-dash"
         ref={dashRef}
-        aria-label="工作区"
+        aria-label={view.justify === "right" ? "工作区与文件" : "工作区"}
+        role={view.justify === "right" ? "dialog" : undefined}
+        aria-modal={view.justify === "right" ? true : undefined}
         className={cx(
           "w-[420px] shrink-0 bg-surface-column border-l border-rule",
           "max-[1180px]:fixed max-[1180px]:inset-y-0 max-[1180px]:right-0 max-[1180px]:z-30 max-[1180px]:w-[420px] max-[1180px]:max-w-[calc(100vw_-_2rem)] max-[1180px]:transition-transform max-[1180px]:duration-[220ms] max-[1180px]:ease-[cubic-bezier(.32,.72,0,1)]",
           open === "right" ? "max-[1180px]:translate-x-0" : "max-[1180px]:translate-x-full"
         )}
       >
+        {view.justify === "right" && (
+          <div className="flex shrink-0 justify-end border-b border-rule px-2 py-2">
+            <IconButton
+              type="button"
+              aria-label="关闭工作区"
+              icon="close"
+              onClick={() => setOpen(null)}
+            />
+          </div>
+        )}
         <DashTabs
           task={task}
           tab={dash.tab}
