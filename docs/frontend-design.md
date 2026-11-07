@@ -193,13 +193,13 @@
 
 - [ ] 设置页按 Provider 成卡：名称 / ID / 地址 / 协议 / Key 状态（已设（粘贴|环境变量）/ 未设）可见（ID 为小号等宽文本，同时进入卡片操作按钮的可访问名称）；首次打开加载失败时显示原因与「重试」按钮（后台恢复后点击继续）；DevTools Network 看 `GET /providers` 与 `GET /models`，响应只有 `key_set` / `key_source`，任何响应与页面都不出现 Key 明文。
 - [ ] 新建（自定义模型 API）：填 ID / 名称 / 地址 / 协议 / 环境变量名 / Key；ID 大写或数字开头、地址非 http(s)、环境变量名非法时字段错误可读（原因 + 下一步）；HTTP 400 服务端原因原样显示不吞。
-- [ ] 新建协议选 Anthropic 并保存：后端 400「协议尚未实现」可读显示（选项在、门在后端）；不产生坏卡。已有 anthropic 卡可改名称 / 地址 / 环境变量 / Key 而不被 400。
+- [ ] 新建协议选 Anthropic 并保存：创建 / 编辑成功（非流式适配器已可用，卡片协议显示「Anthropic 原生（非流式）」）；提示文案明示两项剩余限制「模型目录发现暂不支持；thinking / reasoning_effort 对 Anthropic 暂不支持」。已有 anthropic 卡可改名称 / 地址 / 环境变量 / Key；服务端对不支持的参数组合给出可读 400 时原样显示原因。
 - [ ] 新建（第三方模型供应商）：后端有 `preset` 卡片时列出（如「默认配置」），选中自动带地址 / 协议 / 环境变量；没有预设时给出「改用自定义」下一步；未选预设时创建按钮禁用并说明原因。
 - [ ] 编辑 Provider：ID 只读；改名称 / 地址 / 协议生效；写 Key 只写不读（保存后状态变已设）；粘贴 Key 的「清除已保存的 Key」二次确认后回退到环境变量 / 未设。
 - [ ] 删除 Provider：卡上「删除」需二次确认，确认态明文说明「会级联删除该 Provider 下全部模型条目与 Key；引用它的任务下一轮会失败」；最后一模型的 Provider 删除被 409 拒绝并显示原因与下一步，不破坏其余卡。
 - [ ] 设为默认：点某 Provider 卡的「设为默认」→ 该卡出现「默认」标记、其首条目在目录行标「默认」，原 Provider 的标记消失；刷新 / 重开设置后标记保持。该 Provider 已是默认时按钮禁用并说明原因；目录为空时按钮禁用并提示先添加模型。
 - [ ] 模型目录：手动添加模型 ID / 显示名；空 ID、重复 ID 错误可读；Enter 连按只发一次请求；逐条「测试」能给出连接结果；逐条删除需二次确认（确认态说明引用它的任务下一轮会失败），目录最后一条被 409 拒绝并提示。
-- [ ] 获取可用模型：Key 错 → 「认证失败（HTTP 401）…」；地址错 → HTTP / 超时原因；两者都带「也可以手动添加模型 ID」；预览勾选后点「加入目录」才落库。**关闭/重开残留**：获取预览后不加入 → 关闭设置 → 编辑该 Provider 的地址 / Key → 重开 → 旧预览、删除确认、添加表单与错误提示均不出现（临时状态随会话清空）。Anthropic 卡按钮禁用并给出手动添加提示（文案依赖 PR #298，合并 rebase 后同步）。
+- [ ] 获取可用模型：Key 错 → 「认证失败（HTTP 401）…」；地址错 → HTTP / 超时原因；两者都带「也可以手动添加模型 ID」；预览勾选后点「加入目录」才落库。**关闭/重开残留**：获取预览后不加入 → 关闭设置 → 编辑该 Provider 的地址 / Key → 重开 → 旧预览、删除确认、添加表单与错误提示均不出现（临时状态随会话清空）。Anthropic 卡的「获取可用模型」禁用并给出手动添加提示（服务端对 anthropic 的发现请求仍返回「协议暂不支持发现」，页面显示原因与下一步）。
 - [ ] Composer：`<select>` 按 Provider `<optgroup>` 分组；切换模型后任务持久化（刷新仍在）；运行中切换显示「下一轮生效」，停止 / 失败态切换成功显示「已切换」；切换任务后 switchNote 不串。
 - [ ] Composer 旧任务：`Task.model` 为条目 id 时显示条目名称；条目已被删 / 目录外时回退显示原始 id 且仍可发送（不静默改投默认模型）。
 - [ ] Composer 目录外模型：现有任务选「目录外模型…」，填 Provider + 裸模型 ID → 切换成功、自动进目录、Composer 出现该条目；新建任务同路径先加入目录再创建；切换失败显示原因 + 下一步（Provider 地址 / Key / 协议）；断网显示「无法连接后台」。
@@ -269,3 +269,4 @@
 - 2026-11-07（P1-2 / #258）：长内容断行契约收敛到 `lib/longContent`（`LONG_TEXT`，用于 Markdown 根 / 用户气泡 / 失败块 / 工具入参出参，静态源码守卫防回退）；工具长入参「展开全部 / 收起」（`lib/toolInput`，800 code point 阈值）；事件账本 heartbeat 不进用户面（`lib/eventLedger.isLedgerType` 排除 + `ledgerEvents` 去重 / 100 上限 / 倒序；store `applyEvent` 早退且只替换真正变化的 slice；Trace 保留原始流）；请求 / 渲染去重（选中已停下任务 parked 快照只拉一次、PlanPane 初载不自触发、`task_created` 回放不 bump `listRevision`、Markdown `memo` + 结构守卫）；Composer / FilePane 错误文案带原因与下一步、文件面板「重试」、状态行 `role=status`；§6 增 P1-2 手测清单。
 - 2026-11-07（P2-1 / #232）：Composer 拆分——`lib/composerState` 纯函数 `composerView`（状态矩阵与逐字文案，入参含 `sendError` 以保住 `bottomNote` 纯函数）与 `clearedDraft`；`hooks/useComposerSend` 收口 text / busy / sendError 与 `createTask` / `sendMessage`（返回同一份 `view` 供组件渲染，避免双算），`hooks/useComposerControls` 收口 draftMode / draftModel / switchNote 与 `putMode` / `putTaskModel` + `getTask`；`Composer.tsx` 276 → 164 行，只留结构、Enter 处理与 reset effect；`BACKEND_UNREACHABLE` 抽 `lib/copy`；行为与逐字文案不变，§6 增拆分手测清单。
 - 2026-11-07（P2-3 / #243，D-37）：设置页 Provider 化——`store/modelStore` 改为「Provider 卡片（`GET /providers`）+ 扁平模型条目（`GET /models` 兼容投影，一次请求覆盖全部条目 id）」双读；`components/settings` 拆为 `SettingsDialog`（卡片列表编排）+ `ProviderCard`（卡片事实 / 设为默认 / 编辑 / 删除二次确认 / 模型目录 / 发现预览）+ `ProviderDialog`（新建两页签：第三方预设 / 自定义，编辑 id 只读、Key 只写、清除粘贴 Key 二次确认）；`lib/modelCatalog` 收敛分组、默认动作（全局默认是条目级，卡上「设为默认」取该 Provider 首条目）、表单校验、发现勾选与失败文案（原因 + 下一步）；Composer 模型控件改原生 `<select>` + `<optgroup>`，新增「目录外模型…」行（现有任务走 `PUT /tasks/{id}/model` 的 `{provider, model}` 自动建 manual 条目；新建任务因创建接口只收条目 id，先 `POST /providers/{id}/models` 再创建），旧 `Task.model` 条目 id 用回退 option 兼容显示；旧 `/api/models` 消费点保留（不再有扁平设置表单的写路径，投影读仍是条目映射的唯一读取）；§6 增 P2-3 手测清单。
+- 2026-11-07（P2-3 / #243，rebase 到 #298 合并后）：协议文案按已合并事实更新——Anthropic 原生（非流式）创建 / 编辑可用（不再有「保存 400 / 后端 PR B」说法）；提示明示两项剩余限制：模型目录发现仅 OpenAI 兼容支持、thinking / reasoning_effort 对 Anthropic 暂不支持；§6 对应手测项与纯函数断言同步（`PROTOCOL_OPTIONS` 的 hint 不得回退到旧 400 文案）。

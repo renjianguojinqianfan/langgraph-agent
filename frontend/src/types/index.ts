@@ -127,14 +127,11 @@ export interface CreateTaskRequest {
 
 export type ModelKeySource = "pasted" | "env" | "none";
 
-/** Provider protocol (D-34/D-35). `anthropic` is storable/selectable but its
- * adapter lands in PR B: an explicit create/edit is refused with 400 until then
- * (`ModelStore.require_implemented_protocol`), so the option renders while the
- * service decides.
- *
- * #298 DEPENDENCY (deferred): after PR #298 merges (dual-protocol backend) this
- * comment — together with the 400 copy in ProviderDialog / lib/modelCatalog and
- * docs §6 — must be rebound to the merged fact. */
+/** Provider protocol (D-34/D-35). Both values are implemented as of #298:
+ * `openai-compatible` (chat/completions) and `anthropic` (Messages,
+ * non-streaming). Two limits remain server-enforced: model discovery supports
+ * only OpenAI-compatible, and Anthropic rejects `thinking` /
+ * `reasoning_effort` parameters at the write face (readable 400). */
 export type ModelProtocol = "openai-compatible" | "anthropic";
 
 /** Public v1-shaped model profile: the legacy `/api/models` compatibility

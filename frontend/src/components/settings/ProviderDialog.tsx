@@ -49,8 +49,9 @@ function emptyValues(): ProviderFormValues {
  * suppliers (only when the backend actually reports `preset` cards — the
  * service has no separate preset catalog, so the page never invents one) and a
  * fully custom API. Edit keeps the id immutable and never re-sends an unchanged
- * protocol (an existing anthropic card must stay editable for its other fields;
- * an explicit protocol write is what the service refuses until PR B).
+ * protocol: an existing anthropic card must stay editable for its other fields,
+ * and re-sending the protocol would re-run the protocol-specific parameter
+ * checks (Anthropic rejects thinking / reasoning_effort at the write face).
  */
 export function ProviderDialog({
   open,
@@ -157,8 +158,10 @@ export function ProviderDialog({
           await onSaved();
           onClose();
         } else {
-          // anthropic create answers 400 "协议尚未实现…" here (PR B); show the
-          // service reason verbatim so the next step is visible.
+          // Both protocols create now (#298 merged); protocol-specific refusals
+          // (e.g. thinking / reasoning_effort on an Anthropic card) stay
+          // server-enforced — show the service reason verbatim so the next step
+          // is visible.
           setNote({ kind: "error", text: apiErrorText(result) });
         }
       }

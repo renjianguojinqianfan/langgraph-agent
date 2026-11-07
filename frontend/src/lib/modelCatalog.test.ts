@@ -31,6 +31,7 @@ import {
   providerUpdateBody,
   PROTOCOL_ANTHROPIC,
   PROTOCOL_OPENAI,
+  PROTOCOL_OPTIONS,
   selectGroups,
   selectedModelId,
   toggleDiscoveryPick,
@@ -216,6 +217,29 @@ describe("providerLabel (card heading / accessible name)", () => {
   });
 });
 
+describe("protocol facts (re-based on the merged #298 backend)", () => {
+  it("offers Anthropic as usable non-streaming without a stale 400 claim", () => {
+    const anthropic = PROTOCOL_OPTIONS.find(
+      (option) => option.value === PROTOCOL_ANTHROPIC
+    )!;
+    expect(anthropic.label).toContain("非流式");
+    expect(anthropic.hint).toContain("发现");
+    expect(anthropic.hint).toContain("thinking");
+    // Guards against the pre-#298 copy coming back.
+    expect(anthropic.hint).not.toContain("400");
+    expect(anthropic.hint).not.toContain("后续片");
+    expect(anthropic.hint).not.toContain("PR B");
+  });
+
+  it("keeps the OpenAI-compatible hint on chat/completions", () => {
+    const openai = PROTOCOL_OPTIONS.find(
+      (option) => option.value === PROTOCOL_OPENAI
+    )!;
+    expect(openai.label).toBe("OpenAI Chat Completions");
+    expect(openai.hint).toContain("/chat/completions");
+  });
+});
+
 describe("protocol / key state copy", () => {
   it("labels both protocols and rejects unknown values", () => {
     expect(protocolLabel(PROTOCOL_OPENAI)).toBe("OpenAI Chat Completions");
@@ -341,6 +365,7 @@ describe("discovery preview", () => {
 
   it("explains the anthropic protocol next step instead of a doomed request", () => {
     expect(discoveryBlockedReason(PROTOCOL_ANTHROPIC)).toContain("手动添加");
+    expect(discoveryBlockedReason(PROTOCOL_ANTHROPIC)).toContain("仅 OpenAI 兼容支持");
     expect(discoveryBlockedReason(PROTOCOL_OPENAI)).toBe("");
   });
 });

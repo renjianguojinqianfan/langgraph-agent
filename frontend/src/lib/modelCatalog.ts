@@ -110,14 +110,13 @@ export function selectedModelId(
 export const PROTOCOL_OPENAI: ModelProtocol = "openai-compatible";
 export const PROTOCOL_ANTHROPIC: ModelProtocol = "anthropic";
 
-/** D-34/D-35: both protocols render; the service refuses an explicit
- * `anthropic` save until the adapter lands (PR B), which is exactly the
- * readable 400 the page shows.
- *
- * #298 DEPENDENCY (deferred): this hint, the dialog edit branch and
- * docs/frontend-design.md §6 P2-3 say "saving anthropic answers 400". Once
- * PR #298 (dual-protocol backend) merges we rebase and MUST sync them to the
- * merged fact (adapter available) — do not harden the stale claim meanwhile. */
+/** D-34/D-35 (re-based on the merged #298 backend): both protocols have an
+ * adapter — OpenAI-compatible chat/completions and Anthropic Messages
+ * (non-streaming). Two protocol limits remain and are enforced by the service:
+ * model discovery supports only OpenAI-compatible, and Anthropic rejects
+ * thinking / reasoning_effort parameters at the write face (readable 400).
+ * Keep this hint in step with backend/core/llm/protocols.py and
+ * ModelStore._validate_protocol_params. */
 export const PROTOCOL_OPTIONS: ReadonlyArray<{
   value: ModelProtocol;
   label: string;
@@ -130,8 +129,8 @@ export const PROTOCOL_OPTIONS: ReadonlyArray<{
   },
   {
     value: PROTOCOL_ANTHROPIC,
-    label: "Anthropic 原生",
-    hint: "Anthropic 协议；适配器在后续片落地，当前保存会被服务端拒绝（400）",
+    label: "Anthropic 原生（非流式）",
+    hint: "Anthropic Messages 协议（非流式）；模型目录发现暂不支持；thinking / reasoning_effort 对 Anthropic 暂不支持",
   },
 ];
 
@@ -363,7 +362,7 @@ export function pickableCandidates(
  * point at the manual-add next step instead of firing a doomed request. */
 export function discoveryBlockedReason(protocol: string): string {
   return protocol === PROTOCOL_ANTHROPIC
-    ? "Anthropic 协议暂不支持自动获取模型目录；请手动添加模型 ID。"
+    ? "Anthropic 协议暂不支持自动获取模型目录（当前仅 OpenAI 兼容支持）；请手动添加模型 ID。"
     : "";
 }
 
