@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { cx } from "../../lib/cx";
+import { LONG_TEXT } from "../../lib/longContent";
+import { inputNeedsExpand } from "../../lib/toolInput";
 import type { ToolCallRecord } from "../../types";
+import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 
 /** Only terminal states are result words; `pending` is still in flight (D6). */
@@ -45,8 +48,13 @@ function outputText(tc: ToolCallRecord): string {
 
 export function ToolRow({ tc }: { tc: ToolCallRecord }) {
   const [open, setOpen] = useState(false);
+  // #258 AC2: long inputs get an explicit show-all toggle; the collapsed pre
+  // keeps its scroll box so the row stays compact.
+  const [inputExpanded, setInputExpanded] = useState(false);
   const result = RESULT[tc.status] ?? { label: tc.status, tone: "text-tertiary" };
   const summary = summarizeInput(tc.input);
+  const inputText = pretty(tc.input);
+  const inputExpandable = inputNeedsExpand(inputText);
 
   return (
     <div className="rounded-well bg-surface-well">
@@ -85,13 +93,34 @@ export function ToolRow({ tc }: { tc: ToolCallRecord }) {
         <div className="flex flex-col gap-2 border-t border-rule px-2 py-2">
           <div>
             <div className="mb-1 text-meta text-tertiary">入参</div>
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-well bg-surface-page/60 p-2 font-mono text-code text-secondary">
-              {pretty(tc.input)}
+            <pre
+              className={cx(
+                LONG_TEXT,
+                "overflow-auto whitespace-pre-wrap rounded-well bg-surface-page/60 p-2 font-mono text-code text-secondary",
+                !inputExpanded && "max-h-40"
+              )}
+            >
+              {inputText}
             </pre>
+            {inputExpandable && (
+              <Button
+                variant="quiet"
+                size="sm"
+                aria-expanded={inputExpanded}
+                onClick={() => setInputExpanded((v) => !v)}
+              >
+                {inputExpanded ? "收起" : "展开全部"}
+              </Button>
+            )}
           </div>
           <div>
             <div className="mb-1 text-meta text-tertiary">出参</div>
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-well bg-surface-page/60 p-2 font-mono text-code text-secondary">
+            <pre
+              className={cx(
+                LONG_TEXT,
+                "max-h-40 overflow-auto whitespace-pre-wrap rounded-well bg-surface-page/60 p-2 font-mono text-code text-secondary"
+              )}
+            >
               {outputText(tc)}
             </pre>
           </div>

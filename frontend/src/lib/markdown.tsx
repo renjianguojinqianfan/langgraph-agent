@@ -1,5 +1,7 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { cx } from "./cx";
+import { LONG_TEXT } from "./longContent";
 
 type HastNode = { position?: { start?: { line?: number } } };
 
@@ -110,7 +112,7 @@ export function Markdown({
   headingIds?: Map<number, string>;
 }) {
   return (
-    <div className="text-body text-primary [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className={cx(LONG_TEXT, "text-body text-primary [&>*:first-child]:mt-0 [&>*:last-child]:mb-0")}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
