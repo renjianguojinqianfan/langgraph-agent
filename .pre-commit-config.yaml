@@ -83,6 +83,13 @@ repos:
         files: ^frontend/.*\.(ts|tsx)$
         pass_filenames: false
 
+      - id: frontend-tsc-config
+        name: 前端 tsc（node 配置项目：vite/vitest config；与 CI typecheck 同口径）
+        entry: node frontend/node_modules/typescript/bin/tsc --noEmit -p frontend/tsconfig.node.json
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
+
       - id: commit-msg-format
         name: commit-msg 校验（前缀 / 长度阻断 + 票号提醒）
         entry: .venv311/Scripts/python.exe scripts/validate_commit_msg.py
