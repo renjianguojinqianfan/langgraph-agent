@@ -27,6 +27,7 @@ import {
   listLoadOutcome,
 } from "../lib/failureStates";
 import { isParked } from "../lib/taskState";
+import { shouldRefetchParked } from "../lib/requestPlan";
 
 export function TaskView() {
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
@@ -53,9 +54,8 @@ export function TaskView() {
     files: [],
   });
   const [traceOpen, setTraceOpen] = useState(false);
-  // D-25: one breakpoint source for both columns (lib/breakpoints.ts), with
-  // the same `<` semantics as the `max-[860px]` / `max-[1180px]` utilities.
-  // D-25: rail static is the primary fact; a drawer is its negation.
+  // D-25: one breakpoint source for both columns (lib/breakpoints.ts); rail
+  // static is the primary fact and a drawer is its negation.
   const railStatic = useRailStatic();
   const isLeftDrawer = !railStatic;
   const isRightDrawer = useIsRightDrawer();
@@ -65,6 +65,9 @@ export function TaskView() {
   const dashRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const skipNavRef = useRef<HTMLElement>(null);
+  // D-30: last status the parked effect observed. null = none yet, i.e. the
+  // status about to arrive comes from the snapshot and must not refetch.
+  const prevStatusRef = useRef<string | null>(null);
   const view = drawerView({
     leftNarrow: isLeftDrawer,
     rightNarrow: isRightDrawer,
@@ -193,6 +196,9 @@ export function TaskView() {
           setDetailError(currentTaskId, "");
           setAuthExpired("detail", false);
           upsertTask(r.data);
+          // D-30: the snapshot already carries the authoritative status — the
+          // parked effect must not spend a second getTask on it.
+          prevStatusRef.current = r.data.status;
         } else {
           setDetailError(currentTaskId, detailLoadFailure(state, r.status));
           setAuthExpired("detail", state === "auth");
@@ -206,10 +212,15 @@ export function TaskView() {
   // A round just parked: pull the authoritative record (conversation, plan,
   // steps). SSE carries the live events but is replayed on every reconnect, so
   // the persisted snapshot — not event appending — is what the UI must trust.
+  // D-30 / #258 AC4: only a transition into parked refetches. The status a
+  // fresh snapshot just delivered is already authoritative, so selecting an
+  // already-parked task is one GET, not two.
   const status = detail?.status;
   useEffect(() => {
-    if (!currentTaskId) return;
-    if (!status || !isParked(status)) return;
+    if (!currentTaskId || !status) return;
+    const prevStatus = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (!shouldRefetchParked(prevStatus, status)) return;
     getTask(currentTaskId)
       .then((r) => {
         if (r.data) upsertTask(r.data);
@@ -220,6 +231,9 @@ export function TaskView() {
   // Switching tasks closes the replay face and every file-preview tab; the
   // plan/events choice is not a file tab and survives the switch.
   useEffect(() => {
+    // A switch starts from "nothing observed": the next status comes from the
+    // new task's snapshot, not from a live→parked transition.
+    prevStatusRef.current = null;
     setTraceOpen(false);
     setDash((current) => ({
       files: [],

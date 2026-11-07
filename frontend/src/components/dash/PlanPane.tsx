@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiErrorText, getPlanSnapshot, putPlan } from "../../api/client";
 import { Markdown } from "../../lib/markdown";
 import { planLoadFailure, planLoadState } from "../../lib/failureStates";
+import { nextPlanVersion } from "../../lib/requestPlan";
 import { isParked } from "../../lib/taskState";
 import { useTaskStore } from "../../store/taskStore";
 import type { Task } from "../../types";
@@ -65,6 +66,11 @@ export function PlanPane({ task }: { task: Task }) {
   const setAuthExpired = useTaskStore((s) => s.setAuthExpired);
 
   const editable = isParked(task.status);
+  // D-30: the load effect no longer keys on `task.plan_version` (a save synced
+  // it back through the store and re-triggered a second GET). Read the store's
+  // latest version through a ref instead; `applyVersion` keeps it in sync.
+  const latestVersionRef = useRef(task.plan_version);
+  latestVersionRef.current = task.plan_version;
 
   /**
    * Mirror the server's version onto the task (#256, PlanAnchor). Takes the
@@ -73,7 +79,10 @@ export function PlanPane({ task }: { task: Task }) {
    * a real version back (初审 LOW：初载只 setVersion 会让锚点陈旧).
    */
   const applyVersion = (next: number) => {
-    const merged = Math.max(next, task.plan_version);
+    const merged = nextPlanVersion(latestVersionRef.current, next);
+    // The store write renders a tick later; keep the ref authoritative for
+    // any further read in this cycle.
+    latestVersionRef.current = merged;
     setVersion(merged);
     setPlanVersion(task.id, merged);
   };
@@ -121,7 +130,7 @@ export function PlanPane({ task }: { task: Task }) {
     return () => {
       cancelled = true;
     };
-  }, [task.id, task.plan_version, task.status, editing, reloadToken]);
+  }, [task.id, task.status, editing, reloadToken]);
 
   const startEdit = () => {
     setLoaded(text);

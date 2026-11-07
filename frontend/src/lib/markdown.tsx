@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cx } from "./cx";
@@ -104,7 +105,11 @@ function buildComponents(headingIds?: Map<number, string>): Components {
   };
 }
 
-export function Markdown({
+// D-30 / #258 AC4: memo keeps a long conversation from re-rendering every
+// answer on each SSE tick; the default shallow compare is exactly right — a
+// streaming answer changes `children` (string) and still re-renders, while a
+// new `headingIds` Map also re-renders.
+export const Markdown = memo(function Markdown({
   children,
   headingIds,
 }: {
@@ -122,4 +127,4 @@ export function Markdown({
       </ReactMarkdown>
     </div>
   );
-}
+});

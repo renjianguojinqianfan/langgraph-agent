@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { SSEvent, Task, TraceMarker } from "../types";
 import { currentDir, setDirParam } from "../workspace";
 import { isLedgerType } from "../lib/eventLedger";
+import { shouldBumpListRevision } from "../lib/requestPlan";
 import { applyToTask, mergeSnapshotUnlessStale, mergeStatusSnapshot } from "./reduceTask";
 
 interface TaskState {
@@ -243,7 +244,11 @@ export const useTaskStore = create<TaskState>((set) => ({
       // D-30 / #258 AC4: a replayed task_created for a row we already list must
       // not refetch the history; only a genuinely new id bumps the revision.
       const listRevision =
-        ev.type === "task_created" && !existing
+        ev.type === "task_created" &&
+        shouldBumpListRevision(
+          state.tasks.map((t) => t.id),
+          id
+        )
           ? state.listRevision + 1
           : state.listRevision;
 
