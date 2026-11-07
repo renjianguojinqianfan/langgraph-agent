@@ -31,6 +31,12 @@ from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from ..config import Settings
+from ..core.llm.protocols import (
+    IMPLEMENTED_PROTOCOLS,
+    PROTOCOL_OPENAI,
+    SUPPORTED_PROTOCOLS,
+)
+from ..core.llm.protocols import PROTOCOL_ANTHROPIC as PROTOCOL_ANTHROPIC  # re-exported
 from ..utils.logging import get_logger
 
 logger = get_logger("models")
@@ -40,15 +46,6 @@ _DEEPSEEK_FALLBACK = "https://api.deepseek.com/v1"
 
 #: Current on-disk schema version (D-33). A v1 file omits this key.
 SCHEMA_VERSION = 2
-
-PROTOCOL_OPENAI = "openai-compatible"
-PROTOCOL_ANTHROPIC = "anthropic"
-SUPPORTED_PROTOCOLS = (PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC)
-#: Protocols with a working client adapter. ``anthropic`` is a valid stored
-#: value (D-34) but its adapter lands in PR B, so the HTTP write face refuses it
-#: until then — a mistaken request must not silently talk the OpenAI wire format.
-IMPLEMENTED_PROTOCOLS = (PROTOCOL_OPENAI,)
-
 
 #: Provider ids are used to derive the credentials key, so they are constrained
 #: for new providers (D-34). Migrated v1 ids are opaque hex strings and stay
@@ -82,30 +79,60 @@ class ProviderDiscoveryError(RuntimeError):
 
 
 def require_implemented_protocol(protocol: str) -> None:
-    """Reject an explicit unimplemented-protocol create/edit on the write face.
+    """Reject a protocol this build cannot store or speak (D-34 write face).
 
-    D-34 keeps ``protocol`` on the provider card; D-35 adds the Anthropic
-    adapter in a later slice (PR B). Until then, explicitly *setting*
-    ``protocol=anthropic`` on create/edit must fail readably instead of
-    producing a task-drivable card with no adapter. A card that already exists
-    on disk (hand-edited / migrated data) stays editable for its other fields;
-    using one from a task fails loudly at run time (TaskManager._build_llm).
+    Both supported protocols are implemented as of D-35 (the Anthropic adapter
+    lands with this slice); only a value outside SUPPORTED_PROTOCOLS is refused.
+    The second check keeps a seam for a future stored-but-unwired protocol.
     """
     if protocol not in SUPPORTED_PROTOCOLS:
-        # A protocol this build never intends to speak is not "coming in PR B".
         raise ValueError(
             f"不支持的协议：{protocol!r}；可选：{', '.join(SUPPORTED_PROTOCOLS)}"
         )
-    if protocol not in IMPLEMENTED_PROTOCOLS:
+    if protocol not in IMPLEMENTED_PROTOCOLS:  # pragma: no cover - future gap seam
         raise ValueError(
-            f"协议尚未实现：{protocol!r} 的适配器在后续片（PR B）落地；"
-            f"当前可用协议：{', '.join(IMPLEMENTED_PROTOCOLS)}"
+            f"协议尚未实现：{protocol!r}；当前可用：{', '.join(IMPLEMENTED_PROTOCOLS)}"
         )
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    """Lenient load of an optional numeric field (bad value = not configured)."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_bool(value: Any) -> Optional[bool]:
+    return value if isinstance(value, bool) else None
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 @dataclass
 class Provider:
-    """One API host: several model entries share its address, key and protocol."""
+    """One API host: several model entries share its address, key and protocol.
+
+    The four sampling fields (D-36) are provider-level **defaults**; a model
+    entry may override any of them. ``None`` means "not configured": the
+    client falls back to its documented default (temperature 0.2; Anthropic
+    ``max_tokens`` 4096) or, for ``thinking`` / ``reasoning_effort``, sends
+    nothing at all.
+    """
 
     id: str
     name: str
@@ -113,6 +140,10 @@ class Provider:
     base_url: str = ""
     api_key_env: str = "LLM_API_KEY"
     preset: bool = False
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
 
 
 @dataclass
@@ -124,6 +155,11 @@ class ModelEntry:
     model: str
     name: str
     source: str = "manual"  # manual | migrated
+    #: D-36 overrides: when set they win over the provider-level default.
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
 
 
 @dataclass
@@ -142,6 +178,12 @@ class ModelProfile:
     preset: bool = False
     provider_id: str = ""
     protocol: str = PROTOCOL_OPENAI
+    #: Effective sampling values (entry override else provider default); None =
+    #: the client's own default (D-36).
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
 
     def public(self, key_set: bool, key_source: str = "none") -> Dict[str, Any]:
         data = asdict(self)
@@ -259,6 +301,10 @@ class ModelStore:
                     base_url=str(item.get("base_url") or ""),
                     api_key_env=str(item.get("api_key_env") or "LLM_API_KEY"),
                     preset=bool(item.get("preset")),
+                    temperature=_optional_float(item.get("temperature")),
+                    max_tokens=_optional_int(item.get("max_tokens")),
+                    thinking=_optional_bool(item.get("thinking")),
+                    reasoning_effort=_optional_str(item.get("reasoning_effort")),
                 )
             except (KeyError, TypeError):
                 continue
@@ -287,6 +333,10 @@ class ModelStore:
                     model=str(item.get("model") or ""),
                     name=str(item.get("name") or item["id"]),
                     source=str(item.get("source") or "manual"),
+                    temperature=_optional_float(item.get("temperature")),
+                    max_tokens=_optional_int(item.get("max_tokens")),
+                    thinking=_optional_bool(item.get("thinking")),
+                    reasoning_effort=_optional_str(item.get("reasoning_effort")),
                 )
             except (KeyError, TypeError):
                 continue
@@ -466,6 +516,23 @@ class ModelStore:
             preset=provider.preset,
             provider_id=provider.id,
             protocol=provider.protocol,
+            # D-36 precedence: the entry overrides the provider default; a
+            # still-None value is the client's documented default (temperature
+            # 0.2 / Anthropic max_tokens 4096 / nothing sent for thinking).
+            temperature=(
+                entry.temperature
+                if entry.temperature is not None
+                else provider.temperature
+            ),
+            max_tokens=(
+                entry.max_tokens if entry.max_tokens is not None else provider.max_tokens
+            ),
+            thinking=entry.thinking if entry.thinking is not None else provider.thinking,
+            reasoning_effort=(
+                entry.reasoning_effort
+                if entry.reasoning_effort is not None
+                else provider.reasoning_effort
+            ),
         )
 
     # ── model entries (legacy accessors) ──
@@ -533,6 +600,28 @@ class ModelStore:
                 f"unsupported protocol {protocol!r} (choose from "
                 f"{', '.join(SUPPORTED_PROTOCOLS)})"
             )
+
+    @staticmethod
+    def _validate_model_params(
+        *,
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        thinking: Optional[bool],
+        reasoning_effort: Optional[str],
+    ) -> None:
+        """Validate the D-36 sampling fields (None = not configured)."""
+        if temperature is not None and not 0.0 <= float(temperature) <= 2.0:
+            raise ValueError("temperature must be between 0 and 2")
+        if max_tokens is not None and int(max_tokens) < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        if thinking is not None and not isinstance(thinking, bool):
+            raise ValueError("thinking must be a boolean")
+        if reasoning_effort is not None and reasoning_effort not in (
+            "low",
+            "medium",
+            "high",
+        ):
+            raise ValueError("reasoning_effort must be one of low / medium / high")
 
     @staticmethod
     def _require_model_name(model: Any) -> str:
@@ -710,6 +799,10 @@ class ModelStore:
         protocol: str = PROTOCOL_OPENAI,
         api_key_env: str = "LLM_API_KEY",
         key: str = "",
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Provider:
         provider_id = id.strip()
         if provider_id in self.providers:
@@ -723,6 +816,12 @@ class ModelStore:
             protocol=protocol,
             provider_id=provider_id,
         )
+        self._validate_model_params(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
         provider = Provider(
             id=provider_id,
             name=(name.strip() or provider_id),
@@ -730,6 +829,10 @@ class ModelStore:
             base_url=base_url,
             api_key_env=api_key_env,
             preset=False,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
         )
         # Persist the provider first, then write the key: a credentials failure
         # must not leave an orphaned secret keyed by an id the store never
@@ -764,6 +867,10 @@ class ModelStore:
         protocol: Optional[str] = None,
         api_key_env: Optional[str] = None,
         key: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Provider:
         provider = self.providers.get(provider_id)
         if provider is None:
@@ -781,11 +888,26 @@ class ModelStore:
                 if base_url is None or base_url.strip() == provider.base_url
                 else False
             ),
+            # None means "unchanged" here, like the string fields above.
+            temperature=temperature if temperature is not None else provider.temperature,
+            max_tokens=max_tokens if max_tokens is not None else provider.max_tokens,
+            thinking=thinking if thinking is not None else provider.thinking,
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else provider.reasoning_effort
+            ),
         )
         self._validate_provider_fields(
             base_url=candidate.base_url,
             api_key_env=candidate.api_key_env,
             protocol=candidate.protocol,
+        )
+        self._validate_model_params(
+            temperature=candidate.temperature,
+            max_tokens=candidate.max_tokens,
+            thinking=candidate.thinking,
+            reasoning_effort=candidate.reasoning_effort,
         )
         # Validate the key write before touching the provider record: a refused
         # credentials write leaves the card exactly as it was.
@@ -825,7 +947,15 @@ class ModelStore:
         ]
 
     def add_model(
-        self, provider_id: str, *, model: str, name: Optional[str] = None
+        self,
+        provider_id: str,
+        *,
+        model: str,
+        name: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> ModelEntry:
         if provider_id not in self.providers:
             raise KeyError(provider_id)
@@ -835,16 +965,85 @@ class ModelStore:
             for entry in self.model_entries.values()
         ):
             raise ValueError(f"model {model!r} already exists for provider {provider_id!r}")
+        self._validate_model_params(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
         entry = ModelEntry(
             id=self._new_entry_id(),
             provider_id=provider_id,
             model=model,
             name=(name or "").strip() or model,
             source="manual",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
         )
         self.model_entries[entry.id] = entry
         self._save()
         return entry
+
+    def update_model(
+        self,
+        provider_id: str,
+        model_id: str,
+        *,
+        model: Optional[str] = None,
+        name: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
+    ) -> ModelEntry:
+        """Edit one catalog entry; every parameter is optional (None = unchanged).
+
+        This is the D-36 write path: ``temperature`` / ``max_tokens`` /
+        ``thinking`` / ``reasoning_effort`` set on the entry override the
+        provider-level defaults. There is deliberately no "clear" form in this
+        slice — send a value, not null.
+        """
+        if provider_id not in self.providers:
+            raise KeyError(provider_id)
+        entry = self.model_entries.get(model_id)
+        if entry is None or entry.provider_id != provider_id:
+            raise KeyError(model_id)
+        candidate_model = self._require_model_name(
+            entry.model if model is None else model
+        )
+        if any(
+            other.id != entry.id
+            and other.provider_id == provider_id
+            and other.model == candidate_model
+            for other in self.model_entries.values()
+        ):
+            raise ValueError(
+                f"model {candidate_model!r} already exists for provider {provider_id!r}"
+            )
+        candidate = replace(
+            entry,
+            model=candidate_model,
+            name=entry.name if name is None else ((name or "").strip() or entry.name),
+            temperature=temperature if temperature is not None else entry.temperature,
+            max_tokens=max_tokens if max_tokens is not None else entry.max_tokens,
+            thinking=thinking if thinking is not None else entry.thinking,
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else entry.reasoning_effort
+            ),
+        )
+        self._validate_model_params(
+            temperature=candidate.temperature,
+            max_tokens=candidate.max_tokens,
+            thinking=candidate.thinking,
+            reasoning_effort=candidate.reasoning_effort,
+        )
+        self.model_entries[entry.id] = candidate
+        self._save()
+        return candidate
 
     def delete_model(self, provider_id: str, model_id: str) -> None:
         """Delete one catalog entry and keep ``default`` pointing at a live one.

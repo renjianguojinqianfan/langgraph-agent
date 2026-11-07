@@ -34,6 +34,7 @@ from ..core.agent.policy import DangerPolicy, warn_unmatched_rules
 from ..core.agent.state import AgentState
 from ..core.agent.subagent import SubAgentExecutor
 from ..core.llm.client import LLMClient
+from ..core.llm.factory import build_llm_client
 from ..core.llm.openai_compat import create_llm_client
 from ..core.runtime_context import (
     get_current_task_id,
@@ -707,26 +708,29 @@ class TaskManager:
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
     def _build_llm(self, profile: Any, key: str) -> LLMClient:
-        """Build one client for a resolved model entry (D-33 projection).
+        """Build one client for a resolved model entry, dispatching on protocol.
 
-        Protocol dispatch is not part of this phase: only the OpenAI-compatible
-        adapter exists, so a provider on another protocol must fail loudly here
-        instead of silently talking the wrong wire format.
+        D-35: ``openai-compatible`` and ``anthropic`` both go through the one
+        factory; the D-36 params resolved by ``ModelStore`` (entry overrides
+        provider) ride along. A test-injected factory still wins over both.
         """
         if key:
             self._known_secrets.add(key)
         protocol = getattr(profile, "protocol", PROTOCOL_OPENAI) or PROTOCOL_OPENAI
         if protocol not in IMPLEMENTED_PROTOCOLS:
-            raise RuntimeError(
-                f"model protocol {protocol!r} is not supported yet; use an "
-                "OpenAI-compatible provider (the Anthropic adapter lands separately)"
-            )
+            raise RuntimeError(f"model protocol {protocol!r} is not supported")
         if self._llm_factory is not None:
             return self._llm_factory(profile, key)
-        from ..core.llm.openai_compat import OpenAICompatibleClient
-
-        return OpenAICompatibleClient(
-            profile.base_url, key, profile.model, self.settings.llm_request_timeout_sec
+        return build_llm_client(
+            protocol=protocol,
+            base_url=profile.base_url,
+            model=profile.model,
+            key=key,
+            timeout=self.settings.llm_request_timeout_sec,
+            temperature=getattr(profile, "temperature", None),
+            max_tokens=getattr(profile, "max_tokens", None),
+            thinking=getattr(profile, "thinking", None),
+            reasoning_effort=getattr(profile, "reasoning_effort", None),
         )
 
     def _llm_for(self, task: Optional[Task]) -> LLMClient:
@@ -887,10 +891,34 @@ class TaskManager:
                 self._known_secrets.add(old_key)
 
     def add_model_entry(
-        self, provider_id: str, *, model: str, name: Optional[str] = None
+        self,
+        provider_id: str,
+        *,
+        model: str,
+        name: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         with self._lock:
-            entry = self.models.add_model(provider_id, model=model, name=name)
+            entry = self.models.add_model(
+                provider_id,
+                model=model,
+                name=name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                thinking=thinking,
+                reasoning_effort=reasoning_effort,
+            )
+            return self.models.model_public(entry.id)
+
+    def update_model_entry(self, provider_id: str, model_id: str, **fields: Any) -> Dict[str, Any]:
+        with self._lock:
+            entry = self.models.update_model(provider_id, model_id, **fields)
+            # The entry's D-36 params feed the request construction, so a cached
+            # client for it is stale; providers are few, rebuild is cheap.
+            self._llm_clients.clear()
             return self.models.model_public(entry.id)
 
     def delete_model_entry(self, provider_id: str, model_id: str) -> None:

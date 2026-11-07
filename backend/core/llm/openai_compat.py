@@ -19,6 +19,7 @@ from .client import (
     make_default_mock_client,
     make_mock_client_from_script,
 )
+from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_OPENAI
 
 logger = get_logger("llm.openai")
 
@@ -27,7 +28,16 @@ class OpenAICompatibleClient(LLMClient):
     """Thin wrapper around the OpenAI SDK configured for any compatible host."""
 
     def __init__(
-        self, base_url: str, api_key: str, model: str, timeout: float | None = None
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float | None = None,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         from openai import OpenAI
 
@@ -35,11 +45,41 @@ class OpenAICompatibleClient(LLMClient):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        # D-36: provider/model config defaults; a per-call kwarg still wins.
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.thinking = thinking
+        self.reasoning_effort = reasoning_effort
         # Issue #13: the SDK default is 600s, so a single stalled request could
         # eat an entire task budget and surface as "timed out" instead of a
         # fast failure the caller can retry / degrade on.
         self._client = OpenAI(base_url=base_url, api_key=api_key or "EMPTY", timeout=timeout)
         logger.info("OpenAICompatibleClient ready: model=%s base_url=%s", model, base_url)
+
+    def _sampling_payload(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """D-36 request knobs: config defaults, per-call kwargs win.
+
+        `temperature` falls back to the documented 0.2 when neither the
+        provider/entry config nor the caller sets it (behaviour-compatible with
+        the pre-D-36 hard-coded value). `thinking` / `reasoning_effort` go
+        through the SDK's `extra_body` because they are vendor-specific wire
+        fields rather than part of the OpenAI chat schema.
+        """
+        temperature = kwargs.get("temperature", self.temperature)
+        payload: Dict[str, Any] = {
+            "temperature": DEFAULT_TEMPERATURE if temperature is None else temperature
+        }
+        max_tokens = kwargs.get("max_tokens", self.max_tokens)
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        extra_body: Dict[str, Any] = {}
+        if self.thinking is not None:
+            extra_body["thinking"] = self.thinking
+        if self.reasoning_effort is not None:
+            extra_body["reasoning_effort"] = self.reasoning_effort
+        if extra_body:
+            payload["extra_body"] = extra_body
+        return payload
 
     def complete(
         self,
@@ -51,10 +91,7 @@ class OpenAICompatibleClient(LLMClient):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        # User-tunable knobs
-        payload["temperature"] = kwargs.get("temperature", 0.2)
-        if "max_tokens" in kwargs:
-            payload["max_tokens"] = kwargs["max_tokens"]
+        payload.update(self._sampling_payload(kwargs))
 
         resp = self._client.chat.completions.create(**payload)
         msg = resp.choices[0].message
@@ -88,7 +125,7 @@ class OpenAICompatibleClient(LLMClient):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        payload["temperature"] = kwargs.get("temperature", 0.2)
+        payload.update(self._sampling_payload(kwargs))
 
         stream = self._client.chat.completions.create(**payload)
         for chunk in stream:
@@ -150,8 +187,16 @@ def create_llm_client(settings: Settings) -> LLMClient:
     model = settings.llm_model
     if not api_key:
         logger.warning("llm_api_key is empty — live calls will fail until configured.")
-    return OpenAICompatibleClient(
-        base_url=base_url, api_key=api_key, model=model, timeout=settings.llm_request_timeout_sec
+    # Same factory as the per-task path (D-35): the settings seed constructs an
+    # OpenAI-compatible client, but the dispatch itself lives in one place.
+    from .factory import build_llm_client
+
+    return build_llm_client(
+        protocol=PROTOCOL_OPENAI,
+        base_url=base_url,
+        model=model,
+        key=api_key,
+        timeout=settings.llm_request_timeout_sec,
     )
 
 
