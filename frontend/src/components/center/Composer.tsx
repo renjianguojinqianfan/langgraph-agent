@@ -48,7 +48,6 @@ export function Composer() {
     text,
     setText,
     busy,
-    sendError,
     reset: resetSend,
     onSubmit,
     view,
