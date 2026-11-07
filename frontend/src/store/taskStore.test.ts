@@ -319,3 +319,84 @@ describe("D-24 接线断言模板（#282）", () => {
     expect(listBannerVisible(useTaskStore.getState().listError, listFace())).toBe(true);
   });
 });
+
+// D-29 / #258 AC3：heartbeat 早退 + 只替换真正变化的 slice（引用相等）+
+// #258 AC4：已知 id 的 task_created 回放不 bump listRevision。
+describe("#258 事件账本与引用相等（D-29/D-30）", () => {
+  it("heartbeat 不改任何 slice 引用，也不进事件缓冲", () => {
+    useTaskStore.setState({
+      tasks: [task("t1")],
+      detail: { t1: task("t1") },
+      eventsByTask: { t1: [{ type: "step_start", data: { task_id: "t1", index: 1 }, ts: 1 }] },
+      listRevision: 0,
+    });
+    const before = useTaskStore.getState();
+
+    useTaskStore.getState().applyEvent({ type: "heartbeat", data: { task_id: "t1" } });
+
+    const after = useTaskStore.getState();
+    expect(after.detail).toBe(before.detail);
+    expect(after.tasks).toBe(before.tasks);
+    expect(after.eventsByTask).toBe(before.eventsByTask);
+    expect(after.listRevision).toBe(0);
+    expect(after.eventsByTask.t1).toHaveLength(1);
+  });
+
+  it("已知 id 的 task_created 回放不 bump listRevision；新 id 才 +1", () => {
+    useTaskStore.setState({ tasks: [task("t1")], detail: {}, eventsByTask: {}, listRevision: 3 });
+
+    useTaskStore.getState().applyEvent({
+      type: "task_created",
+      data: { task_id: "t1", title: "t1", status: "PENDING" },
+    });
+    expect(useTaskStore.getState().listRevision).toBe(3);
+
+    useTaskStore.getState().applyEvent({
+      type: "task_created",
+      data: { task_id: "t2", title: "t2", status: "PENDING" },
+    });
+    expect(useTaskStore.getState().listRevision).toBe(4);
+  });
+
+  it("无状态变化的事件只动事件缓冲（detail/tasks 引用不变）", () => {
+    // Same object in the row and in detail — the store keeps them identical
+    // after upsert/merge, so reference equality is the observable signal.
+    const row = task("t1");
+    useTaskStore.setState({
+      tasks: [row],
+      detail: { t1: row },
+      eventsByTask: { t1: [] },
+    });
+    const before = useTaskStore.getState();
+
+    useTaskStore.getState().applyEvent({
+      type: "tool_result_evicted",
+      data: { task_id: "t1", tool_call_id: "c1", tool_name: "t", original_chars: 9, step_index: 1 },
+    });
+
+    const after = useTaskStore.getState();
+    expect(after.detail).toBe(before.detail);
+    expect(after.tasks).toBe(before.tasks);
+    expect(after.eventsByTask).not.toBe(before.eventsByTask);
+    expect(after.eventsByTask.t1).toHaveLength(1);
+  });
+
+  it("真正变化的事件替换 detail 且内容正确", () => {
+    useTaskStore.setState({ tasks: [task("t1")], detail: { t1: task("t1") }, eventsByTask: {} });
+    const before = useTaskStore.getState().detail;
+
+    useTaskStore.getState().applyEvent({
+      type: "step_start",
+      data: { task_id: "t1", index: 1, round: 1, thought: "hi" },
+    });
+
+    const after = useTaskStore.getState();
+    expect(after.detail).not.toBe(before);
+    expect(after.detail.t1.steps[0]).toMatchObject({
+      index: 1,
+      round: 1,
+      thought: "hi",
+      status: "running",
+    });
+  });
+});

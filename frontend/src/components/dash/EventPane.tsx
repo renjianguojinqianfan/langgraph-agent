@@ -1,6 +1,7 @@
 import { useTaskStore } from "../../store/taskStore";
 import { compressFaceParts, type SSEvent, type Task } from "../../types";
 import { eventLabel } from "../../lib/eventLabels";
+import { ledgerEvents } from "../../lib/eventLedger";
 
 function summary(ev: SSEvent): string {
   const d = ev.data as Record<string, unknown> | null | undefined;
@@ -31,25 +32,12 @@ function eventTime(ts?: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/**
- * SSE replays its buffer on every reconnect; the replayed frame is the same
- * fact again. Keep the latest arrival per payload (arrival ts always differs)
- * so the pane shows each fact once.
- */
-function dedupe(events: SSEvent[]): SSEvent[] {
-  const latest = new Map<string, { ev: SSEvent; at: number }>();
-  events.forEach((ev, at) => {
-    latest.set(`${ev.type}:${JSON.stringify(ev.data)}`, { ev, at });
-  });
-  return [...latest.values()]
-    .sort((a, b) => a.at - b.at)
-    .map((entry) => entry.ev);
-}
 
 export function EventPane({ task }: { task: Task | null }) {
   const eventsByTask = useTaskStore((s) => s.eventsByTask);
   const events = task ? eventsByTask[task.id] ?? [] : [];
-  const shown = dedupe(events).slice(-100).reverse();
+  // D-29: dedupe / heartbeat filter / newest-first window live in lib/eventLedger.
+  const shown = ledgerEvents(events);
 
   return (
     <div className="flex flex-col gap-3">
