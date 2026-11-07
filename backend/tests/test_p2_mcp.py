@@ -113,8 +113,16 @@ def mcp_managers():
         return mgr
 
     yield make
+    # LOW-3: one failing cleanup must not skip the remaining managers; collect
+    # every failure, then re-raise the first after all sessions were attempted.
+    errors: list[Exception] = []
     for mgr in created:
-        mgr.cleanup()
+        try:
+            mgr.cleanup()
+        except Exception as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
 
 
 # ─────────────────── zero regression ───────────────────

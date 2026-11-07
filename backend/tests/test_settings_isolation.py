@@ -16,6 +16,10 @@ pydantic-settings 默认会读进程当前目录的 ``.env``；离线套件必�
 ``make_isolated_settings(**overrides)`` 作为唯一 seam（内部仍是显式
 ``Settings(_env_file=None, ...)``）；本守卫的机械面不因此放松——每个**直接**
 ``Settings(...)`` 调用仍必须显式带 ``_env_file``。
+
+已知限制：AST 只认 ``Settings(...)`` / ``<obj>.Settings(...)`` 的 Name/Attribute
+调用；``from backend.config import Settings as S`` 这类**别名调用**不在检测面
+（当前仓库 0 处；新增别名会让本守卫漏检，需同步扩展）。
 """
 
 from __future__ import annotations
@@ -94,6 +98,22 @@ def test_settings_call_with_env_file_is_accepted() -> None:
         )
     }
     assert _missing_env_file_calls(sources) == {"backend/tests/test_synthetic.py": [5]}
+
+
+def test_settings_call_with_only_dict_unpack_is_still_flagged() -> None:
+    """fail-closed：``Settings(**base)`` 没有字面 ``_env_file`` 关键字 → 报红。
+
+    这是刻意的（宁可误报不漏检）：字典解包在 AST 层无法证明键里含 ``_env_file``；
+    工厂 seam 内部同样写成显式的 ``Settings(_env_file=None, ...)``。
+    """
+    sources = {
+        "backend/tests/test_synthetic.py": (
+            "from backend.config import Settings\n"
+            "base = {\"use_mock_llm\": True}\n"
+            "s = Settings(**base)\n"
+        )
+    }
+    assert _missing_env_file_calls(sources) == {"backend/tests/test_synthetic.py": [3]}
 
 
 def test_settings_scan_finds_calls_it_walks() -> None:
