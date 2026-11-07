@@ -5,7 +5,12 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
  * Tailwind v4 compiles `max-[860px]:` to `@media not all and (width >= 860px)`
  * — i.e. strictly `width < 860px`, so 860 itself is still the wide layout. The
  * JS queries below spell the same `<` semantics (not `max-width: 859.98px`),
- * so CSS and `matchMedia` agree at the boundary. */
+ * so CSS and `matchMedia` agree at the boundary.
+ *
+ * Browser baseline: the `(width < Xpx)` range syntax needs Chrome 104+ /
+ * Firefox 102+ / Safari 14.1+. Tailwind v4 already requires Chrome 111+ /
+ * Safari 16.4+ / Firefox 128+, i.e. the stricter constraint — so the
+ * unsupported surface for this module is effectively zero. */
 export const LEFT_DRAWER_MAX = 860;
 export const RIGHT_DRAWER_MAX = 1180;
 

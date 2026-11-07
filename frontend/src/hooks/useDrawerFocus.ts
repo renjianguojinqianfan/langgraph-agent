@@ -63,9 +63,10 @@ export function useDrawerFocus({
     if (!container) return;
 
     // Record the element that opened the drawer exactly once, on entry.
-    // Known limitation: Safari does not focus a button on click, so
-    // `document.activeElement` can be <body>; restore then no-ops (accepted,
-    // no architecture change — see PR body's 已知限制).
+    // Known limitation (accepted, no architecture change): Safari does not
+    // focus a button on click, so `document.activeElement` can be <body>; the
+    // trigger is then null and the restore is a no-op. A click-focus fix would
+    // need an explicit focus() or event capture — out of scope for #257.
     triggerRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
