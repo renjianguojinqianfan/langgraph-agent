@@ -452,8 +452,10 @@ def test_mcp_cleanup_after_a_failing_step_kills_the_child(tmp_path, mcp_managers
         finally:
             mgr.cleanup()  # 与 fixture finalizer 同一条清理路径
 
-    assert mgr._closed is True
-    assert mgr._sessions == {}
+    # Public-behaviour assertions only (spec: no private-field assertions).
+    assert {st.status for st in mgr.status_list()} == {"closed"}
+    with pytest.raises(RuntimeError):
+        mgr.call_tool("echo", "echo", {"text": "x"})
     _wait_pid_dead(pid)
 
 
