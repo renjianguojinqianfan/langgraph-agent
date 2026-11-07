@@ -1073,3 +1073,95 @@ def test_newer_schema_version_is_moved_aside_not_rewritten(tmp_path):
     quarantined = list(settings.data_path.glob("models.json.corrupt-*"))
     assert quarantined
     assert quarantined[0].read_text(encoding="utf-8") == future
+
+
+def test_migration_keeps_the_v1_file_when_the_backup_cannot_be_written(
+    tmp_path, monkeypatch
+):
+    settings, _ = _write_v1_models(tmp_path)
+    before = (settings.data_path / "models.json").read_bytes()
+    import pathlib
+
+    def deny(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(pathlib.Path, "write_bytes", deny)
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    # Fail-closed: the migrated view is served from memory ...
+    assert store.default_id == "aaaabbbbcccc"
+    assert store.get("aaaabbbbcccc").model == "deepseek-chat"
+    # ... while the v1 file stays byte-for-byte as it was: no v2 rewrite and
+    # no missing backup to restore from (the next start retries the migration).
+    assert store.data_file.read_bytes() == before
+    assert not store.data_file.with_name("models.json.bak-v1").exists()
+
+
+def test_add_provider_rolls_back_when_the_key_cannot_be_written(tmp_path, monkeypatch):
+    import backend.services.model_store as model_store_module
+
+    store, _ = _store(tmp_path)
+    original_open = model_store_module.os.open
+    _deny_credentials_write(monkeypatch)
+
+    with pytest.raises(CredentialsError):
+        store.add_provider(
+            id="bailian",
+            name="Bailian",
+            base_url="https://dashscope.test/v1",
+            key="sk-test",
+        )
+
+    # No half-created card: not in memory, not on disk, not after a reload.
+    assert store.get_provider("bailian") is None
+    assert "bailian" not in store.data_file.read_text(encoding="utf-8")
+    reloaded = ModelStore(store.settings, home_dir=tmp_path / "home")
+    assert reloaded.get_provider("bailian") is None
+
+    # With the credentials file writable again, the same id can be created.
+    monkeypatch.setattr(model_store_module.os, "open", original_open)
+    created = store.add_provider(
+        id="bailian",
+        name="Bailian",
+        base_url="https://dashscope.test/v1",
+        key="sk-test",
+    )
+    assert created.id == "bailian"
+    assert store.provider_public("bailian")["key_set"] is True
+
+
+def test_a_pending_backup_blocks_later_v2_writes_until_it_succeeds(tmp_path, monkeypatch):
+    import pathlib
+
+    settings, _ = _write_v1_models(tmp_path)
+    original = (settings.data_path / "models.json").read_bytes()
+    real_write_bytes = pathlib.Path.write_bytes
+
+    def deny_backup(path, data):
+        if path.name == "models.json.bak-v1":
+            raise PermissionError(13, "Permission denied")
+        return real_write_bytes(path, data)
+
+    monkeypatch.setattr(pathlib.Path, "write_bytes", deny_backup)
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    # Fail-closed at load: the v1 file stays, no backup, no v2 write.
+    assert store.data_file.read_bytes() == original
+    assert not store.data_file.with_name("models.json.bak-v1").exists()
+
+    # A later, unrelated mutation must not quietly write v2 without the backup.
+    with pytest.raises(RuntimeError, match="back up"):
+        store.set_default("ddddeeeeffff")
+    assert store.data_file.read_bytes() == original
+    assert not store.data_file.with_name("models.json.bak-v1").exists()
+
+    # Once the backup path is writable the same mutation retries and succeeds.
+    monkeypatch.setattr(pathlib.Path, "write_bytes", real_write_bytes)
+    store.set_default("ddddeeeeffff")
+
+    backup = store.data_file.with_name("models.json.bak-v1")
+    assert backup.read_bytes() == original
+    raw = json.loads(store.data_file.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["default"] == "ddddeeeeffff"

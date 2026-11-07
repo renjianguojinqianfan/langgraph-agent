@@ -44,6 +44,11 @@ SCHEMA_VERSION = 2
 PROTOCOL_OPENAI = "openai-compatible"
 PROTOCOL_ANTHROPIC = "anthropic"
 SUPPORTED_PROTOCOLS = (PROTOCOL_OPENAI, PROTOCOL_ANTHROPIC)
+#: Protocols with a working client adapter. ``anthropic`` is a valid stored
+#: value (D-34) but its adapter lands in PR B, so the HTTP write face refuses it
+#: until then — a mistaken request must not silently talk the OpenAI wire format.
+IMPLEMENTED_PROTOCOLS = (PROTOCOL_OPENAI,)
+
 
 #: Provider ids are used to derive the credentials key, so they are constrained
 #: for new providers (D-34). Migrated v1 ids are opaque hex strings and stay
@@ -56,6 +61,13 @@ _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DISCOVER_TIMEOUT_SEC = 10.0
 DISCOVER_MAX_BYTES = 1_000_000
 
+#: Clock seam for the discovery **body-phase** deadline (tests replace this one
+#: function). It cuts slow-drip bodies off; connect / write / header waits are
+#: still bounded only by httpx's per-operation timeout, so the overall request
+#: ceiling is the sum of those phases, not a strict total (LOW-A rework: the
+#: earlier "total wall clock" wording overstated it).
+_monotonic = time.monotonic
+
 
 class CredentialsError(RuntimeError):
     """The credential file outside the repo could not be written (#244).
@@ -67,6 +79,28 @@ class CredentialsError(RuntimeError):
 
 class ProviderDiscoveryError(RuntimeError):
     """A readable "why the model catalog could not be fetched" (D-34)."""
+
+
+def require_implemented_protocol(protocol: str) -> None:
+    """Reject an explicit unimplemented-protocol create/edit on the write face.
+
+    D-34 keeps ``protocol`` on the provider card; D-35 adds the Anthropic
+    adapter in a later slice (PR B). Until then, explicitly *setting*
+    ``protocol=anthropic`` on create/edit must fail readably instead of
+    producing a task-drivable card with no adapter. A card that already exists
+    on disk (hand-edited / migrated data) stays editable for its other fields;
+    using one from a task fails loudly at run time (TaskManager._build_llm).
+    """
+    if protocol not in SUPPORTED_PROTOCOLS:
+        # A protocol this build never intends to speak is not "coming in PR B".
+        raise ValueError(
+            f"不支持的协议：{protocol!r}；可选：{', '.join(SUPPORTED_PROTOCOLS)}"
+        )
+    if protocol not in IMPLEMENTED_PROTOCOLS:
+        raise ValueError(
+            f"协议尚未实现：{protocol!r} 的适配器在后续片（PR B）落地；"
+            f"当前可用协议：{', '.join(IMPLEMENTED_PROTOCOLS)}"
+        )
 
 
 @dataclass
@@ -124,6 +158,9 @@ class ModelStore:
         self.providers: Dict[str, Provider] = {}
         self.model_entries: Dict[str, ModelEntry] = {}
         self.default_id = DEFAULT_MODEL_ID
+        #: A v1 file was loaded but its backup could not be written (fail-closed
+        #: migration). Every later save retries the backup before writing v2.
+        self._v1_backup_pending = False
         self._load()
 
     # ── seeding / persistence ──
@@ -313,14 +350,12 @@ class ModelStore:
         self.model_entries = entries
         default = str(raw.get("default") or "")
         self.default_id = default if default in entries else next(iter(entries))
-        try:
-            # Bytes, not text: the backup is a byte-for-byte copy of the v1
-            # file (a text round-trip would rewrite line endings on Windows).
-            original = self.data_file.read_bytes()
-        except OSError:  # pragma: no cover - defensive (we just read it)
-            original = b""
-        self._backup_v1(original)
-        self._save()
+        if not self._write_migrated_v2():
+            # The v1 file stays on disk; a later save must retry the backup
+            # before it is allowed to write v2 (otherwise the rollback promise
+            # silently lapses on the first unrelated mutation).
+            self._v1_backup_pending = True
+            return
         logger.info(
             "migrated %d model profile(s) to schema v%d (backup: %s)",
             len(entries),
@@ -328,23 +363,86 @@ class ModelStore:
             self.data_file.with_name(f"{self.data_file.name}.bak-v1").name,
         )
 
-    def _backup_v1(self, original: bytes) -> None:
+    def _write_migrated_v2(self) -> bool:
+        """Rewrite the v1 file as v2 only after a backup exists (fail-closed).
+
+        If the original bytes cannot be read or the backup cannot be written,
+        the v1 file stays byte-for-byte as it was and only the in-memory view
+        is v2: this process still serves the migrated view, and the next start
+        retries the migration. Writing v2 without a backup would turn the
+        "restore from models.json.bak-v1" rollback promise into a lie.
+        """
+        try:
+            # Bytes, not text: the backup is a byte-for-byte copy of the v1
+            # file (a text round-trip would rewrite line endings on Windows).
+            original = self.data_file.read_bytes()
+        except OSError as exc:
+            logger.error(
+                "cannot read %s before migrating (%s); keeping the v1 file as-is "
+                "and serving the migrated view from memory",
+                self.data_file,
+                exc,
+            )
+            return False
+        if not self._backup_v1(original):
+            logger.error(
+                "cannot back up %s before migrating; keeping the v1 file as-is "
+                "and serving the migrated view from memory (the next start retries)",
+                self.data_file,
+            )
+            return False
+        self._save()
+        return True
+
+    def _backup_v1(self, original: bytes) -> bool:
         backup = self.data_file.with_name(f"{self.data_file.name}.bak-v1")
         if backup.exists():
             # Only the first migration writes a backup: a later restore + reload
             # must not clobber the snapshot taken before the first rewrite.
-            return
+            return True
         try:
             backup.write_bytes(original)
-        except OSError as exc:  # pragma: no cover - defensive
+        except OSError as exc:
             logger.warning(
                 "could not back up %s to %s before migrating: %s",
                 self.data_file.name,
                 backup.name,
                 exc,
             )
+            return False
+        return True
+
+    def _retry_pending_v1_backup(self) -> None:
+        """Refuse to write v2 while the failed v1 backup is still missing.
+
+        The migration can fail closed (backup unwritable) while the process
+        keeps serving the migrated view from memory. A later, unrelated save
+        must not quietly write v2 to disk without the backup: retry the backup
+        first; if it still fails, raise a readable error and leave the v1 file
+        untouched. The next save (or the next start) retries again.
+        """
+        if not self._v1_backup_pending:
+            return
+        try:
+            original = self.data_file.read_bytes()
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot read {self.data_file} to back it up before writing "
+                f"models.json v2: {exc}. The v1 file was left unchanged; retry "
+                "once the file is readable."
+            ) from exc
+        if not self._backup_v1(original):
+            raise RuntimeError(
+                f"cannot back up {self.data_file} to "
+                f"{self.data_file.name}.bak-v1 before writing models.json v2. "
+                "The v1 file was left unchanged: fix write access to "
+                f"{self.data_file.parent} and retry (the next save or restart "
+                "retries the backup)."
+            )
+        self._v1_backup_pending = False
 
     def _save(self) -> None:
+        self._retry_pending_v1_backup()
         self.data_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": SCHEMA_VERSION,
@@ -633,13 +731,28 @@ class ModelStore:
             api_key_env=api_key_env,
             preset=False,
         )
+        # Persist the provider first, then write the key: a credentials failure
+        # must not leave an orphaned secret keyed by an id the store never
+        # accepted. The other half of that trade-off is compensation — a failed
+        # key write rolls the card back so the user is not stuck with a
+        # half-created provider whose retry answers "already exists" (and the
+        # 409 reason is not replaced by that 400 on the next attempt).
         self.providers[provider.id] = provider
         self._save()
-        # The key is written after the provider is durable: a credentials write
-        # failure must not leave an orphaned secret keyed by an id that was
-        # never accepted.
         if key.strip():
-            self.set_provider_key(provider.id, key)
+            try:
+                self.set_provider_key(provider.id, key)
+            except CredentialsError:
+                self.providers.pop(provider.id, None)
+                try:
+                    self._save()
+                except OSError as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "rollback after a failed key write could not persist %s: %s",
+                        self.data_file,
+                        exc,
+                    )
+                raise
         return provider
 
     def update_provider(
@@ -734,6 +847,15 @@ class ModelStore:
         return entry
 
     def delete_model(self, provider_id: str, model_id: str) -> None:
+        """Delete one catalog entry and keep ``default`` pointing at a live one.
+
+        The last model entry of the whole catalog cannot be deleted (there must
+        always be a default that resolves). A provider with no entries is
+        unreachable through the API while that invariant holds, so deleting
+        from it is simply "model not found" (``KeyError``) — the same answer
+        legacy ``delete()`` gives for an unknown id; no separate empty-provider
+        branch exists on purpose.
+        """
         if provider_id not in self.providers:
             raise KeyError(provider_id)
         entry = self.model_entries.get(model_id)
@@ -904,11 +1026,13 @@ def discover_provider_models(
 ) -> List[Dict[str, str]]:
     """Fetch `GET <base_url>/models` and return `[{model, name}, ...]`.
 
-    One request to the provider's own address only: bounded wall clock, bounded
-    response size, redirects refused (a redirect would silently move the
-    request off the configured host), and no persistence. Error text is built
-    here and never interpolates the key. `transport` exists for tests
-    (`httpx.MockTransport`) — production callers pass nothing.
+    One request to the provider's own address only: bounded time (httpx's
+    per-operation timeout plus a body-phase wall-clock deadline — not a strict
+    total, see the deadline comment below), bounded response size, redirects
+    refused (a redirect would silently move the request off the configured
+    host), and no persistence. Error text is built here and never interpolates
+    the key. `transport` exists for tests (`httpx.MockTransport`) — production
+    callers pass nothing.
     """
     if provider.protocol != PROTOCOL_OPENAI:
         raise ProviderDiscoveryError(
@@ -919,12 +1043,19 @@ def discover_provider_models(
 
     url = f"{provider.base_url.rstrip('/')}/models"
     headers = {"Authorization": f"Bearer {key}"} if key else {}
+    timeout_message = f"请求超时（{DISCOVER_TIMEOUT_SEC:.0f}s）：检查 API 地址是否可达。"
+    deadline = _monotonic() + DISCOVER_TIMEOUT_SEC
     try:
         with httpx.Client(
             timeout=DISCOVER_TIMEOUT_SEC,
             follow_redirects=False,
             transport=transport,
         ) as client:
+            # Cheap guard before the stream starts: it only rules out a body
+            # read that begins after the body-phase deadline; connect/write and
+            # header waits remain bounded by httpx's per-operation timeout.
+            if _monotonic() > deadline:
+                raise ProviderDiscoveryError(timeout_message)
             with client.stream("GET", url, headers=headers) as response:
                 status = response.status_code
                 if 300 <= status < 400:
@@ -940,19 +1071,24 @@ def discover_provider_models(
                 chunks: List[bytes] = []
                 size = 0
                 for chunk in response.iter_bytes():
+                    # Body-phase wall clock: a slow-drip body must not hold the
+                    # request thread forever. Connect/header phases are not
+                    # covered here (httpx's per-operation timeout bounds them).
+                    if _monotonic() > deadline:
+                        raise ProviderDiscoveryError(timeout_message)
                     size += len(chunk)
                     if size > DISCOVER_MAX_BYTES:
                         raise ProviderDiscoveryError(
                             "模型目录响应超过大小上限（1 MB），已放弃读取。"
                         )
                     chunks.append(chunk)
+                if _monotonic() > deadline:
+                    raise ProviderDiscoveryError(timeout_message)
                 body = b"".join(chunks)
     except ProviderDiscoveryError:
         raise
     except httpx.TimeoutException as exc:
-        raise ProviderDiscoveryError(
-            f"请求超时（{DISCOVER_TIMEOUT_SEC:.0f}s）：检查 API 地址是否可达。"
-        ) from exc
+        raise ProviderDiscoveryError(timeout_message) from exc
     except httpx.HTTPError as exc:
         raise ProviderDiscoveryError(
             f"无法连接 API 地址：{type(exc).__name__}"
