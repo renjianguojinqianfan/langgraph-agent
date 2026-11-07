@@ -66,7 +66,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<ApiResponse<T>>
 }
 
 /** One status-preserving answer; `data` is null unless `parse` accepted it. */
-interface StatusResult<T> {
+export interface StatusResult<T> {
   /** HTTP status; 0 means the request never reached the backend. */
   status: number;
   data: T | null;
@@ -284,8 +284,21 @@ export const updateProvider = (id: string, body: ProviderUpdateRequest) =>
     body: JSON.stringify(body),
   });
 
+/** Envelope parser shared by the status-preserving deletes below. */
+const okEnvelope = (json: unknown): { ok: boolean } | null => {
+  const data = (json as { data?: { ok?: unknown } } | null)?.data;
+  return data && typeof data.ok === "boolean" ? { ok: data.ok } : null;
+};
+
+/** #299 review: the deletes keep the HTTP status so the settings page can name
+ * the cause (409 last-model / 401 re-login / 404 stale card) instead of
+ * appending one generic next step to every failure. */
 export const deleteProvider = (id: string) =>
-  req<{ ok: boolean }>(`/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  reqWithStatus<{ ok: boolean }>(
+    `/providers/${encodeURIComponent(id)}`,
+    okEnvelope,
+    { method: "DELETE" }
+  );
 
 export const addProviderModel = (id: string, body: { model: string; name?: string }) =>
   req<ModelEntry>(`/providers/${encodeURIComponent(id)}/models`, {
@@ -294,8 +307,9 @@ export const addProviderModel = (id: string, body: { model: string; name?: strin
   });
 
 export const deleteProviderModel = (id: string, modelId: string) =>
-  req<{ ok: boolean }>(
+  reqWithStatus<{ ok: boolean }>(
     `/providers/${encodeURIComponent(id)}/models/${encodeURIComponent(modelId)}`,
+    okEnvelope,
     { method: "DELETE" }
   );
 

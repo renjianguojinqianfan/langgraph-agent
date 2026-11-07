@@ -105,9 +105,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 {loadError}
               </div>
             )}
-            {providers.length === 0 && (
+            {loading && providers.length === 0 && (
+              <div role="status" className="text-body text-tertiary">
+                加载中…
+              </div>
+            )}
+            {!loading && !loadError && providers.length === 0 && (
               <div className="text-body text-tertiary">
-                {loading ? "加载中…" : "暂无 Provider；先添加一个 API 地址。"}
+                暂无 Provider；先添加一个 API 地址。
               </div>
             )}
 

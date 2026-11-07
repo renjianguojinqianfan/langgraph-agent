@@ -16,9 +16,11 @@ import {
   initialDiscoverySelection,
   keyStateText,
   manualModelError,
+  modelDeleteFailure,
   pickableCandidates,
   protocolLabel,
   providerDefaultAction,
+  providerDeleteFailure,
   toggleDiscoveryPick,
 } from "../../lib/modelCatalog";
 import type { DiscoverCandidate, ModelEntry, Provider } from "../../types";
@@ -85,31 +87,21 @@ export function ProviderCard({
 
   const removeProvider = async () => {
     setArmed(false);
-    try {
-      const result = await deleteProvider(provider.id);
-      if (result.data) {
-        await onRefresh();
-      } else {
-        reportError(
-          `${apiErrorText(result)}；先给其它 Provider 添加模型，再删这一个。`
-        );
-      }
-    } catch {
-      reportError("删除 Provider 失败：" + BACKEND_UNREACHABLE);
+    const result = await deleteProvider(provider.id);
+    if (result.data) {
+      await onRefresh();
+    } else {
+      reportError(providerDeleteFailure(result.status, result.detail));
     }
   };
 
   const removeModel = async (modelId: string) => {
-    try {
-      const result = await deleteProviderModel(provider.id, modelId);
-      if (result.data) {
-        report("已删除模型");
-        await onRefresh();
-      } else {
-        reportError(`${apiErrorText(result)}；目录至少要保留一个模型。`);
-      }
-    } catch {
-      reportError("删除模型失败：" + BACKEND_UNREACHABLE);
+    const result = await deleteProviderModel(provider.id, modelId);
+    if (result.data) {
+      report("已删除模型");
+      await onRefresh();
+    } else {
+      reportError(modelDeleteFailure(result.status, result.detail));
     }
   };
 
@@ -339,7 +331,7 @@ export function ProviderCard({
                   <Button
                     size="sm"
                     onClick={() => test(entry.id)}
-                    aria-label={`测试模型：${entry.model}`}
+                    aria-label={`测试模型：${provider.name || provider.id} / ${entry.model}`}
                   >
                     测试
                   </Button>
@@ -347,7 +339,7 @@ export function ProviderCard({
                     size="sm"
                     variant="danger"
                     onClick={() => removeModel(entry.id)}
-                    aria-label={`删除模型：${entry.model}`}
+                    aria-label={`删除模型：${provider.name || provider.id} / ${entry.model}`}
                   >
                     删除
                   </Button>

@@ -19,8 +19,10 @@ import {
   isModelProtocol,
   keyStateText,
   manualModelError,
+  modelDeleteFailure,
   modelLabel,
   modelSwitchFailure,
+  providerDeleteFailure,
   pickableCandidates,
   protocolLabel,
   providerDefaultAction,
@@ -344,5 +346,31 @@ describe("failure copy keeps a reason and a next step (D-31 style)", () => {
     expect(note).toContain("unknown model");
     expect(note).toContain("Provider 地址、Key 与协议");
     expect(modelSwitchFailure("")).toContain("操作失败");
+  });
+});
+
+describe("status-branched delete copy (#299 LOW-3)", () => {
+  it("provider delete names the status-specific next step, not one generic one", () => {
+    // 409 = last model or unwritable credentials; keep the server reason.
+    const conflict = providerDeleteFailure(409, "cannot delete the last model profile");
+    expect(conflict).toContain("cannot delete the last model profile");
+    expect(conflict).toContain("最后一个模型");
+    // 404 = stale card, 401 = re-login, 0 = backend down.
+    expect(providerDeleteFailure(404, "provider not found")).toContain("刷新设置页");
+    expect(providerDeleteFailure(401, "invalid token")).toContain("重新登录");
+    expect(providerDeleteFailure(0, "")).toContain("无法连接后台");
+    // A plain 500 keeps the reason but must NOT prescribe "add a model".
+    const boom = providerDeleteFailure(500, "boom");
+    expect(boom).toContain("boom");
+    expect(boom).not.toContain("最后一个模型");
+  });
+
+  it("model delete branches the last-model 409 from stale 404 / unreachable 0", () => {
+    const last = modelDeleteFailure(409, "cannot delete the last model profile");
+    expect(last).toContain("目录至少要保留一个模型");
+    expect(modelDeleteFailure(404, "model not found")).toContain("刷新设置页");
+    expect(modelDeleteFailure(401, "invalid token")).toContain("重新登录");
+    expect(modelDeleteFailure(0, "")).toContain("无法连接后台");
+    expect(modelDeleteFailure(500, "boom")).toContain("boom");
   });
 });

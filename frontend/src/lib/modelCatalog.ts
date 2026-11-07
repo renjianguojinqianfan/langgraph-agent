@@ -1,3 +1,4 @@
+import { BACKEND_UNREACHABLE } from "./copy";
 import type {
   DiscoverCandidate,
   ModelEntry,
@@ -365,4 +366,36 @@ export function discoveryFailureNote(detail: string): string {
 export function modelSwitchFailure(detail: string): string {
   const reason = detail.trim() || "操作失败";
   return `切换失败：${reason}；确认 Provider 地址、Key 与协议后重试。`;
+}
+
+/** A failed delete is not one failure (#299 LOW): a 409 means "not this one"
+ * (last model), 401 means re-login, 404 means the card is stale, and 0 means
+ * the backend is unreachable. Each branch names its own next step instead of
+ * appending "add a model" to every error. */
+export function providerDeleteFailure(status: number, detail: string): string {
+  const reason = detail.trim();
+  if (status === 0) return `删除 Provider 失败：${BACKEND_UNREACHABLE}`;
+  if (status === 401) {
+    return `删除 Provider 失败：${reason || "登录已失效"}；重新登录后再试。`;
+  }
+  if (status === 404) return "Provider 不存在；刷新设置页后再试。";
+  if (status === 409) {
+    return `${reason || "删除被拒绝"}；该 Provider 下是最后一个模型，或凭据文件不可写；按原因处理后重试。`;
+  }
+  return `删除 Provider 失败：${reason || "服务返回错误，稍后重试"}`;
+}
+
+/** Model-entry delete: 409 is the catalog's "cannot delete the last model"
+ * invariant; 404 means the list is stale. */
+export function modelDeleteFailure(status: number, detail: string): string {
+  const reason = detail.trim();
+  if (status === 0) return `删除模型失败：${BACKEND_UNREACHABLE}`;
+  if (status === 401) {
+    return `删除模型失败：${reason || "登录已失效"}；重新登录后再试。`;
+  }
+  if (status === 404) return `${reason || "模型不存在"}；刷新设置页后再试。`;
+  if (status === 409) {
+    return `${reason || "删除被拒绝"}；目录至少要保留一个模型，先给别的 Provider 添加模型。`;
+  }
+  return `删除模型失败：${reason || "服务返回错误，稍后重试"}`;
 }

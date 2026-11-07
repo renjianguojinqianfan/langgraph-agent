@@ -28,43 +28,54 @@ interface ModelState {
   refresh: () => Promise<void>;
 }
 
-export const useModelStore = create<ModelState>((set) => ({
-  providers: [],
-  models: [],
-  defaultId: "",
-  loading: false,
-  error: "",
-  refresh: async () => {
-    set({ loading: true });
-    try {
-      const [providersResult, modelsResult] = await Promise.all([
-        listProviders(),
-        listModels(),
-      ]);
-      if (providersResult.data && modelsResult.data) {
-        set({
-          providers: providersResult.data.providers ?? [],
-          models: entriesFromProfiles(modelsResult.data.models ?? []),
-          defaultId: providersResult.data.default || modelsResult.data.default || "",
-          error: "",
-        });
-      } else {
-        // Name which read failed: the provider list and the flat catalog are
-        // separate faces, and a silent empty page is not a usable failure.
-        const failed = providersResult.data ? modelsResult : providersResult;
-        const detail = apiErrorText(failed);
-        set({
-          error:
-            detail === "操作失败"
-              ? "加载模型配置失败"
-              : `加载模型配置失败：${detail}`,
-        });
+export const useModelStore = create<ModelState>((set) => {
+  // Monotonic request id: a slow earlier refresh (open dialog) must not
+  // overwrite a newer answer (post-switch refresh from the Composer) when the
+  // two finish out of order (#299 LOW).
+  let refreshSeq = 0;
+
+  return {
+    providers: [],
+    models: [],
+    defaultId: "",
+    loading: false,
+    error: "",
+    refresh: async () => {
+      const seq = ++refreshSeq;
+      set({ loading: true });
+      try {
+        const [providersResult, modelsResult] = await Promise.all([
+          listProviders(),
+          listModels(),
+        ]);
+        if (seq !== refreshSeq) return; // superseded by a newer refresh
+        if (providersResult.data && modelsResult.data) {
+          set({
+            providers: providersResult.data.providers ?? [],
+            models: entriesFromProfiles(modelsResult.data.models ?? []),
+            defaultId: providersResult.data.default || modelsResult.data.default || "",
+            error: "",
+          });
+        } else {
+          // Name which read failed: the provider list and the flat catalog are
+          // separate faces, and a silent empty page is not a usable failure.
+          const failed = providersResult.data ? modelsResult : providersResult;
+          const detail = apiErrorText(failed);
+          set({
+            error:
+              detail === "操作失败"
+                ? "加载模型配置失败"
+                : `加载模型配置失败：${detail}`,
+          });
+        }
+      } catch {
+        // Keep the last snapshot; the settings page shows the failure note.
+        if (seq === refreshSeq) {
+          set({ error: "加载模型配置失败：无法连接后台；确认服务在运行后再试。" });
+        }
+      } finally {
+        if (seq === refreshSeq) set({ loading: false });
       }
-    } catch {
-      // Keep the last snapshot; the settings page shows the failure note.
-      set({ error: "加载模型配置失败：无法连接后台；确认服务在运行后再试。" });
-    } finally {
-      set({ loading: false });
-    }
-  },
-}));
+    },
+  };
+});

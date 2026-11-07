@@ -83,6 +83,7 @@ export function Composer() {
   const [customProviderId, setCustomProviderId] = useState("");
   const [customModel, setCustomModel] = useState("");
   const [customError, setCustomError] = useState("");
+  const [applyingCustom, setApplyingCustom] = useState(false);
 
   // A server reason belongs to the task that produced it; switching tasks must
   // not carry "操作失败" into the next conversation.
@@ -90,8 +91,10 @@ export function Composer() {
     resetControls();
     resetSend();
     setCustomOpen(false);
+    setCustomProviderId("");
     setCustomModel("");
     setCustomError("");
+    setApplyingCustom(false);
   }, [currentTaskId, resetControls, resetSend]);
 
   const mode: TaskMode = task?.mode ?? draftMode;
@@ -120,14 +123,23 @@ export function Composer() {
   };
 
   const applyCustom = async () => {
+    // One in-flight switch at a time: a double click (or Enter held) would
+    // otherwise POST twice, and the second answer (409) would overwrite the
+    // success note with a failure (#299 LOW-5).
+    if (applyingCustom) return;
     const error = customModelError(effectiveProviderId, customModel);
     setCustomError(error);
     if (error) return;
-    const ok = await onCustomModel(effectiveProviderId, customModel);
-    if (ok) {
-      setCustomOpen(false);
-      setCustomModel("");
-      setCustomError("");
+    setApplyingCustom(true);
+    try {
+      const ok = await onCustomModel(effectiveProviderId, customModel);
+      if (ok) {
+        setCustomOpen(false);
+        setCustomModel("");
+        setCustomError("");
+      }
+    } finally {
+      setApplyingCustom(false);
     }
   };
 
@@ -166,6 +178,8 @@ export function Composer() {
         </select>
         {switchNote && (
           <span
+            role="status"
+            aria-atomic="true"
             className="min-w-0 truncate text-meta text-tertiary"
             title={switchNote}
           >
@@ -205,9 +219,10 @@ export function Composer() {
             size="sm"
             variant="outline"
             onClick={applyCustom}
-            disabled={!customModel.trim() || !effectiveProviderId}
+            disabled={applyingCustom || !customModel.trim() || !effectiveProviderId}
+            title={applyingCustom ? "切换中…" : undefined}
           >
-            使用
+            {applyingCustom ? "使用中…" : "使用"}
           </Button>
           <Button
             size="sm"
