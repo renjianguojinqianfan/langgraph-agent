@@ -160,6 +160,17 @@
 - [ ] 读屏播报抽屉为 dialog：名称「任务列表」/「工作区与文件」，`aria-modal=true`。
 - [ ] 仅用 Tab / Shift+Tab / Esc 完成「开 → 用 → 关」全流程，焦点不丢。
 
+### P1-2 手测清单（#258）
+
+- [ ] 400 字符 token / 2000 字单词 / 长 URL / CJK+emoji：对话与计划页均按字符断行，无整页横向滚动。
+- [ ] 工具调用展开后，超长入参出现「展开全部 / 收起」，展开后不再受 `max-h` 限制（仍可横向滚动）。
+- [ ] 事件页无 heartbeat 条目；Trace 回放（打开完整 Trace）仍能看到原始流。
+- [ ] DevTools Network：选中已停下任务只发一次快照 GET（无并列第二次 `getTask`）；长任务运行期间无 list GET 风暴。
+- [ ] 流式回答期间 Markdown 持续更新，结束后不再无谓重渲染（React DevTools Profiler 抽查）。
+- [ ] 发送失败（断开后台）显示「无法连接后台；确认服务在运行后再试」，读屏有播报（`role=status`）。
+- [ ] 文件面板失败显示原因 + 下一步，「重试」可用；加载 / 空 / 失败状态读屏可感知（`role=status`）。
+- [ ] 对比度：`text-state-danger` / `text-tertiary` 在 `bg-surface-page` / `bg-surface-well` 上仍达 §1 标准（本片未改 token）。
+
 ## 7. 空 / 错 / 加载
 
 - 空（未选任务）：一句 21px 邀请 + 一行副说明；composer 可用。

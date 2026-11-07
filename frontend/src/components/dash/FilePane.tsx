@@ -3,6 +3,7 @@ import { listFiles } from "../../api/client";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
+import { Button } from "../ui/Button";
 import { FileDownloadLink } from "./FileDownloadLink";
 import { fileName, groupFiles } from "./fileGroup";
 
@@ -22,6 +23,8 @@ export function FilePane({
   const [truncated, setTruncated] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** Bumped by the retry button; the load effect keys on it (#258 AC5). */
+  const [reloadToken, setReloadToken] = useState(0);
 
   // A different task starts from a clean pane; a status change must not clear
   // the list the user is reading.
@@ -41,14 +44,21 @@ export function FilePane({
         .then((r) => {
           if (cancelled) return;
           if (!r.data) {
-            setNote("无法读取工作区文件");
+            setNote(
+              "无法读取工作区文件：后台不可达或响应异常；确认服务在运行后点「重试」。（切换页签/重新打开任务也会重新加载）"
+            );
             return;
           }
+          setNote(null);
           setFiles(r.data.files ?? []);
           setTruncated(!!r.data.truncated);
         })
         .catch(() => {
-          if (!cancelled) setNote("无法读取工作区文件");
+          if (!cancelled) {
+            setNote(
+              "无法读取工作区文件：后台不可达或响应异常；确认服务在运行后点「重试」。（切换页签/重新打开任务也会重新加载）"
+            );
+          }
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -65,7 +75,7 @@ export function FilePane({
       cancelled = true;
       if (timer !== null) window.clearInterval(timer);
     };
-  }, [task.id, task.status, visible]);
+  }, [task.id, task.status, visible, reloadToken]);
 
   const groups = groupFiles(files);
 
@@ -78,7 +88,7 @@ export function FilePane({
       )}
 
       {files.length === 0 ? (
-        <p className="text-body text-tertiary">
+        <p role="status" className="text-body text-tertiary">
           {loading
             ? "加载中…"
             : task.status === "RUNNING"
@@ -118,7 +128,21 @@ export function FilePane({
         ))
       )}
 
-      {note && <p className="text-meta text-state-danger">{note}</p>}
+      {note && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="status" className="min-w-0 flex-1 text-meta text-state-danger">
+            {note}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            disabled={loading}
+          >
+            {loading ? "重试中…" : "重试"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

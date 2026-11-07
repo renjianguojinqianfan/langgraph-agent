@@ -167,7 +167,7 @@ export function Composer() {
         }
       }
     } catch {
-      setSendError("发送失败");
+      setSendError("发送失败：无法连接后台；确认服务在运行后再试。");
     } finally {
       setBusy(false);
     }
@@ -257,6 +257,7 @@ export function Composer() {
       <div className="mt-2 flex items-center gap-2 text-meta">
         <span
           id="composer-reason"
+          role="status"
           className="min-w-0 flex-1 truncate text-tertiary"
           title={bottomNote ?? undefined}
         >
