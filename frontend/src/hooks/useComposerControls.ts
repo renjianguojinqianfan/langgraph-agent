@@ -7,7 +7,11 @@ import {
   putTaskModel,
 } from "../api/client";
 import { BACKEND_UNREACHABLE } from "../lib/copy";
-import { findEntryByModel, modelSwitchFailure } from "../lib/modelCatalog";
+import {
+  findEntryByModel,
+  modelSwitchFailure,
+  modelSwitchSuccess,
+} from "../lib/modelCatalog";
 import { isStoppable } from "../lib/taskState";
 import { useModelStore } from "../store/modelStore";
 import { useTaskStore } from "../store/taskStore";
@@ -70,7 +74,7 @@ export function useComposerControls({ task }: UseComposerControlsOptions) {
         if (r.data?.ok) {
           const fresh = await getTask(task.id);
           if (fresh.data) upsert(fresh.data);
-          if (running) setSwitchNote("下一轮生效");
+          setSwitchNote(modelSwitchSuccess(running));
         } else {
           setSwitchNote(modelSwitchFailure(apiErrorText(r)));
         }
@@ -121,7 +125,7 @@ export function useComposerControls({ task }: UseComposerControlsOptions) {
           // The on-demand entry is now part of the catalog; the picker should
           // show it as a normal option instead of the raw fallback.
           await refreshModels();
-          setSwitchNote(running ? "下一轮生效" : "已切换");
+          setSwitchNote(modelSwitchSuccess(running));
           return true;
         }
         setSwitchNote(modelSwitchFailure(apiErrorText(r)));

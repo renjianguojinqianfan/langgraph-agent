@@ -112,7 +112,12 @@ export const PROTOCOL_ANTHROPIC: ModelProtocol = "anthropic";
 
 /** D-34/D-35: both protocols render; the service refuses an explicit
  * `anthropic` save until the adapter lands (PR B), which is exactly the
- * readable 400 the page shows. */
+ * readable 400 the page shows.
+ *
+ * #298 DEPENDENCY (deferred): this hint, the dialog edit branch and
+ * docs/frontend-design.md §6 P2-3 say "saving anthropic answers 400". Once
+ * PR #298 (dual-protocol backend) merges we rebase and MUST sync them to the
+ * merged fact (adapter available) — do not harden the stale claim meanwhile. */
 export const PROTOCOL_OPTIONS: ReadonlyArray<{
   value: ModelProtocol;
   label: string;
@@ -369,6 +374,12 @@ export function discoveryBlockedReason(protocol: string): string {
 export function discoveryFailureNote(detail: string): string {
   const reason = detail.trim() || "无法连接后台；确认服务在运行后再试。";
   return `${reason}也可以手动添加模型 ID。`;
+}
+
+/** OK model switch: a running task applies it on the next round; a parked or
+ * failed task's next message already uses it (#299 LOW-2). */
+export function modelSwitchSuccess(running: boolean): string {
+  return running ? "下一轮生效" : "已切换";
 }
 
 /** Non-OK model switch: keep the server reason and name the next check. */

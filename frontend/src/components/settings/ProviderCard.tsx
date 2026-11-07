@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   addProviderModel,
   apiErrorText,
@@ -63,6 +63,38 @@ export function ProviderCard({
   const [candidates, setCandidates] = useState<DiscoverCandidate[] | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [addingPicked, setAddingPicked] = useState(false);
+  /** Armed model-entry delete: the row's second click confirms. */
+  const [modelArmed, setModelArmed] = useState<string | null>(null);
+  /** Drops a discovery answer that belongs to a superseded provider config. */
+  const discoverySeq = useRef(0);
+
+  // #299 MEDIUM: temporary card state (preview, armed deletes, add form,
+  // messages) belongs to this provider *configuration*. When the address /
+  // protocol / env / id changes — e.g. edit the card between closing and
+  // reopening the settings dialog — a stale discovery preview must not be
+  // "加入目录"'d into the new host. The settings dialog also unmounts the cards
+  // while closed; this effect covers the in-session edit case.
+  useEffect(() => {
+    discoverySeq.current += 1;
+    setArmed(false);
+    setNote(null);
+    setAddOpen(false);
+    setAddModel("");
+    setAddName("");
+    setAddError("");
+    setAddingModel(false);
+    setDiscovering(false);
+    setDiscoverError("");
+    setCandidates(null);
+    setPicked([]);
+    setAddingPicked(false);
+    setModelArmed(null);
+  }, [
+    provider.id,
+    provider.protocol,
+    provider.base_url,
+    provider.api_key_env,
+  ]);
 
   const defaultAction = providerDefaultAction(models, defaultId);
   const discoverBlocked = discoveryBlockedReason(provider.protocol);
@@ -97,6 +129,7 @@ export function ProviderCard({
   };
 
   const removeModel = async (modelId: string) => {
+    setModelArmed(null);
     const result = await deleteProviderModel(provider.id, modelId);
     if (result.data) {
       report("已删除模型");
@@ -118,6 +151,9 @@ export function ProviderCard({
   };
 
   const submitModel = async () => {
+    // Same in-flight guard as the button: a fast double Enter must not POST
+    // twice (#299 LOW-3).
+    if (addingModel) return;
     const error = manualModelError(addModel, models);
     setAddError(error);
     if (error) return;
@@ -145,12 +181,14 @@ export function ProviderCard({
   };
 
   const discover = async () => {
+    const seq = ++discoverySeq.current;
     setDiscovering(true);
     setDiscoverError("");
     setCandidates(null);
     setPicked([]);
     try {
       const result = await discoverProviderModels(provider.id);
+      if (seq !== discoverySeq.current) return; // config changed mid-flight
       if (result.data) {
         const list = result.data.models ?? [];
         setCandidates(list);
@@ -163,9 +201,11 @@ export function ProviderCard({
         setDiscoverError(discoveryFailureNote(apiErrorText(result)));
       }
     } catch {
-      setDiscoverError(discoveryFailureNote(""));
+      if (seq === discoverySeq.current) {
+        setDiscoverError(discoveryFailureNote(""));
+      }
     } finally {
-      setDiscovering(false);
+      if (seq === discoverySeq.current) setDiscovering(false);
     }
   };
 
@@ -274,6 +314,7 @@ export function ProviderCard({
               size="sm"
               variant="danger"
               onClick={removeProvider}
+              title="会级联删除该 Provider 下全部模型条目与 Key；引用它的任务下一轮会失败。"
               aria-label={`确认删除 Provider：${providerLabel(provider)}`}
             >
               确认删除
@@ -293,6 +334,11 @@ export function ProviderCard({
           </Button>
         )}
       </div>
+      {armed && (
+        <p role="alert" className="text-meta text-state-danger">
+          确认删除会级联删除该 Provider 下的全部模型条目与 Key；引用它的任务下一轮会失败。
+        </p>
+      )}
 
       <div className="flex flex-col gap-2 rounded-well border border-rule bg-surface-well p-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -339,14 +385,31 @@ export function ProviderCard({
                   >
                     测试
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => removeModel(entry.id)}
-                    aria-label={`删除模型：${providerLabel(provider)} / ${entry.model}`}
-                  >
-                    删除
-                  </Button>
+                  {modelArmed === entry.id ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => removeModel(entry.id)}
+                        title="会从目录删除该模型条目；引用它的任务下一轮会失败。"
+                        aria-label={`确认删除模型：${providerLabel(provider)} / ${entry.model}`}
+                      >
+                        确认删除
+                      </Button>
+                      <Button size="sm" onClick={() => setModelArmed(null)}>
+                        取消
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setModelArmed(entry.id)}
+                      aria-label={`删除模型：${providerLabel(provider)} / ${entry.model}`}
+                    >
+                      删除
+                    </Button>
+                  )}
                 </span>
               </li>
             ))}

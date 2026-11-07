@@ -134,23 +134,44 @@ describe("modelStore refresh (#243 P2-3)", () => {
     expect(state.loading).toBe(false);
   });
 
-  it("keeps the last snapshot and names the failed read when an envelope is missing", async () => {
+  it("names a failed provider read and keeps the last snapshot", async () => {
     listProvidersMock.mockResolvedValue(providersResponse("deepseek"));
     listModelsMock.mockResolvedValue(modelsResponse("deepseek"));
     await useModelStore.getState().refresh();
 
     listProvidersMock.mockResolvedValue({
       code: 1,
-      message: "providers blew up",
-      data: null,
+      detail: "providers blew up",
     } as unknown as ApiResponse<ProvidersData>);
     listModelsMock.mockResolvedValue(modelsResponse("deepseek"));
     await useModelStore.getState().refresh();
 
     const state = useModelStore.getState();
-    // Old snapshot survives; the failure is named rather than rendered empty.
+    // Old snapshot survives; the failed *provider* read is named.
     expect(state.providers.map((p) => p.id)).toEqual(["deepseek"]);
     expect(state.error).toContain("加载模型配置失败");
+    expect(state.error).toContain("providers blew up");
+    expect(state.error).not.toContain("models blew up");
+    expect(state.loading).toBe(false);
+  });
+
+  it("names a failed flat-catalog read and keeps the last snapshot", async () => {
+    listProvidersMock.mockResolvedValue(providersResponse("deepseek"));
+    listModelsMock.mockResolvedValue(modelsResponse("deepseek"));
+    await useModelStore.getState().refresh();
+
+    listProvidersMock.mockResolvedValue(providersResponse("deepseek"));
+    listModelsMock.mockResolvedValue({
+      code: 1,
+      detail: "models blew up",
+    } as unknown as ApiResponse<ModelsData>);
+    await useModelStore.getState().refresh();
+
+    const state = useModelStore.getState();
+    expect(state.models.map((m) => m.provider_id)).toEqual(["deepseek"]);
+    expect(state.error).toContain("加载模型配置失败");
+    expect(state.error).toContain("models blew up");
+    expect(state.error).not.toContain("providers blew up");
     expect(state.loading).toBe(false);
   });
 });

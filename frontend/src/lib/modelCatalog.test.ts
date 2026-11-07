@@ -22,6 +22,7 @@ import {
   modelDeleteFailure,
   modelLabel,
   modelSwitchFailure,
+  modelSwitchSuccess,
   providerDeleteFailure,
   pickableCandidates,
   protocolLabel,
@@ -352,6 +353,11 @@ describe("failure copy keeps a reason and a next step (D-31 style)", () => {
     expect(discoveryFailureNote("认证失败（HTTP 401）")).toContain("手动添加");
     expect(discoveryFailureNote("")).toContain("无法连接后台");
     expect(discoveryFailureNote("")).toContain("手动添加");
+  });
+
+  it("modelSwitchSuccess distinguishes running (next round) from parked (already switched)", () => {
+    expect(modelSwitchSuccess(true)).toBe("下一轮生效");
+    expect(modelSwitchSuccess(false)).toBe("已切换");
   });
 
   it("modelSwitchFailure names the checks after a server refusal", () => {

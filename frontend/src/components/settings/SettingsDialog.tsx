@@ -85,47 +85,68 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-5 py-4">
-            <div className="flex items-start justify-between gap-4">
-              <p className="max-w-[56ch] text-body text-tertiary">
-                模型配置按 Provider 组织：一个地址 + 一种协议下挂多个模型。
-                Key 只写不读，保存在仓库外的 ~/.qianfan/credentials.json，或取配置里写的环境变量。
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setEditor({ mode: "create" })}
-              >
-                <Icon name="plus" size={14} />
-                添加模型提供商
-              </Button>
-            </div>
+            {/* #299 MEDIUM: cards hold temporary state (discovery preview,
+                armed deletes, add form, messages) that belongs to one settings
+                session. Rendering them only while open unmounts that state on
+                close, so closing → editing a Provider → reopening cannot show
+                a stale preview from the old host. The cards also reset on
+                provider-config changes (ProviderCard effect) for in-session
+                edits. */}
+            {open && (
+            <>
+              <div className="flex items-start justify-between gap-4">
+                <p className="max-w-[56ch] text-body text-tertiary">
+                  模型配置按 Provider 组织：一个地址 + 一种协议下挂多个模型。
+                  Key 只写不读，保存在仓库外的 ~/.qianfan/credentials.json，或取配置里写的环境变量。
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditor({ mode: "create" })}
+                >
+                  <Icon name="plus" size={14} />
+                  添加模型提供商
+                </Button>
+              </div>
 
-            {loadError && (
-              <div role="alert" className="text-meta text-state-danger">
-                {loadError}
-              </div>
-            )}
-            {loading && providers.length === 0 && (
-              <div role="status" className="text-body text-tertiary">
-                加载中…
-              </div>
-            )}
-            {!loading && !loadError && providers.length === 0 && (
-              <div className="text-body text-tertiary">
-                暂无 Provider；先添加一个 API 地址。
-              </div>
-            )}
+              {loadError && (
+                <div className="flex flex-wrap items-center gap-2 text-meta text-state-danger">
+                  <span role="alert" className="min-w-0 flex-1">
+                    {loadError}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void refresh()}
+                    disabled={loading}
+                  >
+                    {loading ? "重试中…" : "重试"}
+                  </Button>
+                </div>
+              )}
+              {loading && providers.length === 0 && (
+                <div role="status" className="text-body text-tertiary">
+                  加载中…
+                </div>
+              )}
+              {!loading && !loadError && providers.length === 0 && (
+                <div className="text-body text-tertiary">
+                  暂无 Provider；先添加一个 API 地址。
+                </div>
+              )}
 
-            {groups.map((group) => (
-              <ProviderCard
-                key={group.provider.id}
-                provider={group.provider}
-                models={group.models}
-                defaultId={defaultId}
-                onEdit={() => setEditor({ mode: "edit", provider: group.provider })}
-                onRefresh={refresh}
-              />
-            ))}
+              {groups.map((group) => (
+                <ProviderCard
+                  key={group.provider.id}
+                  provider={group.provider}
+                  models={group.models}
+                  defaultId={defaultId}
+                  onEdit={() => setEditor({ mode: "edit", provider: group.provider })}
+                  onRefresh={refresh}
+                />
+              ))}
+            </>
+            )}
           </div>
         </div>
       </dialog>
