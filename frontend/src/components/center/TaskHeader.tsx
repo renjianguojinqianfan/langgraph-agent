@@ -7,6 +7,8 @@ import { Status } from "../ui/Status";
 interface TaskHeaderProps {
   task: Task;
   rightOpen: boolean;
+  /** D-25: render the workspace toggle iff the right column is a drawer. */
+  rightDrawer: boolean;
   onToggleRight: () => void;
 }
 
@@ -15,7 +17,12 @@ const MODE_LABEL: Record<TaskMode, string> = {
   build: "执行",
 };
 
-export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) {
+export function TaskHeader({
+  task,
+  rightOpen,
+  rightDrawer,
+  onToggleRight,
+}: TaskHeaderProps) {
   // #189: PENDING is the startup transient — it is stoppable like RUNNING.
   const stoppable = isStoppable(task.status);
   const heading = task.title || task.user_input || "未命名任务";
@@ -53,7 +60,7 @@ export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) 
           停止
         </Button>
       )}
-      <span className="hidden max-[1180px]:inline-flex">
+      {rightDrawer && (
         <IconButton
           type="button"
           aria-label="打开工作区"
@@ -62,7 +69,7 @@ export function TaskHeader({ task, rightOpen, onToggleRight }: TaskHeaderProps) 
           icon="panel"
           onClick={onToggleRight}
         />
-      </span>
+      )}
     </header>
   );
 }
