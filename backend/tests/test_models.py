@@ -636,3 +636,176 @@ def test_key_write_failure_returns_409_with_reason(tmp_path, monkeypatch):
         assert tm.models.get(model_id) is not None
     finally:
         client.__exit__(None, None, None)
+
+# ── #243 P2-2 (D-33): models.json v2 + v1 migration ──
+_V1_PROFILES = [
+    {
+        "id": "aaaabbbbcccc",
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "api_key_env": "LLM_API_KEY",
+        "preset": True,
+    },
+    {
+        "id": "ddddeeeeffff",
+        "name": "Bailian",
+        "base_url": "https://dashscope.test/v1",
+        "model": "qwen-max",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "preset": False,
+    },
+]
+
+
+def _write_v1_models(tmp_path, default="aaaabbbbcccc"):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    payload = {"default": default, "models": _V1_PROFILES}
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    (settings.data_path / "models.json").write_text(text, encoding="utf-8")
+    return settings, text
+
+
+def test_v1_models_json_migrates_to_providers_and_catalog(tmp_path):
+    settings, original = _write_v1_models(tmp_path)
+    home = tmp_path / "home"
+    credentials = home / ".qianfan" / "credentials.json"
+    credentials.parent.mkdir(parents=True)
+    credentials.write_text(json.dumps({"ddddeeeeffff": SENTINEL}), encoding="utf-8")
+
+    store = ModelStore(settings, home_dir=home)
+
+    raw = json.loads(store.data_file.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["default"] == "aaaabbbbcccc"
+    providers = {provider["id"]: provider for provider in raw["providers"]}
+    assert set(providers) == {"aaaabbbbcccc", "ddddeeeeffff"}
+    assert providers["aaaabbbbcccc"] == {
+        "id": "aaaabbbbcccc",
+        "name": "DeepSeek",
+        "protocol": "openai-compatible",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key_env": "LLM_API_KEY",
+        "preset": True,
+    }
+    assert providers["ddddeeeeffff"]["api_key_env"] == "DASHSCOPE_API_KEY"
+    assert providers["ddddeeeeffff"]["preset"] is False
+    entries = {entry["id"]: entry for entry in raw["models"]}
+    assert entries["aaaabbbbcccc"] == {
+        "id": "aaaabbbbcccc",
+        "provider_id": "aaaabbbbcccc",
+        "model": "deepseek-chat",
+        "name": "DeepSeek",
+        "source": "migrated",
+    }
+    assert entries["ddddeeeeffff"]["provider_id"] == "ddddeeeeffff"
+    assert entries["ddddeeeeffff"]["model"] == "qwen-max"
+
+    # Backup: written before the rewrite, byte-identical to the v1 file.
+    backup = store.data_file.with_name("models.json.bak-v1")
+    assert backup.is_file()
+    assert backup.read_text(encoding="utf-8") == original
+
+    # Task.model / default / credentials keys keep working unchanged.
+    assert store.default_id == "aaaabbbbcccc"
+    assert store.get("aaaabbbbcccc").model == "deepseek-chat"
+    assert store.get("ddddeeeeffff").base_url == "https://dashscope.test/v1"
+    assert store.key_for("ddddeeeeffff") == SENTINEL
+    assert store.key_source("ddddeeeeffff") == "pasted"
+    assert SENTINEL not in store.data_file.read_text(encoding="utf-8")
+    assert json.loads(credentials.read_text(encoding="utf-8")) == {"ddddeeeeffff": SENTINEL}
+
+    # Legacy flat projection keeps the old fields and adds provider_id/protocol.
+    listing = store.list_public()
+    projected = next(m for m in listing["models"] if m["id"] == "ddddeeeeffff")
+    assert projected["provider_id"] == "ddddeeeeffff"
+    assert projected["protocol"] == "openai-compatible"
+    assert projected["base_url"] == "https://dashscope.test/v1"
+    assert projected["model"] == "qwen-max"
+    assert projected["key_set"] is True
+    assert projected["key_source"] == "pasted"
+
+
+def test_v1_migration_is_idempotent_and_backs_up_once(tmp_path):
+    settings, original = _write_v1_models(tmp_path)
+    home = tmp_path / "home"
+    store = ModelStore(settings, home_dir=home)
+    after_first = store.data_file.read_bytes()
+    backups = settings.data_path.glob("models.json.bak-v1")
+    assert [backup.name for backup in backups] == ["models.json.bak-v1"]
+
+    reloaded = ModelStore(settings, home_dir=home)
+
+    # A v2 file is read as-is: no rewrite and no second backup.
+    assert reloaded.data_file.read_bytes() == after_first
+    assert [backup.name for backup in settings.data_path.glob("models.json.bak-v1")] == [
+        "models.json.bak-v1"
+    ]
+    backup = reloaded.data_file.with_name("models.json.bak-v1")
+    assert backup.read_text(encoding="utf-8") == original
+    assert reloaded.list_public()["default"] == "aaaabbbbcccc"
+
+
+def test_existing_v1_backup_is_never_overwritten(tmp_path):
+    settings, _ = _write_v1_models(tmp_path)
+    backup = settings.data_path / "models.json.bak-v1"
+    backup.write_text("first migration backup", encoding="utf-8")
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.default_id == "aaaabbbbcccc"
+    assert backup.read_text(encoding="utf-8") == "first migration backup"
+
+
+def test_v1_default_falls_back_to_the_first_profile_when_unknown(tmp_path):
+    settings, _ = _write_v1_models(tmp_path, default="does-not-exist")
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+    assert store.default_id == "aaaabbbbcccc"
+
+
+def test_migrated_profile_ids_still_pin_tasks(tmp_path):
+    settings, _ = _write_v1_models(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
+    task_id = tm.create_task("m", "hi", model="ddddeeeeffff")
+    assert (tm.get_task(task_id).model or "") == "ddddeeeeffff"
+
+
+def test_seeded_models_json_uses_schema_v2(tmp_path):
+    store, _ = _store(tmp_path)
+    raw = json.loads(store.data_file.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["default"] == "default"
+    assert [provider["id"] for provider in raw["providers"]] == ["default"]
+    assert raw["providers"][0]["protocol"] == "openai-compatible"
+    assert [entry["id"] for entry in raw["models"]] == ["default"]
+    assert raw["models"][0]["provider_id"] == "default"
+
+
+def test_bad_v2_file_is_quarantined_and_reseeded(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    (settings.data_path / "models.json").write_text(
+        json.dumps({"schema_version": 2, "providers": [], "models": []}),
+        encoding="utf-8",
+    )
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.get("default") is not None
+    assert list(settings.data_path.glob("models.json.corrupt-*"))
+    assert json.loads(store.data_file.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_newer_schema_version_is_moved_aside_not_rewritten(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    future = json.dumps({"schema_version": 99, "providers": [], "models": []})
+    (settings.data_path / "models.json").write_text(future, encoding="utf-8")
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.get("default") is not None
+    quarantined = list(settings.data_path.glob("models.json.corrupt-*"))
+    assert quarantined
+    assert quarantined[0].read_text(encoding="utf-8") == future
