@@ -578,3 +578,94 @@ def test_delete_model_from_an_empty_provider_is_model_not_found(tmp_path):
 
     with pytest.raises(KeyError):
         store.delete_model("empty", "anything")
+
+
+# ── 返工批次 1：Provider 创建带 key 的半成功回滚 ──
+def test_provider_create_with_key_rolls_back_when_the_key_write_fails(tmp_path, monkeypatch):
+    monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        original_open = model_store_module.os.open
+
+        def deny(*args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(model_store_module.os, "open", deny)
+
+        refused = client.post(
+            "/api/providers",
+            json={
+                "id": "bailian",
+                "name": "Bailian",
+                "base_url": "https://dashscope.test/v1",
+                "api_key_env": _TEST_ENV_NAME,
+                "key": SENTINEL,
+            },
+        )
+        assert refused.status_code == 409
+        assert SENTINEL not in refused.text
+
+        # The half-created card is rolled back: the same id is free to retry.
+        ids = {p["id"] for p in client.get("/api/providers").json()["data"]["providers"]}
+        assert "bailian" not in ids
+
+        monkeypatch.setattr(model_store_module.os, "open", original_open)
+        created = _create_provider(client, key=SENTINEL)
+        assert created["key_set"] is True
+    finally:
+        client.__exit__(None, None, None)
+
+
+# ── 返工批次 2（LOW-4 收窄）：已有 anthropic 卡片仍可编辑其它字段 ──
+def test_existing_anthropic_provider_stays_editable_for_other_fields(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        tm.models.add_provider(
+            id="claude",
+            name="Claude",
+            protocol=PROTOCOL_ANTHROPIC,
+            base_url="https://api.anthropic.test/v1",
+            api_key_env=_TEST_ENV_NAME,
+        )
+        renamed = client.put("/api/providers/claude", json={"name": "Renamed"})
+        assert renamed.status_code == 200
+        assert renamed.json()["data"]["name"] == "Renamed"
+        assert renamed.json()["data"]["protocol"] == PROTOCOL_ANTHROPIC
+
+        # An explicit protocol=anthropic change is still refused until PR B.
+        refused = client.put(
+            "/api/providers/claude", json={"protocol": PROTOCOL_ANTHROPIC}
+        )
+        assert refused.status_code == 400
+        assert "协议尚未实现" in refused.json()["detail"]
+    finally:
+        client.__exit__(None, None, None)
+
+
+# ── 返工批次 2（LOW-B）：非法 protocol 文案分两队 ──
+def test_unknown_protocol_says_unsupported_not_pr_b(tmp_path):
+    client, tm = _client(tmp_path)
+    try:
+        created = client.post(
+            "/api/providers",
+            json={
+                "id": "grpc",
+                "base_url": "https://grpc.test/v1",
+                "protocol": "grpc",
+            },
+        )
+        assert created.status_code == 400
+        detail = created.json()["detail"]
+        assert "不支持" in detail
+        assert "PR B" not in detail
+
+        _create_provider(client)
+        updated = client.put("/api/providers/bailian", json={"protocol": "grpc"})
+        assert updated.status_code == 400
+        assert "不支持" in updated.json()["detail"]
+        assert "PR B" not in updated.json()["detail"]
+    finally:
+        client.__exit__(None, None, None)
