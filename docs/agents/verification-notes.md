@@ -42,10 +42,10 @@ harness（dsh / opencode / qoder）在受限模式下会挡住 MSYS 运行时与
 
 ```bash
 .\.venv311\Scripts\python.exe -m pytest backend/tests/ -q      # 全绿（计数以实跑为准）
-.\.venv311\Scripts\python.exe -m ruff check backend scripts   # All checks passed
+.\.venv311\Scripts\python.exe -m ruff check backend scripts start.py   # All checks passed
 .\.venv311\Scripts\python.exe -m mypy                        # no issues found
 .\.venv311\Scripts\python.exe scripts\check_doc_links.py     # 相对链接全部可解析
-cd frontend; npx tsc --noEmit; npm test; npm run check:sse; npm run build
+cd frontend; npm run typecheck; npm test; npm run check:sse; npm run build
 ```
 
 **对照（同一提交、dsh 默认沙箱）**：5 failed + 181 passed + 562 errors——两层假红签名全中，

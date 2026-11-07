@@ -10,7 +10,7 @@
 #
 # 本地用法：
 #   .venv311\Scripts\python.exe -m pip install -r requirements-dev.txt
-#   .venv311\Scripts\python.exe -m ruff check backend scripts
+#   .venv311\Scripts\python.exe -m ruff check backend scripts start.py
 #   .venv311\Scripts\python.exe -m mypy
 ruff==0.16.7
 mypy==2.3.1

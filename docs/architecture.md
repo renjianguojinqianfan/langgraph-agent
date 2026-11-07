@@ -328,7 +328,7 @@ uvicorn backend.main:app --port 8000 --reload   # 手工起后端
 ### 6.4 CI 与验证入口
 
 - CI 三个 job（[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）：`backend-test`（ruff + mypy + pytest 离线全量）、`backend-windows-smoke`（Windows 敏感面）、`frontend-build`（`npm ci` → typecheck → `npm test` → `check:sse` → build；job 显示名沿用「Frontend typecheck & build」——分支保护锁定了这个 required check 的字符串）。
-- 本地权威命令：`.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q`、`-m ruff check backend scripts`、`-m mypy`；前端 `npm run typecheck` / `npm run check:sse` / `npm run build`。
+- 本地权威命令：`.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q`、`-m ruff check backend scripts start.py`、`-m mypy`；前端 `npm run typecheck` / `npm run check:sse` / `npm run build`。
 - 文档链接门：`python scripts/check_doc_links.py`（只校验 tracked Markdown 的相对链接）。
 - 发布前 / 换供应商：按 [`docs/manual-verification.md`](manual-verification.md) 的 9 个场景启服务、在网页端手动跑一遍（CI 不跑真模型）。
 
