@@ -2,7 +2,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 
 /** Single source of the drawer breakpoints (D-25 / #257).
  *
- * Tailwind v4 compiles `max-[860px]:` to `@media not all and (min-width: 860px)`
+ * Tailwind v4 compiles `max-[860px]:` to `@media not all and (width >= 860px)`
  * — i.e. strictly `width < 860px`, so 860 itself is still the wide layout. The
  * JS queries below spell the same `<` semantics (not `max-width: 859.98px`),
  * so CSS and `matchMedia` agree at the boundary. */

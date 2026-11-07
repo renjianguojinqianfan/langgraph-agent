@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { drawerKeyAction, FOCUSABLE_SELECTOR, nextFocusIndex } from "../lib/focus";
+import { createInertLedger, type InertLedger } from "../lib/inertLedger";
 
 /** A region whose inert state is not `drawerView().backgroundInert`: the
  * off-screen drawer panels when the screen is narrow but nothing is open.
@@ -25,12 +26,6 @@ export interface UseDrawerFocusOptions {
   onClose: () => void;
 }
 
-function setInert(el: HTMLElement | null, inert: boolean): void {
-  if (!el) return;
-  el.inert = inert;
-  if (inert) el.setAttribute("aria-hidden", "true");
-  else el.removeAttribute("aria-hidden");
-}
 
 function focusablesIn(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
@@ -53,15 +48,13 @@ export function useDrawerFocus({
   onClose,
 }: UseDrawerFocusOptions): void {
   const triggerRef = useRef<HTMLElement | null>(null);
-  // Latest values for the installed listeners/cleanup without re-running the
-  // open/close effect (which would re-record the trigger and steal focus).
-  const inertTargetsRef = useRef(inertTargets);
-  const edgesRef = useRef(edges);
-  const backgroundInertRef = useRef(backgroundInert);
+  // HIGH fix (PR #293 review): a write-ahead ledger restores exactly what was
+  // touched. Restoring from the *current* target lists failed on close — that
+  // render passes `inertTargets=[]`, so <main>/skip-nav/other aside stayed inert.
+  const ledgerRef = useRef<InertLedger | null>(null);
+  if (ledgerRef.current === null) ledgerRef.current = createInertLedger();
+  // Latest close callback for the installed keydown listener.
   const onCloseRef = useRef(onClose);
-  inertTargetsRef.current = inertTargets;
-  edgesRef.current = edges;
-  backgroundInertRef.current = backgroundInert;
   onCloseRef.current = onClose;
 
   useEffect(() => {
@@ -70,6 +63,9 @@ export function useDrawerFocus({
     if (!container) return;
 
     // Record the element that opened the drawer exactly once, on entry.
+    // Known limitation: Safari does not focus a button on click, so
+    // `document.activeElement` can be <body>; restore then no-ops (accepted,
+    // no architecture change — see PR body's 已知限制).
     triggerRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
@@ -118,8 +114,9 @@ export function useDrawerFocus({
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("focusin", onFocusIn, true);
       // D-27 order: withdraw inert/aria-hidden first, then hand focus back.
-      for (const ref of inertTargetsRef.current) setInert(ref.current, false);
-      for (const edge of edgesRef.current) setInert(edge.ref.current, false);
+      // The ledger restores the first-seen state, so the closing render's
+      // empty target lists cannot strand the marks applied while open.
+      ledgerRef.current?.restoreAll();
       const trigger = triggerRef.current;
       if (trigger && trigger.isConnected) trigger.focus();
       triggerRef.current = null;
@@ -128,12 +125,13 @@ export function useDrawerFocus({
   }, [active, containerRef]);
 
   // Single writer of the `inert` marks (D-27): every render applies the latest
-  // derived state, and it runs after the focus cleanup above, so the closed
-  // state (edges inert on narrow screens) is restored in the same commit.
+  // derived state through the ledger; it runs after the focus cleanup above, so
+  // the closed state (edges inert on narrow screens) is restored in the same
+  // commit — and the next `restoreAll` puts those elements back to baseline.
   useEffect(() => {
-    for (const ref of inertTargetsRef.current) {
-      setInert(ref.current, backgroundInertRef.current);
-    }
-    for (const edge of edgesRef.current) setInert(edge.ref.current, edge.inert);
+    const ledger = ledgerRef.current;
+    if (!ledger) return;
+    for (const ref of inertTargets) ledger.apply(ref.current, backgroundInert);
+    for (const edge of edges) ledger.apply(edge.ref.current, edge.inert);
   });
 }

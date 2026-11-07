@@ -12,7 +12,7 @@ import {
   type DashTab,
 } from "../lib/dashTabs";
 import { getTask, getTaskSnapshot, listTasksSnapshot } from "../api/client";
-import { useIsLeftDrawer, useIsRightDrawer } from "../lib/breakpoints";
+import { useIsRightDrawer, useRailStatic } from "../lib/breakpoints";
 import { drawerView, type DrawerSide } from "../lib/drawer";
 import { useDrawerFocus } from "../hooks/useDrawerFocus";
 import { useSSE } from "../hooks/useSSE";
@@ -55,7 +55,9 @@ export function TaskView() {
   const [traceOpen, setTraceOpen] = useState(false);
   // D-25: one breakpoint source for both columns (lib/breakpoints.ts), with
   // the same `<` semantics as the `max-[860px]` / `max-[1180px]` utilities.
-  const isLeftDrawer = useIsLeftDrawer();
+  // D-25: rail static is the primary fact; a drawer is its negation.
+  const railStatic = useRailStatic();
+  const isLeftDrawer = !railStatic;
   const isRightDrawer = useIsRightDrawer();
   // D-26: a single open entry keeps the two drawers mutually exclusive.
   const [open, setOpen] = useState<DrawerSide | null>(null);
@@ -303,9 +305,10 @@ export function TaskView() {
       </aside>
 
       <main ref={mainRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* D-25: the toggle renders iff the rail is actually a drawer — no
-            `min-[861px]:hidden` third source; at exactly 860 it is a static rail. */}
-        {isLeftDrawer && (
+        {/* D-25: the toggle renders iff the rail is actually a drawer — the old
+            861px 断点变体（hidden）第三来源已删除；860 恰好是静态 rail。
+            Trace 打开时也隐藏，避免「点了没反应」的错觉。 */}
+        {isLeftDrawer && !traceOpen && (
           <IconButton
             type="button"
             aria-label="打开任务列表"
@@ -328,7 +331,7 @@ export function TaskView() {
             loading={loading}
             rightOpen={open === "right"}
             onToggleRight={() => setOpen((v) => (v === "right" ? null : "right"))}
-            rightDrawer={isRightDrawer}
+            rightDrawer={isRightDrawer && !traceOpen}
             onOpenPlan={() => {
               changeTab("plan");
               setOpen("right");
