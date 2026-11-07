@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "../types";
+import { historyListState, listBannerVisible } from "../lib/failureStates";
 import { useTaskStore } from "./taskStore";
 
 function task(id: string, workspace = "E:\\a"): Task {
@@ -279,5 +280,42 @@ describe("#256 AC7 首帧不闪空态", () => {
     expect(fresh.useTaskStore.getState().listLoading).toBe(true);
     vi.resetModules();
     await import("./taskStore");
+  });
+});
+
+// D-24 接线断言模板（#282）：store action 写入 → 既有纯函数给出组合判定。
+// 覆盖 #282 S1 的接线缺口——列表 500 时组件必须落「失败脸」而不是空态。
+// 纯函数单测已覆盖判定本身（lib/failureStates.test.ts）；这条钉的是
+// 「store 状态与判定函数的接线」，新状态面孔照抄这个形状即可。
+describe("D-24 接线断言模板（#282）", () => {
+  const listFace = () => {
+    const state = useTaskStore.getState();
+    return historyListState({
+      error: state.listError,
+      loading: state.listLoading,
+      rows: state.tasks.length,
+      visible: state.tasks.length,
+    });
+  };
+
+  it("列表读失败 + 零行 → 失败脸；清空 error 后回到空态", () => {
+    useTaskStore.getState().setTasks([]);
+    useTaskStore.getState().setListLoading(false);
+    useTaskStore.getState().setListError("任务列表读取失败（HTTP 500）。");
+
+    expect(listFace()).toBe("error");
+    // 失败脸已经承担错误说明，横幅不再重复。
+    expect(listBannerVisible(useTaskStore.getState().listError, listFace())).toBe(false);
+
+    useTaskStore.getState().setListError("");
+    expect(listFace()).toBe("empty");
+  });
+
+  it("有行时 errored refetch 不改写 rows——横幅可见但不落空/失败脸", () => {
+    useTaskStore.getState().setTasks([task("t1")]);
+    useTaskStore.getState().setListError("任务列表读取失败（HTTP 500）。");
+
+    expect(listFace()).toBe("rows");
+    expect(listBannerVisible(useTaskStore.getState().listError, listFace())).toBe(true);
   });
 });
