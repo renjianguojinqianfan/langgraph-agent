@@ -146,7 +146,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |
 | POST | `/api/tasks/{id}/stop` | 停止任务 | — | `{ok, status}`；落盘失败 → 500（`{detail}`） |
 | POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 / 落盘失败 → 500（`{detail}`） |
-| PUT | `/api/tasks/{id}/model` | 换任务模型（下一条消息生效） | `{model}`（模型条目 id）或 `{provider, model}`（目录外模型自动建 `source: manual` 条目） | `{ok, model, task}`；未知条目 → 409 / 未知 Provider → 404 / 非法 → 400 / 落盘失败 → 500（`{detail}`） |
+| PUT | `/api/tasks/{id}/model` | 换任务模型（下一条消息生效） | `{model}`（模型条目 id）或 `{provider, model}`（目录外模型自动建 `source: manual` 条目） | `{ok, model, task}`；未知条目 → 409 / 未知 Provider → 404 / 缺·空 `model` → 422（请求体校验）/ 落盘失败 → 500（`{detail}`） |
 | PUT | `/api/tasks/{id}/mode` | 切计划/执行模式（黏性，下一轮生效） | `{mode}` | `TaskManager.set_mode` 结果；不能切 → 409 / 落盘失败 → 500（`{detail}`） |
 | POST | `/api/tasks/{id}/messages` | 停下 / 失败后续说（同一 thread，多轮对话入口；需 checkpoint） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；任务不存在 → 404；计划文件读失败 → 409（detail 通用文案，全因只进服务端日志）——IO / 锁（`PlanIOError`，瞬时）在 worker 种子与轮内刷新处**容忍**：保住本轮计划 + warn，请求路径预检仍 409 可重试；内容损坏（`PlanError`，非 UTF-8）**严格**：轮判 FAILED |
@@ -164,7 +164,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | PUT | `/api/models/{id}/key` | 写入粘贴的 Key（只写；写到该条目所属 Provider） | `{key}` | `{ok, key_set, key_source}`；404/409 |
 | POST | `/api/models/{id}/test` | 测试该条目所属 Provider + 模型连通性 | — | 测试结果；404 |
 | GET | `/api/providers` | Provider 卡片列表 + 全局默认模型条目 id | — | `{providers: [...], default}`；只回 `key_set` / `key_source` |
-| POST | `/api/providers` | 新建 Provider（id 须匹配 `^[a-z][a-z0-9_-]*$`；`key` 只写） | `{id, name?, protocol?, base_url, api_key_env?, key?}` | public provider；重复 id / 非法 / anthropic（A2）→ 400 |
+| POST | `/api/providers` | 新建 Provider（**id 必填**且须匹配 `^[a-z][a-z0-9_-]*$`；`key` 只写） | `{id, name?, protocol?, base_url, api_key_env?, key?}` | public provider；重复 id / 非法 / anthropic（A2）→ 400 |
 | PUT | `/api/providers/{id}` | 编辑 Provider（id 不可改；`key` 只写，传 `""` 清空） | `{name?, protocol?, base_url?, api_key_env?, key?}` | public provider；404/400；写 Key 失败 → 409 |
 | DELETE | `/api/providers/{id}` | 删除 Provider 及其模型条目（撤销 Key；最后一个模型拒绝） | — | `{ok}`；404 / 409 |
 | GET | `/api/providers/{id}/models` | 该 Provider 的模型目录 | — | `{models: [...], default}`；404 |
@@ -180,7 +180,8 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 - 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset}], models: [{id, provider_id, model, name, source}]}`。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
 - 迁移：v1（无 `schema_version` 的扁平 `models` 列表）首次加载迁移为同 id 的 Provider（`protocol: openai-compatible`，base_url / api_key_env / preset 原样）+ 同 id 模型条目（model / name，`source: migrated`）；`Task.model` / `default` / credentials 键不变；迁移前把**原始字节**复制为 `models.json.bak-v1`（仅首次，已有备份不覆盖），二次加载不改文件、不再备份；坏文件 / 未来 schema 版本 quarantine + seed。
-- 协议：Provider 可存 `openai-compatible` / `anthropic`；**本片只有 OpenAI 兼容有适配器**——写面 API 暂拒 anthropic（400「协议尚未实现」），发现接口对 anthropic 返回 400「协议暂不支持发现」，任务侧遇到非 openai-compatible 显式失败（Anthropic 适配器在 PR B，D-35）。
+- 协议：Provider 可存 `openai-compatible` / `anthropic`；**本片只有 OpenAI 兼容有适配器**——**显式设置 `protocol=anthropic` 的创建/编辑被拒**（400「协议尚未实现」）；库里已有的 anthropic 卡片（手工编辑 / 迁移数据）仍可编辑其它字段，但任务运行到它时显式失败；发现接口对 anthropic 返回 400「协议暂不支持发现」（Anthropic 适配器在 PR B，D-35）。
+- 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) `2）。
 - 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），供 P2-3 前的设置页使用；Provider 卡片走 `/api/providers`。
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
@@ -294,7 +295,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 > 与 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」同源；冲突时以 AGENTS.md 的硬规则为准。
 
 1. **配置管理**：所有配置经 [`backend/config.py`](../backend/config.py) 的 `Settings`（pydantic-settings）从 `.env` / 环境变量读取；业务代码用 `get_settings()` 单例，**禁止**硬编码 Key/路径。例外：`ModelStore` 自带 `data/models.json`（Provider + 模型目录）与仓库外 `~/.qianfan/credentials.json`（Key 只在那里，按 Provider id 取）。
-2. **LLM 接入**：业务只依赖 `LLMClient` 抽象；`LLMResponse{content, tool_calls, raw, reasoning_content}`。现役实现 = `OpenAICompatibleClient`（唯一真实供应商路径，OpenAI 兼容）+ `MockLLMClient`（离线脚本）。**选哪套模型不再是硬编码分支**：由 `ModelStore` 的 Provider + 模型条目（`data/models.json` v2）+ 任务 `Task.model` / 全局默认决定；预设只有 DeepSeek，其余用自定义 `base_url`。Provider 的 `protocol` 已持久化，但当前只有 `openai-compatible` 有适配器——`anthropic` 的写面/使用在适配器落地前被显式拒绝（D-35，PR B）。
+2. **LLM 接入**：业务只依赖 `LLMClient` 抽象；`LLMResponse{content, tool_calls, raw, reasoning_content}`。现役实现 = `OpenAICompatibleClient`（唯一真实供应商路径，OpenAI 兼容）+ `MockLLMClient`（离线脚本）。**选哪套模型不再是硬编码分支**：由 `ModelStore` 的 Provider + 模型条目（`data/models.json` v2）+ 任务 `Task.model` / 全局默认决定；预设只有 DeepSeek，其余用自定义 `base_url`。Provider 的 `protocol` 已持久化，但当前只有 `openai-compatible` 有适配器——显式设置 `protocol=anthropic` 的创建/编辑被拒；已存在的 anthropic 卡片可编辑其它字段、任务运行到它时显式失败（D-35，PR B）。
 3. **工具接口**：`name / description / args_schema(JSON Schema) / requires_confirm / registers_artifact / run(**kwargs) -> ToolResult`。`run` 不得抛未捕获异常（内核兜底）；新工具 `@register` 即被自动发现。**现状**：`requires_confirm` 是确认闸门退役后的**兼容字段，已无消费者**；`registers_artifact` 只剩子任务产物收集在用；MCP 工具不经 `@register`，由 `task_manager` 追加。
 4. **事件/消息协议**：后端 → 前端只经 SSE（§3.4）；`data` 字段名与后端模型一致；`frontend/src/types/index.ts` 与 `schemas.py` 字段对齐（单一来源 `schemas.py`）。字段级无机械守卫，只有事件**类型名**有。
 5. **错误口径**：见 §3.5（失败两个面 + 规则拒绝第三形状 + 只执行一次）。

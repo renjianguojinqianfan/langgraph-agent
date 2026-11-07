@@ -412,8 +412,9 @@ def create_provider(
 ) -> ApiResponse:
     protocol = (payload.protocol or PROTOCOL_OPENAI).strip()
     try:
-        # D-35: anthropic is a stored value but has no adapter yet (PR B), so
-        # the write face refuses it instead of producing a task-drivable card.
+        # D-35: an explicit protocol=anthropic create is refused until the
+        # adapter lands (PR B). A card that already exists on disk stays
+        # editable for its other fields and fails loudly when a task runs it.
         require_implemented_protocol(protocol)
         created = _tm(request).add_provider(
             id=payload.id,
@@ -439,8 +440,9 @@ def update_provider(
 ) -> ApiResponse:
     """Partial edit; the provider id is immutable (D-34).
 
-    The protocol is checked against the implemented set for the same reason as
-    creation: a card with no adapter must not become task-selectable.
+    Only an explicit protocol change is checked against the implemented set: an
+    existing anthropic card (hand-edited / migrated data) can still be edited
+    for its other fields; running a task on it fails loudly in the manager.
     """
     fields = payload.model_dump(exclude_none=True)
     if "protocol" in fields:

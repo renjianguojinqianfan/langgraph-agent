@@ -37,6 +37,12 @@
   MCP server 定位到含私有 registry 凭证的 `npmrc`；这不改变「非安全边界」的定位。
   第三方 MCP server 需要额外变量（含代理 / 私有 registry / CA）时，只能在
   `mcp_servers[].env` 里显式声明——这是唯一通道（#254）。
+- **出站请求（模型发现，#243 P2-2 D-34）**：`POST /api/providers/{id}/models/discover`
+  只对该 Provider **自己配置的** `base_url` 发一次 `GET <base_url>/models`，带该 Provider 的
+  Key（无 Key 时不发 `Authorization`）；拒绝重定向（不把请求带离配置的主机）、10s 级超时
+  （httpx 每操作 + body 阶段墙钟）、1 MB 响应上限、错误文本脱敏、响应不落库。它**不新增 SSRF
+  面**：地址本来就由用户配置，且服务只监听回环；同一调用者也能直接配一个任意 `base_url`
+  让任务请求打过去。属本机单用户前提下可接受的暴露面，不是安全边界。
 - **禁止**：Key 写进 `.env`（提交）/ 代码 / 文档 / 截图 / issue；测试只用假 Key（如 `sk-test`）；
   提交前依赖 GitHub secret scanning（公开仓库免费）。
 
@@ -181,3 +187,6 @@
   回退到公开的 `changeme` 密钥，`/auth/token` 甚至接受空密码）；启动日志（info 级）明示
   当前认证状态。默认 `auth_enabled=false` 的本地演示语义不变（§4 收口条目）。
   守卫只挂在进程入口 `backend.main`；新增入口需同样调用 `ensure_startup_auth_configured`。
+- 2026-11-07（#243 P2-2 A2）：模型发现接口 `POST /api/providers/{id}/models/discover` 的
+  出站面口径列入 §2（只打 Provider 自己配置的 base_url、带其 Key、拒重定向、超时/大小上限、
+  错误脱敏、响应不落库）；本机单用户 / 回环部署下**不视为新增 SSRF 面**。
