@@ -3,10 +3,16 @@ import {
   AuthTokenResponse,
   ChatTurn,
   CreateTaskRequest,
+  DiscoverCandidate,
   FilePreview,
+  ModelEntry,
   ModelKeySource,
   ModelProfile,
   ModelsData,
+  Provider,
+  ProviderCreateRequest,
+  ProvidersData,
+  ProviderUpdateRequest,
   SSEvent,
   Task,
   TaskMode,
@@ -251,11 +257,55 @@ export const testModel = (id: string) =>
     { method: "POST" }
   );
 
-export const putTaskModel = (id: string, model: string) =>
+/** Switch a task's model (D-34). `{model}` names a catalog entry; adding
+ * `provider` names a raw model under that provider and the entry is created on
+ * demand (source: manual) — that is the catalog-outside path. */
+export const putTaskModel = (
+  id: string,
+  body: { model: string; provider?: string }
+) =>
   req<{ ok: boolean; model: string }>(`/tasks/${id}/model`, {
     method: "PUT",
-    body: JSON.stringify({ model }),
+    body: JSON.stringify(body),
   });
+
+// ── #243 P2-2/P2-3: providers + model catalog (D-34) ──
+// The legacy /api/models surface above stays the flat compatibility projection
+// (listModels is still the single read behind the Composer's id → label map);
+// these are the v2 write faces the settings page drives.
+export const listProviders = () => req<ProvidersData>("/providers");
+
+export const createProvider = (body: ProviderCreateRequest) =>
+  req<Provider>("/providers", { method: "POST", body: JSON.stringify(body) });
+
+export const updateProvider = (id: string, body: ProviderUpdateRequest) =>
+  req<Provider>(`/providers/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const deleteProvider = (id: string) =>
+  req<{ ok: boolean }>(`/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+export const addProviderModel = (id: string, body: { model: string; name?: string }) =>
+  req<ModelEntry>(`/providers/${encodeURIComponent(id)}/models`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const deleteProviderModel = (id: string, modelId: string) =>
+  req<{ ok: boolean }>(
+    `/providers/${encodeURIComponent(id)}/models/${encodeURIComponent(modelId)}`,
+    { method: "DELETE" }
+  );
+
+/** Preview the provider's upstream `/models` list; never persisted. The
+ * service bounds time / response size and refuses redirects (D-34). */
+export const discoverProviderModels = (id: string) =>
+  req<{ models: DiscoverCandidate[] }>(
+    `/providers/${encodeURIComponent(id)}/models/discover`,
+    { method: "POST" }
+  );
 
 // ── P1 item 5: auth ──
 export type LoginAttempt = StatusResult<AuthTokenResponse>;

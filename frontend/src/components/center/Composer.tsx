@@ -1,8 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useComposerControls } from "../../hooks/useComposerControls";
 import { useComposerSend } from "../../hooks/useComposerSend";
 import { shouldSendOnEnter } from "../../lib/keys";
-import { profileName, useModelStore } from "../../store/modelStore";
+import {
+  customModelError,
+  entryProviderId,
+  hasEntry,
+  modelLabel,
+  selectedModelId,
+  selectGroups,
+} from "../../lib/modelCatalog";
+import { useModelStore } from "../../store/modelStore";
 import { useTaskStore } from "../../store/taskStore";
 import { TaskMode } from "../../types";
 import { Button } from "../ui/Button";
@@ -11,7 +19,10 @@ import { Segmented } from "../ui/Segmented";
 
 /** D-32 / #232: four API paths + store writes live in the two hooks; this
  * component keeps only the structure, the key handling and the rendered
- * matrix (`composerView`). Copy, aria and disabled rules are unchanged. */
+ * matrix (`composerView`). Copy, aria and disabled rules are unchanged.
+ * #243 P2-3: the model control is a Provider → model native `<select>` with
+ * `<optgroup>`s (D-37, no new overlay), plus the catalog-outside model row
+ * (the service accepts `{provider, model}` and auto-creates a manual entry). */
 const MODE_OPTIONS: Array<{ value: TaskMode; label: string; title: string }> = [
   { value: "plan", label: "计划", title: "只读工具；产出可改的计划" },
   {
@@ -20,6 +31,9 @@ const MODE_OPTIONS: Array<{ value: TaskMode; label: string; title: string }> = [
     title: "全部已挂载工具；危险动作由规则表当场拒绝",
   },
 ];
+
+/** Sentinel option: opens the catalog-outside model row instead of a switch. */
+const CUSTOM_MODEL_OPTION = "__custom_model__";
 
 export function Composer() {
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
@@ -33,6 +47,7 @@ export function Composer() {
   );
   // #256: a 401 on the detail read; the entries offered are re-login ones.
   const detailAuthExpired = useTaskStore((s) => s.authExpired.detail);
+  const providers = useModelStore((s) => s.providers);
   const models = useModelStore((s) => s.models);
   const defaultModelId = useModelStore((s) => s.defaultId);
 
@@ -43,6 +58,7 @@ export function Composer() {
     reset: resetControls,
     onMode,
     onModel,
+    onCustomModel,
   } = useComposerControls({ task });
   const {
     text,
@@ -61,19 +77,59 @@ export function Composer() {
     defaultModelId,
   });
 
+  // Catalog-outside model row (not part of the composerView matrix: it never
+  // changes whether a message can be sent).
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customProviderId, setCustomProviderId] = useState("");
+  const [customModel, setCustomModel] = useState("");
+  const [customError, setCustomError] = useState("");
+
   // A server reason belongs to the task that produced it; switching tasks must
   // not carry "操作失败" into the next conversation.
   useEffect(() => {
     resetControls();
     resetSend();
+    setCustomOpen(false);
+    setCustomModel("");
+    setCustomError("");
   }, [currentTaskId, resetControls, resetSend]);
 
   const mode: TaskMode = task?.mode ?? draftMode;
-  const selectedModel = task
-    ? task.model || defaultModelId
-    : draftModel || defaultModelId;
-  const modelLabel = profileName(models, selectedModel);
-  const hasSelectedOption = models.some((m) => m.id === selectedModel);
+  const groups = selectGroups(providers, models);
+  const selectedModel = selectedModelId(
+    !!task,
+    task?.model ?? "",
+    draftModel,
+    defaultModelId
+  );
+  const hasSelectedOption = hasEntry(models, selectedModel);
+  const currentLabel = modelLabel(models, selectedModel);
+  const selectedProviderId = entryProviderId(models, selectedModel);
+  const effectiveProviderId =
+    customProviderId || selectedProviderId || providers[0]?.id || "";
+
+  const pickModel = (value: string) => {
+    if (value === CUSTOM_MODEL_OPTION) {
+      setCustomOpen(true);
+      setCustomError("");
+      return;
+    }
+    setCustomOpen(false);
+    setCustomError("");
+    void onModel(value);
+  };
+
+  const applyCustom = async () => {
+    const error = customModelError(effectiveProviderId, customModel);
+    setCustomError(error);
+    if (error) return;
+    const ok = await onCustomModel(effectiveProviderId, customModel);
+    if (ok) {
+      setCustomOpen(false);
+      setCustomModel("");
+      setCustomError("");
+    }
+  };
 
   return (
     <div className="shrink-0 border-t border-rule px-4 py-3">
@@ -86,22 +142,27 @@ export function Composer() {
         />
         <select
           aria-label="模型"
-          title={modelLabel}
-          value={selectedModel}
-          disabled={view.loading || busy || models.length === 0}
-          onChange={(e) => onModel(e.target.value)}
-          className="min-w-0 max-w-[220px] rounded-control border border-rule-strong bg-surface-well px-2 py-1 text-meta text-secondary disabled:opacity-50"
+          title={currentLabel}
+          value={customOpen ? CUSTOM_MODEL_OPTION : selectedModel}
+          disabled={view.loading || busy || providers.length === 0}
+          onChange={(e) => pickModel(e.target.value)}
+          className="min-w-0 max-w-[240px] rounded-control border border-rule-strong bg-surface-well px-2 py-1 text-meta text-secondary disabled:opacity-50"
         >
-          {!hasSelectedOption && (
+          {!customOpen && !hasSelectedOption && (
             <option value={selectedModel}>
-              {selectedModel ? selectedModel : "默认"}
+              {selectedModel ? currentLabel : "默认"}
             </option>
           )}
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
+          {groups.map((group) => (
+            <optgroup key={group.providerId} label={group.providerName}>
+              {group.models.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+            </optgroup>
           ))}
+          <option value={CUSTOM_MODEL_OPTION}>目录外模型…</option>
         </select>
         {switchNote && (
           <span
@@ -112,6 +173,62 @@ export function Composer() {
           </span>
         )}
       </div>
+
+      {customOpen && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-meta">
+          <select
+            aria-label="目录外模型的 Provider"
+            value={effectiveProviderId}
+            onChange={(e) => setCustomProviderId(e.target.value)}
+            className="max-w-[180px] min-w-0 truncate rounded-control border border-rule-strong bg-surface-well px-2 py-1 text-meta text-secondary"
+          >
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name || provider.id}
+              </option>
+            ))}
+          </select>
+          <input
+            aria-label="目录外模型 ID"
+            value={customModel}
+            placeholder="例如 qwen-max"
+            onChange={(e) => setCustomModel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void applyCustom();
+              }
+            }}
+            className="h-7 w-48 rounded-control border border-rule-strong bg-surface-well px-2 font-mono text-machine text-primary placeholder:text-tertiary"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={applyCustom}
+            disabled={!customModel.trim() || !effectiveProviderId}
+          >
+            使用
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setCustomOpen(false);
+              setCustomError("");
+            }}
+          >
+            取消
+          </Button>
+          <span className="min-w-0 truncate text-tertiary">
+            目录外 ID 在切换或新建时自动加入目录
+          </span>
+          {customError && (
+            <span role="alert" className="text-state-danger">
+              {customError}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         <textarea
           aria-label="任务输入"
