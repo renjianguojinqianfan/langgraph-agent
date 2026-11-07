@@ -307,14 +307,19 @@ describe("filesLoadFailure (D-31 / #258 AC5)", () => {
 });
 
 describe("filesPaneState (D-31 / #258 AC5: 失败不伪装空面)", () => {
-  it("error wins over loading and over a stale row count", () => {
-    expect(filesPaneState({ error: "boom", loading: true, count: 3 })).toBe("error");
+  it("rows already on screen stay rows even when the refresh failed", () => {
+    expect(filesPaneState({ error: "boom", loading: false, count: 3 })).toBe("rows");
+    expect(filesPaneState({ error: "boom", loading: true, count: 3 })).toBe("rows");
+  });
+
+  it("error owns the pane only when there are no rows", () => {
+    expect(filesPaneState({ error: "boom", loading: true, count: 0 })).toBe("error");
     expect(filesPaneState({ error: "boom", loading: false, count: 0 })).toBe("error");
   });
 
-  it("loading wins when there is no error", () => {
+  it("loading wins when there are no rows and no error", () => {
     expect(filesPaneState({ error: "", loading: true, count: 0 })).toBe("loading");
-    expect(filesPaneState({ error: "", loading: true, count: 3 })).toBe("loading");
+    expect(filesPaneState({ error: "", loading: true, count: 3 })).toBe("rows");
   });
 
   it("empty only when idle with no rows and no error", () => {

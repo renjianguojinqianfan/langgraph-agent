@@ -106,7 +106,10 @@ export function FilePane({
       <div
         role="status"
         aria-live="polite"
-        className={cx("flex flex-wrap items-center gap-2", state === "rows" && "sr-only")}
+        className={cx(
+          "flex flex-wrap items-center gap-2",
+          state === "rows" && !note && "sr-only"
+        )}
       >
         <p
           className={cx(
@@ -116,7 +119,7 @@ export function FilePane({
         >
           {statusText}
         </p>
-        {state === "error" && (
+        {note && (
           <Button
             variant="outline"
             size="sm"

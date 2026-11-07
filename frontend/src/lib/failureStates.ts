@@ -220,9 +220,13 @@ export function filesPaneState(input: {
   loading: boolean;
   count: number;
 }): FilesPaneState {
+  // Same rule as historyListState: rows already on screen stay rows — a failed
+  // refresh is told by the persistent live region, not by swapping the loaded
+  // list for an error face. Only an error with no rows owns the pane.
+  if (input.count > 0) return "rows";
   if (input.error) return "error";
   if (input.loading) return "loading";
-  return input.count === 0 ? "empty" : "rows";
+  return "empty";
 }
 
 /**
