@@ -1,11 +1,28 @@
-"""C23: Windows 冒烟清单在 AGENTS.md 与 ci.yml 两处必须逐条相同。
+"""C23 / D-14: Windows 冒烟清单双址一致 + Windows-only 标记文件必须进清单。
 
 两份清单（AGENTS.md「验证入口」的本地命令 + ci.yml 的 backend-windows-smoke
 job）此前只靠「两边保持同一清单」的文档约定维持一致，没有任何机械守卫；
 #254 的三个兄弟 PR 各往两处同点追加测试文件时，合并冲突正落在这两行，解冲突
 靠人肉逐行核对——丢一行 = Windows 冒烟面静默缩水，而 CI 仍是绿的。
 
-本守卫纯文本解析两个文件，毫秒级、平台无关：集合不相等或文件不存在即红。
+两条腿都是纯文本解析，毫秒级、平台无关：
+
+1. 双址集合逐条相同（原有三条断言，不放宽）；
+2. D-14 标记扫描：backend/tests/test_*.py 里出现 os.name / sys.platform /
+   WinDLL / taskkill 任一标记时，该文件必须已在清单。**唯一的例外通道**是
+   _WINDOWS_ONLY_ALLOWLIST（路径 -> 非空理由；守卫自身也在其中）——不存在
+   免扫名单 / 路径过滤，要豁免就必须写理由。
+
+**盲区（有意写明，不宣称覆盖）**：扫描只看 backend/tests/test_*.py 的文本。
+test_test_isolation.py 与 test_server_lock.py 自身不含这四类标记——它们的
+Windows 分支分别在 conftest.py:98-105（os.name=="nt" 临时根探测）与
+backend/server_lock.py:126-166（ctypes/WinDLL 分支，WinDLL 在 :144）；这两个
+文件进清单靠 D-13 的单独 PR + 3 连跑证据，标记扫描覆盖不到它们，也不该被当成
+它们已覆盖的证明。
+
+另一处已知限制：ci.yml 的注释文件表位于 job key 之前，不在本守卫的解析面——
+「pytest 命令里加了文件、注释表漏了理由行」不会红，只能人工核对（本 PR 已核
+13/13）；双址集合相等与标记扫描都管不到那张表。
 """
 
 from __future__ import annotations
@@ -23,6 +40,18 @@ _FILE_TOKEN = re.compile(r"backend/tests/[A-Za-z0-9_]+\.py")
 
 # ci.yml 的 job 键（2 空格缩进）；steps / 注释行的缩进或首字符都不匹配。
 _JOB_KEY = re.compile(r"^  [A-Za-z0-9_-]+:", re.MULTILINE)
+
+# D-14：Windows-only 标记。子串扫描（含注释 / 文档字符串）是刻意的——出现在注释里
+# 也说明该文件与平台分支有关；是否真的该进清单由白名单显式裁定，不静默放过。
+_WINDOWS_ONLY_MARKERS = ("os.name", "sys.platform", "WinDLL", "taskkill")
+
+# 已知「带标记但有意不进冒烟清单」的显式例外：repo 相对路径 -> 理由（必须非空）。
+# 这是唯一的例外通道：当前 1 条（守卫自身）。新增例外必须写清为什么，理由由自测④钉住。
+_WINDOWS_ONLY_ALLOWLIST: dict[str, str] = {
+    "backend/tests/test_smoke_list_parity.py": (
+        "守卫自身常量必然字面包含四个标记，扫描自己恒真，故豁免；改扫描面时须同步复核"
+    ),
+}
 
 
 def _agents_md_command_lines() -> list[str]:
@@ -59,6 +88,37 @@ def _smoke_files() -> tuple[set[str], set[str]]:
     return set(_FILE_TOKEN.findall(lines[0])), set(_FILE_TOKEN.findall(_ci_windows_smoke_block()))
 
 
+def _test_files() -> list[str]:
+    """``backend/tests/test_*.py`` 的 repo 相对路径（posix 形态；全量在扫描面）。"""
+    tests_dir = REPO_ROOT / "backend" / "tests"
+    return sorted(
+        path.relative_to(REPO_ROOT).as_posix() for path in tests_dir.glob("test_*.py")
+    )
+
+
+def _windows_only_markers(text: str) -> set[str]:
+    """纯函数：文本里命中的 Windows-only 标记集合。"""
+    return {marker for marker in _WINDOWS_ONLY_MARKERS if marker in text}
+
+
+def _marker_scan_violations(
+    texts: dict[str, str],
+    smoke_files: set[str],
+    allowlist: dict[str, str] | None = None,
+) -> dict[str, set[str]]:
+    """纯函数：带标记、但不在清单也不在白名单里的文件 -> 命中的标记集合。
+
+    ``allowlist`` 省略时用模块级 ``_WINDOWS_ONLY_ALLOWLIST``；自测可注入合成表。
+    """
+    exempt = _WINDOWS_ONLY_ALLOWLIST if allowlist is None else allowlist
+    violations: dict[str, set[str]] = {}
+    for rel, text in texts.items():
+        markers = _windows_only_markers(text)
+        if markers and rel not in smoke_files and rel not in exempt:
+            violations[rel] = markers
+    return violations
+
+
 def test_agents_md_carries_exactly_one_smoke_command() -> None:
     lines = _agents_md_command_lines()
     assert len(lines) == 1, (
@@ -82,3 +142,71 @@ def test_every_smoke_list_entry_exists_on_disk() -> None:
     agents_files, ci_files = _smoke_files()
     missing = sorted(rel for rel in agents_files | ci_files if not (REPO_ROOT / rel).is_file())
     assert not missing, f"冒烟清单里的文件不存在：{missing}"
+
+
+# ── D-14：Windows-only 标记扫描 ──────────────────────────────────────────
+
+# 现状锚：这 6 个既有 marker 文件都已在清单里（自测③逐个验它们确实带标记）。
+_EXPECTED_MARKER_FILES = frozenset(
+    {
+        "backend/tests/test_bash_tool.py",
+        "backend/tests/test_gitignore_visibility.py",
+        "backend/tests/test_p2_mcp.py",
+        "backend/tests/test_static_guard.py",
+        "backend/tests/test_workspace.py",
+        "backend/tests/test_workspace_files_api.py",
+    }
+)
+
+
+def test_marker_scan_flags_a_marked_file_missing_from_the_list() -> None:
+    """自测①：合成「带标记但不在清单」必须报红（否则扫描是空转）。"""
+    violations = _marker_scan_violations(
+        {"backend/tests/test_not_listed.py": 'if os.name == "nt":\n    pass\n'},
+        smoke_files=set(),
+    )
+
+    assert violations == {"backend/tests/test_not_listed.py": {"os.name"}}
+
+
+def test_marker_scan_honours_the_explicit_allowlist() -> None:
+    """自测②：白名单条目（路径 -> 理由）豁免；别的带标记文件仍然报红。"""
+    allowlist = {"backend/tests/test_not_listed.py": "covered by conftest instead"}
+
+    assert (
+        _marker_scan_violations(
+            {"backend/tests/test_not_listed.py": 'if os.name == "nt":\n    pass\n'},
+            smoke_files=set(),
+            allowlist=allowlist,
+        )
+        == {}
+    )
+    assert _marker_scan_violations(
+        {"backend/tests/test_other.py": 'if sys.platform == "win32":\n    pass\n'},
+        smoke_files=set(),
+        allowlist=allowlist,
+    ) == {"backend/tests/test_other.py": {"sys.platform"}}
+
+
+def test_every_marker_file_is_covered_by_the_smoke_list() -> None:
+    """自测③：6 个既有 marker 文件确带标记、确在清单里，且全仓无未覆盖违规。"""
+    agents_files, ci_files = _smoke_files()
+    smoke = agents_files | ci_files
+    texts = {
+        rel: (REPO_ROOT / rel).read_text(encoding="utf-8") for rel in _test_files()
+    }
+
+    missing_from_list = sorted(_EXPECTED_MARKER_FILES - smoke)
+    assert not missing_from_list, f"既有 marker 文件不在冒烟清单：{missing_from_list}"
+    for rel in _EXPECTED_MARKER_FILES:
+        assert rel in texts, f"锚点文件不存在：{rel}"
+        assert _windows_only_markers(texts[rel]), f"{rel} 不再含 Windows-only 标记，请更新锚点"
+    assert _marker_scan_violations(texts, smoke) == {}
+
+
+def test_marker_scan_allowlist_entries_carry_a_reason() -> None:
+    """自测④：白名单每个条目必须带非空理由（当前守卫自身这条即生效）。
+
+    唯一的例外通道就是白名单，所以「空理由静默豁免」必须变红，否则扫描会被架空。
+    """
+    assert all(reason.strip() for reason in _WINDOWS_ONLY_ALLOWLIST.values())
