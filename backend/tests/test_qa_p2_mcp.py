@@ -31,7 +31,6 @@ from fastapi.testclient import TestClient
 
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
-from backend.core.mcp.client import McpClientManager
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
 from backend.core.tools.registry import build_tools
 from backend.main import app
@@ -88,7 +87,7 @@ def test_mcp_servers_list_parsing(tmp_path):
     assert Settings(_env_file=None, mcp_servers="   ").mcp_servers_list == []
 
 
-def test_mcp_config_skips_non_dict_and_missing_fields(tmp_path):
+def test_mcp_config_skips_non_dict_and_missing_fields(tmp_path, mcp_managers):
     """connect_all never crashes on garbage entries; valid ones still connect."""
     s = _echo_settings(
         tmp_path,
@@ -102,15 +101,14 @@ def test_mcp_config_skips_non_dict_and_missing_fields(tmp_path):
             ]
         ),
     )
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     assert {t["server"] for t in tools} == {"echo"}
     statuses = {st.name: st.to_dict() for st in mgr.status_list()}
     assert statuses["echo"]["status"] == "connected"
-    mgr.cleanup()
 
 
-def test_mcp_transport_not_stdio_marked_error(tmp_path):
+def test_mcp_transport_not_stdio_marked_error(tmp_path, mcp_managers):
     """A server configured with transport=http is reserved/unimplemented."""
     s = _echo_settings(
         tmp_path,
@@ -121,19 +119,18 @@ def test_mcp_transport_not_stdio_marked_error(tmp_path):
             ]
         ),
     )
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tools = mgr.connect_all()
     assert {t["server"] for t in tools} == {"echo"}
     statuses = {st.name: st.to_dict() for st in mgr.status_list()}
     assert statuses["httpy"]["status"] == "error"
     assert "not implemented" in statuses["httpy"]["error"]
-    mgr.cleanup()
 
 
 # ─────────────────── McpTool normalisation ───────────────────
-def test_mcp_tool_name_sanitised(tmp_path):
+def test_mcp_tool_name_sanitised(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     tool = McpTool(
         server_name="my-server/fs",
         tool_name="read text",
@@ -147,12 +144,11 @@ def test_mcp_tool_name_sanitised(tmp_path):
     assert tool.description == "MCP tool my-server/fs.read text"
     # args_schema fallback for None / non-object.
     assert tool.args_schema == {"type": "object", "properties": {}, "required": []}
-    mgr.cleanup()
 
 
-def test_mcp_tool_args_schema_fallback(tmp_path):
+def test_mcp_tool_args_schema_fallback(tmp_path, mcp_managers):
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     # Non-object inputSchema -> default empty schema.
     tool = McpTool(
         server_name="s", tool_name="t", description="d",
@@ -165,7 +161,6 @@ def test_mcp_tool_args_schema_fallback(tmp_path):
         input_schema={"type": "object"}, manager=mgr, settings=s,
     )
     assert tool2.args_schema == {"type": "object", "properties": {}, "required": []}
-    mgr.cleanup()
 
 
 def test_sanitize_name_extra():
@@ -256,10 +251,10 @@ def _mcp_agent_state() -> dict:
     }
 
 
-def test_agent_read_tool_executes_directly(tmp_path):
+def test_agent_read_tool_executes_directly(tmp_path, mcp_managers):
     """A read tool runs over agent -> tool_node (no gate, #138)."""
     s = _echo_settings(tmp_path)
-    mgr = McpClientManager(s)
+    mgr = mcp_managers(s)
     mgr.connect_all()
     tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
@@ -292,7 +287,6 @@ def test_agent_read_tool_executes_directly(tmp_path):
     rec = state["_current_tool_calls"][0]
     assert rec["status"] == "success"
     assert rec["output"]["text"] == "echo:hi"
-    mgr.cleanup()
 
 
 # ─────────────────── REST GET /api/mcp/servers ───────────────────

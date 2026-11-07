@@ -7,7 +7,7 @@ pydantic-settings 默认会读进程当前目录的 ``.env``；离线套件必�
 * ``None`` 是离线约定（不读 .env）；
 * 允许任意值（例如显式路径）——本守卫只钉「关键字存在」，不替业务判断。
 
-范围：只扫 ``backend/tests/*.py``（生产代码不在此守卫面）。用 AST 而不是
+范围：只扫 ``backend/tests/**/*.py``（含子目录；生产代码不在此守卫面）。用 AST 而不是
 文本正则：``Settings(`` 出现在字符串 / 注释里不会误报。
 
 工厂 seam：pydantic v2 的 ``dataclass_transform`` 让 mypy 看不到运行时可接受的
@@ -60,7 +60,7 @@ def _missing_env_file_calls(sources: dict[str, str]) -> dict[str, list[int]]:
 def _repo_sources() -> dict[str, str]:
     return {
         path.relative_to(REPO_ROOT).as_posix(): path.read_text(encoding="utf-8")
-        for path in sorted(TESTS_DIR.glob("*.py"))
+        for path in sorted(TESTS_DIR.rglob("*.py"))
     }
 
 

@@ -27,10 +27,10 @@ from typing import Any
 import pytest
 
 from backend.config import Settings
-from backend.core.mcp.client import McpClientManager, McpServerConfig
+from backend.core.mcp.client import McpServerConfig
 from backend.core.tools.mcp_tool import McpTool, sanitize_name
 from backend.server_lock import pid_alive
-from backend.tests.conftest import make_isolated_settings
+from backend.tests.conftest import cleanup_managers, make_isolated_settings
 from backend.utils.sandbox import MCP_ENV_ALLOWLIST
 
 ECHO_SERVER = str(Path(__file__).resolve().parent / "mcp_echo_server.py")
@@ -96,33 +96,8 @@ def _wait_pid_dead(pid: int, timeout: float = 10.0) -> None:
     raise AssertionError(f"MCP child process {pid} is still alive after cleanup")
 
 
-@pytest.fixture
-def mcp_managers():
-    """D-17: every manager built here is cleaned up in fixture teardown.
-
-    The old tests called ``mgr.cleanup()`` at the end of each body; an
-    assertion failure before that line leaked the MCP child process.
-    Registering cleanup in the fixture makes the failure path safe without
-    touching any assertion.
-    """
-    created: list[McpClientManager] = []
-
-    def make(settings):
-        mgr = McpClientManager(settings)
-        created.append(mgr)
-        return mgr
-
-    yield make
-    # LOW-3: one failing cleanup must not skip the remaining managers; collect
-    # every failure, then re-raise the first after all sessions were attempted.
-    errors: list[Exception] = []
-    for mgr in created:
-        try:
-            mgr.cleanup()
-        except Exception as exc:
-            errors.append(exc)
-    if errors:
-        raise errors[0]
+# ``mcp_managers`` is a shared fixture in conftest.py (D-17 / #261 AC3), so the
+# QA and danger-annotation suites get the same failure-safe cleanup path.
 
 
 # ─────────────────── zero regression ───────────────────
@@ -413,6 +388,44 @@ def test_mcp_child_env_is_allowlisted_only(tmp_path, monkeypatch, mcp_managers):
     assert received <= allowed, f"unexpected inherited variables: {received - allowed}"
     # The server's own explicit env is the intended channel for extras.
     assert child_env["ECHO_ENV_DUMP_FILE"] == str(dump)
+
+
+# ─────────────────── finalizer helper regression (D-17) ───────────────────
+
+
+class _FakeManager:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.cleaned = False
+        self.fail = fail
+
+    def cleanup(self) -> None:
+        self.cleaned = True
+        if self.fail:
+            raise RuntimeError("cleanup boom")
+
+
+def test_cleanup_managers_closes_every_manager() -> None:
+    """正常路径：所有注册的 manager 都被 cleanup。"""
+    first, second = _FakeManager(), _FakeManager()
+    cleanup_managers([first, second])
+    assert first.cleaned is True
+    assert second.cleaned is True
+
+
+def test_cleanup_managers_runs_all_then_raises_the_first_error() -> None:
+    """一个 cleanup 抛错不跳过其余 manager，最终 raise 第一个错误。"""
+    boom, ok = _FakeManager(fail=True), _FakeManager()
+    with pytest.raises(RuntimeError, match="cleanup boom"):
+        cleanup_managers([boom, ok])
+    assert boom.cleaned is True
+    assert ok.cleaned is True
+
+
+def test_mcp_managers_fixture_teardown_is_wired() -> None:
+    """机械判据：删掉 fixture teardown 里的 cleanup_managers(created) 会变红。"""
+    source = Path(__file__).with_name("conftest.py").read_text(encoding="utf-8")
+    assert "def cleanup_managers(" in source
+    assert "cleanup_managers(created)" in source
 
 
 # ─────────────────── cleanup ───────────────────
