@@ -65,9 +65,10 @@ export function TaskView() {
   const dashRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const skipNavRef = useRef<HTMLElement>(null);
-  // D-30: last status the parked effect observed. null = none yet, i.e. the
-  // status about to arrive comes from the snapshot and must not refetch.
-  const prevStatusRef = useRef<string | null>(null);
+  // D-30: what the parked effect observed last (task id + status). null =
+  // none yet; the id keeps a previous task's RUNNING from reading as a
+  // transition when switching to an already-cached parked task.
+  const prevStatusRef = useRef<{ id: string; status: string } | null>(null);
   const view = drawerView({
     leftNarrow: isLeftDrawer,
     rightNarrow: isRightDrawer,
@@ -198,7 +199,7 @@ export function TaskView() {
           upsertTask(r.data);
           // D-30: the snapshot already carries the authoritative status — the
           // parked effect must not spend a second getTask on it.
-          prevStatusRef.current = r.data.status;
+          prevStatusRef.current = { id: currentTaskId, status: r.data.status };
         } else {
           setDetailError(currentTaskId, detailLoadFailure(state, r.status));
           setAuthExpired("detail", state === "auth");
@@ -219,8 +220,8 @@ export function TaskView() {
   useEffect(() => {
     if (!currentTaskId || !status) return;
     const prevStatus = prevStatusRef.current;
-    prevStatusRef.current = status;
-    if (!shouldRefetchParked(prevStatus, status)) return;
+    prevStatusRef.current = { id: currentTaskId, status };
+    if (!shouldRefetchParked(prevStatus, currentTaskId, status)) return;
     getTask(currentTaskId)
       .then((r) => {
         if (r.data) upsertTask(r.data);
@@ -231,9 +232,8 @@ export function TaskView() {
   // Switching tasks closes the replay face and every file-preview tab; the
   // plan/events choice is not a file tab and survives the switch.
   useEffect(() => {
-    // A switch starts from "nothing observed": the next status comes from the
-    // new task's snapshot, not from a live→parked transition.
-    prevStatusRef.current = null;
+    // No ref reset here: `prevStatusRef` is keyed by task id, so a switch
+    // simply reads as "another task" until this task's own status is observed.
     setTraceOpen(false);
     setDash((current) => ({
       files: [],

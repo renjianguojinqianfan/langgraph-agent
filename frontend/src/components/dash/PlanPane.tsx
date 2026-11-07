@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiErrorText, getPlanSnapshot, putPlan } from "../../api/client";
 import { Markdown } from "../../lib/markdown";
 import { planLoadFailure, planLoadState } from "../../lib/failureStates";
@@ -218,8 +218,13 @@ export function PlanPane({ task }: { task: Task }) {
     setNote("已载入新版；继续编辑后再保存。");
   };
 
-  const toc = parsePlanToc(text);
-  const headingIds = new Map(toc.map((item) => [item.line, item.slug]));
+  // D-30: cache by text so `headingIds` is referentially stable across
+  // unrelated re-renders — otherwise the memoized Markdown never hits.
+  const toc = useMemo(() => parsePlanToc(text), [text]);
+  const headingIds = useMemo(
+    () => new Map(toc.map((item) => [item.line, item.slug] as const)),
+    [toc]
+  );
   // #256: with the plan unread, the editor holds nothing true — no edit, no
   // save; the only way forward is reading it again.
   const saveBlocked = !!loadError;

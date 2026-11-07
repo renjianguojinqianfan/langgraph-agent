@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listFiles } from "../../api/client";
+import { filesLoadFailure } from "../../lib/failureStates";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
@@ -44,9 +45,7 @@ export function FilePane({
         .then((r) => {
           if (cancelled) return;
           if (!r.data) {
-            setNote(
-              "无法读取工作区文件：后台不可达或响应异常；确认服务在运行后点「重试」。（切换页签/重新打开任务也会重新加载）"
-            );
+            setNote(filesLoadFailure(r.status, r.detail));
             return;
           }
           setNote(null);
@@ -54,11 +53,7 @@ export function FilePane({
           setTruncated(!!r.data.truncated);
         })
         .catch(() => {
-          if (!cancelled) {
-            setNote(
-              "无法读取工作区文件：后台不可达或响应异常；确认服务在运行后点「重试」。（切换页签/重新打开任务也会重新加载）"
-            );
-          }
+          if (!cancelled) setNote(filesLoadFailure(0));
         })
         .finally(() => {
           if (!cancelled) setLoading(false);

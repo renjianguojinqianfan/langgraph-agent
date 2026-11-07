@@ -106,7 +106,7 @@ export function Composer() {
         setSwitchNote(apiErrorText(r));
       }
     } catch {
-      setSwitchNote("切换失败");
+      setSwitchNote("切换失败：无法连接后台；确认服务在运行后再试。");
     }
   };
 
@@ -127,7 +127,7 @@ export function Composer() {
         setSwitchNote(apiErrorText(r));
       }
     } catch {
-      setSwitchNote("切换失败");
+      setSwitchNote("切换失败：无法连接后台；确认服务在运行后再试。");
     }
   };
 

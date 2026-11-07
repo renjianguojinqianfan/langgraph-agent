@@ -183,6 +183,35 @@ export function planLoadFailure(status: number, detail?: string): string {
 }
 
 /**
+ * Why the workspace file list read failed, with the next step (D-31 / #258
+ * AC5). Same buckets as `previewFailure`: the server separates them by status,
+ * and a single generic line was exactly the unreadable copy the review
+ * flagged. `detail` is the sanitized FastAPI detail when the server sent one.
+ */
+export function filesLoadFailure(status: number, detail?: string): string {
+  switch (status) {
+    case 0:
+      return "无法连接后台；确认服务在运行后点「重试」。（切换页签/重新打开任务也会重新加载）";
+    case 401:
+      return "登录已失效；重新登录后再点「重试」。";
+    case 404:
+      return "任务不存在或已被删除；返回任务列表重新选择。";
+    case 409:
+      return "任务工作区不存在；检查任务目录是否还在，或切回存在的目录/新建任务。";
+    case 400:
+      return "文件列表请求非法（路径越界或参数错误）；核对任务工作区后点「重试」。";
+    case 415:
+      return "响应内容类型不受支持；点「重试」，若持续失败查看服务端日志。";
+    default:
+      return status >= 200 && status < 300
+        ? "文件列表响应异常；点「重试」。（切换页签/重新打开任务也会重新加载）"
+        : `文件列表读取失败（HTTP ${status}）${
+            detail?.trim() ? `：${detail.trim()}` : ""
+          }；点「重试」或查看服务端日志。`;
+  }
+}
+
+/**
  * #256: the login page must tell "wrong secret" from "cannot reach the
  * backend" — retrying a password never fixes a dead server.
  */

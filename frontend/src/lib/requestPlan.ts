@@ -1,17 +1,27 @@
 import type { TaskStatus } from "../types";
 import { isParked } from "./taskState";
 
+/** What the parked effect remembers between runs: the task it observed and
+ * that task's last status. Keying by id is load-bearing: switching from a
+ * running task to another task that is already parked must not read the
+ * *previous* task's RUNNING as a live→parked transition. */
+export interface ParkedStatusMark {
+  id: string;
+  status: string;
+}
+
 /** D-30 / #258 AC4: does a status change need the authoritative "round parked"
- * `getTask`? Only a transition INTO parked from a live state does. The status
- * that comes with a fresh `getTaskSnapshot` already is the authoritative one,
- * so selecting an already-parked task (prev === null → parked) must not refetch,
- * and parked → parked must not either. */
+ * `getTask`? Only a same-task transition INTO parked from a live state does.
+ * The status that comes with a fresh `getTaskSnapshot` already is the
+ * authoritative one, so selecting an already-parked task (prev === null) must
+ * not refetch, parked → parked must not, and another task's mark never counts. */
 export function shouldRefetchParked(
-  prevStatus: string | null,
+  prev: ParkedStatusMark | null,
+  taskId: string,
   nextStatus: string
 ): boolean {
-  if (prevStatus === null) return false;
-  return !isParked(prevStatus as TaskStatus) && isParked(nextStatus as TaskStatus);
+  if (prev === null || prev.id !== taskId) return false;
+  return !isParked(prev.status as TaskStatus) && isParked(nextStatus as TaskStatus);
 }
 
 /** #256 plan-version merge, extracted so "only ever grows" is testable. */

@@ -24,8 +24,9 @@ describe("long-content contract (D-28 / #258 AC1)", () => {
     expect(LONG_TEXT).toContain("[overflow-wrap:anywhere]");
   });
 
-  it.each(FACES)("%s imports/uses LONG_TEXT", (_name, source) => {
-    expect(source).toContain("LONG_TEXT");
+  it.each(FACES)("%s references LONG_TEXT from a className", (_name, source) => {
+    // 判据：删掉该面 className 里的 LONG_TEXT 引用（只留 import 不行）→ 本用例红。
+    expect(source).toMatch(/className=\{[^}]*LONG_TEXT[^}]*\}/);
   });
 
   it("does not paper over the regression with global overflow-x hidden", () => {

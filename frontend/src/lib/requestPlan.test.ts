@@ -7,19 +7,31 @@ import {
 
 describe("shouldRefetchParked (#258 AC4 / D-30)", () => {
   it("does not refetch when the first status comes from a snapshot", () => {
-    expect(shouldRefetchParked(null, "INTERRUPTED")).toBe(false);
-    expect(shouldRefetchParked(null, "FAILED")).toBe(false);
+    expect(shouldRefetchParked(null, "t1", "INTERRUPTED")).toBe(false);
+    expect(shouldRefetchParked(null, "t1", "FAILED")).toBe(false);
   });
 
-  it("refetches on a transition into parked", () => {
-    expect(shouldRefetchParked("RUNNING", "INTERRUPTED")).toBe(true);
-    expect(shouldRefetchParked("PENDING", "FAILED")).toBe(true);
+  it("refetches on a same-task transition into parked", () => {
+    expect(shouldRefetchParked({ id: "t1", status: "RUNNING" }, "t1", "INTERRUPTED")).toBe(
+      true
+    );
+    expect(shouldRefetchParked({ id: "t1", status: "PENDING" }, "t1", "FAILED")).toBe(true);
+  });
+
+  it("ignores another task's remembered status (switch race)", () => {
+    expect(shouldRefetchParked({ id: "t1", status: "RUNNING" }, "t2", "INTERRUPTED")).toBe(
+      false
+    );
   });
 
   it("does not refetch between parked states or between live states", () => {
-    expect(shouldRefetchParked("INTERRUPTED", "INTERRUPTED")).toBe(false);
-    expect(shouldRefetchParked("FAILED", "INTERRUPTED")).toBe(false);
-    expect(shouldRefetchParked("RUNNING", "RUNNING")).toBe(false);
+    expect(
+      shouldRefetchParked({ id: "t1", status: "INTERRUPTED" }, "t1", "INTERRUPTED")
+    ).toBe(false);
+    expect(shouldRefetchParked({ id: "t1", status: "FAILED" }, "t1", "INTERRUPTED")).toBe(
+      false
+    );
+    expect(shouldRefetchParked({ id: "t1", status: "RUNNING" }, "t1", "RUNNING")).toBe(false);
   });
 });
 
