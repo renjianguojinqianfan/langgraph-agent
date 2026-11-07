@@ -311,7 +311,7 @@ describe("D-24 接线断言模板（#282）", () => {
     expect(listFace()).toBe("empty");
   });
 
-  it("有行时 errored refetch 不改写 rows——横幅可见但不落空/失败脸", () => {
+  it("有行时 listError 不清空列表（判定 rows + 横幅可见；真实 refetch 在 TaskView，不在本测试）", () => {
     useTaskStore.getState().setTasks([task("t1")]);
     useTaskStore.getState().setListError("任务列表读取失败（HTTP 500）。");
 
