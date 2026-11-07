@@ -9,8 +9,9 @@ job）此前只靠「两边保持同一清单」的文档约定维持一致，�
 
 1. 双址集合逐条相同（原有三条断言，不放宽）；
 2. D-14 标记扫描：backend/tests/test_*.py 里出现 os.name / sys.platform /
-   WinDLL / taskkill 任一标记时，该文件必须已在清单，除非命中显式白名单
-   （路径 -> 理由）。
+   WinDLL / taskkill 任一标记时，该文件必须已在清单。**唯一的例外通道**是
+   _WINDOWS_ONLY_ALLOWLIST（路径 -> 非空理由；守卫自身也在其中）——不存在
+   免扫名单 / 路径过滤，要豁免就必须写理由。
 
 **盲区（有意写明，不宣称覆盖）**：扫描只看 backend/tests/test_*.py 的文本。
 test_test_isolation.py 与 test_server_lock.py 自身不含这四类标记——它们的
@@ -44,9 +45,13 @@ _JOB_KEY = re.compile(r"^  [A-Za-z0-9_-]+:", re.MULTILINE)
 # 也说明该文件与平台分支有关；是否真的该进清单由白名单显式裁定，不静默放过。
 _WINDOWS_ONLY_MARKERS = ("os.name", "sys.platform", "WinDLL", "taskkill")
 
-# 已知「带标记但有意不进冒烟清单」的显式例外：repo 相对路径 -> 理由。
-# 当前为空（6 个既有 marker 文件都已在清单）。新增例外必须写清为什么，别把扫描架空。
-_WINDOWS_ONLY_ALLOWLIST: dict[str, str] = {}
+# 已知「带标记但有意不进冒烟清单」的显式例外：repo 相对路径 -> 理由（必须非空）。
+# 这是唯一的例外通道：当前 1 条（守卫自身）。新增例外必须写清为什么，理由由自测④钉住。
+_WINDOWS_ONLY_ALLOWLIST: dict[str, str] = {
+    "backend/tests/test_smoke_list_parity.py": (
+        "守卫自身常量必然字面包含四个标记，扫描自己恒真，故豁免；改扫描面时须同步复核"
+    ),
+}
 
 
 def _agents_md_command_lines() -> list[str]:
@@ -83,18 +88,11 @@ def _smoke_files() -> tuple[set[str], set[str]]:
     return set(_FILE_TOKEN.findall(lines[0])), set(_FILE_TOKEN.findall(_ci_windows_smoke_block()))
 
 
-# 守卫自身就是扫描器的实现：_WINDOWS_ONLY_MARKERS 常量必然字面包含这些标记，
-# 扫自己恒真且没有意义，故从扫描面排除；其余 test_*.py 一个不漏（含未来新增）。
-_MARKER_SCAN_EXCLUDED = frozenset({"backend/tests/test_smoke_list_parity.py"})
-
-
 def _test_files() -> list[str]:
-    """``backend/tests/test_*.py`` 的 repo 相对路径（posix 形态，排除守卫自身）。"""
+    """``backend/tests/test_*.py`` 的 repo 相对路径（posix 形态；全量在扫描面）。"""
     tests_dir = REPO_ROOT / "backend" / "tests"
     return sorted(
-        path.relative_to(REPO_ROOT).as_posix()
-        for path in tests_dir.glob("test_*.py")
-        if path.relative_to(REPO_ROOT).as_posix() not in _MARKER_SCAN_EXCLUDED
+        path.relative_to(REPO_ROOT).as_posix() for path in tests_dir.glob("test_*.py")
     )
 
 
@@ -207,8 +205,8 @@ def test_every_marker_file_is_covered_by_the_smoke_list() -> None:
 
 
 def test_marker_scan_allowlist_entries_carry_a_reason() -> None:
-    """自测④：白名单条目必须带非空理由，防止未来「空理由静默豁免」把扫描架空。
+    """自测④：白名单每个条目必须带非空理由（当前守卫自身这条即生效）。
 
-    当前白名单为空：本断言此刻是格式锚（非空转），未来填入例外时生效。
+    唯一的例外通道就是白名单，所以「空理由静默豁免」必须变红，否则扫描会被架空。
     """
     assert all(reason.strip() for reason in _WINDOWS_ONLY_ALLOWLIST.values())
