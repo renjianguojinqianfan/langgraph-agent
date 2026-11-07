@@ -15,6 +15,8 @@ interface TaskPanelProps {
   /** #256: the selected task's snapshot is still in flight. */
   loading?: boolean;
   rightOpen: boolean;
+  /** D-25: the right column is a drawer exactly on narrow screens. */
+  rightDrawer: boolean;
   onToggleRight: () => void;
   onOpenPlan: () => void;
   traceOpen: boolean;
@@ -26,6 +28,7 @@ export function TaskPanel({
   loadError = "",
   loading = false,
   rightOpen,
+  rightDrawer,
   onToggleRight,
   onOpenPlan,
   traceOpen,
@@ -44,6 +47,7 @@ export function TaskPanel({
         <TaskHeader
           task={task}
           rightOpen={rightOpen}
+          rightDrawer={rightDrawer}
           onToggleRight={onToggleRight}
         />
         <TraceFace taskId={task.id} onClose={onCloseTrace} />
@@ -57,6 +61,7 @@ export function TaskPanel({
         <TaskHeader
           task={task}
           rightOpen={rightOpen}
+          rightDrawer={rightDrawer}
           onToggleRight={onToggleRight}
         />
       ) : loadError ? (

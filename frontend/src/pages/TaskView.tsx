@@ -12,7 +12,9 @@ import {
   type DashTab,
 } from "../lib/dashTabs";
 import { getTask, getTaskSnapshot, listTasksSnapshot } from "../api/client";
-import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useIsRightDrawer, useRailStatic } from "../lib/breakpoints";
+import { drawerView, type DrawerSide } from "../lib/drawer";
+import { useDrawerFocus } from "../hooks/useDrawerFocus";
 import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
 import { needsStatusRefetch } from "../store/reduceTask";
@@ -51,37 +53,55 @@ export function TaskView() {
     files: [],
   });
   const [traceOpen, setTraceOpen] = useState(false);
-  const [leftOpen, setLeftOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState(false);
+  // D-25: one breakpoint source for both columns (lib/breakpoints.ts), with
+  // the same `<` semantics as the `max-[860px]` / `max-[1180px]` utilities.
+  // D-25: rail static is the primary fact; a drawer is its negation.
+  const railStatic = useRailStatic();
+  const isLeftDrawer = !railStatic;
+  const isRightDrawer = useIsRightDrawer();
+  // D-26: a single open entry keeps the two drawers mutually exclusive.
+  const [open, setOpen] = useState<DrawerSide | null>(null);
   const railRef = useRef<HTMLElement>(null);
   const dashRef = useRef<HTMLElement>(null);
-  // Tailwind v4 把 `max-[860px]:` 编译成 `width < 860px`（不含 860），JS 必须同界：
-  // 恰好 860px 时 CSS 仍是宽屏、左栏可见，判成窄屏会让 railInert 把可见面板 `inert`。
-  // 与右栏 1179.98px 同一口径（#238 / #240）。
-  const narrowRail = useMediaQuery("(max-width: 859.98px)");
-  // 右栏：`max-[1180px]:` = `width < 1180`，同理对齐到 1179.98px；否则恰好 1180px 时
-  // visible=false 会把可见面板停在「加载中…」且不轮询（#238）。
-  const narrowDash = useMediaQuery("(max-width: 1179.98px)");
-  const railInert = narrowRail && !leftOpen;
-  const dashInert = narrowDash && !rightOpen;
+  const mainRef = useRef<HTMLElement>(null);
+  const skipNavRef = useRef<HTMLElement>(null);
+  const view = drawerView({
+    leftNarrow: isLeftDrawer,
+    rightNarrow: isRightDrawer,
+    open,
+    traceOpen,
+  });
+  const railInert = isLeftDrawer && view.justify !== "left";
+  const dashInert = isRightDrawer && view.justify !== "right";
 
-  // A translated drawer is still in the tab order; inert removes it from focus
-  // and the accessibility tree while the visual slide animation stays intact.
-  useEffect(() => {
-    const el = railRef.current;
-    if (!el) return;
-    el.inert = railInert;
-    if (railInert) el.setAttribute("aria-hidden", "true");
-    else el.removeAttribute("aria-hidden");
-  }, [railInert]);
+  // D-27: the hook is the only writer of `inert`/`aria-hidden` (background
+  // targets while justified, off-screen drawer edges when narrow-but-closed)
+  // and owns focus entry/trap/Esc/restore. `active` follows D-26's `justify`,
+  // so a drawer that stopped being narrow or hid behind Trace never traps.
+  const containerRef = view.justify === "right" ? dashRef : railRef;
+  const inertTargets =
+    view.justify === "left"
+      ? [mainRef, dashRef, skipNavRef]
+      : view.justify === "right"
+        ? [mainRef, railRef, skipNavRef]
+        : [];
+  useDrawerFocus({
+    active: view.justify !== null,
+    containerRef,
+    inertTargets,
+    backgroundInert: view.backgroundInert,
+    edges: [
+      { ref: railRef, inert: railInert },
+      { ref: dashRef, inert: dashInert },
+    ],
+    onClose: () => setOpen(null),
+  });
 
+  // D-26: widening past the breakpoint (or opening Trace) closes the drawer, so
+  // no scrim can outlive the state that justified it.
   useEffect(() => {
-    const el = dashRef.current;
-    if (!el) return;
-    el.inert = dashInert;
-    if (dashInert) el.setAttribute("aria-hidden", "true");
-    else el.removeAttribute("aria-hidden");
-  }, [dashInert]);
+    if (view.closeOnWiden || view.closeForTrace) setOpen(null);
+  }, [view.closeOnWiden, view.closeForTrace]);
 
   useEffect(() => {
     refreshModels();
@@ -214,7 +234,7 @@ export function TaskView() {
     }));
     // On narrow screens the file list lives in the drawer; keep it open when
     // its row turns into a preview tab.
-    setRightOpen(true);
+    setOpen("right");
   }, []);
 
   const closeFile = useCallback((path: string) => {
@@ -249,7 +269,7 @@ export function TaskView() {
       }}
     >
       {task && !traceOpen && (
-        <nav aria-label="跳到对话记录">
+        <nav ref={skipNavRef} aria-label="跳到对话记录">
           <a
             href="#conversation"
             className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-control focus:bg-surface-sheet focus:px-3 focus:py-1.5 focus:text-meta focus:text-primary"
@@ -262,26 +282,43 @@ export function TaskView() {
       <aside
         id="task-rail"
         ref={railRef}
-        aria-label="任务历史"
+        aria-label={view.justify === "left" ? "任务列表" : "任务历史"}
+        role={view.justify === "left" ? "dialog" : undefined}
+        aria-modal={view.justify === "left" ? true : undefined}
         className={cx(
           "w-[264px] shrink-0 bg-surface-column border-r border-rule",
           "max-[860px]:fixed max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:z-30 max-[860px]:w-[264px] max-[860px]:max-w-[80vw] max-[860px]:transition-transform max-[860px]:duration-[220ms] max-[860px]:ease-[cubic-bezier(.32,.72,0,1)]",
-          leftOpen ? "max-[860px]:translate-x-0" : "max-[860px]:-translate-x-full"
+          open === "left" ? "max-[860px]:translate-x-0" : "max-[860px]:-translate-x-full"
         )}
       >
+        {view.justify === "left" && (
+          <div className="flex shrink-0 justify-end border-b border-rule px-2 py-2">
+            <IconButton
+              type="button"
+              aria-label="关闭任务列表"
+              icon="close"
+              onClick={() => setOpen(null)}
+            />
+          </div>
+        )}
         <TaskRail />
       </aside>
 
-      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <IconButton
-          type="button"
-          aria-label="打开任务列表"
-          aria-controls="task-rail"
-          aria-expanded={leftOpen}
-          icon="panel"
-          onClick={() => setLeftOpen((v) => !v)}
-          className="min-[861px]:hidden absolute left-3 top-3 z-20"
-        />
+      <main ref={mainRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* D-25: the toggle renders iff the rail is actually a drawer — the old
+            861px 断点变体（hidden）第三来源已删除；860 恰好是静态 rail。
+            Trace 打开时也隐藏，避免「点了没反应」的错觉。 */}
+        {isLeftDrawer && !traceOpen && (
+          <IconButton
+            type="button"
+            aria-label="打开任务列表"
+            aria-controls="task-rail"
+            aria-expanded={open === "left"}
+            icon="panel"
+            onClick={() => setOpen((v) => (v === "left" ? null : "left"))}
+            className="absolute left-3 top-3 z-20"
+          />
+        )}
         <div
           className={cx(
             "mx-auto flex h-full w-full min-h-0 flex-col",
@@ -292,11 +329,12 @@ export function TaskView() {
             task={task}
             loadError={loadError}
             loading={loading}
-            rightOpen={rightOpen}
-            onToggleRight={() => setRightOpen((v) => !v)}
+            rightOpen={open === "right"}
+            onToggleRight={() => setOpen((v) => (v === "right" ? null : "right"))}
+            rightDrawer={isRightDrawer && !traceOpen}
             onOpenPlan={() => {
               changeTab("plan");
-              setRightOpen(true);
+              setOpen("right");
             }}
             traceOpen={traceOpen}
             onCloseTrace={() => setTraceOpen(false)}
@@ -307,13 +345,25 @@ export function TaskView() {
       <aside
         id="task-dash"
         ref={dashRef}
-        aria-label="工作区"
+        aria-label={view.justify === "right" ? "工作区与文件" : "工作区"}
+        role={view.justify === "right" ? "dialog" : undefined}
+        aria-modal={view.justify === "right" ? true : undefined}
         className={cx(
           "w-[420px] shrink-0 bg-surface-column border-l border-rule",
           "max-[1180px]:fixed max-[1180px]:inset-y-0 max-[1180px]:right-0 max-[1180px]:z-30 max-[1180px]:w-[420px] max-[1180px]:max-w-[calc(100vw_-_2rem)] max-[1180px]:transition-transform max-[1180px]:duration-[220ms] max-[1180px]:ease-[cubic-bezier(.32,.72,0,1)]",
-          rightOpen ? "max-[1180px]:translate-x-0" : "max-[1180px]:translate-x-full"
+          open === "right" ? "max-[1180px]:translate-x-0" : "max-[1180px]:translate-x-full"
         )}
       >
+        {view.justify === "right" && (
+          <div className="flex shrink-0 justify-end border-b border-rule px-2 py-2">
+            <IconButton
+              type="button"
+              aria-label="关闭工作区"
+              icon="close"
+              onClick={() => setOpen(null)}
+            />
+          </div>
+        )}
         <DashTabs
           task={task}
           tab={dash.tab}
@@ -326,15 +376,17 @@ export function TaskView() {
         />
       </aside>
 
-      {(leftOpen || rightOpen) && (
+      {/* D-26: the scrim renders iff a drawer is justified — never from `open`
+          alone, so widening can't leave an orphan overlay. Decorative for the
+          keyboard (Phase B makes Esc the path), hence aria-hidden/tabIndex=-1. */}
+      {view.overlayVisible && (
         <button
           type="button"
           aria-label="关闭侧栏"
-          className="fixed inset-0 z-20 bg-black/50 max-[1180px]:block hidden"
-          onClick={() => {
-            setLeftOpen(false);
-            setRightOpen(false);
-          }}
+          aria-hidden="true"
+          tabIndex={-1}
+          className="fixed inset-0 z-20 bg-black/50"
+          onClick={() => setOpen(null)}
         />
       )}
     </div>
