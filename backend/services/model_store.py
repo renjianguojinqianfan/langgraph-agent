@@ -123,6 +123,17 @@ def _optional_str(value: Any) -> Optional[str]:
     return text or None
 
 
+#: Sentinel for "the update did not mention this field". Explicit `None` is a
+#: real value on the D-36 fields: it clears the override and falls back to the
+#: provider default / client default (MEDIUM-2b, PR #298 rework).
+_UNSET: Any = object()
+
+
+def _pick(value: Any, fallback: Any) -> Any:
+    """Sentinel-aware update: omitted keeps the stored value, None clears it."""
+    return fallback if value is _UNSET else value
+
+
 @dataclass
 class Provider:
     """One API host: several model entries share its address, key and protocol.
@@ -604,14 +615,24 @@ class ModelStore:
     @staticmethod
     def _validate_model_params(
         *,
+        protocol: str,
         temperature: Optional[float],
         max_tokens: Optional[int],
         thinking: Optional[bool],
         reasoning_effort: Optional[str],
     ) -> None:
-        """Validate the D-36 sampling fields (None = not configured)."""
-        if temperature is not None and not 0.0 <= float(temperature) <= 2.0:
-            raise ValueError("temperature must be between 0 and 2")
+        """Validate the D-36 sampling fields (None = not configured).
+
+        temperature's legal range is protocol-specific (OpenAI-compatible
+        0..2, Anthropic Messages 0..1): checking at the write face turns an
+        upstream 400 into a readable 400 before the card exists.
+        """
+        limit = 1.0 if protocol == PROTOCOL_ANTHROPIC else 2.0
+        if temperature is not None and not 0.0 <= float(temperature) <= limit:
+            raise ValueError(
+                f"temperature must be between 0 and {limit:g} "
+                f"for protocol {protocol!r}"
+            )
         if max_tokens is not None and int(max_tokens) < 1:
             raise ValueError("max_tokens must be a positive integer")
         if thinking is not None and not isinstance(thinking, bool):
@@ -622,6 +643,58 @@ class ModelStore:
             "high",
         ):
             raise ValueError("reasoning_effort must be one of low / medium / high")
+
+    @staticmethod
+    def _validate_protocol_params(
+        *,
+        protocol: str,
+        thinking: Optional[bool],
+        reasoning_effort: Optional[str],
+    ) -> None:
+        """Reject an effective combination that could never run (ADR 0011).
+
+        Anthropic extended thinking needs the previous assistant thinking block
+        with its signature on the next tool turn; this codebase rebuilds history
+        from OpenAI-style messages and cannot carry it. A card with
+        protocol=anthropic + effective thinking=True / reasoning_effort would
+        therefore only fail at run time — refuse it at the write face instead.
+        """
+        if protocol != PROTOCOL_ANTHROPIC:
+            return
+        if thinking:
+            raise ValueError(
+                "Anthropic 适配器暂不支持 thinking（需要保留 thinking 签名）；"
+                "请先关闭或清空 thinking 再使用 anthropic 协议"
+            )
+        if reasoning_effort is not None:
+            raise ValueError(
+                "Anthropic 适配器暂不支持 reasoning_effort；"
+                "请先清空 reasoning_effort 再使用 anthropic 协议"
+            )
+
+    def _validate_provider_entries_runnable(self, provider: Provider) -> None:
+        """Check every entry's effective params against the provider protocol.
+
+        A protocol switch (openai-compatible -> anthropic) must not leave an
+        entry behind that overrides thinking=True / reasoning_effort: the card
+        would be writable but never runnable (MEDIUM-2a).
+        """
+        for entry in self.model_entries.values():
+            if entry.provider_id != provider.id:
+                continue
+            thinking = (
+                entry.thinking if entry.thinking is not None else provider.thinking
+            )
+            reasoning_effort = (
+                entry.reasoning_effort
+                if entry.reasoning_effort is not None
+                else provider.reasoning_effort
+            )
+            self._validate_protocol_params(
+                protocol=provider.protocol,
+                thinking=thinking,
+                reasoning_effort=reasoning_effort,
+            )
 
     @staticmethod
     def _require_model_name(model: Any) -> str:
@@ -817,8 +890,14 @@ class ModelStore:
             provider_id=provider_id,
         )
         self._validate_model_params(
+            protocol=protocol,
             temperature=temperature,
             max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
+        self._validate_protocol_params(
+            protocol=protocol,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
         )
@@ -867,10 +946,12 @@ class ModelStore:
         protocol: Optional[str] = None,
         api_key_env: Optional[str] = None,
         key: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        thinking: Optional[bool] = None,
-        reasoning_effort: Optional[str] = None,
+        # D-36 params: omitted (_UNSET) = unchanged, explicit None = clear the
+        # override so the value falls back to the provider / client default.
+        temperature: Any = _UNSET,
+        max_tokens: Any = _UNSET,
+        thinking: Any = _UNSET,
+        reasoning_effort: Any = _UNSET,
     ) -> Provider:
         provider = self.providers.get(provider_id)
         if provider is None:
@@ -888,15 +969,10 @@ class ModelStore:
                 if base_url is None or base_url.strip() == provider.base_url
                 else False
             ),
-            # None means "unchanged" here, like the string fields above.
-            temperature=temperature if temperature is not None else provider.temperature,
-            max_tokens=max_tokens if max_tokens is not None else provider.max_tokens,
-            thinking=thinking if thinking is not None else provider.thinking,
-            reasoning_effort=(
-                reasoning_effort
-                if reasoning_effort is not None
-                else provider.reasoning_effort
-            ),
+            temperature=_pick(temperature, provider.temperature),
+            max_tokens=_pick(max_tokens, provider.max_tokens),
+            thinking=_pick(thinking, provider.thinking),
+            reasoning_effort=_pick(reasoning_effort, provider.reasoning_effort),
         )
         self._validate_provider_fields(
             base_url=candidate.base_url,
@@ -904,11 +980,18 @@ class ModelStore:
             protocol=candidate.protocol,
         )
         self._validate_model_params(
+            protocol=candidate.protocol,
             temperature=candidate.temperature,
             max_tokens=candidate.max_tokens,
             thinking=candidate.thinking,
             reasoning_effort=candidate.reasoning_effort,
         )
+        self._validate_protocol_params(
+            protocol=candidate.protocol,
+            thinking=candidate.thinking,
+            reasoning_effort=candidate.reasoning_effort,
+        )
+        self._validate_provider_entries_runnable(candidate)
         # Validate the key write before touching the provider record: a refused
         # credentials write leaves the card exactly as it was.
         if key is not None:
@@ -959,6 +1042,7 @@ class ModelStore:
     ) -> ModelEntry:
         if provider_id not in self.providers:
             raise KeyError(provider_id)
+        provider = self.providers[provider_id]
         model = self._require_model_name(model)
         if any(
             entry.provider_id == provider_id and entry.model == model
@@ -966,10 +1050,22 @@ class ModelStore:
         ):
             raise ValueError(f"model {model!r} already exists for provider {provider_id!r}")
         self._validate_model_params(
+            protocol=provider.protocol,
             temperature=temperature,
             max_tokens=max_tokens,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
+        )
+        self._validate_protocol_params(
+            protocol=provider.protocol,
+            thinking=(
+                thinking if thinking is not None else provider.thinking
+            ),
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else provider.reasoning_effort
+            ),
         )
         entry = ModelEntry(
             id=self._new_entry_id(),
@@ -993,20 +1089,23 @@ class ModelStore:
         *,
         model: Optional[str] = None,
         name: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        thinking: Optional[bool] = None,
-        reasoning_effort: Optional[str] = None,
+        # D-36 params: omitted (_UNSET) = unchanged, explicit None = clear the
+        # override (falls back to the provider default / client default).
+        temperature: Any = _UNSET,
+        max_tokens: Any = _UNSET,
+        thinking: Any = _UNSET,
+        reasoning_effort: Any = _UNSET,
     ) -> ModelEntry:
-        """Edit one catalog entry; every parameter is optional (None = unchanged).
+        """Edit one catalog entry (D-36 write path).
 
-        This is the D-36 write path: ``temperature`` / ``max_tokens`` /
-        ``thinking`` / ``reasoning_effort`` set on the entry override the
-        provider-level defaults. There is deliberately no "clear" form in this
-        slice — send a value, not null.
+        ``temperature`` / ``max_tokens`` / ``thinking`` / ``reasoning_effort``
+        set on the entry override the provider-level defaults. Passing one of
+        them as an explicit ``None`` clears the override (omitting it keeps the
+        stored value) — that is the only way back to "inherit from provider".
         """
         if provider_id not in self.providers:
             raise KeyError(provider_id)
+        provider = self.providers[provider_id]
         entry = self.model_entries.get(model_id)
         if entry is None or entry.provider_id != provider_id:
             raise KeyError(model_id)
@@ -1026,20 +1125,30 @@ class ModelStore:
             entry,
             model=candidate_model,
             name=entry.name if name is None else ((name or "").strip() or entry.name),
-            temperature=temperature if temperature is not None else entry.temperature,
-            max_tokens=max_tokens if max_tokens is not None else entry.max_tokens,
-            thinking=thinking if thinking is not None else entry.thinking,
-            reasoning_effort=(
-                reasoning_effort
-                if reasoning_effort is not None
-                else entry.reasoning_effort
-            ),
+            temperature=_pick(temperature, entry.temperature),
+            max_tokens=_pick(max_tokens, entry.max_tokens),
+            thinking=_pick(thinking, entry.thinking),
+            reasoning_effort=_pick(reasoning_effort, entry.reasoning_effort),
         )
         self._validate_model_params(
+            protocol=provider.protocol,
             temperature=candidate.temperature,
             max_tokens=candidate.max_tokens,
             thinking=candidate.thinking,
             reasoning_effort=candidate.reasoning_effort,
+        )
+        self._validate_protocol_params(
+            protocol=provider.protocol,
+            thinking=(
+                candidate.thinking
+                if candidate.thinking is not None
+                else provider.thinking
+            ),
+            reasoning_effort=(
+                candidate.reasoning_effort
+                if candidate.reasoning_effort is not None
+                else provider.reasoning_effort
+            ),
         )
         self.model_entries[entry.id] = candidate
         self._save()

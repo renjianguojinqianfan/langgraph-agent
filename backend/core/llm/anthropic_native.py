@@ -54,9 +54,18 @@ class AnthropicClient(LLMClient):
                 "Anthropic provider has no API key: paste one in the settings page "
                 "or set the environment variable the provider names"
             )
-        if thinking is not None or reasoning_effort is not None:
+        # thinking=False means "explicitly off" (the settings toggle default),
+        # so only an enabled thinking switch is refused here; the same holds for
+        # a configured reasoning_effort (there is no pass-through field on the
+        # Messages API). The store rejects these combinators even earlier.
+        if thinking is True:
             raise ValueError(
-                "Anthropic 适配器暂不支持 thinking/reasoning_effort：工具循环需要保留 "
+                "Anthropic 适配器暂不支持 thinking：工具循环需要保留 thinking 签名，"
+                "留后续片（见 ADR 0011）"
+            )
+        if reasoning_effort is not None:
+            raise ValueError(
+                "Anthropic 适配器暂不支持 reasoning_effort：工具循环需要保留 "
                 "thinking 签名，留后续片（见 ADR 0011）"
             )
         self.base_url = base
@@ -70,8 +79,8 @@ class AnthropicClient(LLMClient):
     def _messages_url(self) -> str:
         """Accept both documented base_url spellings (D-35).
 
-        ``https://api.anthropic.com` -> ``.../v1/messages``;
-        ``https://api.anthropic.com/v1` -> ``.../v1/messages``.
+        Bare host -> ".../v1/messages"; a base_url already ending in "/v1" ->
+        ".../v1/messages" (i.e. append "/messages" only).
         """
         if self.base_url.endswith("/v1"):
             return f"{self.base_url}/messages"
@@ -129,12 +138,15 @@ class AnthropicClient(LLMClient):
         tools: List[Dict[str, Any]] | None,
         kwargs: Dict[str, Any],
     ) -> Dict[str, Any]:
-        max_tokens = kwargs.get(
-            "max_tokens",
-            self.max_tokens
-            if self.max_tokens is not None
-            else ANTHROPIC_DEFAULT_MAX_TOKENS,
-        )
+        # A per-call max_tokens=None must not reach int(None): missing / None
+        # both fall back to the configured value, then to the documented 4096.
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is None:
+            max_tokens = (
+                self.max_tokens
+                if self.max_tokens is not None
+                else ANTHROPIC_DEFAULT_MAX_TOKENS
+            )
         temperature = kwargs.get("temperature", self.temperature)
         payload: Dict[str, Any] = {
             "model": self.model,

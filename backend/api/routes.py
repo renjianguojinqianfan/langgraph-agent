@@ -446,9 +446,15 @@ def update_provider(
     A protocol change is validated against the supported set (unknown → 400);
     the D-36 sampling defaults are editable here as well.
     """
-    fields = payload.model_dump(exclude_none=True)
-    if "protocol" in fields:
+    # exclude_unset distinguishes "omitted" (leave unchanged) from an explicit
+    # null (clear the D-36 override and fall back to the provider/default).
+    fields = payload.model_dump(exclude_unset=True)
+    if fields.get("protocol") is None:
+        fields.pop("protocol", None)
+    elif "protocol" in fields:
         fields["protocol"] = str(fields["protocol"]).strip() or PROTOCOL_OPENAI
+    if fields.get("key") is None:
+        fields.pop("key", None)
     try:
         if "protocol" in fields:
             require_implemented_protocol(fields["protocol"])
@@ -530,7 +536,7 @@ def update_provider_model(
     """Partial edit of one catalog entry (D-36 sampling overrides live here)."""
     try:
         updated = _tm(request).update_model_entry(
-            provider_id, model_id, **payload.model_dump(exclude_none=True)
+            provider_id, model_id, **payload.model_dump(exclude_unset=True)
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found") from None
