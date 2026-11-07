@@ -225,8 +225,20 @@ class ModelStore:
                 )
             except (KeyError, TypeError):
                 continue
-            if provider.id and provider.base_url:
-                providers[provider.id] = provider
+            if not (provider.id and provider.base_url):
+                continue
+            if provider.protocol not in SUPPORTED_PROTOCOLS:
+                # A protocol this build does not know how to store is a bad
+                # file entry, not a runtime surprise: drop the provider (its
+                # entries fall with it); a file left with no usable entry is
+                # quarantined below, same as any other broken state file.
+                logger.warning(
+                    "dropping provider %r: unknown protocol %r",
+                    provider.id,
+                    provider.protocol,
+                )
+                continue
+            providers[provider.id] = provider
         entries: Dict[str, ModelEntry] = {}
         for item in raw.get("models") or []:
             if not isinstance(item, dict):
@@ -302,9 +314,11 @@ class ModelStore:
         default = str(raw.get("default") or "")
         self.default_id = default if default in entries else next(iter(entries))
         try:
-            original = self.data_file.read_text(encoding="utf-8")
+            # Bytes, not text: the backup is a byte-for-byte copy of the v1
+            # file (a text round-trip would rewrite line endings on Windows).
+            original = self.data_file.read_bytes()
         except OSError:  # pragma: no cover - defensive (we just read it)
-            original = ""
+            original = b""
         self._backup_v1(original)
         self._save()
         logger.info(
@@ -314,14 +328,14 @@ class ModelStore:
             self.data_file.with_name(f"{self.data_file.name}.bak-v1").name,
         )
 
-    def _backup_v1(self, text: str) -> None:
+    def _backup_v1(self, original: bytes) -> None:
         backup = self.data_file.with_name(f"{self.data_file.name}.bak-v1")
         if backup.exists():
             # Only the first migration writes a backup: a later restore + reload
             # must not clobber the snapshot taken before the first rewrite.
             return
         try:
-            backup.write_text(text, encoding="utf-8")
+            backup.write_bytes(original)
         except OSError as exc:  # pragma: no cover - defensive
             logger.warning(
                 "could not back up %s to %s before migrating: %s",
@@ -423,6 +437,20 @@ class ModelStore:
             )
 
     @staticmethod
+    def _require_model_name(model: Any) -> str:
+        """Trimmed non-empty model name.
+
+        v1's validator rejected an empty model; keeping the check in one helper
+        covers the legacy profile paths and the v2 catalog paths alike. An
+        empty value would be accepted, then dropped by the next load, and the
+        entry would silently disappear from disk with the next save.
+        """
+        cleaned = str(model or "").strip()
+        if not cleaned:
+            raise ValueError("model is required")
+        return cleaned
+
+    @staticmethod
     def _slugify_provider_id(name: str, taken: Iterable[str]) -> str:
         """A valid provider id derived from a display name (legacy POST path)."""
         slug = re.sub(r"[^a-z0-9_-]+", "-", (name or "").strip().lower()).strip("-_")
@@ -457,7 +485,7 @@ class ModelStore:
         """
         display = name.strip() or "自定义"
         base_url = base_url.strip()
-        model = model.strip()
+        model = self._require_model_name(model)
         api_key_env = (api_key_env or "LLM_API_KEY").strip()
         self._validate_provider_fields(
             base_url=base_url, api_key_env=api_key_env, protocol=PROTOCOL_OPENAI
@@ -512,7 +540,7 @@ class ModelStore:
         candidate_entry = replace(
             entry,
             name=cleaned.get("name", entry.name),
-            model=cleaned.get("model", entry.model),
+            model=self._require_model_name(cleaned.get("model", entry.model)),
         )
         self.providers[provider.id] = candidate_provider
         self.model_entries[entry.id] = candidate_entry
@@ -688,9 +716,7 @@ class ModelStore:
     ) -> ModelEntry:
         if provider_id not in self.providers:
             raise KeyError(provider_id)
-        model = model.strip()
-        if not model:
-            raise ValueError("model is required")
+        model = self._require_model_name(model)
         if any(
             entry.provider_id == provider_id and entry.model == model
             for entry in self.model_entries.values()
@@ -729,9 +755,7 @@ class ModelStore:
         """
         if provider_id not in self.providers:
             raise KeyError(provider_id)
-        model = model.strip()
-        if not model:
-            raise ValueError("model is required")
+        model = self._require_model_name(model)
         for entry in self.model_entries.values():
             if entry.provider_id == provider_id and entry.model == model:
                 return entry
