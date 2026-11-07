@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FOCUSABLE_SELECTOR, nextFocusIndex } from "./focus";
+import { drawerKeyAction, FOCUSABLE_SELECTOR, nextFocusIndex } from "./focus";
 
 describe("nextFocusIndex (D-27 Tab trap)", () => {
   it("forward wraps at the tail", () => {
@@ -35,5 +35,25 @@ describe("nextFocusIndex (D-27 Tab trap)", () => {
         'input:not([disabled]), select:not([disabled]), ' +
         '[tabindex]:not([tabindex="-1"])'
     );
+  });
+});
+
+describe("drawerKeyAction (D-27 keyboard map)", () => {
+  it("Escape closes the drawer", () => {
+    expect(drawerKeyAction("Escape", false)).toBe("close");
+    expect(drawerKeyAction("Escape", true)).toBe("close");
+  });
+
+  it("Tab cycles forward", () => {
+    expect(drawerKeyAction("Tab", false)).toBe("cycle-forward");
+  });
+
+  it("Shift+Tab cycles backward", () => {
+    expect(drawerKeyAction("Tab", true)).toBe("cycle-backward");
+  });
+
+  it("other keys are ignored", () => {
+    expect(drawerKeyAction("Enter", false)).toBeNull();
+    expect(drawerKeyAction("a", true)).toBeNull();
   });
 });

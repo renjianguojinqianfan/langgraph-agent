@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
-import { FOCUSABLE_SELECTOR, nextFocusIndex } from "../lib/focus";
+import { drawerKeyAction, FOCUSABLE_SELECTOR, nextFocusIndex } from "../lib/focus";
 
 /** A region whose inert state is not `drawerView().backgroundInert`: the
  * off-screen drawer panels when the screen is narrow but nothing is open.
@@ -84,12 +84,13 @@ export function useDrawerFocus({
     }
 
     const onKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") {
+      const action = drawerKeyAction(ev.key, ev.shiftKey);
+      if (action === "close") {
         ev.preventDefault();
         onCloseRef.current();
         return;
       }
-      if (ev.key !== "Tab") return;
+      if (action === null) return;
       const items = focusablesIn(container);
       const current =
         document.activeElement instanceof HTMLElement
