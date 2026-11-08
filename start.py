@@ -9,7 +9,8 @@ Usage:
     python start.py --backend-only  # backend only
     python start.py --frontend-only # frontend only
     python start.py --mock          # run backend with the offline MockLLM
-    python start.py --install       # install backend + frontend deps first
+    python start.py --install       # CI-equivalent backend deps + frontend deps first
+
 """
 
 from __future__ import annotations
@@ -43,6 +44,57 @@ def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> su
     return subprocess.Popen(cmd, cwd=str(cwd or ROOT), env=env, shell=False)
 
 
+def _filtered_requirements_text() -> str:
+    """requirements.txt as CI installs it directly (mcp lines filtered out).
+
+    CI (both jobs) installs the equivalent of `grep -vE '^mcp' requirements.txt`
+    and then mcp with `--no-deps`. Keeping the local installer on the same
+    contract is what makes the Windows path work: mcp's metadata demands
+    uvicorn>=0.31.1 while this repo pins uvicorn<0.31.
+    """
+    lines = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    return "\n".join(line for line in lines if not line.startswith("mcp")) + "\n"
+
+
+def _pip_install_commands(filtered_path: str) -> list[list[str]]:
+    """The two CI-equivalent pip steps (exposed for a parser-level test)."""
+    return [
+        [sys.executable, "-m", "pip", "install", "-r", filtered_path],
+        [sys.executable, "-m", "pip", "install", "--no-deps", "mcp>=1.2,<2.0"],
+    ]
+
+
+def _install_backend_deps() -> None:
+    """Install runtime deps exactly like CI, in a locale-proof way.
+
+    Plain `pip install -r requirements.txt` fails on Chinese Windows before
+    parsing anything: pip decodes requirement files with the platform locale
+    (cp936 -> UnicodeDecodeError, #259), and mcp's metadata conflicts with the
+    pinned uvicorn. The ASCII-only requirements files plus the two CI steps
+    (filter mcp, install, then mcp `--no-deps`) fix both.
+    """
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        "w",
+        suffix="-requirements-ci.txt",
+        delete=False,
+        encoding="utf-8",
+        newline="\n",
+    ) as handle:
+        handle.write(_filtered_requirements_text())
+        filtered = handle.name
+    try:
+        print(
+            "[start] installing backend deps (CI-equivalent: mcp filtered, then --no-deps)...",
+            flush=True,
+        )
+        for command in _pip_install_commands(filtered):
+            subprocess.run(command, cwd=str(ROOT), check=True)
+    finally:
+        Path(filtered).unlink(missing_ok=True)
+
+
 def _running_server(settings):
     """The live qianfan/dev backend, if one is registered (W2)."""
     from backend import server_lock
@@ -73,8 +125,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.install:
-        print("[start] installing backend deps...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], cwd=str(ROOT), check=True)
+        _install_backend_deps()
         print("[start] installing frontend deps...")
         subprocess.run(["npm", "install"], cwd=str(ROOT / "frontend"), check=True)
 
@@ -97,13 +148,38 @@ def main() -> int:
     procs: list[subprocess.Popen] = []
     try:
         if not args.frontend_only:
-            from backend.config import get_settings
+            from backend.config import ensure_loopback_host, get_settings
 
             settings = get_settings()
+            try:
+                ensure_loopback_host(settings)
+            except RuntimeError as exc:
+                print(f"[start] {exc}", flush=True)
+                return 2
             if _refuse_if_running(settings):
                 return 2
             lock_file = server_lock.lock_path(settings)
             instance = server_lock.new_instance()
+            # D-42 (#259): claim the record BEFORE spawning uvicorn. The old
+            # order left a boot gap in which a second launcher saw a free lock
+            # and started a second writer of data/. The recorded pid is swapped
+            # for the real backend pid right after the spawn.
+            claimed = server_lock.claim_lock(
+                lock_file,
+                server_lock.ServerLock(
+                    pid=os.getpid(),
+                    port=args.port,
+                    started_at=server_lock.now_iso(),
+                    instance=instance,
+                    mode="dev",
+                ),
+            )
+            if not claimed:
+                print(
+                    "[start] 另一个后台刚刚启动了；要换目录请再敲 qianfan。",
+                    flush=True,
+                )
+                return 2
             env["QIANFAN_INSTANCE"] = instance
             backend_cmd = [
                 sys.executable, "-m", "uvicorn", "backend.main:app",
@@ -111,21 +187,10 @@ def main() -> int:
             ]
             backend = _run(backend_cmd, cwd=ROOT, env=env)
             procs.append(backend)
-            lock = server_lock.ServerLock(
-                pid=backend.pid,
-                port=args.port,
-                started_at=server_lock.now_iso(),
-                instance=instance,
-                mode="dev",
-            )
-            if not server_lock.claim_lock(lock_file, lock):
-                print(
-                    "[start] 另一个后台刚刚启动了；要换目录请再敲 qianfan。",
-                    flush=True,
-                )
+            if not server_lock.update_lock_pid(lock_file, instance, backend.pid):
+                print("[start] 单实例记录被接管，放弃本次启动。", flush=True)
                 backend.terminate()
                 return 2
-            claimed = True
         if not args.backend_only:
             if not (ROOT / "frontend" / "node_modules").exists():
                 print("[start] frontend/node_modules missing — run with --install first.")
