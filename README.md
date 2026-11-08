@@ -29,9 +29,16 @@ override 让干净环境装出与 `requirements.txt` 一致的版本。缺 `fron
 ```bash
 python -m venv .venv311
 .venv311\Scripts\activate                        # Git Bash: source .venv311/Scripts/activate
-pip install -r requirements.txt
+python start.py --install  # 后端依赖按 CI 同口径装（过滤 mcp 行 + mcp --no-deps）+ 前端 npm install
 python start.py            # 虚拟环境请叫 .venv311；start.py 会拦住根目录的 .venv
 ```
+
+`--install` 与 CI 的两步安装完全同构：`requirements.txt` 过滤掉 `mcp` 行后安装，再
+`pip install --no-deps mcp>=1.2,<2.0`（mcp 元数据要求 uvicorn>=0.31.1，与本仓 uvicorn 钉版
+冲突，直接 `pip install -r requirements.txt` 解不出来）。三个 requirements 文件注释保持
+纯 ASCII：Windows 上 pip 按系统 locale（中文 = cp936）解码依赖文件，非 ASCII 会在解析前
+直接 `UnicodeDecodeError`（#259）。`--port 9123` 时 Vite 代理跟随 `PORT`，且 `/health`
+也在代理内（`frontend/vite.config.ts`）。
 
 ## 核心模型
 
@@ -58,7 +65,7 @@ agent ──有 tool call──> tool ──> agent
 - 这就是在你的项目里直接干活：bash 与写工具会改真实文件，**撤销靠 git**；在主目录或盘根启动不拦（见「这不是安全边界」）。
 - MCP 服务仍是整个后台共用一份，工作目录是后台的启动目录，不随任务切换。
 
-**一台机器只共用一个后台**（ADR 0010）：第二次在别的目录敲 `qianfan`，它会把浏览器开到已在跑的后台、定位到当前目录，然后退出，不另起进程（`--port` 只对第一次生效）。关掉启动它的终端 = 所有项目的任务停下，之后可以续说 / 续跑。`start.py` 的开发后台与 `qianfan` 互斥，一个在跑时另一个会拒绝启动。
+**一台机器只共用一个后台**（ADR 0010）：第二次在别的目录敲 `qianfan`，它会把浏览器开到已在跑的后台、定位到当前目录，然后退出，不另起进程（`--port` 只对第一次生效）。关掉启动它的终端 = 所有项目的任务停下，之后可以续说 / 续跑。`start.py` 的开发后台与 `qianfan` 互斥，一个在跑时另一个会拒绝启动；`start.py` 现在**先抢 `data/server.json` 再起 uvicorn**，启动窗口内也不可能出现第二个写者。手工 `uvicorn backend.main:app` 在有后台时启动即拒（指引用 `qianfan`），没有后台时按开发模式放行并告警。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等非回环值在启动期直接拒绝（本章只支持本机访问）。
 
 ## 能力
 

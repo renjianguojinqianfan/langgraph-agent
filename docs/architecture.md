@@ -25,7 +25,7 @@
 | 存储 | sqlite（checkpoint）+ JSON（任务/模型档案）+ JSONL（trace） | `data/` 为运行态、不入库；Key 在仓库外（`~/.qianfan/credentials.json` 或环境变量） |
 | 通信 | REST + **SSE**（单向事件流） | SSE 事件词汇表是本仓最强的机械契约（§3.4） |
 
-**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），两者互斥（`backend/server_lock.py`）。
+**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），两者互斥（`backend/server_lock.py`）。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；手动 uvicorn 在有后台时被拒）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
 
 ---
 
@@ -36,7 +36,7 @@ backend/
 ├── config.py            Settings（pydantic-settings；.env / 环境变量）
 ├── main.py              FastAPI app：/health、/api 路由挂载、静态前端（StaticFiles）、Host 检查、CORS
 ├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
-├── server_lock.py       单实例锁（一台机器只允许一个后台）
+├── server_lock.py       单实例锁与启动守卫（一台机器只允许一个后台；ensure_single_backend / update_lock_pid）
 ├── api/
 │   ├── routes.py        36 条 REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
@@ -324,15 +324,19 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 | 前端 | React 18 · Vite 8 · TS 5 · Tailwind 4 · zustand 4（`npm ci` 口径） |
 | 质量门禁工具链 | `requirements-dev.txt` 钉 ruff / mypy / pre-commit；配置在 `pyproject.toml` |
 
+`requirements.txt` / `requirements-dev.txt` / `overrides.txt` 的注释**保持纯 ASCII**：Windows 上 pip 按平台 locale 解码依赖文件（中文 Windows = cp936），非 ASCII 注释会在解析前抛 `UnicodeDecodeError`（#259，已实测复现）；依赖版本行零变更。
+
 ### 6.2 启动形态
 
 ```bash
 qianfan                       # 日常：uv tool install -e . --overrides overrides.txt，单后台 + 自动开浏览器
+python start.py --install     # 开发：先按 CI 同口径装后端依赖（过滤 mcp 行 + mcp --no-deps）与前端依赖
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
-uvicorn backend.main:app --port 8000 --reload   # 手工起后端
 ```
 
-一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示先构建。
+一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn）。手工 `uvicorn backend.main:app` 在没有后台时按开发模式放行并告警（无 `QIANFAN_INSTANCE`），有后台时启动即拒并指引用 `qianfan`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`。
+
+`frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示先构建。
 
 ### 6.3 运行态数据布局
 
