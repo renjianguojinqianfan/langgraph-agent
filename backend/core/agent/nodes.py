@@ -122,10 +122,15 @@ class AgentRuntime:
         max_steps: int = 15,
         parent_task_id: str = "",
         model_profile: str = "",
+        reasoning_scope: str = "",
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
         self.model_profile = model_profile
+        #: D-39: "<provider_id>:<protocol>" of the model this round runs with.
+        #: Assistant reasoning is only replayed to the same scope; the value
+        #: tags message provenance and never leaves the graph.
+        self.reasoning_scope = reasoning_scope
         # Issue #60: ``TaskManager.stop()`` only flips the id it was handed, so a
         # subtask has to watch its own id *and* the parent's. Watching the parent
         # alone would break ``stop(subtask_id)``.
@@ -299,12 +304,81 @@ class AgentRuntime:
             plan_text = str(state.get("plan_text", ""))
         plan_file.sync_plan_message(compressed, plan_text)
         state["messages"] = compressed
-        return [{"role": "system", "content": system + self._inject_block}, *compressed]
+        history = self._request_history(compressed)
+        return [{"role": "system", "content": system + self._inject_block}, *history]
 
     def _redact(self, text: str) -> str:
         """Strip known keys before an error reaches state / SSE / trace."""
         redact = getattr(getattr(self, "tm", None), "redact", None)
         return redact(text) if callable(redact) else text
+
+    def _reasoning_for_display(self, text: str) -> str:
+        """D-38: redacted + bounded reasoning copy for SSE / persistence.
+
+        The real manager owns the single truncation seam; the fallback keeps
+        test fakes (which have no redact_reasoning) working.
+        """
+        if not text:
+            return ""
+        redact_reasoning = getattr(
+            getattr(self, "tm", None), "redact_reasoning", None
+        )
+        if callable(redact_reasoning):
+            return redact_reasoning(text)
+        return self._redact(text)
+
+    def _stamp_reasoning(self, turn: Dict[str, Any], reasoning: str) -> None:
+        """Attach raw reasoning for protocol replay + its D-39 provenance.
+
+        The `_reasoning_from` marker is internal to `state.messages`: the
+        request builder strips it, and SSE / trace / StepRecord only ever see
+        the redacted display copy. Messages saved before this marker existed
+        (upgraded checkpoints) carry no provenance and are sent as-is; a
+        cross-provider switch on such a checkpoint is a documented boundary
+        (no one-off migration).
+        """
+        if not reasoning:
+            return
+        turn["reasoning_content"] = reasoning
+        turn["_reasoning_from"] = self.reasoning_scope
+
+    def _request_history(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Copies safe for the provider: provenance removed, foreign reasoning dropped.
+
+        D-39: a turn's reasoning may only be replayed to the provider+protocol
+        that produced it (DeepSeek thinking mode 400s without its own trace;
+        Anthropic uses a different block shape). Same scope keeps
+        `reasoning_content`; any other scope drops it from the request copy
+        only — `state.messages` and the persisted display copy are untouched.
+        """
+        history: List[Dict[str, Any]] = []
+        for message in messages:
+            if "_reasoning_from" not in message:
+                history.append(message)
+                continue
+            copy = dict(message)
+            source = copy.pop("_reasoning_from", "")
+            if source != self.reasoning_scope:
+                copy.pop("reasoning_content", None)
+            history.append(copy)
+        return history
+
+    def _final_answer_payload(
+        self, answer: str, reasoning: str
+    ) -> Dict[str, Any]:
+        """D-38: final_answer keeps its old shape unless there is reasoning.
+
+        The optional field is the redacted / bounded display copy; a
+        non-thinking model emits exactly the pre-#267 payload, so the frontend
+        never has to render an empty reasoning block.
+        """
+        payload: Dict[str, Any] = {"answer": answer}
+        display = self._reasoning_for_display(reasoning)
+        if display:
+            payload["reasoning"] = display
+        return payload
 
     def _public_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
         """A copy safe for SSE / trace: the args are redacted, dispatch is not."""
@@ -353,6 +427,9 @@ class AgentRuntime:
             "index": idx,
             "round": round_no,
             "thought": "",
+            # D-38: raw reasoning lands here; _finalize_terminal persists the
+            # redacted / truncated copy via TaskManager._redact_step.
+            "reasoning": "",
             "tool_calls": [],
             "status": "running",
         }
@@ -419,8 +496,8 @@ class AgentRuntime:
         assistant_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
         # Issue #45: thinking-mode providers require the trace back on the next
         # turn; the plan round is no exception (a missing trace 400s forever).
-        if resp.reasoning_content:
-            assistant_turn["reasoning_content"] = resp.reasoning_content
+        # _stamp_reasoning also tags its D-39 provenance.
+        self._stamp_reasoning(assistant_turn, resp.reasoning_content)
         messages = state.setdefault("messages", [])
         if updated:
             # One gray "plan updated" line: replace the previous one. A
@@ -428,7 +505,10 @@ class AgentRuntime:
             _drop_plan_notes(messages)
         messages.append(assistant_turn)
         step["thought"] = answer
-        self._publish("final_answer", {"answer": answer})
+        step["reasoning"] = resp.reasoning_content or ""
+        self._publish(
+            "final_answer", self._final_answer_payload(answer, resp.reasoning_content)
+        )
         state["_last_action"] = "final_answer"
         return state
 
@@ -474,11 +554,14 @@ class AgentRuntime:
         answer = self._redact(resp.content or "").strip() or "(no content)"
         state["final_answer"] = answer
         final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
-        if resp.reasoning_content:  # Issue #45, same rule as the tool-call turn
-            final_turn["reasoning_content"] = resp.reasoning_content
+        # Issue #45, same rule as the tool-call turn; plus D-39 provenance.
+        self._stamp_reasoning(final_turn, resp.reasoning_content)
         state.setdefault("messages", []).append(final_turn)
         step["thought"] = answer
-        self._publish("final_answer", {"answer": answer})
+        step["reasoning"] = resp.reasoning_content or ""
+        self._publish(
+            "final_answer", self._final_answer_payload(answer, resp.reasoning_content)
+        )
         state["_last_action"] = "final_answer"
         return state
 
@@ -536,8 +619,8 @@ class AgentRuntime:
         # *next* request when the previous turn's reasoning trace is missing.
         # Written only when non-empty — providers that never report it must
         # keep sending exactly the same message shape as before.
-        if resp.reasoning_content:
-            assistant_turn["reasoning_content"] = resp.reasoning_content
+        self._stamp_reasoning(assistant_turn, resp.reasoning_content)
+        step["reasoning"] = resp.reasoning_content or ""
         state.setdefault("messages", []).append(assistant_turn)
         for rec in tcs:
             step["tool_calls"].append(rec)

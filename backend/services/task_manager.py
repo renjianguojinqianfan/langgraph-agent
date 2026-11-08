@@ -59,6 +59,9 @@ if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _loa
 
 logger = get_logger("task_manager")
 
+#: D-38: one step's reasoning is capped before it is persisted / sent over SSE.
+REASONING_TRUNCATE_LIMIT = 8000
+
 # langgraph 1.x durability mode — the one 1.x feature this migration adopts
 # (Issue #7; selection rationale in docs/migration-langgraph-1x.md §5).
 #
@@ -784,6 +787,31 @@ class TaskManager:
                 text = text.replace(secret, "[redacted]")
         return text
 
+    def redact_reasoning(self, text: str) -> str:
+        """D-38: the copy of a step's reasoning that may leave the graph.
+
+        Redact first (a reasoning trace can quote a tool input / key), then
+        truncate by character count. The raw trace in `state.messages` is
+        untouched — the next protocol turn may need it verbatim.
+        """
+        cleaned = self.redact(str(text or ""))
+        return cleaned[:REASONING_TRUNCATE_LIMIT]
+
+    def reasoning_scope_for(self, model_id: Optional[str]) -> str:
+        """D-39 compatibility identity of the model that produced a turn.
+
+        Assistant reasoning is replayable only inside the same provider and
+        protocol: DeepSeek-style thinking endpoints require their own trace
+        back, and Anthropic uses a different block shape. The graph tags
+        assistant messages with this string and strips foreign reasoning when
+        building a request. Unknown model -> empty (tests / legacy fakes keep
+        history untouched).
+        """
+        profile = self.models.get(model_id or "")
+        if profile is None:
+            return ""
+        return f"{profile.provider_id}:{profile.protocol}"
+
     def set_model(self, task_id: str, model_id: str) -> Dict[str, Any]:
         """Switch a task's model; the next message uses it."""
         if self.models.get(model_id) is None:
@@ -1188,6 +1216,7 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 model_profile=self.model_id_for(task),
+                reasoning_scope=self.reasoning_scope_for(self.model_id_for(task)),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -1375,7 +1404,12 @@ class TaskManager:
             if "input" in call:
                 call["input"] = redact_value(call["input"])
             calls.append(call)
-        return {**step, "tool_calls": calls}
+        redacted = {**step, "tool_calls": calls}
+        # D-38: the persisted reasoning is the display copy — redacted and
+        # bounded; state.messages keeps the raw trace for the next turn.
+        if redacted.get("reasoning"):
+            redacted["reasoning"] = self.redact_reasoning(str(redacted["reasoning"]))
+        return redacted
 
     def _finalize_terminal(self, task: Task, final: Dict[str, Any]) -> None:
         """Map a finished run onto the persisted task record.
@@ -1621,6 +1655,7 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 model_profile=self.model_id_for(current),
+                reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -1881,6 +1916,7 @@ class TaskManager:
                 tool_schemas=self._tool_schemas,
                 max_steps=self.settings.max_steps,
                 model_profile=self.model_id_for(current),
+                reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 

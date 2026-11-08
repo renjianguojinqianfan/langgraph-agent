@@ -368,6 +368,10 @@ class SubAgentExecutor:
                 parent_task = self.tm.get_task(parent_id)
                 model_profile = self.tm.model_id_for(parent_task)
                 llm = self.tm.llm_for_task_id(parent_id)
+            # D-39: the child shares the parent round's model, so it also
+            # shares that model's reasoning-compatibility scope.
+            scope_for = getattr(self.tm, "reasoning_scope_for", None)
+            reasoning_scope = scope_for(model_profile) if callable(scope_for) else ""
             runtime = AgentRuntime(
                 task_id=spec.subtask_id,
                 task_manager=self.tm,
@@ -377,6 +381,7 @@ class SubAgentExecutor:
                 max_steps=self.settings.max_steps,
                 parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
                 model_profile=model_profile,
+                reasoning_scope=reasoning_scope,
             )
             from .graph import build_graph
 
