@@ -136,7 +136,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 **基础路径**：`/api`（`backend/main.py` 用 `include_router(..., prefix="/api")` 挂载）；`/health` 不在前缀下。**内容类型**：`application/json`（例外：`/events` 为 `text/event-stream`，`/trace` 默认 `application/x-ndjson`，`/files/download` 为文件流）。
 
-所有端点除 `POST /api/auth/token` 外都挂 `Depends(verify_token)`；`auth_enabled=false` 时它是 no-op。
+所有端点除 `POST /api/auth/token` 外都挂 `Depends(verify_token)`；`auth_enabled=false` 时它是 no-op。开启时 **REST 只认 `Authorization: Bearer`**；`?token=` 只允许两个浏览器原生 GET——`GET /api/tasks/{id}/events`（EventSource 不能设 header）与 `GET /api/tasks/{id}/files/download`（`<a href>` 导航不能设 header），其余端点带 `?token=` 也 401（#271 D-46）。`TokenIssuer` 构造 fail-closed（空 / 占位即抛），`main` 仅在 `auth_enabled=true` 时构造、关闭置 None，`cli` 入口复用同一启动守卫（D-45）；`backend.main` import 时给 `uvicorn.access` 装幂等 filter，query 的 `token=...` 输出为 `token=***`（D-47）。
 
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 `data` |
 |---|---|---|---|---|
@@ -154,11 +154,11 @@ START → agent ──有 tool call──→ tool ──→ agent
 | POST | `/api/tasks/{id}/messages` | 停下 / 失败后续说（同一 thread，多轮对话入口；需 checkpoint） | `{input}` | `TaskManager.send_message` 结果；不能续 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；任务不存在 → 404；计划文件读失败 → 409（detail 通用文案，全因只进服务端日志）——IO / 锁（`PlanIOError`，瞬时）在 worker 种子与轮内刷新处**容忍**：保住本轮计划 + warn，请求路径预检仍 409 可重试；内容损坏（`PlanError`，非 UTF-8）**严格**：轮判 FAILED |
 | PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 / 落盘失败 → 500（`{detail}`） |
-| GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4） | — | `text/event-stream` |
+| GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4）；auth 开启时可用 `?token=`（浏览器例外端点） | — | `text/event-stream` |
 | GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认 raw NDJSON：**stat 时前缀快照**流式返回（`StreamingResponse`，64KiB 分块、chunked 不声明长度）——任务跑着时 trace 仍在增长，流只发响应开始 `stat` 看到的那个 size 的字节，**无大小上限**、服务端零缓冲；文件被替换 / 截断则提前收尾，增长与缩短两个方向都不违约（语义 = 「raw = 请求时刻的前缀快照」，不是「当前整个文件」）；畸形行原样带出（回放面按设计跳过、导出身份依赖字节）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**（每行须为 JSON 对象且含 string `type` / object `data` / numeric `ts`；按 `\n` 切分）——**413 / 422 只属这个分支**（唯一有界读取，cap+1 字节）：超 `TRACE_MAX_BYTES`（8 MiB）→ 413（`detail` 明示 raw 形式无上限）；畸形行 → 422（`detail` 带行号）；非 UTF-8 → 422（文件级解码失败，无行号可给）。**探测时**读取失败（锁 / 权限）→ 500 通用 detail，全因只进服务端日志——raw 在探测**之后**失败（文件于探测与出流之间被删 / 被锁）= 响应中断、客户端拿到坏 body（服务端有日志），**不是**干净的 500：探测只缩窄窗口、不消除竞态；非法 `task_id` → 400（触碰文件系统之前），trace 关闭（`trace_enabled=false`）/ 任务不存在 / 无 trace → 404 |
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（最多返回前 200 KB，`truncated` 标记） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400；文件不存在 → 404；工作区不存在 → 409。404 的 `detail` 是 `task not found` 或 `file not found`，前端据此区分任务与文件消失（`frontend/src/lib/preview.ts`） |
-| GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件 | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
+| GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件；auth 开启时可用 `?token=`（`<a href>` 例外端点） | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
 | GET | `/api/models` | 模型目录的扁平兼容投影（旧字段 + `provider_id` / `protocol`，不含 Key） | — | `[public profile...]` |
 | POST | `/api/models` | 新建兼容档案（1:1 建 Provider + 模型条目，id 由名称派生） | `{name, base_url, model, api_key_env?}` | public profile；非法 → 400 |
 | PUT | `/api/models/{id}` | 更新兼容档案（名称/模型改条目，地址/环境变量名改其 Provider） | `{name?, base_url?, model?, api_key_env?}` | public profile；404/400 |

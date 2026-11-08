@@ -5,10 +5,14 @@ A small, dependency-free token service built on the standard library:
 * :class:`TokenIssuer` — issues HMAC-signed tokens
   ``{expires_ts}.{nonce}.{sig}`` and registers them in an in-memory store so
   verification is (signature + registration + expiry) based;
+* :class:`TokenIssuer` is **fail-closed**: an empty or placeholder secret
+  raises at construction instead of silently signing with a public value;
 * :func:`verify_token` — a FastAPI dependency that reads
-  ``Authorization: Bearer <token>`` (REST) or ``?token=<token>`` (SSE, since
-  ``EventSource`` cannot set headers). When ``auth_enabled=False`` it returns
-  ``"local"`` immediately — **zero regression** for the local demo.
+  ``Authorization: Bearer <token>`` (REST). A ``?token=<token>`` query
+  parameter is accepted **only** on the two browser-native GETs (SSE
+  ``/events`` and file ``/files/download``, where EventSource / ``<a href>``
+  cannot set headers). When ``auth_enabled=False`` it returns ``"local"``
+  immediately — **zero regression** for the local demo.
 
 Design decisions:
 
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 import threading
 import time
@@ -39,10 +44,23 @@ TOKEN_STORAGE_KEY = "lga_auth_token"
 
 
 class TokenIssuer:
-    """Issue and verify HMAC-signed, server-registered bearer tokens."""
+    """Issue and verify HMAC-signed, server-registered bearer tokens.
+
+    Fail-closed (D-45 / #271): an empty or placeholder secret raises instead of
+    falling back to the publicly documented placeholder. The startup guard
+    (:func:`ensure_startup_auth_configured`) is still the entrypoint check; this
+    constructor is the last line of defence so a future caller cannot silently
+    recreate the #254 bug.
+    """
 
     def __init__(self, secret: str, ttl_sec: int = 86400) -> None:
-        self._secret = (secret or PLACEHOLDER_AUTH_TOKEN).encode("utf-8")
+        cleaned = str(secret or "").strip()
+        if not cleaned or cleaned.lower() == PLACEHOLDER_AUTH_TOKEN.lower():
+            raise ValueError(
+                "TokenIssuer requires a non-empty, non-placeholder auth secret; "
+                "set a strong auth_token before enabling auth."
+            )
+        self._secret = cleaned.encode("utf-8")
         self._ttl_sec = max(1, int(ttl_sec))
         self._store: Dict[str, float] = {}  # token -> expires_at
         self._lock = threading.Lock()
@@ -91,6 +109,23 @@ class TokenIssuer:
         return n
 
 
+#: D-46 (#271): `?token=` is only for browser-native GETs that cannot set
+#: an Authorization header — EventSource (SSE) and ``<a href>`` navigation
+#: (download). Anchored full-path matches: ``/api/tasks/<id>/events-extra`` must
+#: NOT match. Paths include the ``/api`` router prefix.
+_QUERY_TOKEN_PATHS = (
+    re.compile(r"/api/tasks/[^/]+/events"),
+    re.compile(r"/api/tasks/[^/]+/files/download"),
+)
+
+
+def query_token_allowed(method: str, path: str) -> bool:
+    """True only for the two whitelisted browser-native GET endpoints."""
+    return method.upper() == "GET" and any(
+        pattern.fullmatch(path) for pattern in _QUERY_TOKEN_PATHS
+    )
+
+
 def verify_token(
     request: Request,
     authorization: Optional[str] = Header(default=None),
@@ -99,19 +134,30 @@ def verify_token(
     """FastAPI dependency guarding protected endpoints.
 
     * ``auth_enabled=False`` -> return ``"local"`` (passthrough, zero regress);
-    * otherwise read ``Authorization: Bearer`` or ``?token=`` and validate via
-      ``app.state.auth`` (:class:`TokenIssuer`); failures raise ``401``.
+    * otherwise: an ``Authorization: Bearer`` header is the REST contract and
+      always wins; ``?token=`` is read **only** when no Authorization header is
+      present and the request is a whitelisted browser-native GET (SSE /
+      download, D-46). Validation goes through ``app.state.auth``
+      (:class:`TokenIssuer`); any failure raises ``401``.
     """
     settings = getattr(request.app.state, "settings", None)
     if settings is None or not settings.auth_enabled:
+        # Known boundary (kept as-is, #271): a missing app.state.settings is
+        # only possible for a hand-assembled app without the lifespan, and it
+        # fails open exactly like auth_enabled=False. The real lifespan always
+        # sets it before any request is served.
         return "local"
     issuer: Optional[TokenIssuer] = getattr(request.app.state, "auth", None)
     if issuer is None:
         raise HTTPException(status_code=401, detail="auth not configured")
     raw: Optional[str] = None
-    if authorization and authorization.lower().startswith("bearer "):
-        raw = authorization[7:].strip()
-    elif token:
+    if authorization is not None:
+        # A present-but-malformed header does not fall back to ?token=: the
+        # REST face is header-only, so a bad header is a 401, not a downgrade.
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            raw = value.strip()
+    elif token is not None and query_token_allowed(request.method, request.url.path):
         raw = token.strip()
     if not raw or not issuer.verify(raw):
         raise HTTPException(status_code=401, detail="invalid or expired token")
