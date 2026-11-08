@@ -77,7 +77,9 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    restart_required 会与真相不一致）。写文件失败（IO / 权限 / 磁盘）与校验失败分开：
    校验错误 4xx 不落盘；写入失败 500（旧文件保持、unique 临时文件清理），并发 PUT 不共用
    固定临时名。`GET /api/plugins` 的 `active.tools` 是实际装配面（含 legacy 开关与已连接
-   的 MCP 动态工具），与 `TaskManager` 共用同一个 pure 派生 helper。
+   的 MCP 动态工具），与 `TaskManager` 共用同一个 pure 派生 helper。P4-3 补三预设 ×
+   overrides 的**面快照**、**文件配置的关闭面端到端**（schema / dispatch / 注入 / MCP /
+   子代理面）与文档对账——无新增决策；#67 到此交付完成（真机手测归 P5-1）。
 
 ## 与既有 ADR 的关系
 

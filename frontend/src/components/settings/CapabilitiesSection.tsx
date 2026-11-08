@@ -133,9 +133,10 @@ export function CapabilitiesSection() {
             size="sm"
             variant="outline"
             onClick={() => void refresh()}
-            disabled={loading}
+            disabled={loading || saving}
+            title={saving ? "保存中，稍后再试" : undefined}
           >
-            {loading ? "重试中…" : "重试"}
+            {loading ? "重试中…" : saving ? "保存中…" : "重试"}
           </Button>
         </div>
       )}

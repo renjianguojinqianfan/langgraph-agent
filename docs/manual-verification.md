@@ -1,4 +1,4 @@
-# 真模型网页验收（9 个场景）
+# 真模型网页验收（10 个场景）
 
 > 发布前 / 换供应商时**在网页端逐条手动跑**；CI 不跑真模型（ADR 0008「三笔账」2）。
 > 每条记录日期与所用配置名即可，不把模型名与时间写进 README（数字与型号必腐）。
@@ -47,6 +47,13 @@
    分别派一个子代理、调用一个 MCP 工具、搜一次网；再在一个任务中途切换模型并续说。
    判据：三条路径各成功一次（trace/步骤里有对应记录）；切换后下一条消息使用新配置（trace 的 `model_profile` 变化）。
 
+10. **预设对比（minimal vs full 同题，P5-1 使用）**
+    把 `data/plugins.json` 写成 `{"preset": "minimal", "overrides": {}}`（或设置页「能力」区选 minimal）并重启后台；
+    用同一道题执行一次任务；再改成 `{"preset": "full", "overrides": {}}` 重启，用同一道题执行第二次。
+    判据：两次任务都能完成；`GET /api/plugins` 的 `active` 面与页面展示一致（minimal 无 skills / web_search /
+    spawn_subagent / MCP 工具）；minimal 轮不出现被关闭工具的调用；切回 full 后工具面恢复。
+    **P4-3 只交付场景，未运行；P5-1 真机执行。**
+
 ## 结果记录
 
 | # | 日期 | 配置 / 模型 | 结果 | 证据 |
@@ -65,6 +72,7 @@
 | 6 | 2026-10-27 | 默认 | 通过（UI 部分）：A / B 两个工作区各自列表；「全部」按目录分组；从「全部」打开 A 续说，`a2.txt` 落在 A。CLI 交接步骤沿用 2026-10-22 证据，未重跑 | `scenario6.json` / `scenario6-*.png`，任务 `25c55dcc` / `f1477ef0` |
 | 7 | 2026-10-27 | 默认 | 通过：重启后历史仍在；停下任务续说 `a3.txt`；RUNNING 孤儿重启后转 INTERRUPTED，续说被接受并完成（6 步，回答 7 字） | `scenario7.json` / `scenario7-*.png`，任务 `25c55dcc` / `a940d160` |
 | B1 | 2026-10-27 | 坏 Key 档案（`B1_BAD_KEY`，env）→ 默认 | 通过：401 `invalid_api_key` → FAILED；失败态计划可编辑；切默认档案续说，同一任务完成、`error` 清空 | `b1-failed-continue.json` / `b1-failed.png` / `b1-plan-editable.png` / `b1-continued.png`，任务 `1da34aa6` |
+| 10 | 未运行 | — | 未运行（P4-3 交付场景；P5-1 真机执行 minimal vs full 同题） | — |
 
 > 证据根：2026-10-21 及更早轮次在 `docs/assets/verification/2026-10-21/`；2026-10-22 在 `2026-10-22/`；2026-10-27（新版界面 + B1）在 `docs/assets/verification/2026-10-27/`。JSON 只留任务/步骤/工具状态与脱敏摘录，不含 Key 与完整对话。
 > 场景 6 的 A/B 路径按后端记录的绝对路径核对（Windows 反斜杠），写入位置以文件系统实际落点为准。

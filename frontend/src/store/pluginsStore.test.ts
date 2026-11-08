@@ -188,4 +188,20 @@ describe("pluginsStore (#67 P4-2)", () => {
     expect(await first).toBe(true);
     expect(usePluginsStore.getState().saving).toBe(false);
   });
+
+  it("refresh is a no-op while a save is in flight（重试钮禁用有 store 依据）", async () => {
+    const pending = deferred<ApiResponse<PluginsData>>();
+    putPluginsMock.mockReturnValueOnce(pending.promise);
+    const saving = usePluginsStore.getState().save({ preset: "minimal", overrides: {} });
+
+    // Saving owns the snapshot: no GET starts and loading must not flicker.
+    await usePluginsStore.getState().refresh();
+    expect(getPluginsMock).not.toHaveBeenCalled();
+    expect(usePluginsStore.getState().loading).toBe(false);
+    expect(usePluginsStore.getState().saving).toBe(true);
+
+    pending.resolve(ok(minimalSnapshot(true)));
+    expect(await saving).toBe(true);
+    expect(usePluginsStore.getState().saving).toBe(false);
+  });
 });

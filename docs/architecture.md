@@ -53,7 +53,7 @@ backend/
 │   │                    bash.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
 │   ├── mcp/             MCP 客户端（stdio 现役；http 预留）
 │   ├── workspace_files.py  工作区文件可见性过滤（W3）
-│   └── capability_packages.py 能力包 / 预设静态声明与真关装配清单（#67 P4-1；ADR 0012）
+│   └── capability_packages.py 能力包 / 预设静态声明与真关装配清单（#67 P4；ADR 0012）
 ├── services/            task_manager.py 生命周期/worker/续说/续跑/事件 · event_bus.py
 │                        persistence.py tasks.json · plan_file.py 计划文件 · trace.py JSONL trace
 │                        model_store.py Provider/模型目录与凭据 · auth.py token 签发/校验
@@ -279,7 +279,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
   是否连 MCP + 是否影响子代理面）与三预设（`minimal` / `research` / `full`，默认 `full` =
   #67 前行为；`research` 当前与 `full` 同一面）。`TaskManager` 启动期解析包清单后按名单装配
   工具面与注入片段。**真关**：禁用包不实例化、不进 schema / dispatch、不加注入片段、不连 MCP。
-- **配置与生效**（#67 P4-2）：保存态是 `data/plugins.json` = `{preset, overrides}`（atomic 写；
+- **配置与生效**（#67 P4-2/P4-3）：保存态是 `data/plugins.json` = `{preset, overrides}`（atomic 写；
   `backend/services/plugins_store.py`）；设置页「能力」区 / `PUT /api/plugins` 写入，**重启后台
   生效**（不做热重载）。优先级：**CLI `--preset`（本次运行，不写文件）> `data/plugins.json`
   （文件存在即权威）> `PLUGINS_PRESET` env（仅文件缺失时回退）> `full`**。`overrides` 叠在
@@ -381,7 +381,7 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 - CI 三个 job（[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）：`backend-test`（ruff + mypy + pytest 离线全量）、`backend-windows-smoke`（Windows 敏感面）、`frontend-build`（`npm ci` → typecheck → `npm test` → `check:sse` → build；job 显示名沿用「Frontend typecheck & build」——分支保护锁定了这个 required check 的字符串）。
 - 本地权威命令：`.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q`、`-m ruff check backend scripts start.py`、`-m mypy`；前端 `npm run typecheck` / `npm run check:sse` / `npm run build`。
 - 文档链接门：`python scripts/check_doc_links.py`（只校验 tracked Markdown 的相对链接）。
-- 发布前 / 换供应商：按 [`docs/manual-verification.md`](manual-verification.md) 的 9 个场景启服务、在网页端手动跑一遍（CI 不跑真模型）。
+- 发布前 / 换供应商：按 [`docs/manual-verification.md`](manual-verification.md) 的 10 个场景启服务、在网页端手动跑一遍（CI 不跑真模型）。
 
 ---
 

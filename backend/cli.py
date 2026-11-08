@@ -222,7 +222,7 @@ def main(
 
     # D-54/D-55 (#67 P4-2): resolve data/plugins.json + the optional one-shot
     # --preset before the lock/claim and before spawning anything. Invalid file /
-    # preset is a readable non-zero exit, not a traceback from the child.
+    # preset is a readable non-zero exit, not a traceback from the serving app.
     from .services.plugins_store import (
         PLUGIN_PRESET_OVERRIDE_ENV,
         resolve_effective_plugins,
@@ -287,8 +287,9 @@ def main(
     try:
         os.environ["PORT"] = str(args.port)
         os.environ["QIANFAN_INSTANCE"] = instance
-        # One-shot preset travels to the web child through env (never written to
-        # data/plugins.json); the child resolves it as a CLI override.
+        # One-shot preset travels to the serving process through env (never
+        # written to data/plugins.json; uvicorn imports the app in this same
+        # process and resolves the env value as a CLI override).
         if args.preset:
             os.environ[PLUGIN_PRESET_OVERRIDE_ENV] = args.preset
         reset_settings()

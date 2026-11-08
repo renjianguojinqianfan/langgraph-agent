@@ -9,7 +9,7 @@
 
 - **最简 agent 一章（pi 式工具面、计划文件、一条命令启动，2026-10-22 已交付）**：[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)，切片 C1–C7 见 `docs/capability-registry-rescope.md` §0.9。现役以下面的「跨任务安全边界」表 + 代码为准。
 - **日常形态补充（启动目录即工作区、共用一个后台、多套模型配置，2026-10-22 已交付）**：[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)；实施记录见 `docs/specs/qianfan-daily-form-plan.md`（spec #166，切片 PR #167、#176–#187）。现役以下表 + 代码为准。
-- **插件 + 预设（能力包 / 全局组合，2026-11-08 起 P4-1/P4-2）**：[ADR 0012](docs/adr/0012-plugin-packages-and-presets.md)；P4-1 交付静态 manifest + 装配 + 三预设真关，P4-2 交付 `data/plugins.json` + 设置页「能力」区 + `GET/PUT /api/plugins` + `qianfan --preset`。现役以下表 + 代码为准。
+- **插件 + 预设（能力包 / 全局组合，2026-11-08 P4 三片已交付）**：[ADR 0012](docs/adr/0012-plugin-packages-and-presets.md)；P4-1 静态 manifest + 装配 + 三预设真关，P4-2 `data/plugins.json` + 设置页「能力」区 + `GET/PUT /api/plugins` + `qianfan --preset`，P4-3 面快照 + 文件配置关闭面端到端 + 文档对账。现役以下表 + 代码为准。
 - **本文件面向外部开发 agent**（改这个仓库时读）。
 - **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md`（`Task.workspace`；旧任务为 `data/artifacts`）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py` + `backend/core/runtime_context.py`。
 
@@ -27,7 +27,7 @@
 | 质量门禁 | `ruff check backend scripts start.py` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
 | 测试隔离 | 离线测试不受本地 `.env` 影响；`conftest.py` 顶部把 `DATA_DIR` / `ARTIFACTS_DIR` / `TRACE_DIR` / `CHECKPOINT_DIR` 指到检出外的临时根（**assign，不是 `setdefault`**），并把 pytest 自己的临时根钉到同一处；模块级 `TestClient` 的 lifespan 不写仓库 `data/`（#252；**接受「进程级重定向 + 会话级守卫」而非逐用例 `create_app` 注入**）；会话守卫只比对套件会碰的面（`tasks.json` / `models.json` / `logs` / `traces` / `checkpoints`）并禁止增删 `data/` 顶层条目（#264 N1）；**跑离线套件时不要同时开后台服务**（并发写入会污染守卫快照）；其余离线覆盖块（`setdefault` 语义）保持原样；SDK **自读**的 LangSmith / LangChain 开关与 Key 另由同文件的 pop 块摘除（#84）；langgraph 的 `LANGGRAPH_STRICT_MSGPACK` 同样在 import 前 pop（#212）——「离线全绿」不靠开发者 shell 恰好没设变量 | `backend/tests/conftest.py` 顶部（代码即权威）+ `test_test_isolation.py`、`test_langsmith_offline_guard.py`、`test_strict_msgpack_guard.py` |
 | 依赖面 | 三包同钉；新依赖需说明理由；抬版走独立 chore + 人工评估（含 Dependabot 自动抬版）；`langchain*` 保持零钉版；uvicorn 区间不动，starlette 显式钉 `>=1.3.1,<2`（覆盖 2026 同批 CVE，修复线 1.3.1，见 #198）；`qianfan` 的安装入口只多一个 build 期 setuptools，运行期依赖仍只以 `requirements.txt` 为源，mcp 的 `uvicorn>=0.31.1` 元数据用根目录 `overrides.txt` 覆盖（区间不变） | `requirements.txt` 注释 + `pyproject.toml` 头注 |
-| 真实模型验证 | 发布前 / 换供应商时，按 [9 个场景](docs/manual-verification.md) **启服务、在网页端手动跑一遍**（CI 不再跑真模型）；README **不记**跑过的时间与模型 | `docs/manual-verification.md` + [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
+| 真实模型验证 | 发布前 / 换供应商时，按 [10 个场景](docs/manual-verification.md) **启服务、在网页端手动跑一遍**（CI 不再跑真模型）；README **不记**跑过的时间与模型 | `docs/manual-verification.md` + [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)「三笔账」2 |
 | 提交边界 | 副作用可逆或事先说明；提交只含本次意图内的源码与文档（`.env` / `data/` / `frontend/dist` 是本地态）；`push --force` 类默认拒绝 | `.gitignore` + 全局 `~/.agents/AGENTS.md` |
 | 发布与合并惯例 | 功能 / 依赖 / 代码走 PR + CI 全绿；docs 小修可直推；依赖类 PR 先人工评估 | `docs/agents/issue-tracker.md`「Release conventions」 |
 

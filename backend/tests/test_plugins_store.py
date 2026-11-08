@@ -331,7 +331,9 @@ def test_build_runtime_rejects_an_invalid_file(tmp_path):
     assert str(path) in str(excinfo.value)
 
 
-def test_cli_web_valid_preset_reaches_the_child_env(tmp_path, monkeypatch):
+def test_cli_web_valid_preset_reaches_the_serving_process_env(
+    tmp_path, monkeypatch
+):
     settings = _cli_settings(tmp_path, monkeypatch)
     port = _free_port()
     previous = os.environ.pop(PLUGIN_PRESET_OVERRIDE_ENV, None)
