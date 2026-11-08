@@ -38,7 +38,6 @@ from ..core.capability_packages import (
     injection_fragments,
     mcp_package_enabled,
     package_for_tool,
-    resolve_packages,
     subagent_package_enabled,
     validate_packages,
 )
@@ -61,6 +60,7 @@ from . import plan_file
 from .event_bus import EventBus
 from .model_store import IMPLEMENTED_PROTOCOLS, PROTOCOL_OPENAI, ModelStore
 from .persistence import Persistence, PersistenceError
+from .plugins_store import EffectivePluginsConfig, resolve_effective_plugins
 from .trace import TraceRecorder
 
 if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
@@ -201,6 +201,7 @@ class TaskManager:
         model_store: Optional[ModelStore] = None,
         llm_factory: Optional[Callable[[Any, str], LLMClient]] = None,
         packages: Optional[frozenset[str]] = None,
+        plugins: Optional[EffectivePluginsConfig] = None,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
@@ -222,14 +223,21 @@ class TaskManager:
         #: The (profile, client) a round is pinned to; subagents inherit it.
         self._round_models: Dict[str, tuple[str, LLMClient]] = {}
         # D-53/D-56 (#67): global capability-package combination, resolved once
-        # at manager construction. `packages` is the embedding/test seam; the
-        # production path resolves the settings preset here, so an unknown
+        # at manager construction. Precedence: explicit `packages` (test seam) >
+        # the runtime's resolved `plugins` config (file/CLI) > resolve from
+        # settings here (direct constructions, P4-1 compatibility). An unknown
         # preset fails startup instead of mounting a half face.
-        self.packages: frozenset[str] = (
-            validate_packages(packages)
-            if packages is not None
-            else resolve_packages(settings.plugins_preset)
-        )
+        self.plugins_config: Optional[EffectivePluginsConfig]
+        if packages is not None:
+            self.packages = validate_packages(packages)
+            self.plugins_config = plugins
+        elif plugins is not None:
+            self.packages = plugins.packages
+            self.plugins_config = plugins
+        else:
+            resolved = resolve_effective_plugins(settings)
+            self.packages = resolved.packages
+            self.plugins_config = resolved
         self.injection_fragments = injection_fragments(self.packages)
         enabled_names = enabled_tool_names(self.packages)
         if tools is None:

@@ -119,6 +119,16 @@ def _repl_entry(argv: list[str]) -> int:
     return repl_main(argv)
 
 
+def _argv_preset(argv: list[str]) -> Optional[str]:
+    """Extract a --preset value from unparsed args (repl dispatch pre-check)."""
+    for index, arg in enumerate(argv):
+        if arg == "--preset" and index + 1 < len(argv):
+            return argv[index + 1]
+        if arg.startswith("--preset="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def _open_at(port: int, no_browser: bool, browser: Callable[[str], None]) -> None:
     url = f"http://{HOST}:{port}/?dir={quote(os.getcwd())}"
     if not no_browser:
@@ -164,20 +174,22 @@ def main(
     except RuntimeError as exc:
         print(f"[qianfan] {exc}")
         return 1
-    # D-55 (#67): unknown capability preset fails at startup, before anything
-    # claims the single-backend lock or touches data/.
-    from .core.capability_packages import resolve_packages
-
-    try:
-        resolve_packages(settings.plugins_preset)
-    except ValueError as exc:
-        print(f"[qianfan] {exc}")
-        return 1
     if raw_argv and raw_argv[0] == "repl":
-        # D-48 (#20): qianfan repl is the terminal session; the default
-        # command still serves the web UI. Dispatch lives after the startup
-        # guards so an unknown preset fails before the REPL can claim a lock.
-        return (repl or _repl_entry)(raw_argv[1:])
+        # D-48 (#20): qianfan repl is the terminal session; the default command
+        # still serves the web UI. Validate the saved file + the repl --preset
+        # here too (the repl sub-parser repeats it) so a bad config fails before
+        # the seam can claim a lock or spawn anything.
+        repl_args = raw_argv[1:]
+        from .services.plugins_store import resolve_effective_plugins
+
+        try:
+            resolve_effective_plugins(
+                settings, preset_override=_argv_preset(repl_args)
+            )
+        except ValueError as exc:
+            print(f"[qianfan] {exc}")
+            return 1
+        return (repl or _repl_entry)(repl_args)
     dist: Path = settings.frontend_dist_path
     browser: Callable[[str], None] = open_browser or _open_browser
     handoff_browser = open_browser or _open_browser_now
@@ -194,10 +206,32 @@ def main(
     )
     parser.add_argument("--port", type=int, default=settings.port)
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser window")
+    parser.add_argument(
+        "--preset",
+        default=None,
+        help=(
+            "one-shot capability preset for this run "
+            "(minimal | research | full; not written to data/plugins.json)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not 1 <= args.port <= 65535:
         print(f"[qianfan] 端口必须在 1–65535 之间：{args.port}")
+        return 1
+
+    # D-54/D-55 (#67 P4-2): resolve data/plugins.json + the optional one-shot
+    # --preset before the lock/claim and before spawning anything. Invalid file /
+    # preset is a readable non-zero exit, not a traceback from the child.
+    from .services.plugins_store import (
+        PLUGIN_PRESET_OVERRIDE_ENV,
+        resolve_effective_plugins,
+    )
+
+    try:
+        resolve_effective_plugins(settings, preset_override=args.preset)
+    except ValueError as exc:
+        print(f"[qianfan] {exc}")
         return 1
 
     # D-48 (#20): a terminal REPL holds the lock with mode="repl" but serves no
@@ -219,6 +253,8 @@ def main(
     # live instance instead of starting a second writer of tasks.json.
     running = server_lock.find_running(lock_file, probe=probe_health)
     if running is not None:
+        if args.preset:
+            print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
         return _handoff(running, args.no_browser, handoff_browser)
 
     if not (dist / "index.html").is_file():
@@ -242,6 +278,8 @@ def main(
         # Lost a race with another launcher: hand off to the winner.
         running = server_lock.find_running(lock_file, probe=probe_health)
         if running is not None:
+            if args.preset:
+                print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
             return _handoff(running, args.no_browser, handoff_browser)
         print(f"[qianfan] 后台可能正在启动或登记记录损坏（{lock_file}），请稍后再试。")
         return 1
@@ -249,6 +287,10 @@ def main(
     try:
         os.environ["PORT"] = str(args.port)
         os.environ["QIANFAN_INSTANCE"] = instance
+        # One-shot preset travels to the web child through env (never written to
+        # data/plugins.json); the child resolves it as a CLI override.
+        if args.preset:
+            os.environ[PLUGIN_PRESET_OVERRIDE_ENV] = args.preset
         reset_settings()
 
         # D-42 (#259): the launcher entry checks the same invariant as the

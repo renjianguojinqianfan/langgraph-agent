@@ -733,7 +733,7 @@ def test_subagent_face_flag_matches_the_fixed_tier_membership():
         ), package.id
 
 
-def test_preset_field_is_a_hard_attribute_not_a_silent_fallback():
+def test_preset_field_is_a_hard_attribute_not_a_silent_fallback(tmp_path):
     """MEDIUM-2: an absent field must raise, not fall back to full."""
     offenders = []
     for relative in (
@@ -751,8 +751,10 @@ def test_preset_field_is_a_hard_attribute_not_a_silent_fallback():
             offenders.append(relative)
     assert offenders == []
 
+    # data_path exists but the preset field does not: the resolver must raise on
+    # the missing attribute instead of silently using full.
     with pytest.raises(AttributeError, match="plugins_preset"):
-        build_runtime(SimpleNamespace())
+        build_runtime(SimpleNamespace(data_path=tmp_path))
 
 
 def test_child_subtask_inherits_packages_and_injection_fragments(tmp_path, monkeypatch):

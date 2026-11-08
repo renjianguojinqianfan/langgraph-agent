@@ -26,7 +26,6 @@ from starlette.staticfiles import StaticFiles
 from . import server_lock
 from .api.routes import router
 from .config import Settings, ensure_loopback_host, get_settings
-from .core.capability_packages import resolve_packages
 from .runtime import build_runtime, model_key_is_missing
 from .services.auth import (
     TokenIssuer,
@@ -34,6 +33,7 @@ from .services.auth import (
     ensure_startup_auth_configured,
 )
 from .services.persistence import PersistenceError
+from .services.plugins_store import resolve_effective_plugins
 from .utils.logging import get_logger, install_access_log_redaction
 
 logger = get_logger("main")
@@ -113,8 +113,10 @@ def create_app(settings: Settings) -> FastAPI:
     # D-45 (#271): the entrypoint guard is reusable (cli / REPL call it too);
     # calling it here keeps the create_app test seam on the same contract.
     ensure_startup_auth_configured(settings)
-    # D-55 (#67): unknown preset / bad capability config fails at startup.
-    resolve_packages(settings.plugins_preset)
+    # D-54/D-55 (#67 P4-2): resolve data/plugins.json (CLI > file > env > full)
+    # at composition time; an invalid file / preset fails startup with a
+    # readable path + fix hint rather than mounting a half capability face.
+    resolve_effective_plugins(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -165,6 +167,10 @@ def create_app(settings: Settings) -> FastAPI:
             else None
         )
         app.state.task_manager = runtime.task_manager
+        # #67 P4-2: GET/PUT /api/plugins compare the running configuration with
+        # the saved file; the running one is frozen for this process.
+        app.state.plugins_active = runtime.plugins
+        app.state.plugins_saved = runtime.plugins.saved
         # D-44 (#259): startup posture, not client construction -- warn only
         # when no model entry can actually serve a call.
         warn_if_no_usable_model_key(settings, runtime.task_manager.models)

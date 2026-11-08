@@ -51,11 +51,12 @@ class Settings(BaseSettings):
     # ── Agent / orchestration ──
     max_steps: int = 15  # max agent LLM calls per round (P0-1; #139 resets per round)
 
-    # ── Capability packages / presets (#67 P4-1; global, restart to apply) ──
-    # full = pre-#67 behaviour (all packages). minimal = files+bash;
-    # research = files+bash+skills+web-search+subagent+mcp (D-55). P4-2 adds
-    # data/plugins.json + settings UI; until then this env/field is the only
-    # explicit path. Unknown preset fails startup.
+    # ── Capability packages / presets (#67; global, restart to apply) ──
+    # Saved config: data/plugins.json (settings page / PUT /api/plugins).
+    # This env/field is only the fallback when that file is missing (P4-1
+    # compatibility); a CLI --preset wins for one run. full = pre-#67
+    # behaviour; minimal = files+bash; research = files+bash+skills+
+    # web-search+subagent+mcp. Unknown preset / package ids fail startup.
     plugins_preset: str = "full"
 
     # ── Bash tool ──

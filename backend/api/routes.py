@@ -37,6 +37,16 @@ from ..services.model_store import (
 )
 from ..services.persistence import PersistenceError
 from ..services.plan_file import PlanError
+from ..services.plugins_store import (
+    EffectivePluginsConfig,
+    PluginsConfigError,
+    load_plugins_config,
+    packages_catalog,
+    presets_catalog,
+    resolve_effective_plugins,
+    restart_required,
+    save_plugins_config,
+)
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
 from .schemas import (
@@ -47,6 +57,7 @@ from .schemas import (
     ModelCreateRequest,
     ModelKeyRequest,
     ModelUpdateRequest,
+    PluginsUpdateRequest,
     ProviderCreateRequest,
     ProviderModelCreateRequest,
     ProviderModelUpdateRequest,
@@ -1023,3 +1034,74 @@ def mcp_servers(request: Request, _auth: str = Depends(verify_token)) -> ApiResp
             ]
         }
     )
+
+
+# ── #67 P4-2: capability packages / presets ──
+def _plugins_data(
+    settings, saved, active: EffectivePluginsConfig
+) -> dict:
+    """The GET/PUT /api/plugins data shape (contract shared with the frontend)."""
+    packages = packages_catalog()
+    return {
+        "presets": presets_catalog(),
+        "packages": packages,
+        "saved": {"preset": saved.preset, "overrides": dict(saved.overrides)},
+        "active": {
+            "preset": active.preset,
+            "overrides": dict(active.overrides),
+            "packages": [
+                package["id"]
+                for package in packages
+                if package["id"] in active.packages
+            ],
+            "tools": [
+                tool
+                for package in packages
+                for tool in package["tools"]
+                if tool in active.tools
+            ],
+        },
+        "restart_required": restart_required(active, saved),
+    }
+
+
+def _active_plugins(request: Request):
+    active = getattr(request.app.state, "plugins_active", None)
+    if active is not None:
+        return active
+    # Test apps that inject a manager directly may not run the lifespan state
+    # assignment; fall back to resolving the same config the manager used.
+    return resolve_effective_plugins(request.app.state.settings)
+
+
+@router.get("/plugins")
+def get_plugins(request: Request, _auth: str = Depends(verify_token)) -> ApiResponse:
+    """Current capability configuration: catalogue + saved file + active face."""
+    settings = request.app.state.settings
+    try:
+        saved = load_plugins_config(settings)
+        active = _active_plugins(request)
+    except PluginsConfigError as exc:
+        # The running process is fine, but an external edit broke the file.
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return _envelope(data=_plugins_data(settings, saved, active))
+
+
+@router.put("/plugins")
+def put_plugins(
+    payload: PluginsUpdateRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Validate + persist a new preset/overrides; runtime changes need restart."""
+    settings = request.app.state.settings
+    try:
+        saved = save_plugins_config(settings, payload.preset, dict(payload.overrides))
+    except PluginsConfigError as exc:
+        # Validation happens before the write: a 4xx never touches the file.
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    try:
+        active = _active_plugins(request)
+    except PluginsConfigError as exc:  # pragma: no cover - valid file just written
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return _envelope(data=_plugins_data(settings, saved, active))
