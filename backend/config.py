@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     # This chapter is local-only: loopback listener + the app's own origins.
     host: str = "127.0.0.1"
     port: int = 8000
+    #: D-42 / #259: startup single-backend guard. Tests and embedded runs must
+    #: disable it explicitly (conftest test factory does); production keeps it
+    #: on and never relies on detecting the test runner.
+    single_backend_guard_enabled: bool = True
     # Built frontend served by `qianfan` (ADR 0010); relative to PROJECT_ROOT.
     frontend_dist: str = "frontend/dist"
     cors_origins: str = (
@@ -200,6 +204,30 @@ class Settings(BaseSettings):
             if own not in origins:
                 origins.append(own)
         return origins
+
+
+#: D-43 / #259: the only hosts this chapter may bind. Everything else is
+#: refused at startup with a readable reason instead of silently listening on
+#: an interface the security model does not cover (ADR 0010 decision 6).
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def ensure_loopback_host(settings: Settings) -> None:
+    """Refuse a non-loopback `host` at startup (#259 D-43).
+
+    The chapter is local-only: the Host check, CORS own-origin list and the
+    "not a security boundary" posture all assume a loopback listener. A
+    `host=0.0.0.0` would expose every endpoint (including pasted model keys'
+    call paths) to the LAN while those assumptions still say localhost.
+    """
+    host = str(getattr(settings, "host", "") or "").strip().lower()
+    if host in LOOPBACK_HOSTS:
+        return
+    raise RuntimeError(
+        f"host={host!r} 不是本机回环地址；本章只支持本机访问"
+        "（127.0.0.1 / localhost / ::1）。远程访问不在本章范围，"
+        "请把 host 改回 127.0.0.1。"
+    )
 
 
 @lru_cache

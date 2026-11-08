@@ -161,6 +161,15 @@ os.environ.setdefault("CONTEXT_EVICT_ENABLED", "false")  # T1.4: isolate tool-re
 # C4: a developer's local frontend/dist must not change the app composition
 # (CI has no build output). Tests that need a dist build their own app.
 os.environ.setdefault("FRONTEND_DIST", "_no_frontend_dist_for_tests")
+# #259 D-42: the single-backend startup guard is production posture. The test
+# suite disables it through the explicit Settings switch (never by detecting
+# pytest); guard tests build Settings directly, where it defaults on. Assign,
+# not setdefault: an exported true must not put the module-level app on a real
+# single-instance lock during the suite.
+os.environ["SINGLE_BACKEND_GUARD_ENABLED"] = "false"
+# #259 D-43: the app refuses a non-loopback host at composition time. Pin the
+# host so an exported HOST=0.0.0.0 (or a local .env) cannot fail collection.
+os.environ["HOST"] = "127.0.0.1"
 
 # ── LangSmith tracing is off for the offline suite (Issue #84) ──
 # The block above zeroes *this repo's* settings; it cannot zero what the SDK
@@ -298,6 +307,11 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         # Explicit: a developer's CHECKPOINT_DIR must not leak one sqlite file
         # into every test that opts into checkpoints.
         checkpoint_dir="",
+        # #259: the startup single-backend guard is production posture; the test
+        # factory disables it explicitly (never "detect pytest"). Tests for the
+        # guard build Settings directly with the default (on). Host stays
+        # loopback so create_app's D-43 check passes.
+        single_backend_guard_enabled=False,
         llm_provider="deepseek",
         llm_base_url="",
         llm_model="deepseek-chat",

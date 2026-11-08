@@ -208,3 +208,76 @@ def find_running(
         if time.monotonic() >= deadline:
             return None  # still booting: keep the record
         time.sleep(interval)
+
+
+def ensure_single_backend(
+    settings: Any,
+    *,
+    probe: Callable[[int, float], Optional[Dict[str, Any]]] = probe_health,
+    wait: float = 1.0,
+    instance: Optional[str] = None,
+) -> Optional[ServerLock]:
+    """D-42 (#259): startup guard — never serve beside a different live backend.
+
+    The caller's own identity comes from `QIANFAN_INSTANCE` (set by `cli` /
+    `start.py`). When the recorded instance is ours we return immediately
+    instead of probing our own health: `find_running` would otherwise wait for
+    a server that is this very process, i.e. "waiting on ourselves".
+
+    A different live instance raises (the app is expected to fail startup; the
+    launcher `cli` treats the same condition as a handoff). A manual
+    `uvicorn backend.main:app` has no instance id: it is refused while anything
+    runs, and the caller only warns about the missing id when nothing runs.
+    """
+    lock_file = lock_path(settings)
+    own = instance if instance is not None else os.environ.get("QIANFAN_INSTANCE", "")
+    record = read_lock(lock_file)
+    if record is not None and own and record.instance == own:
+        return record
+    running = find_running(lock_file, probe=probe, wait=wait)
+    if running is None:
+        return None
+    if own and running.instance == own:
+        return running
+    raise RuntimeError(
+        f"已有后台在 http://127.0.0.1:{running.port}/ 运行；"
+        "同一台机器只允许一个后台写 data/。请直接打开现有页面，"
+        "或先停掉它（关掉启动它的终端）；手动 uvicorn 请改用 qianfan。"
+    )
+
+
+def update_lock_pid(path: Path, instance: str, pid: int) -> bool:
+    """D-42 (#259): swap the launcher pid for the real backend pid.
+
+    `start.py` claims the record *before* spawning uvicorn (so no second
+    launcher can slip a writer in during the boot gap), then rewrites the pid
+    once the child exists. False means the record was lost or taken over; the
+    launcher must back out instead of running unregistered.
+    """
+    lock = read_lock(path)
+    if lock is None or lock.instance != instance:
+        return False
+    updated = ServerLock(
+        pid=pid,
+        port=lock.port,
+        started_at=lock.started_at,
+        instance=lock.instance,
+        mode=lock.mode,
+    )
+    path = Path(path)
+    temp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(updated.to_dict(), handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass

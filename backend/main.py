@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,8 +23,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 
+from . import server_lock
 from .api.routes import router
-from .config import Settings, get_settings
+from .config import Settings, ensure_loopback_host, get_settings
 from .services.auth import (
     TokenIssuer,
     auth_state_message,
@@ -47,6 +49,35 @@ logger.info(auth_state_message(settings))
 # so any other Host name is refused before routing. Independent of
 # ``settings.host`` on purpose — this chapter does not support remote access.
 TRUSTED_HOSTS = ["127.0.0.1", "localhost"]
+
+
+def warn_if_no_usable_model_key(settings: Settings, store: Any) -> bool:
+    """D-44 (#259): warn once when the startup posture has no usable model key.
+
+    The old warning lived in the client constructor and keyed off the global
+    `llm_api_key`, so it fired even when a pasted key existed (and told people
+    to write `.env`). The real source of truth is the model store: the default
+    model's `key_source` (pasted / env / none) plus whether *any* entry has a
+    key. Warn only when nothing can serve a call, and point at the settings
+    page / provider env var -- never at `.env`. Returns whether it warned.
+    """
+    if settings.use_mock_llm:
+        return False
+    snapshot = store.list_public()
+    default_id = str(snapshot.get("default") or "")
+    models = list(snapshot.get("models") or [])
+    default = next((m for m in models if m.get("id") == default_id), None)
+    default_source = str((default or {}).get("key_source") or "none")
+    any_key = any(bool(m.get("key_set")) for m in models)
+    if default is not None and (default_source != "none" or any_key):
+        return False
+    logger.warning(
+        "没有可用的模型 Key：默认模型 %r 的来源是 none，且没有任何模型条目配过 Key。"
+        "请在设置页给对应 Provider 粘贴 Key，或设置它配置的环境变量"
+        "（如 LLM_API_KEY）；任务在真正调用模型时才会失败，启动不会代填。",
+        default_id or "(无默认模型)",
+    )
+    return True
 
 
 def mount_frontend(app: FastAPI, dist: Path) -> bool:
@@ -73,8 +104,38 @@ def create_app(settings: Settings) -> FastAPI:
     CORSMiddleware is added first, TrustedHost last (= outermost).
     """
 
+    # D-43 (#259): refuse a non-loopback bind before any side effect. This
+    # also covers `uvicorn backend.main:app`, because the module-level app is
+    # built through this function at import time.
+    ensure_loopback_host(settings)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # D-42 (#259): single-backend guard before touching data/. The launcher
+        # passes its identity through `QIANFAN_INSTANCE`, which is what stops
+        # this guard from "waiting on ourselves"; a hand-started uvicorn has no
+        # id and is refused while any other backend runs.
+        if settings.single_backend_guard_enabled:
+            own_instance = os.environ.get("QIANFAN_INSTANCE", "")
+            try:
+                server_lock.ensure_single_backend(settings)
+            except RuntimeError as exc:
+                logger.error("%s", exc)
+                raise
+            if not own_instance:
+                logger.warning(
+                    "未通过 qianfan / start.py 启动（缺少 QIANFAN_INSTANCE 实例标识）："
+                    "本次按手动开发模式放行，单后台守卫只在 qianfan / start.py 下生效。"
+                )
+            elif not server_lock.update_lock_pid(
+                server_lock.lock_path(settings), own_instance, os.getpid()
+            ):
+                # The launcher's record vanished mid-boot: keep serving, but say
+                # so -- a second launcher would otherwise think nobody is home.
+                logger.warning(
+                    "单实例记录已被接管：本次启动未登记 pid（instance=%s）",
+                    own_instance,
+                )
         settings.data_path.mkdir(parents=True, exist_ok=True)
         settings.artifacts_path.mkdir(parents=True, exist_ok=True)
         app.state.settings = settings
@@ -88,6 +149,9 @@ def create_app(settings: Settings) -> FastAPI:
             app.state.persistence,
             default_workspace=Path.cwd(),
         )
+        # D-44 (#259): startup posture, not client construction -- warn only
+        # when no model entry can actually serve a call.
+        warn_if_no_usable_model_key(settings, app.state.task_manager.models)
         yield
         # P2 item 1: gracefully shut down MCP child processes on app exit so no
         # stdio subprocess survives the server. #260: the shutdown path itself
