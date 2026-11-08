@@ -26,14 +26,13 @@ from starlette.staticfiles import StaticFiles
 from . import server_lock
 from .api.routes import router
 from .config import Settings, ensure_loopback_host, get_settings
+from .runtime import build_runtime, model_key_is_missing
 from .services.auth import (
     TokenIssuer,
     auth_state_message,
     ensure_startup_auth_configured,
 )
-from .services.event_bus import EventBus
-from .services.persistence import Persistence, PersistenceError
-from .services.task_manager import TaskManager
+from .services.persistence import PersistenceError
 from .utils.logging import get_logger, install_access_log_redaction
 
 logger = get_logger("main")
@@ -70,18 +69,9 @@ def warn_if_no_usable_model_key(settings: Settings, store: Any) -> bool:
     key. Warn only when nothing can serve a call, and point at the settings
     page / provider env var -- never at `.env`. Returns whether it warned.
     """
-    if settings.use_mock_llm:
+    if not model_key_is_missing(settings, store):
         return False
-    snapshot = store.list_public()
-    default_id = str(snapshot.get("default") or "")
-    models = list(snapshot.get("models") or [])
-    default = next((m for m in models if m.get("id") == default_id), None)
-    default_source = str((default or {}).get("key_source") or "none")
-    any_key = any(bool(m.get("key_set")) for m in models)
-    # Any usable key anywhere is enough (L1: the old default-is-None shortcut
-    # warned even when another entry demonstrably had a key).
-    if default_source != "none" or any_key:
-        return False
+    default_id = str(store.list_public().get("default") or "")
     logger.warning(
         "没有可用的模型 Key：默认模型 %r 的来源是 none，且没有任何模型条目配过 Key。"
         "请在设置页给对应 Provider 粘贴 Key，或设置它配置的环境变量"
@@ -157,11 +147,13 @@ def create_app(settings: Settings) -> FastAPI:
                         "单实例记录已被接管：本次启动未登记 pid（instance=%s）",
                         own_instance,
                     )
-        settings.data_path.mkdir(parents=True, exist_ok=True)
-        settings.artifacts_path.mkdir(parents=True, exist_ok=True)
+        # D-48 (#20): the EventBus / Persistence / TaskManager wiring is the
+        # same seam the terminal REPL uses (backend/runtime.py). Auth issuance
+        # stays here: the REPL never serves tokens and must not couple to it.
+        runtime = build_runtime(settings)
         app.state.settings = settings
-        app.state.event_bus = EventBus()
-        app.state.persistence = Persistence(settings)
+        app.state.event_bus = runtime.event_bus
+        app.state.persistence = runtime.persistence
         # P1 item 5 / D-45: the issuer exists only when auth is enabled; the
         # dependency returns "local" before it ever reads app.state.auth.
         app.state.auth = (
@@ -169,15 +161,10 @@ def create_app(settings: Settings) -> FastAPI:
             if settings.auth_enabled
             else None
         )
-        app.state.task_manager = TaskManager(
-            settings,
-            app.state.event_bus,
-            app.state.persistence,
-            default_workspace=Path.cwd(),
-        )
+        app.state.task_manager = runtime.task_manager
         # D-44 (#259): startup posture, not client construction -- warn only
         # when no model entry can actually serve a call.
-        warn_if_no_usable_model_key(settings, app.state.task_manager.models)
+        warn_if_no_usable_model_key(settings, runtime.task_manager.models)
         yield
         # P2 item 1: gracefully shut down MCP child processes on app exit so no
         # stdio subprocess survives the server. #260: the shutdown path itself
@@ -185,7 +172,7 @@ def create_app(settings: Settings) -> FastAPI:
         # file as well, not only stdout.
         logger.info("app shutdown: releasing task manager resources")
         try:
-            app.state.task_manager.shutdown()
+            runtime.task_manager.shutdown()
         except Exception:  # pragma: no cover - defensive
             logger.exception("task_manager.shutdown failed")
 
