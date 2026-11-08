@@ -222,6 +222,33 @@ def test_start_refuses_when_a_backend_is_registered(monkeypatch):
     assert start._refuse_if_running(Settings(_env_file=None)) is False
 
 
+def test_start_refuses_a_running_repl_without_probing(tmp_path, monkeypatch, capsys):
+    """D-48 (#20): a live mode=repl record refuses start.py before find_running.
+
+    The REPL serves no /health, so the 15s boot wait would otherwise block
+    start.py; the record check must answer immediately and never call probe.
+    """
+    import start
+
+    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
+    lock_file = server_lock.lock_path(settings)
+    assert server_lock.claim_lock(
+        lock_file,
+        _lock(port=settings.port, instance="repl-live", mode="repl"),
+    )
+    probed: list = []
+
+    def fake_running_server(_settings):
+        probed.append(True)
+        return None
+
+    monkeypatch.setattr(start, "_running_server", fake_running_server)
+
+    assert start._refuse_if_running(settings) is True
+    assert probed == []
+    assert "关终端会停任务" in capsys.readouterr().out
+
+
 def test_find_running_clears_a_dead_record(tmp_path):
     path = tmp_path / "data" / "server.json"
     server_lock.claim_lock(path, _lock(pid=999_999))

@@ -55,8 +55,10 @@ qianfan repl
 Rich/TUI；**思考块（reasoning）只在网页端显示，终端当前不显示**——不要预期终端出现模型思考过程。
 
 - **与网页后台互斥**：终端会话写 `data/server.json`（`mode=repl`），`qianfan` / `python start.py`
-  在它跑着时拒绝启动；反过来网页或开发后台在跑时 `qianfan repl` 也拒绝。**关掉终端 = 任务停下**
-  （退出走 `TaskManager.shutdown()` 释放后台线程与锁；停下后可在网页/下次会话续说）。
+  在它跑着时拒绝启动；反过来网页或开发后台在跑时 `qianfan repl` 也拒绝。锁由 REPL 退出路径的
+  `finally` 释放；关闭终端时**正在跑的任务不是优雅 stop**——进程退出后它不会继续跑，下次启动
+  按孤儿对账归为 INTERRUPTED（停下），可续说 / 续跑；`TaskManager.shutdown()` 只释放后台线程与
+  进程内资源，不是任务停止语义。
 - **启动守卫复用**：与网页入口同一套（`auth_enabled` 校验、回环 host 校验、单实例锁），
   `auth_enabled=true` 时 REPL 同样先过启动校验，不另开旁路。
 - **编码**：入口把 stdout/stderr `reconfigure(encoding="utf-8", errors="replace")`（有

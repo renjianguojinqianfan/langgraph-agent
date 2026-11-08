@@ -175,7 +175,14 @@ def main(
     probe_health = probe or server_lock.probe_health
     lock_file = server_lock.lock_path(settings)
 
-    parser = argparse.ArgumentParser(prog="qianfan", description="Run qianfan and open it in the browser")
+    parser = argparse.ArgumentParser(
+        prog="qianfan",
+        description="Run qianfan and open it in the browser",
+        epilog=(
+            "qianfan repl — start the terminal session instead "
+            "(no browser, no uvicorn)."
+        ),
+    )
     parser.add_argument("--port", type=int, default=settings.port)
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser window")
     args = parser.parse_args(argv)
