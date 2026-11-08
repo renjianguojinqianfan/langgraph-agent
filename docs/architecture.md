@@ -25,7 +25,7 @@
 | 存储 | sqlite（checkpoint）+ JSON（任务/模型档案）+ JSONL（trace） | `data/` 为运行态、不入库；Key 在仓库外（`~/.qianfan/credentials.json` 或环境变量） |
 | 通信 | REST + **SSE**（单向事件流） | SSE 事件词汇表是本仓最强的机械契约（§3.4） |
 
-**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），两者互斥（`backend/server_lock.py`）。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；手动 uvicorn 在有后台时被拒）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
+**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），两者互斥（`backend/server_lock.py`）。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；`--reload` 下锁保持 supervisor pid；pid 活但 `/health` 未就绪视为「启动中」而非空闲；**无实例标识的手动 uvicorn 一律拒绝**）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝；`::1` 的健康探针与 `TrustedHost` 用方括号形态）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
 
 ---
 
@@ -334,7 +334,7 @@ python start.py --install     # 开发：先按 CI 同口径装后端依赖（�
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
 ```
 
-一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn）。手工 `uvicorn backend.main:app` 在没有后台时按开发模式放行并告警（无 `QIANFAN_INSTANCE`），有后台时启动即拒并指引用 `qianfan`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`。
+一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
 
 `frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示先构建。
 

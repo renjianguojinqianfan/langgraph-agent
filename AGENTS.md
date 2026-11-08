@@ -69,9 +69,9 @@
 # 设计 token 镜像（改 DESIGN.md 或 frontend/src/index.css 必跑；pre-commit 钩子 design-token-mirror 同一条）
 .\.venv311\Scripts\python.exe scripts\check_design_tokens.py
 
-# 真实模型验证（发布前 / 换模型）：启服务、在网页端手动跑一遍（CI 不再跑真模型）
-.\.venv311\Scripts\python.exe -m uvicorn backend.main:app --port 8000 --reload
-cd frontend; npm run dev
+# 真实模型验证（发布前 / 换模型）：用 qianfan / start.py 启服务，在网页端手动跑一遍（CI 不再跑真模型）
+# 手工 uvicorn backend.main:app 会被启动守卫拒绝（无 QIANFAN_INSTANCE，会绕过单后台/host/Key 守卫，#259）
+.\.venv311\Scripts\python.exe start.py
 
 # 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm test → npm run check:sse → npm run build
 npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.node.json  # 本地快检，双项目 0 错误

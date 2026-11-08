@@ -4,6 +4,8 @@
 > 每条记录日期与所用配置名即可，不把模型名与时间写进 README（数字与型号必腐）。
 > 结果表的「证据」列只写仓库内路径；证据根是 `docs/assets/verification/<日期>/`（截图 + 脱敏结果 JSON）。
 > 前置：`frontend` 已构建、`qianfan` 能启动、`~/.qianfan/credentials.json` 或环境变量里有可用 Key。
+> 启服务统一用 `qianfan`（或开发态 `python start.py`）；**不要手工 `uvicorn backend.main:app`**——
+> 没有 `QIANFAN_INSTANCE` 实例标识会被启动守卫拒绝（会绕过单后台 / host / Key 守卫，#259）。
 
 ## 场景与判据
 
