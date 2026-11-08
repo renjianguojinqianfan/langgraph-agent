@@ -8,7 +8,7 @@ the REPL and its tests stay light and an embedded runner can reuse it too.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -52,6 +52,9 @@ def build_runtime(
         default_workspace=Path.cwd(),
         plugins=plugins,
     )
+    # #308 M1: expose the actually assembled tool face (legacy gates + dynamic
+    # MCP tools included), not just the manifest's static package names.
+    plugins = replace(plugins, tools=task_manager.assembled_tool_names)
     return Runtime(
         settings=settings,
         event_bus=event_bus,

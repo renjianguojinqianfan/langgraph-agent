@@ -47,6 +47,21 @@ function ok(data: PluginsData): ApiResponse<PluginsData> {
   return { code: 0, message: "ok", data };
 }
 
+/** A snapshot for the minimal preset (used as the PUT answer). */
+function minimalSnapshot(restartRequired: boolean): PluginsData {
+  const base = pluginsData(restartRequired);
+  return {
+    ...base,
+    saved: { preset: "minimal", overrides: {} },
+    active: {
+      preset: "minimal",
+      overrides: {},
+      packages: ["files", "bash"],
+      tools: ["read", "write", "bash"],
+    },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   usePluginsStore.setState({
@@ -120,6 +135,43 @@ describe("pluginsStore (#67 P4-2)", () => {
     expect(state.data?.saved.preset).toBe("full");
     expect(state.saveError).toContain("未知 preset");
     expect(state.saving).toBe(false);
+  });
+
+  it("#308 M2: a slow GET cannot overwrite a successful PUT", async () => {
+    const staleGet = deferred<ApiResponse<PluginsData>>();
+    getPluginsMock.mockReturnValueOnce(staleGet.promise);
+    putPluginsMock.mockResolvedValue(ok(minimalSnapshot(true)));
+
+    const refreshing = usePluginsStore.getState().refresh(); // starts, pending
+    expect(await usePluginsStore.getState().save({ preset: "minimal", overrides: {} })).toBe(true);
+    expect(usePluginsStore.getState().data?.saved.preset).toBe("minimal");
+    expect(usePluginsStore.getState().data?.restart_required).toBe(true);
+
+    // The old GET resolves after the PUT: it must be discarded entirely.
+    staleGet.resolve(ok(pluginsData(false)));
+    await refreshing;
+
+    const state = usePluginsStore.getState();
+    expect(state.data?.saved.preset).toBe("minimal");
+    expect(state.data?.active.packages).toEqual(["files", "bash"]);
+    expect(state.data?.restart_required).toBe(true);
+    expect(state.loading).toBe(false);
+  });
+
+  it("#308 L4: a successful save clears a stale load error", async () => {
+    getPluginsMock.mockResolvedValue({
+      code: 1,
+      detail: "load blew up",
+    } as unknown as ApiResponse<PluginsData>);
+    await usePluginsStore.getState().refresh();
+    expect(usePluginsStore.getState().error).toContain("load blew up");
+
+    putPluginsMock.mockResolvedValue(ok(pluginsData(true)));
+    expect(await usePluginsStore.getState().save({ preset: "full", overrides: {} })).toBe(true);
+
+    const state = usePluginsStore.getState();
+    expect(state.error).toBe("");
+    expect(state.data?.restart_required).toBe(true);
   });
 
   it("refuses a second save while one is in flight", async () => {

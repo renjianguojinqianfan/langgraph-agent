@@ -108,7 +108,9 @@ agent ──有 tool call──> tool ──> agent
   `qianfan repl --preset <id>`（终端），不写文件。优先级：**CLI（本次运行）> data/plugins.json
   （文件存在即权威）> PLUGINS_PRESET 环境变量（仅文件缺失时回退）> 默认 full**。关掉的包是
   **真关**：不实例化、不进 schema / dispatch / 注入、不连 MCP（不承诺模块不被 import）；
-  子代理实际面 = 固定 tier ∩ 已启用包。未知 preset / 包 id 启动即错（文件错误会指出路径与修法）。
+  子代理实际面 = 固定 tier ∩ 已启用包。未知 preset / 包 id 启动即错（文件错误会指出路径与修法）；
+  **CLI 一次性覆盖不豁免坏文件**——§data/plugins.json§ 非法时，即使带 §--preset§ 也启动即错
+  （文件仍是权威配置，不允许静默绕过；先删除或修好文件）。
 - **失败回传**：工具调用只执行一次（不自动重试、不熔断）；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩。
 - **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（bash 写的也在），文本预览、流式下载；**列表只是可见性过滤，preview / download 仍可点名被忽略的文件**；撤销靠 git。

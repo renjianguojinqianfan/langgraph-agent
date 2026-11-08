@@ -8,11 +8,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.core.tools.base import BaseTool, ToolResult
 from backend.main import create_app
+from backend.services import plugins_store
 from backend.services.plugins_store import (
     PLUGIN_PRESET_OVERRIDE_ENV,
     plugins_path,
 )
+from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
 
 ALL_PACKAGE_IDS = ["files", "bash", "skills", "web-search", "subagent", "mcp"]
@@ -62,6 +65,9 @@ def test_get_plugins_returns_catalogue_saved_and_active(client):
     assert set(data["active"]["packages"]) == set(ALL_PACKAGE_IDS)
     assert "read" in data["active"]["tools"]
     assert "spawn_subagent" in data["active"]["tools"]
+    # MCP children are disabled here (conftest default), so no dynamic MCP tool
+    # name exists on the assembled face yet — only manifest names are listed.
+    assert "mcp_fetch" not in data["active"]["tools"]
     assert data["restart_required"] is False
 
 
@@ -168,3 +174,60 @@ def test_cli_override_only_marks_restart_until_the_file_matches(
         )
         assert response.status_code == 200
         assert _data(response)["restart_required"] is False
+
+
+# ── #308 M1: active.tools is the assembled face, not the static manifest ──
+def test_active_tools_respect_the_legacy_subagent_switch(tmp_path):
+    settings = make_settings(tmp_path, subagent_enabled=False)
+    app = create_app(settings)
+    with TestClient(app, base_url="http://localhost") as test_client:
+        data = _data(test_client.get("/api/plugins"))
+        assert "spawn_subagent" not in data["active"]["tools"]
+        # The package is still on; only the legacy switch removed the tool.
+        assert "subagent" in data["active"]["packages"]
+        assert "read" in data["active"]["tools"]
+
+
+def test_active_tools_include_connected_mcp_tools(tmp_path, monkeypatch):
+    class _DynamicMcpTool(BaseTool):
+        name = "mcp_fetch"
+        description = "dynamic MCP tool"
+        args_schema = {}
+
+        def run(self, **kwargs):
+            return ToolResult(success=True, data="ok")
+
+    def fake_load_mcp(self, settings):
+        # Same seam a real connection appends through; no subprocess in tests.
+        self._tools.append(_DynamicMcpTool(settings))
+
+    monkeypatch.setattr(TaskManager, "_load_mcp_tools", fake_load_mcp)
+    settings = make_settings(tmp_path)
+    app = create_app(settings)
+    with TestClient(app, base_url="http://localhost") as test_client:
+        data = _data(test_client.get("/api/plugins"))
+        assert "mcp_fetch" in data["active"]["tools"]
+        assert "read" in data["active"]["tools"]
+
+
+# ── #308 M3: write failures are 500 and leave the old file in place ──
+def test_put_write_failure_is_500_and_preserves_the_file(client, monkeypatch):
+    test_client, settings = client
+    first = test_client.put(
+        "/api/plugins", json={"preset": "minimal", "overrides": {}}
+    )
+    assert first.status_code == 200
+    path = plugins_path(settings)
+    before = path.read_text(encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(plugins_store.os, "replace", boom)
+    response = test_client.put(
+        "/api/plugins", json={"preset": "research", "overrides": {}}
+    )
+    assert response.status_code == 500
+    assert "保存失败" in response.json()["detail"]
+    assert path.read_text(encoding="utf-8") == before
+    assert list(path.parent.glob("plugins.json.*.tmp")) == []

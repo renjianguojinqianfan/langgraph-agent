@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -35,7 +37,7 @@ from ..core.capability_packages import (
     PACKAGE_IDS,
     PACKAGES,
     PRESETS,
-    enabled_tool_names,
+    mounted_tool_names,
     preset_names,
     resolve_packages,
 )
@@ -50,6 +52,14 @@ PLUGINS_FILE_NAME = "plugins.json"
 
 class PluginsConfigError(ValueError):
     """Unreadable / invalid plugins configuration (readable startup error)."""
+
+
+class PluginsWriteError(Exception):
+    """Persisting data/plugins.json failed (IO, not validation).
+
+    Kept separate from PluginsConfigError so the API can answer 500
+    (server/disk problem) instead of 400 (the caller's payload was invalid).
+    """
 
 
 @dataclass(frozen=True)
@@ -189,19 +199,34 @@ def save_plugins_config(
     )
     path = plugins_path(settings)
     payload = {"preset": preset, "overrides": clean_overrides}
-    tmp = path.with_name(f"{path.name}.tmp")
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    # Unique temp file per writer: a fixed temp name would let two concurrent
+    # PUTs clobber each other's partial write.
+    tmp: Optional[Path] = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent)
         )
-        os.replace(tmp, path)
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        try:
+            os.replace(tmp, path)
+        except PermissionError:
+            # Windows: a concurrent PUT can hold the target open for a moment.
+            # Same bounded retry as Persistence._dump.
+            time.sleep(0.05)
+            os.replace(tmp, path)
     except OSError as exc:
-        tmp.unlink(missing_ok=True)
-        raise PluginsConfigError(
-            f"无法写入能力包配置 {path}：{exc}. 修法：确认 data/ 可写后重试；"
-            "正在运行的组合不受本次写入影响，重启后台才生效。"
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:  # pragma: no cover - best-effort cleanup
+                pass
+        raise PluginsWriteError(
+            f"保存失败：{exc}；旧文件未被修改（{path}）。"
+            "修法：确认 data/ 可写 / 磁盘空间后重试。"
         ) from None
     return SavedPluginsConfig(preset=preset, overrides=clean_overrides, exists=True)
 
@@ -245,7 +270,12 @@ def resolve_effective_plugins(
         preset=preset.strip(),
         overrides=overrides,
         packages=packages,
-        tools=enabled_tool_names(packages),
+        # Static face after the legacy gates. The web app replaces this with the
+        # actually assembled face (dynamic MCP tools included) once the
+        # TaskManager exists; see Runtime.plugins / GET /api/plugins active.
+        tools=mounted_tool_names(
+            packages, subagent_enabled=settings.subagent_enabled
+        ),
         source=source,
         saved=saved,
     )

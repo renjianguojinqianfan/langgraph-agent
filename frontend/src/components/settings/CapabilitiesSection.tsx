@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   activeFaceSummary,
   buildPluginsPayload,
@@ -11,10 +11,12 @@ import {
   presetPackages,
   restartNotice,
   setOverride,
+  shouldAdoptSnapshot,
   type OverrideState,
   type PluginsDraft,
 } from "../../lib/plugins";
 import { usePluginsStore } from "../../store/pluginsStore";
+import type { PluginConfigured, PluginsData } from "../../types";
 import { Button } from "../ui/Button";
 import { Segmented } from "../ui/Segmented";
 
@@ -49,6 +51,10 @@ export function CapabilitiesSection() {
 
   const [draft, setDraft] = useState<PluginsDraft | null>(null);
   const baseId = useId();
+  // #308 M2: the saved config the draft was seeded from (dirty detection) and
+  // the latest draft for the snapshot-adoption effect.
+  const baseRef = useRef<PluginConfigured | null>(null);
+  const draftRef = useRef<PluginsDraft | null>(null);
 
   // The section mounts on every settings open (the dialog unmounts its content
   // while closed), so a plain mount-time GET is the fresh-on-reopen rule.
@@ -57,8 +63,22 @@ export function CapabilitiesSection() {
   }, [refresh]);
 
   useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  const adopt = (snapshot: PluginsData) => {
+    baseRef.current = snapshot.saved;
+    setDraft(pluginsDraftFrom(snapshot.saved, snapshot.packages));
+  };
+
+  // A late or refreshed snapshot may only replace a clean draft: while the user
+  // has unsaved edits, adopting would silently throw those away. The active
+  // face / restart hint still re-render from the store data either way.
+  useEffect(() => {
     if (!data) return;
-    setDraft(pluginsDraftFrom(data.saved, data.packages));
+    if (!shouldAdoptSnapshot(baseRef.current, draftRef.current)) return;
+    adopt(data);
+    // adopt is render-scoped; data is the only trigger that matters here.
   }, [data]);
 
   const edit = () => clearSaveNotes();
@@ -78,7 +98,12 @@ export function CapabilitiesSection() {
 
   const saveDraft = async () => {
     if (!draft || saving) return;
-    await save(buildPluginsPayload(draft));
+    const ok = await save(buildPluginsPayload(draft));
+    if (!ok) return;
+    // The PUT response is authoritative: re-seed the draft from it so the
+    // save button's dirty check is measured against the new saved config.
+    const fresh = usePluginsStore.getState().data;
+    if (fresh) adopt(fresh);
   };
 
   return (
@@ -119,23 +144,17 @@ export function CapabilitiesSection() {
         <>
           <div className="flex flex-col gap-1.5">
             <span className="text-meta font-semibold text-secondary">预设</span>
-            <div
-              className={
-                saving ? "pointer-events-none opacity-50" : undefined
-              }
-              aria-disabled={saving || undefined}
-            >
-              <Segmented
-                options={data.presets.map((preset) => ({
-                  value: preset.id,
-                  label: presetLabel(preset.id),
-                  title: `${preset.id}：${preset.packages.join("、") || "无能力包"}`,
-                }))}
-                value={draft.preset}
-                onChange={choosePreset}
-                label="能力预设"
-              />
-            </div>
+            <Segmented
+              options={data.presets.map((preset) => ({
+                value: preset.id,
+                label: presetLabel(preset.id),
+                title: `${preset.id}：${preset.packages.join("、") || "无能力包"}`,
+              }))}
+              value={draft.preset}
+              onChange={choosePreset}
+              label="能力预设"
+              disabled={saving}
+            />
             <span className="text-machine text-tertiary">
               预设包含：
               {presetPackages(data.presets, draft.preset).join("、") || "无能力包"}

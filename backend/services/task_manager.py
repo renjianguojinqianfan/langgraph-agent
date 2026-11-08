@@ -37,6 +37,7 @@ from ..core.capability_packages import (
     enabled_tool_names,
     injection_fragments,
     mcp_package_enabled,
+    mounted_tool_names,
     package_for_tool,
     subagent_package_enabled,
     validate_packages,
@@ -273,6 +274,21 @@ class TaskManager:
             self._tools = [t for t in self._tools if t.name != "spawn_subagent"]
         self._tool_schemas = [t.to_openai_schema() for t in self._tools]
         self._wire_injected_tools()
+        # #308 M1: the actually assembled face. Built from the same pure helper
+        # (/api/plugins reads this via Runtime.plugins), then intersected with
+        # the tools really present, so legacy gates and dynamically mounted MCP
+        # tools are reflected exactly.
+        actual_names = {tool.name for tool in self._tools}
+        mounted = mounted_tool_names(
+            self.packages,
+            subagent_enabled=self._subagent_enabled,
+            extra_names=(
+                name for name in actual_names if package_for_tool(name) is None
+            ),
+        )
+        self.assembled_tool_names: frozenset[str] = frozenset(
+            name for name in mounted if name in actual_names
+        )
         # #145: dead rules never fire — the same silent-loss family as a broken
         # table, one rule wide. The mount face is stable at manager construction
         # (MCP appended, subagent switch applied), so check it once here;

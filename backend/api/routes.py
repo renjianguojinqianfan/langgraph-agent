@@ -40,6 +40,7 @@ from ..services.plan_file import PlanError
 from ..services.plugins_store import (
     EffectivePluginsConfig,
     PluginsConfigError,
+    PluginsWriteError,
     load_plugins_config,
     packages_catalog,
     presets_catalog,
@@ -1054,15 +1055,30 @@ def _plugins_data(
                 for package in packages
                 if package["id"] in active.packages
             ],
-            "tools": [
-                tool
-                for package in packages
-                for tool in package["tools"]
-                if tool in active.tools
-            ],
+            "tools": _active_tools(active.tools, packages),
         },
         "restart_required": restart_required(active, saved),
     }
+
+
+def _active_tools(
+    assembled: frozenset[str], packages: list[dict]
+) -> list[str]:
+    """Manifest order first, then dynamically mounted names (e.g. MCP tools).
+
+    The assembled face is authoritative (#308 M1); dynamic tool names have no
+    package entry, so they are appended after the static ones instead of being
+    dropped by the package loop.
+    """
+    static = [
+        tool
+        for package in packages
+        for tool in package["tools"]
+        if tool in assembled
+    ]
+    seen = set(static)
+    dynamic = sorted(name for name in assembled if name not in seen)
+    return [*static, *dynamic]
 
 
 def _active_plugins(request: Request):
@@ -1097,6 +1113,9 @@ def put_plugins(
     settings = request.app.state.settings
     try:
         saved = save_plugins_config(settings, payload.preset, dict(payload.overrides))
+    except PluginsWriteError as exc:
+        # Storage / permission / disk failure: a server-side 500, not a 400.
+        raise HTTPException(status_code=500, detail=str(exc)) from None
     except PluginsConfigError as exc:
         # Validation happens before the write: a 4xx never touches the file.
         raise HTTPException(status_code=400, detail=str(exc)) from None

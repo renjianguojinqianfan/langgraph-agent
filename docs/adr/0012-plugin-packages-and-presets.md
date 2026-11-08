@@ -71,7 +71,12 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    `restart_required`（saved 的 preset/overrides 与 active 不同）；§PUT§ 校验后写
    文件并返回同形状，未知 preset / 包 id → 4xx 且不写。非法文件 / preset 在
    `create_app` / `build_runtime` / CLI / REPL / `start.py` 启动期报可读错误
-   （含 `data/plugins.json` 路径与修法），不静默回退 `full`。
+   （含 `data/plugins.json` 路径与修法），不静默回退 `full`。**CLI `--preset` 不豁免坏
+   文件**：文件非法时即使带一次性覆盖也启动即错（文件是权威配置，绕过后 API 的 saved /
+   restart_required 会与真相不一致）。写文件失败（IO / 权限 / 磁盘）与校验失败分开：
+   校验错误 4xx 不落盘；写入失败 500（旧文件保持、unique 临时文件清理），并发 PUT 不共用
+   固定临时名。`GET /api/plugins` 的 `active.tools` 是实际装配面（含 legacy 开关与已连接
+   的 MCP 动态工具），与 `TaskManager` 共用同一个 pure 派生 helper。
 
 ## 与既有 ADR 的关系
 
@@ -112,6 +117,8 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
   安全边界」的定位一起重估；不在本仓近期计划。
 - **热重载能力组合**：需要工具面 / 注入块从任务级快照改成可热切换对象，且明确
   半途切换对 schema / 上下文的语义，另开票。
-- **更多预设 / 自定义 preset**：由 P4-2 的 `custom + overrides` 覆盖；若仍需命名
-  预设，扩展 `PRESETS` 并同步本 ADR 与文档。
+- **更多预设 / 自定义 preset**：P4-2 的承载面是**三预设 + `overrides`**（`custom`
+  未实现，本 ADR 未将其定为长期方向）。要新增命名预设：扩展 `PRESETS` 并同步本 ADR、
+  `capability_packages.py` 与文档。要支持任意 `custom` 组合：另开票先定 schema
+  （`preset` 字段是否接受 `"custom"`、与 overrides 的关系）与设置页交互，再实施。
 - **未知 preset 降级为警告**：不重开；启动即错是 D-55 的机械保障。

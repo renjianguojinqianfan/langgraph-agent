@@ -14,6 +14,7 @@ from backend import cli, repl, server_lock
 from backend.core.capability_packages import (
     DEFAULT_PRESET,
     enabled_tool_names,
+    mounted_tool_names,
 )
 from backend.core.llm.client import MockLLMClient
 from backend.services.event_bus import EventBus
@@ -22,6 +23,7 @@ from backend.services.persistence import Persistence
 from backend.services.plugins_store import (
     PLUGIN_PRESET_OVERRIDE_ENV,
     PluginsConfigError,
+    PluginsWriteError,
     load_plugins_config,
     packages_catalog,
     plugins_path,
@@ -470,6 +472,90 @@ def test_start_rejects_an_invalid_file_before_claim_or_spawn(
     code = start.main()
     assert code == 2
     assert actions == []
+    out = capsys.readouterr().out
+    assert str(path) in out
+    assert "修法" in out
+
+
+# ── #308 M1: the effective/assembled face follows the legacy gates ──
+def test_mounted_tool_names_helper_covers_gates_and_dynamic_names():
+    full = mounted_tool_names(ALL_PACKAGES)
+    assert "spawn_subagent" in full
+    gated = mounted_tool_names(ALL_PACKAGES, subagent_enabled=False)
+    assert "spawn_subagent" not in gated
+    dynamic = mounted_tool_names(
+        ALL_PACKAGES, extra_names={"mcp_fetch"}
+    )
+    assert "mcp_fetch" in dynamic
+
+
+def test_effective_tools_respect_the_legacy_subagent_switch(tmp_path):
+    settings = make_settings(tmp_path, plugins_preset="full", subagent_enabled=False)
+    effective = resolve_effective_plugins(settings)
+    assert effective.packages == ALL_PACKAGES
+    assert "spawn_subagent" not in effective.tools
+    assert "read" in effective.tools
+
+
+def test_runtime_plugins_expose_the_actually_assembled_face(tmp_path):
+    from backend.runtime import build_runtime
+
+    settings = make_settings(tmp_path, subagent_enabled=False)
+    runtime = build_runtime(settings)
+    try:
+        # Legacy gate removed the tool from the manager; the API-facing effective
+        # config must not claim it either.
+        assert "spawn_subagent" not in runtime.plugins.tools
+        assert runtime.plugins.tools == runtime.task_manager.assembled_tool_names
+        assert "spawn_subagent" not in runtime.task_manager.assembled_tool_names
+    finally:
+        runtime.task_manager.shutdown()
+
+
+# ── #308 M3/L2: write IO errors vs validation errors, unique temp files ──
+def test_write_io_error_preserves_the_old_file_and_cleans_tmp(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    save_plugins_config(settings, "minimal", {})
+    path = plugins_path(settings)
+    before = path.read_text(encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(PluginsWriteError, match="保存失败"):
+        save_plugins_config(settings, "research", {})
+
+    assert path.read_text(encoding="utf-8") == before
+    assert list(path.parent.glob("plugins.json.*.tmp")) == []
+
+
+def test_concurrent_saves_use_unique_temp_files(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    settings = make_settings(tmp_path)
+    presets = ["minimal", "research", "full"] * 4
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda preset: save_plugins_config(settings, preset, {}), presets))
+
+    path = plugins_path(settings)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["preset"] in {"minimal", "research", "full"}
+    assert list(path.parent.glob("plugins.json.*.tmp")) == []
+
+
+def test_cli_preset_does_not_exempt_a_broken_file(tmp_path, monkeypatch, capsys):
+    settings = _cli_settings(tmp_path, monkeypatch)
+    path = _write_raw(settings, "{broken")
+    served: List[Any] = []
+    code = cli.main(
+        ["--preset", "minimal"],
+        serve=lambda host, port: served.append((host, port)),
+        when_ready=lambda url, port: None,
+    )
+    assert code == 1
+    assert served == []
+    assert not server_lock.lock_path(settings).exists()
     out = capsys.readouterr().out
     assert str(path) in out
     assert "修法" in out

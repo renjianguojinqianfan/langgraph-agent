@@ -13,6 +13,7 @@ import {
   presetPackages,
   restartNotice,
   setOverride,
+  shouldAdoptSnapshot,
   type PluginsDraft,
 } from "./plugins";
 
@@ -118,6 +119,20 @@ describe("effective package face (backend active is the authority)", () => {
     expect(effectivePackageEnabled(["files", "bash"], "files")).toBe(true);
     expect(effectivePackageEnabled(["files", "bash"], "mcp")).toBe(false);
     expect(effectivePackageEnabled([], "files")).toBe(false);
+  });
+});
+
+describe("shouldAdoptSnapshot (dirty draft wins over a late snapshot)", () => {
+  const base = { preset: "full", overrides: {} };
+
+  it("adopts when there is no draft yet or the draft is clean", () => {
+    expect(shouldAdoptSnapshot(null, null)).toBe(true);
+    expect(shouldAdoptSnapshot(base, draft())).toBe(true);
+  });
+
+  it("keeps unsaved edits when the draft is dirty", () => {
+    expect(shouldAdoptSnapshot(base, setOverride(draft(), "mcp", "off"))).toBe(false);
+    expect(shouldAdoptSnapshot(base, changePreset(draft(), "minimal"))).toBe(false);
   });
 });
 

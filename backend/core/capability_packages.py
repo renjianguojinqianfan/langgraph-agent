@@ -21,7 +21,7 @@ promised — only instantiation / wiring is.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Mapping, Optional, Tuple
+from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
 
 #: Injection fragment ids a package may contribute to the system prompt.
 INJECTION_SKILLS = "skills"
@@ -136,6 +136,27 @@ def enabled_tool_names(packages: FrozenSet[str]) -> FrozenSet[str]:
     names: set[str] = set()
     for package_id in packages:
         names.update(PACKAGE_BY_ID[package_id].tools)
+    return frozenset(names)
+
+
+def mounted_tool_names(
+    packages: FrozenSet[str],
+    *,
+    subagent_enabled: bool = True,
+    extra_names: Iterable[str] = (),
+) -> FrozenSet[str]:
+    """The static face after the legacy gates TaskManager also applies.
+
+    Single rule for "what package tools are advertised": the enabled packages'
+    tool names, minus spawn_subagent when the legacy subagent switch is off, plus
+    dynamically mounted names (e.g. connected MCP tools). TaskManager and the
+    /api/plugins active face both derive from this helper; the manager then
+    intersects it with the tools it really built.
+    """
+    names = set(enabled_tool_names(packages))
+    if not subagent_enabled:
+        names.discard("spawn_subagent")
+    names.update(extra_names)
     return frozenset(names)
 
 

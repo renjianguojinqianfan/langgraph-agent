@@ -105,6 +105,18 @@ export function pluginsDirty(
   );
 }
 
+/** Whether a server snapshot may replace the form draft. A dirty draft keeps
+ * the user's unsaved edits (the new snapshot still drives the active face /
+ * restart hint, which are read straight from the store); only a clean or absent
+ * draft adopts it (#308 M2 ③). */
+export function shouldAdoptSnapshot(
+  base: PluginConfigured | null,
+  draft: PluginsDraft | null
+): boolean {
+  if (!draft || !base) return true;
+  return !pluginsDirty(base, draft);
+}
+
 /** Whether a package is in the backend's active face. The backend already
  * computed preset ∩ overrides; the page must NOT re-derive that rule — it only
  * tests membership in `active.packages` (source of truth). */
