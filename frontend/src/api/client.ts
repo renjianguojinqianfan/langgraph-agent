@@ -10,6 +10,8 @@ import {
   ModelParamsUpdate,
   ModelProfile,
   ModelsData,
+  PluginsData,
+  PluginsSaveRequest,
   Provider,
   ProviderCreateRequest,
   ProvidersData,
@@ -26,6 +28,24 @@ export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ??
 function detailText(r: unknown): string {
   const detail = (r as { detail?: unknown })?.detail;
   if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    // FastAPI 422: `detail` is a list of {type, loc, msg, input} objects. The
+    // readable copy lives in `msg`; several failed fields are joined so a
+    // validation error never degrades to the generic "操作失败" (#308 LOW④).
+    const parts: string[] = [];
+    for (const item of detail) {
+      if (typeof item === "string" && item) {
+        parts.push(item);
+        continue;
+      }
+      if (item && typeof item === "object") {
+        const record = item as { msg?: unknown; message?: unknown };
+        const text = typeof record.msg === "string" ? record.msg : record.message;
+        if (typeof text === "string" && text) parts.push(text);
+      }
+    }
+    if (parts.length > 0) return parts.join("；");
+  }
   const message = (r as { message?: unknown })?.message;
   return typeof message === "string" && message !== "ok" ? message : "";
 }
@@ -343,6 +363,18 @@ export const discoverProviderModels = (id: string) =>
     `/providers/${encodeURIComponent(id)}/models/discover`,
     { method: "POST" }
   );
+
+// ── #67 P4-2: plugin packages / presets (data/plugins.json) ──
+// GET returns the presets, package manifest, the saved file and the backend's
+// active face; PUT validates + writes the file and answers with the same shape
+// (restart_required tells the page a restart is still needed).
+export const getPlugins = () => req<PluginsData>("/plugins");
+
+export const putPlugins = (body: PluginsSaveRequest) =>
+  req<PluginsData>("/plugins", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 
 // ── P1 item 5: auth ──
 export type LoginAttempt = StatusResult<AuthTokenResponse>;

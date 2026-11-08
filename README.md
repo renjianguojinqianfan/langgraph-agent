@@ -99,12 +99,18 @@ agent ──有 tool call──> tool ──> agent
 
 - **工具**：沙箱文件读写（`read` / `write` / `edit` / `ls` / `glob` / `grep`）、`bash`（工作区根、环境白名单、可配超时、停止收进程树含调用返回后的后台进程）、`web_search`（搜索源 `duckduckgo` / `serpapi` / `exa`；国内网络下 duckduckgo 可能不可达，设 `search_provider=exa` 并导出 `EXA_API_KEY`）、MCP（子进程只继承白名单环境变量：**环境变量里的** LLM / 云 Key 不会被继承；文件仍可读，见「这不是安全边界」；额外变量用 `mcp_servers[].env` 显式声明）。
 - **子 agent**：`spawn_subagent` 单入口，`explore` / `execute` 两档，工具面只能收窄。
-- **能力包与预设（#67 P4-1，ADR 0012）**：工具面与注入面按能力包声明（`files` / `bash` /
+- **能力包与预设（#67，ADR 0012）**：工具面与注入面按能力包声明（`files` / `bash` /
   `skills` / `web-search` / `subagent` / `mcp`），全局预设三档：`minimal`（files+bash）、
-  `research`（files+bash+skills+web-search+subagent+mcp）、`full`（全部，**默认 = 现行为**）。
-  关掉的包是**真关**：不实例化、不进 schema / dispatch、不加注入片段、不连 MCP（不承诺模块不被
-  import）；子代理实际面 = 固定 tier ∩ 已启用包。本片只有 `plugins_preset`（环境变量
-  `PLUGINS_PRESET`，重启生效）；`data/plugins.json`、设置页与 `qianfan --preset` 在 P4-2。
+  `research`（files+bash+skills+web-search+subagent+mcp，当前与 full 同一面）、`full`（全部，
+  **默认 = 原行为**）。保存的配置在 `data/plugins.json`：`{preset, overrides}`，overrides 叠在
+  preset 上（true 强制开 / false 强制关），由设置页「能力」区或 `PUT /api/plugins` 写入，
+  **重启后台生效**。一次性覆盖用 `qianfan --preset <id>`（网页后台）或
+  `qianfan repl --preset <id>`（终端），不写文件。优先级：**CLI（本次运行）> data/plugins.json
+  （文件存在即权威）> PLUGINS_PRESET 环境变量（仅文件缺失时回退）> 默认 full**。关掉的包是
+  **真关**：不实例化、不进 schema / dispatch / 注入、不连 MCP（不承诺模块不被 import）；
+  子代理实际面 = 固定 tier ∩ 已启用包。未知 preset / 包 id 启动即错（文件错误会指出路径与修法）；
+  **CLI 一次性覆盖不豁免坏文件**——`data/plugins.json` 非法时，即使带 `--preset` 也启动即错
+  （文件仍是权威配置，不允许静默绕过；先删除或修好文件）。
 - **失败回传**：工具调用只执行一次（不自动重试、不熔断）；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩。
 - **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（bash 写的也在），文本预览、流式下载；**列表只是可见性过滤，preview / download 仍可点名被忽略的文件**；撤销靠 git。

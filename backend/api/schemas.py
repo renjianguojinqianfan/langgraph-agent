@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 
 class TaskStatus(str, Enum):
@@ -252,6 +252,19 @@ class AuthTokenResponse(BaseModel):
     token: str = ""
     expires_at: str = ""
     ok: bool = True
+
+
+# ── #67 P4-2: capability packages / presets ──
+class PluginsUpdateRequest(BaseModel):
+    """PUT /api/plugins body: a full preset + per-package overrides.
+
+    Overrides are strict booleans (a JSON string "true" is a 422, not a silent
+    coercion); unknown preset / package ids are rejected by the route against the
+    static manifest before anything is written.
+    """
+
+    preset: str
+    overrides: Dict[str, StrictBool] = Field(default_factory=dict)
 
 
 # ── Unified response envelope ──

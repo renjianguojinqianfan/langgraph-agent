@@ -37,8 +37,8 @@ from ..core.capability_packages import (
     enabled_tool_names,
     injection_fragments,
     mcp_package_enabled,
+    mounted_tool_names,
     package_for_tool,
-    resolve_packages,
     subagent_package_enabled,
     validate_packages,
 )
@@ -61,6 +61,7 @@ from . import plan_file
 from .event_bus import EventBus
 from .model_store import IMPLEMENTED_PROTOCOLS, PROTOCOL_OPENAI, ModelStore
 from .persistence import Persistence, PersistenceError
+from .plugins_store import EffectivePluginsConfig, resolve_effective_plugins
 from .trace import TraceRecorder
 
 if TYPE_CHECKING:  # 只给类型检查器：运行期 McpClientManager 由 _load_mcp_tools 懒加载
@@ -201,6 +202,7 @@ class TaskManager:
         model_store: Optional[ModelStore] = None,
         llm_factory: Optional[Callable[[Any, str], LLMClient]] = None,
         packages: Optional[frozenset[str]] = None,
+        plugins: Optional[EffectivePluginsConfig] = None,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
@@ -222,14 +224,16 @@ class TaskManager:
         #: The (profile, client) a round is pinned to; subagents inherit it.
         self._round_models: Dict[str, tuple[str, LLMClient]] = {}
         # D-53/D-56 (#67): global capability-package combination, resolved once
-        # at manager construction. `packages` is the embedding/test seam; the
-        # production path resolves the settings preset here, so an unknown
+        # at manager construction. Precedence: explicit `packages` (test seam) >
+        # the runtime's resolved `plugins` config (file/CLI) > resolve from
+        # settings here (direct constructions, P4-1 compatibility). An unknown
         # preset fails startup instead of mounting a half face.
-        self.packages: frozenset[str] = (
-            validate_packages(packages)
-            if packages is not None
-            else resolve_packages(settings.plugins_preset)
-        )
+        if packages is not None:
+            self.packages = validate_packages(packages)
+        elif plugins is not None:
+            self.packages = plugins.packages
+        else:
+            self.packages = resolve_effective_plugins(settings).packages
         self.injection_fragments = injection_fragments(self.packages)
         enabled_names = enabled_tool_names(self.packages)
         if tools is None:
@@ -265,6 +269,21 @@ class TaskManager:
             self._tools = [t for t in self._tools if t.name != "spawn_subagent"]
         self._tool_schemas = [t.to_openai_schema() for t in self._tools]
         self._wire_injected_tools()
+        # #308 M1: the actually assembled face. Built from the same pure helper
+        # (/api/plugins reads this via Runtime.plugins), then intersected with
+        # the tools really present, so legacy gates and dynamically mounted MCP
+        # tools are reflected exactly.
+        actual_names = {tool.name for tool in self._tools}
+        mounted = mounted_tool_names(
+            self.packages,
+            subagent_enabled=self._subagent_enabled,
+            extra_names=(
+                name for name in actual_names if package_for_tool(name) is None
+            ),
+        )
+        self.assembled_tool_names: frozenset[str] = frozenset(
+            name for name in mounted if name in actual_names
+        )
         # #145: dead rules never fire — the same silent-loss family as a broken
         # table, one rule wide. The mount face is stable at manager construction
         # (MCP appended, subagent switch applied), so check it once here;

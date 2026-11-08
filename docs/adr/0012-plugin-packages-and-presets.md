@@ -27,11 +27,13 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    改完重启生效（设置页在 P4-2 明示）。**不做每任务预设**：G-2 的学习场景是
    同一道题在不同全局组合下对比，任务级会把「任务 × 组合 × 持久化」的状态矩阵
    与续跑语义乘上去；重开条件见文末。
-2. **承载面（D-54）**：`data/plugins.json`（P4-2）形态 =
-   `{preset: "minimal|research|full|custom", overrides: {<package-id>: bool}}`；
-   `qianfan --preset <id>` 一次性覆盖（不写文件）。默认 `preset=full` =
-   #67 之前的全部行为。P4-1 先用 `Settings.plugins_preset`（env `PLUGINS_PRESET`）
-   作为唯一显式入口，文件 / API / 设置页 / CLI 全部留到 P4-2，避免半套持久化。
+2. **承载面（D-54）**：`data/plugins.json` 形态 =
+   `{preset: "minimal|research|full", overrides: {<package-id>: bool}}`；文件缺失 =
+   默认 `full` + 无 overrides；`overrides` 叠在 preset 之上（true 强制开 / false
+   强制关）。设置页「能力」区与 `GET/PUT /api/plugins` 读写该文件；改文件后
+   **重启后台生效**（不做热重载）。`qianfan --preset <id>`（web）/
+   `qianfan repl --preset <id>`（终端）一次性覆盖、不写文件。默认 `preset=full` =
+   #67 之前的全部行为。
 3. **能力包与三预设（D-55）**：能力包是本仓代码的**静态声明**（不是第三方插件），
    单项 = 工具名集合 + 注入片段 + 是否连 MCP + 是否影响子代理面：
    - `files` = read / write / edit / ls / glob / grep；
@@ -60,6 +62,22 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    「这不是安全边界」：bash / 文件工具改真实文件，撤销靠 git）。
 7. **文档与术语（D-57）**：README「能力」段、architecture `4.5/`4.6、GLOSSARY
    「能力包 / 预设」、AGENTS.md「工具挂载与失败回传」行同步。
+8. **P4-2 优先级与生效语义（2026-11-08 已交付）**：解析优先级（高到低）=
+   **CLI `--preset`（仅本次运行，经内部环境变量传给 web 子进程，不写文件）>
+   `data/plugins.json`（文件存在即权威，env 不再生效）> `PLUGINS_PRESET` env
+   （仅文件缺失时作为 P4-1 兼容回退）> 默认 `full`**。存储用 atomic 写
+   （`*.tmp` + `os.replace`；与 tasks.json / models.json 同款），校验失败不落盘。
+   `GET /api/plugins` 返回目录 + saved（文件 + `exists` 标记）+ active（本进程
+   启动时装配的面）+ `restart_required`（仅当文件存在且其 preset/overrides 与 active
+   不同；无文件时 false）；`PUT` 校验后写文件并返回同形状，未知 preset / 包 id → 4xx
+   且不写。非法文件 / preset 在
+   `create_app` / `build_runtime` / CLI / REPL / `start.py` 启动期报可读错误
+   （含 `data/plugins.json` 路径与修法），不静默回退 `full`。**CLI `--preset` 不豁免坏
+   文件**：文件非法时即使带一次性覆盖也启动即错（文件是权威配置，绕过后 API 的 saved /
+   restart_required 会与真相不一致）。写文件失败（IO / 权限 / 磁盘）与校验失败分开：
+   校验错误 4xx 不落盘；写入失败 500（旧文件保持、unique 临时文件清理），并发 PUT 不共用
+   固定临时名。`GET /api/plugins` 的 `active.tools` 是实际装配面（含 legacy 开关与已连接
+   的 MCP 动态工具），与 `TaskManager` 共用同一个 pure 派生 helper。
 
 ## 与既有 ADR 的关系
 
@@ -100,6 +118,8 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
   安全边界」的定位一起重估；不在本仓近期计划。
 - **热重载能力组合**：需要工具面 / 注入块从任务级快照改成可热切换对象，且明确
   半途切换对 schema / 上下文的语义，另开票。
-- **更多预设 / 自定义 preset**：由 P4-2 的 `custom + overrides` 覆盖；若仍需命名
-  预设，扩展 `PRESETS` 并同步本 ADR 与文档。
+- **更多预设 / 自定义 preset**：P4-2 的承载面是**三预设 + `overrides`**（`custom`
+  未实现，本 ADR 未将其定为长期方向）。要新增命名预设：扩展 `PRESETS` 并同步本 ADR、
+  `capability_packages.py` 与文档。要支持任意 `custom` 组合：另开票先定 schema
+  （`preset` 字段是否接受 `"custom"`、与 overrides 的关系）与设置页交互，再实施。
 - **未知 preset 降级为警告**：不重开；启动即错是 D-55 的机械保障。

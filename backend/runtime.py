@@ -8,14 +8,14 @@ the REPL and its tests stay light and an embedded runner can reuse it too.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .config import Settings
-from .core.capability_packages import resolve_packages
 from .services.event_bus import EventBus
 from .services.persistence import Persistence
+from .services.plugins_store import EffectivePluginsConfig, resolve_effective_plugins
 from .services.task_manager import TaskManager
 
 
@@ -27,14 +27,20 @@ class Runtime:
     event_bus: EventBus
     persistence: Persistence
     task_manager: TaskManager
+    #: #67 P4-2: what this process actually assembled (saved file + CLI override).
+    plugins: EffectivePluginsConfig
 
 
-def build_runtime(settings: Settings) -> Runtime:
-    """Create the process runtime with the same wiring the web lifespan uses."""
-    # D-55 fail-fast: an unknown preset / malformed capability config must fail
-    # at startup, before any data is touched (the TaskManager resolves too; this
-    # keeps the web/REPL entry error readable and early).
-    resolve_packages(settings.plugins_preset)
+def build_runtime(
+    settings: Settings, *, preset_override: Optional[str] = None
+) -> Runtime:
+    """Create the process runtime with the same wiring the web lifespan uses.
+
+    D-54 (#67): resolve data/plugins.json (CLI override > file > env > full)
+    before touching data/. An invalid file / preset fails here with a readable
+    error naming the file path and the fix, for both the web and REPL entries.
+    """
+    plugins = resolve_effective_plugins(settings, preset_override=preset_override)
     settings.data_path.mkdir(parents=True, exist_ok=True)
     settings.artifacts_path.mkdir(parents=True, exist_ok=True)
     event_bus = EventBus()
@@ -44,12 +50,17 @@ def build_runtime(settings: Settings) -> Runtime:
         event_bus,
         persistence,
         default_workspace=Path.cwd(),
+        plugins=plugins,
     )
+    # #308 M1: expose the actually assembled tool face (legacy gates + dynamic
+    # MCP tools included), not just the manifest's static package names.
+    plugins = replace(plugins, tools=task_manager.assembled_tool_names)
     return Runtime(
         settings=settings,
         event_bus=event_bus,
         persistence=persistence,
         task_manager=task_manager,
+        plugins=plugins,
     )
 
 

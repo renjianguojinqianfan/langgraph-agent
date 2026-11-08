@@ -4,6 +4,7 @@ import { useModelStore } from "../../store/modelStore";
 import type { Provider } from "../../types";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/Icon";
+import { CapabilitiesSection } from "./CapabilitiesSection";
 import { ProviderCard } from "./ProviderCard";
 import { ProviderDialog, type ProviderDialogMode } from "./ProviderDialog";
 
@@ -25,6 +26,8 @@ type Editor =
  * manual add, delete), and an add/edit dialog with the two user-story tabs.
  * Keys stay write-only; delete of a provider asks for confirmation first, and a
  * model entry's 测试 keeps the pre-existing connectivity check reachable.
+ * #67 P4-2 appends the "能力" section (preset + per-package overrides) below
+ * the Provider area without reflowing it.
  */
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -145,6 +148,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                   onRefresh={refresh}
                 />
               ))}
+
+              {/* #67 P4-2: capability packages + presets, below the Provider area. */}
+              <CapabilitiesSection />
             </>
             )}
           </div>

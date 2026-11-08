@@ -194,10 +194,13 @@ def main() -> int:
             # D-55 (#67): resolve the capability preset before claiming the
             # single-backend lock or spawning uvicorn/Vite; an unknown/empty
             # preset fails here with a readable line and zero children.
-            from backend.core.capability_packages import resolve_packages
+            # D-54/D-55 (#67 P4-2): the dev launcher reads data/plugins.json
+            # (no CLI flag here) before claiming the lock or spawning children;
+            # an invalid file fails readably with zero spawns.
+            from backend.services.plugins_store import resolve_effective_plugins
 
             try:
-                resolve_packages(settings.plugins_preset)
+                resolve_effective_plugins(settings)
             except ValueError as exc:
                 print(f"[start] {exc}", flush=True)
                 return 2

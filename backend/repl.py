@@ -26,12 +26,12 @@ from typing import Any, Callable, Dict, Optional, Sequence
 
 from . import server_lock
 from .api.schemas import TaskStatus
-from .config import Settings, ensure_loopback_host, get_settings
-from .core.capability_packages import resolve_packages
+from .config import ensure_loopback_host, get_settings
 from .runtime import Runtime, build_runtime, model_key_is_missing
 from .services.auth import ensure_startup_auth_configured
 from .services.event_bus import Event
 from .services.persistence import PersistenceError
+from .services.plugins_store import resolve_effective_plugins
 from .utils.logging import get_logger
 
 logger = get_logger("repl")
@@ -338,7 +338,7 @@ def _busy_message(lock: server_lock.ServerLock) -> str:
 def repl_main(
     argv: Optional[Sequence[str]] = None,
     *,
-    runtime_factory: Optional[Callable[[Settings], Runtime]] = None,
+    runtime_factory: Optional[Callable[..., Runtime]] = None,
     input_fn: Optional[InputFn] = None,
     output: Optional[Output] = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -350,7 +350,12 @@ def repl_main(
         prog="qianfan repl",
         description="Terminal session for the local agent (no browser, no uvicorn).",
     )
-    parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    parser.add_argument(
+        "--preset",
+        default=None,
+        help="one-shot capability preset for this run (minimal | research | full)",
+    )
+    args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
 
     emit = output or _print_line
     if configure_stdio:
@@ -362,10 +367,11 @@ def repl_main(
     except RuntimeError as exc:
         emit(f"[repl] {exc}")
         return 1
-    # D-55 (#67): unknown / empty capability preset must fail before the
-    # single-backend lock is claimed, with a readable line (no traceback).
+    # D-54/D-55 (#67 P4-2): resolve the saved file + optional CLI --preset
+    # before the single-backend lock is claimed; an invalid file / preset fails
+    # with a readable line (no traceback, no claim).
     try:
-        resolve_packages(settings.plugins_preset)
+        resolve_effective_plugins(settings, preset_override=args.preset)
     except ValueError as exc:
         emit(f"[repl] {exc}")
         return 1
@@ -421,7 +427,13 @@ def repl_main(
                 return 1
 
         try:
-            runtime = (runtime_factory or build_runtime)(settings)
+            factory = runtime_factory or build_runtime
+            # A one-shot --preset is passed straight to the runtime builder; the
+            # saved file is still honoured for overrides (D-54).
+            if args.preset is not None:
+                runtime = factory(settings, preset_override=args.preset)
+            else:
+                runtime = factory(settings)
         except ValueError as exc:
             # Defence in depth (the preset was validated above): a runtime
             # factory raising a config ValueError still reports readably and the

@@ -11,6 +11,9 @@ interface SegmentedProps<T extends string> {
   value: T;
   onChange: (value: T) => void;
   label: string;
+  /** #308 L3: real disabled semantics (focusable buttons must not activate
+   * while a save is in flight). */
+  disabled?: boolean;
 }
 
 export function Segmented<T extends string>({
@@ -18,11 +21,13 @@ export function Segmented<T extends string>({
   value,
   onChange,
   label,
+  disabled = false,
 }: SegmentedProps<T>) {
   return (
     <div
       role="group"
       aria-label={label}
+      aria-disabled={disabled || undefined}
       className="inline-flex items-center gap-0.5 rounded-control bg-surface-well p-0.5"
     >
       {options.map((option) => {
@@ -33,9 +38,10 @@ export function Segmented<T extends string>({
             type="button"
             title={option.title}
             aria-pressed={selected}
+            disabled={disabled}
             onClick={() => onChange(option.value)}
             className={cx(
-              "rounded-control px-2 py-1 text-meta transition-colors duration-150",
+              "rounded-control px-2 py-1 text-meta transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
               selected
                 ? "text-primary shadow-[inset_0_-2px_0_var(--color-primary)]"
                 : "text-tertiary hover:text-secondary"

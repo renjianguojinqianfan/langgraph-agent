@@ -40,7 +40,7 @@ backend/
 ├── repl.py              qianfan repl：thin 终端会话（事件入队→主线程渲染、mode=repl 锁；D-48…D-52）
 ├── server_lock.py       单实例锁与启动守卫（一台机器只允许一个后台；ensure_single_backend / update_lock_pid）
 ├── api/
-│   ├── routes.py        36 条 REST 路由（§3.3）；统一 {code,data,message} 信封
+│   ├── routes.py        38 条 REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
 │   ├── sse.py           SSE 流组装（15s heartbeat）
 ├── core/
@@ -57,6 +57,7 @@ backend/
 ├── services/            task_manager.py 生命周期/worker/续说/续跑/事件 · event_bus.py
 │                        persistence.py tasks.json · plan_file.py 计划文件 · trace.py JSONL trace
 │                        model_store.py Provider/模型目录与凭据 · auth.py token 签发/校验
+│                        plugins_store.py data/plugins.json 读/写（atomic）与生效解析
 └── utils/               logging.py · sandbox.py（bash 进程组/超时）· winjob.py（Windows Job Object）
 
 frontend/src/
@@ -180,6 +181,8 @@ START → agent ──有 tool call──→ tool ──→ agent
 | POST | `/api/providers/{id}/models/discover` | 预览上游 `/models` 清单（**不落库**；anthropic → 400） | — | `{models: [{model, name, added}]}`；404 / 400（超时、大小上限、认证、重定向、格式；错误文本不含 Key） |
 | POST | `/api/auth/token` | 登录签发（`auth_enabled` 关闭时回 `{ok, note}`） | `{token}` | 关闭：`{ok, note}`；开启：`{token, expires_at, ok}`；错误口令 → 401 |
 | GET | `/api/mcp/servers` | MCP 服务器连接状态 | — | `{servers: McpServerInfo[]}`（未启用 → `[]`） |
+| GET | `/api/plugins` | 能力包 / 预设：目录 + 已保存文件 + 运行期生效面 | — | `{presets, packages, saved, active, restart_required}`（信封 `data`）；运行中被外部改坏的文件 → 500（detail 含路径与修法） |
+| PUT | `/api/plugins` | 保存 preset + overrides 到 `data/plugins.json`（atomic，重启生效） | `{preset, overrides}` | 同 GET 的 `data` 形状；未知 preset / 包 id → 400（不写）；非布尔 override → 422（不写） |
 
 > 契约细节（状态码、字段形状）以 [`backend/api/routes.py`](../backend/api/routes.py) 与运行时 Swagger `/docs` 为准；本表与路由的「方法+路径」由人工维护，无自动守卫——新增/删除端点时**必须**同步本表。
 
@@ -271,12 +274,25 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 
 ### 4.5 工具执行与危险动作
 
-- **能力包 / 预设**（#67 P4-1，ADR 0012）：`backend/core/capability_packages.py` 静态声明六个包
+- **能力包 / 预设**（#67，ADR 0012）：`backend/core/capability_packages.py` 静态声明六个包
   （`files` / `bash` / `skills` / `web-search` / `subagent` / `mcp`：工具名集合 + 注入片段 +
   是否连 MCP + 是否影响子代理面）与三预设（`minimal` / `research` / `full`，默认 `full` =
-  #67 前行为）；`TaskManager` 启动期解析包清单后按名单装配工具面与注入片段。**真关**：禁用包
-  不实例化、不进 schema / dispatch、不加注入片段、不连 MCP。未知 preset 启动即错；本片由
-  `plugins_preset`（env `PLUGINS_PRESET`）指定，`data/plugins.json` / 设置页在 P4-2。
+  #67 前行为；`research` 当前与 `full` 同一面）。`TaskManager` 启动期解析包清单后按名单装配
+  工具面与注入片段。**真关**：禁用包不实例化、不进 schema / dispatch、不加注入片段、不连 MCP。
+- **配置与生效**（#67 P4-2）：保存态是 `data/plugins.json` = `{preset, overrides}`（atomic 写；
+  `backend/services/plugins_store.py`）；设置页「能力」区 / `PUT /api/plugins` 写入，**重启后台
+  生效**（不做热重载）。优先级：**CLI `--preset`（本次运行，不写文件）> `data/plugins.json`
+  （文件存在即权威）> `PLUGINS_PRESET` env（仅文件缺失时回退）> `full`**。`overrides` 叠在
+  preset 之上。**CLI `--preset` 不豁免坏文件**：`data/plugins.json` 非法时即使带 `--preset`
+  也启动即错（文件是权威配置，不允许静默绕过）。非法文件 / preset / 包 id 在 `create_app` /
+  `build_runtime` / CLI / REPL / `start.py` 启动期可读报错（指出文件路径与修法）。
+  `GET /api/plugins` 的 `active` 是**实际装配面**：`active.packages` 是启用的能力包，
+  `active.tools` 与 `TaskManager` 真实挂载一致（叠加 legacy `subagent_enabled` / `mcp_enabled`
+  等门；MCP 动态工具在服务器连接成功后一并列入，未连接时只有静态工具名）。`saved` 是文件内容
+  （含 `exists` 标记）：仅当**文件存在**且 preset/overrides 与 active 不同才
+  `restart_required=true`；无文件时 false（否则「有 env 值、无文件」会永远提示重启）。
+  写入失败（IO / 权限 / 磁盘）与校验失败分开：校验 4xx 不落盘，写入 500 且旧文件保持；
+  atomic 临时文件名唯一，并发 PUT 不互踩。
 - 工具注册：`BaseTool` 子类 + `@register`，由 `registry.build_tools` 自动实例化（新增工具零接线）。
 - **MCP 工具例外**：由 `task_manager` 显式追加（不经 `@register`）；每次 `call_tool` 只执行一次。
 - 危险动作：`policy_rules`（JSON 数组，`{tool, pattern?, reason?}`）在 `agent` 节点里由**一个钩子**匹配入参；命中即不执行，把 `{block, reason}` 当该次调用结果回给模型，记录 `status="skipped"`。**不弹框、不进图重入、不改参数、不 terminate**（与 pi 的有意分歧，ADR 0008 决策 6）。空表 = 不拦，它不是安全边界（见 §7）。
