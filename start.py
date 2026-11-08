@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,24 @@ def _check_interpreter() -> None:
 def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> subprocess.Popen:
     print(f"[start] {' '.join(cmd)}", flush=True)
     return subprocess.Popen(cmd, cwd=str(cwd or ROOT), env=env, shell=False)
+
+
+def _npm_cmd(*args: str, windows: bool | None = None) -> list[str]:
+    """Argv that runs npm on this platform.
+
+    Windows installs npm as a ``.cmd`` shim; ``CreateProcess`` (what
+    ``subprocess.Popen(..., shell=False)`` uses) cannot execute batch shims, so
+    the launcher must go through ``cmd.exe /c``. POSIX runs ``npm`` directly.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    return ["cmd.exe", "/c", "npm.cmd", *args] if windows else ["npm", *args]
+
+
+def _npm_available(*, windows: bool | None = None) -> bool:
+    if windows is None:
+        windows = os.name == "nt"
+    return shutil.which("npm.cmd" if windows else "npm") is not None
 
 
 def _filtered_requirements_text() -> str:
@@ -163,10 +182,23 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
+    # Missing npm must fail before anything is installed/claimed/spawned; the
+    # old path spawned the backend first and then died with a raw WinError 2
+    # traceback, leaving a half-started stack behind.
+    if args.install or not args.backend_only:
+        if not _npm_available():
+            print(
+                "[start] 找不到 npm（前端需要 Node.js 22）。请安装 Node 并把 npm 加入 PATH；"
+                "或只跑后端：.\\.venv311\\Scripts\\python.exe start.py --backend-only"
+                "（前端由后端同源托管已构建的 frontend/dist）。",
+                flush=True,
+            )
+            return 2
+
     if args.install:
         _install_backend_deps()
         print("[start] installing frontend deps...")
-        subprocess.run(["npm", "ci"], cwd=str(ROOT / "frontend"), check=True)
+        subprocess.run(_npm_cmd("ci"), cwd=str(ROOT / "frontend"), check=True)
 
     # Both children (uvicorn and Vite) get the same PORT: the backend's CORS
     # own-origin follows settings.port, and the Vite proxy reads it too (D-41).
@@ -247,7 +279,7 @@ def main() -> int:
         if not args.backend_only:
             if not (ROOT / "frontend" / "node_modules").exists():
                 print("[start] frontend/node_modules missing — run with --install first.")
-            procs.append(_run(["npm", "run", "dev"], cwd=ROOT / "frontend", env=env))
+            procs.append(_run(_npm_cmd("run", "dev"), cwd=ROOT / "frontend", env=env))
         print("[start] stack is running. Press Ctrl+C to stop.", flush=True)
         for p in procs:
             p.wait()
