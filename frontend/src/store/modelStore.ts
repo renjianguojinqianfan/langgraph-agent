@@ -59,9 +59,17 @@ export const useModelStore = create<ModelState>((set) => {
           providers.map((provider) => listProviderModels(provider.id))
         );
         if (seq !== refreshSeq) return;
-        const failed = catalogs.find((catalog) => !catalog.data);
-        if (failed) {
-          set({ error: loadFailure(apiErrorText(failed)) });
+        const failedIndex = catalogs.findIndex((catalog) => !catalog.data);
+        if (failedIndex >= 0) {
+          // Name the failing Provider and say what survived: one broken catalog
+          // must not read as "all settings are empty" (#300 L5).
+          const failedProvider = providers[failedIndex];
+          const label = failedProvider
+            ? `${failedProvider.name || failedProvider.id}（${failedProvider.id}）`
+            : "未知 Provider";
+          set({
+            error: `${loadFailure(apiErrorText(catalogs[failedIndex]))}；Provider「${label}」的模型目录读取失败，其余 Provider 保持旧快照。`,
+          });
           return;
         }
         const models: ModelEntry[] = [];

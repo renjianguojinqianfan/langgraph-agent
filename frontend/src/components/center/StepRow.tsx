@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { cx } from "../../lib/cx";
 import { LONG_TEXT } from "../../lib/longContent";
 import { stepHasReasoning } from "../../lib/reasoning";
@@ -14,20 +14,30 @@ const STATUS: Record<string, { label: string; dot: string }> = {
   failed: { label: "失败", dot: "bg-state-danger" },
 };
 
-export function StepRow({ step }: { step: StepRecord }) {
+export function StepRow({
+  step,
+  taskId,
+}: {
+  step: StepRecord;
+  /** Parent task identity: switching tasks must fold the thinking block even
+   * when the new record's reasoning text happens to be identical (#300 L1). */
+  taskId?: string;
+}) {
   // Running steps open by themselves so live tool traffic is visible.
   const [open, setOpen] = useState(step.status === "running");
   // D-40: the thinking block starts folded even when the step is expanded; a
   // step without reasoning renders no block at all.
   const [reasoningOpen, setReasoningOpen] = useState(false);
+  const reasoningId = useId();
   useEffect(() => {
     if (step.status === "running") setOpen(true);
   }, [step.status]);
-  // A replaced record (task switch / refreshed snapshot) starts folded again;
-  // an unchanged reasoning string keeps the reader's current expansion.
+  // A replaced record (task switch / refreshed snapshot) starts folded again.
+  // The identity deps matter: the same reasoning text under another task or
+  // another step index is still a different record (L1).
   useEffect(() => {
     setReasoningOpen(false);
-  }, [step.reasoning]);
+  }, [taskId, step.index, step.reasoning]);
 
   const status = STATUS[step.status] ?? {
     label: step.status,
@@ -68,7 +78,8 @@ export function StepRow({ step }: { step: StepRecord }) {
               <button
                 type="button"
                 aria-expanded={reasoningOpen}
-                aria-label="展开模型思考"
+                aria-controls={reasoningId}
+                aria-label={reasoningOpen ? "收起模型思考" : "展开模型思考"}
                 onClick={() => setReasoningOpen((value) => !value)}
                 className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-meta text-tertiary"
               >
@@ -85,16 +96,16 @@ export function StepRow({ step }: { step: StepRecord }) {
                   {reasoningOpen ? "收起" : "展开"}
                 </span>
               </button>
-              {reasoningOpen && (
-                <p
-                  className={cx(
-                    "max-h-60 overflow-y-auto overscroll-contain whitespace-pre-wrap px-2 pb-2 text-meta text-secondary",
-                    LONG_TEXT
-                  )}
-                >
-                  {step.reasoning}
-                </p>
-              )}
+              <p
+                id={reasoningId}
+                hidden={!reasoningOpen}
+                className={cx(
+                  "max-h-60 overflow-y-auto overscroll-contain whitespace-pre-wrap px-2 pb-2 text-meta text-secondary",
+                  LONG_TEXT
+                )}
+              >
+                {step.reasoning}
+              </p>
             </div>
           )}
           {toolCount === 0 ? (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { apiErrorText, updateProviderModel } from "../../api/client";
 import { BACKEND_UNREACHABLE } from "../../lib/copy";
 import {
@@ -129,6 +129,9 @@ export function ModelParamsForm({
   };
 
   const fieldError = (field: keyof ModelParamErrors) => errors[field] ?? "";
+  // The error span id must match the input's aria-describedby (L4).
+  const errorBaseId = useId();
+  const errorId = (field: keyof ModelParamErrors) => `${errorBaseId}-${field}-error`;
 
   return (
     <div className="flex flex-col gap-2 rounded-well border border-rule bg-surface-sheet p-2">
@@ -146,13 +149,21 @@ export function ModelParamsForm({
             aria-label={`温度 temperature：${entry.model}`}
             value={draft.temperature}
             placeholder={hints.temperature}
+            disabled={saving}
             aria-invalid={fieldError("temperature") ? true : undefined}
+            aria-describedby={
+              fieldError("temperature") ? errorId("temperature") : undefined
+            }
             onChange={(event) => setField("temperature", event.target.value)}
-            className="h-7 rounded-control border border-rule bg-surface-well px-2 text-meta text-primary placeholder:text-tertiary"
+            className="h-7 rounded-control border border-rule bg-surface-well px-2 text-meta text-primary placeholder:text-tertiary disabled:opacity-50"
           />
           <span className="text-machine text-tertiary">{hints.temperature}</span>
           {fieldError("temperature") && (
-            <span role="alert" className="text-meta text-state-danger">
+            <span
+              id={errorId("temperature")}
+              role="alert"
+              className="text-meta text-state-danger"
+            >
               {fieldError("temperature")}
             </span>
           )}
@@ -164,13 +175,21 @@ export function ModelParamsForm({
             aria-label={`最大 token max_tokens：${entry.model}`}
             value={draft.max_tokens}
             placeholder={hints.max_tokens}
+            disabled={saving}
             aria-invalid={fieldError("max_tokens") ? true : undefined}
+            aria-describedby={
+              fieldError("max_tokens") ? errorId("max_tokens") : undefined
+            }
             onChange={(event) => setField("max_tokens", event.target.value)}
-            className="h-7 rounded-control border border-rule bg-surface-well px-2 text-meta text-primary placeholder:text-tertiary"
+            className="h-7 rounded-control border border-rule bg-surface-well px-2 text-meta text-primary placeholder:text-tertiary disabled:opacity-50"
           />
           <span className="text-machine text-tertiary">{hints.max_tokens}</span>
           {fieldError("max_tokens") && (
-            <span role="alert" className="text-meta text-state-danger">
+            <span
+              id={errorId("max_tokens")}
+              role="alert"
+              className="text-meta text-state-danger"
+            >
               {fieldError("max_tokens")}
             </span>
           )}
@@ -181,6 +200,7 @@ export function ModelParamsForm({
           <select
             aria-label={`思考 thinking：${entry.model}`}
             value={draft.thinking}
+            disabled={saving}
             onChange={(event) => {
               if (isThinkingDraft(event.target.value)) {
                 setField("thinking", event.target.value);
@@ -202,6 +222,7 @@ export function ModelParamsForm({
           <select
             aria-label={`推理强度 reasoning_effort：${entry.model}`}
             value={draft.reasoning_effort}
+            disabled={saving}
             onChange={(event) => {
               if (isReasoningDraft(event.target.value)) {
                 setField("reasoning_effort", event.target.value);
@@ -225,7 +246,8 @@ export function ModelParamsForm({
       </p>
       {anthropicNote && (
         <p className="text-meta text-tertiary">
-          Anthropic 暂不支持 thinking / reasoning_effort；保存时由服务端拒绝并原样显示原因。
+          Anthropic 下 thinking 开启或 reasoning_effort 非空时服务端会拒绝（400）；thinking
+          关、reasoning_effort 清空后可保存。
         </p>
       )}
 

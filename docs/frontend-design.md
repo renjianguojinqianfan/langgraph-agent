@@ -207,7 +207,7 @@
 
 ### P2-4 思考展示与参数入口手测清单（#267，D-38 / D-40）
 
-机械面由 `lib/reasoning.ts`（空 / 缺省不渲染）、`lib/modelParams.ts`（tri-state 映射、区间校验、只提交改动字段、继承提示）的纯函数断言与 `store/reduceTask` 的 `final_answer.reasoning` 断言覆盖；下列为组件接线与真实模型走查项（本片只做条目级参数，Provider 级默认以继承提示展示、不提供编辑）。
+机械面由 `lib/reasoning.ts`（空 / 缺省不渲染）、`lib/modelParams.ts`（tri-state 映射、区间校验、只提交改动字段、继承提示）的纯函数断言与 `store/reduceTask` 的 `final_answer.reasoning` 断言覆盖；下列为组件接线与真实模型走查项（本片只做条目级参数，Provider 级默认以继承提示展示、不提供编辑；**Provider 级默认编辑留后续片（#267 后续 / 参数入口二期）**）。
 
 - [ ] 思考展示：用思考型模型跑完一轮 → 展开该轮过程 → 展开步骤 → 「思考」块默认折叠；点开显示思考正文；步骤行头出现「思考」机器事实词。
 - [ ] 非思考模型 / 旧任务（无 `reasoning` 字段）：步骤展开区不出现「思考」块，也没有空块或占位。
@@ -218,8 +218,8 @@
 - [ ] 只改一个字段保存：DevTools Network 的 `PUT /providers/{id}/models/{model_id}` 请求体只含该字段；保存后刷新设置 / 刷新页面值仍在。
 - [ ] 清空数值（如 temperature）保存：请求体该字段为 `null`（回到继承）；表单提示重新显示继承值，而不是把 Provider 默认误当条目覆盖。
 - [ ] 非法值：temperature 非数字 / 超范围（OpenAI 兼容 0–2、Anthropic 0–1）、max_tokens 非正整数 → 字段错误可读且不发请求。
-- [ ] 协议限制：Anthropic 卡把 thinking 设为「开」或 reasoning_effort 设为 low/medium/high 保存 → 服务端 400 原因（含下一步）原样显示；前端不静默拦截、不留下半套配置。
-- [ ] 读屏 / 键盘：步骤「思考」折叠按钮有 `aria-expanded`；参数表单控件有 `aria-label`，字段错误可感知，保存成功 / 失败走 `role=status` / `role=alert`；Tab 顺序不跳出参数表单。
+- [ ] 协议限制：Anthropic 卡把 thinking 设为「开」或 reasoning_effort 设为 low/medium/high 保存 → 服务端 400 原因（含下一步）原样显示；thinking 设为「关」/ 清空 reasoning_effort 可正常保存（后端只拒「开 + 非空」组合）。前端不静默拦截、不留下半套配置。
+- [ ] 读屏 / 键盘：步骤「思考」折叠按钮有 `aria-expanded` / `aria-controls`，展开与收起时名称分别读作「展开 / 收起模型思考」；参数表单控件有 `aria-label`，字段错误经 `aria-describedby` 关联，保存中字段禁用，保存成功 / 失败走 `role=status` / `role=alert`；Tab 顺序不跳出参数表单。
 
 ## 7. 空 / 错 / 加载
 
@@ -286,4 +286,4 @@
 - 2026-11-07（P2-1 / #232）：Composer 拆分——`lib/composerState` 纯函数 `composerView`（状态矩阵与逐字文案，入参含 `sendError` 以保住 `bottomNote` 纯函数）与 `clearedDraft`；`hooks/useComposerSend` 收口 text / busy / sendError 与 `createTask` / `sendMessage`（返回同一份 `view` 供组件渲染，避免双算），`hooks/useComposerControls` 收口 draftMode / draftModel / switchNote 与 `putMode` / `putTaskModel` + `getTask`；`Composer.tsx` 276 → 164 行，只留结构、Enter 处理与 reset effect；`BACKEND_UNREACHABLE` 抽 `lib/copy`；行为与逐字文案不变，§6 增拆分手测清单。
 - 2026-11-07（P2-3 / #243，D-37）：设置页 Provider 化——`store/modelStore` 改为「Provider 卡片（`GET /providers`）+ 扁平模型条目（`GET /models` 兼容投影，一次请求覆盖全部条目 id）」双读；`components/settings` 拆为 `SettingsDialog`（卡片列表编排）+ `ProviderCard`（卡片事实 / 设为默认 / 编辑 / 删除二次确认 / 模型目录 / 发现预览）+ `ProviderDialog`（新建两页签：第三方预设 / 自定义，编辑 id 只读、Key 只写、清除粘贴 Key 二次确认）；`lib/modelCatalog` 收敛分组、默认动作（全局默认是条目级，卡上「设为默认」取该 Provider 首条目）、表单校验、发现勾选与失败文案（原因 + 下一步）；Composer 模型控件改原生 `<select>` + `<optgroup>`，新增「目录外模型…」行（现有任务走 `PUT /tasks/{id}/model` 的 `{provider, model}` 自动建 manual 条目；新建任务因创建接口只收条目 id，先 `POST /providers/{id}/models` 再创建），旧 `Task.model` 条目 id 用回退 option 兼容显示；旧 `/api/models` 消费点保留（不再有扁平设置表单的写路径，投影读仍是条目映射的唯一读取）；§6 增 P2-3 手测清单。
 - 2026-11-07（P2-3 / #243，rebase 到 #298 合并后）：协议文案按已合并事实更新——Anthropic 原生（非流式）创建 / 编辑可用（不再有「保存 400 / 后端 PR B」说法）；提示明示两项剩余限制：模型目录发现仅 OpenAI 兼容支持、thinking / reasoning_effort 对 Anthropic 暂不支持；§6 对应手测项与纯函数断言同步（`PROTOCOL_OPTIONS` 的 hint 不得回退到旧 400 文案）。
-- 2026-11-08（P2-4b / #267，D-38 / D-40）：思考展示与参数入口——`StepRecord.reasoning` 可选字段（D-38 契约，字段暂缺时兼容）；`StepRow` 展开区新增默认折叠的「思考」块（空 / 缺省不渲染，长文本断行 + 限高滚动，行头标「思考」），`TurnProcess` / `AnswerSheet` 不变；reducer 把 `final_answer.reasoning` 挂到最后一步（快照仍权威）；`lib/modelParams` 收敛参数表单的 tri-state 映射、区间校验（temperature 按协议 / max_tokens 正整数）、显式 null 清空与「只提交改动字段」，设置页模型行新增「参数」表单（条目级；Provider 默认以继承提示展示）；`store/modelStore` 模型目录改读 `GET /providers/{id}/models` 原始条目（D-36 需要 raw 覆盖值，legacy 投影只有生效值）；§6 增 P2-4 手测清单。
+- 2026-11-08（P2-4b / #267，D-38 / D-40）：思考展示与参数入口——`StepRecord.reasoning` 可选字段（D-38 契约，字段暂缺时兼容）；`StepRow` 展开区新增默认折叠的「思考」块（空 / 缺省不渲染，长文本断行 + 限高滚动，行头标「思考」），`TurnProcess` / `AnswerSheet` 不变；reducer 把 `final_answer.reasoning` 挂到最后一步（快照仍权威）；`lib/modelParams` 收敛参数表单的 tri-state 映射、区间校验（temperature 按协议 / max_tokens 正整数）、显式 null 清空与「只提交改动字段」，设置页模型行新增「参数」表单（条目级；Provider 默认以继承提示展示；Provider 级默认编辑留后续片 / 参数入口二期）；`store/modelStore` 模型目录改读 `GET /providers/{id}/models` 原始条目（D-36 需要 raw 覆盖值，legacy 投影只有生效值）；§6 增 P2-4 手测清单。

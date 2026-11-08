@@ -78,6 +78,12 @@ describe("modelParamPatch (omitted = unchanged, explicit null = clear)", () => {
     expect(result.changed).toBe(true);
   });
 
+  it("clears a max_tokens override with null", () => {
+    const result = modelParamPatch(entry({ max_tokens: 2048 }), draft({ max_tokens: "" }), "openai-compatible");
+    expect(result.errors).toEqual({});
+    expect(result.patch).toEqual({ max_tokens: null });
+  });
+
   it("only carries the fields that actually changed", () => {
     const original = entry({ temperature: 0.2, max_tokens: 2048 });
     const result = modelParamPatch(original, draft({ temperature: "0.9", max_tokens: "2048" }), "openai-compatible");

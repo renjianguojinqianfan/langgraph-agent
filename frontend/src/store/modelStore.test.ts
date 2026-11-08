@@ -158,6 +158,34 @@ describe("modelStore refresh (#243 P2-3 / #267 P2-4b)", () => {
     expect(state.loading).toBe(false);
   });
 
+  it("names the failing Provider on a multi-provider catalog read and keeps the others", async () => {
+    listProvidersMock.mockResolvedValue(providersResponse(["ok", "broken"]));
+    listProviderModelsMock.mockImplementation((id) =>
+      Promise.resolve(catalogResponse(id, ["m1"]))
+    );
+    await useModelStore.getState().refresh();
+    expect(useModelStore.getState().models).toHaveLength(2);
+
+    // One provider's catalog now fails; its name/id must be named and the
+    // previous snapshot (both providers' entries) must survive.
+    listProviderModelsMock.mockImplementation((id) =>
+      id === "broken"
+        ? Promise.resolve({
+            code: 1,
+            detail: "catalog blew up",
+          } as unknown as ApiResponse<{ models: ModelEntry[]; default: string }>)
+        : Promise.resolve(catalogResponse(id, ["m1"]))
+    );
+    await useModelStore.getState().refresh();
+
+    const state = useModelStore.getState();
+    expect(state.error).toContain("Provider broken（broken）");
+    expect(state.error).toContain("catalog blew up");
+    expect(state.error).toContain("其余 Provider 保持旧快照");
+    expect(state.models.map((m) => m.provider_id)).toEqual(["ok", "broken"]);
+    expect(state.loading).toBe(false);
+  });
+
   it("names a failed catalog read and keeps the last snapshot", async () => {
     listProvidersMock.mockResolvedValue(providersResponse(["deepseek"]));
     listProviderModelsMock.mockResolvedValue(catalogResponse("deepseek", ["m1"]));

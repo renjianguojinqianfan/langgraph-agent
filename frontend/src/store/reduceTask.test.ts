@@ -441,6 +441,15 @@ describe("D-38/D-40: final_answer reasoning 落到步骤", () => {
     expect(next.steps.every((step) => step.reasoning === undefined)).toBe(true);
   });
 
+  it("任务还没有任何步骤时带 reasoning 的 final_answer 不炸、不造步骤", () => {
+    const next = applyToTask(snapshot({ steps: [] }), "t1", {
+      type: "final_answer",
+      data: { answer: "答", reasoning: "想一想" },
+    });
+    expect(next.final_answer).toBe("答");
+    expect(next.steps).toEqual([]);
+  });
+
   it("回放同一事件幂等（重连不产生重复思考块）", () => {
     const event = {
       type: "final_answer" as const,
