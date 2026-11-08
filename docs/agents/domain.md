@@ -108,8 +108,9 @@ D1–D9), `0002` (moat discipline — **部分退役**：「受保护文件零�
 `0008` (single loop + plan/build two modes — **0005–0007 已随之退役；
 0003 随 C2 删除熔断后退役**),
 `0009` (minimal-agent chapter: pi-style tool face, plan file, one-command start),
-`0010` (daily form: launch dir = workspace owned by the task, one shared server, model profiles)
-and `0011` (two provider protocols: OpenAI-compatible + Anthropic native adapter)
+`0010` (daily form: launch dir = workspace owned by the task, one shared server, model profiles),
+`0011` (two provider protocols: OpenAI-compatible + Anthropic native adapter)
+and `0012` (plugin packages / presets: global presets + true-close assembly, P4-1)
 are the live ADRs today. Beyond them, the equivalent
 frozen decisions are the hard rules in `AGENTS.md`「跨任务安全边界」 (conftest isolation,
 dependency matrix, quality-gate baseline). Treat a contradiction with those

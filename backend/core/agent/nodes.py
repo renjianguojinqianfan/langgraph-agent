@@ -162,9 +162,13 @@ class AgentRuntime:
         # `packages=None` keeps the pre-#67 behaviour for direct runtime tests;
         # the manager always passes its resolved set.
         include_skills = packages is None or INJECTION_SKILLS in packages
-        # Same rule for the prompt text: a disabled subagent package must not be
-        # advertised in the planner context (neither tool call nor delegation).
-        self._planner_system: str = planner_system(packages)
+        # Same rule for the prompt text: a disabled subagent package (or the
+        # legacy subagent_enabled switch) must not be advertised in the planner
+        # context (neither tool call nor delegation).
+        self._planner_system: str = planner_system(
+            packages,
+            subagent_enabled=getattr(settings, "subagent_enabled", True),
+        )
         self._inject_block: str = (
             inject.build_inject_block(settings, include_skills=include_skills)
             if getattr(settings, "context_inject_enabled", True)

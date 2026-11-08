@@ -23,6 +23,7 @@ from typing import FrozenSet, Optional
 PLANNER_MARKER = "You are the planner for an autonomous task agent."
 
 _DELEGATION_BLOCK = """
+
 Delegation: if part of the task is a focused, self-contained job that will feed a
 later step, plan it as one plain step such as "Research X in a sub-agent"; in
 execution mode the agent may then call `spawn_subagent` for it."""
@@ -30,6 +31,7 @@ execution mode the agent may then call `spawn_subagent` for it."""
 #: Package-neutral replacement used when the `subagent` capability package is off
 #: (no unavailable tool name may be advertised in the context).
 _GENERIC_DELEGATION_BLOCK = """
+
 If part of the task is a focused, self-contained job that will feed a later
 step, plan it as one plain step."""
 
@@ -56,13 +58,20 @@ decide the next action:
 Think step by step but respond with either a tool call or a text reply."""
 
 
-def planner_system(packages: Optional[FrozenSet[str]] = None) -> str:
+def planner_system(
+    packages: Optional[FrozenSet[str]] = None,
+    *,
+    subagent_enabled: bool = True,
+) -> str:
     """Planner prompt for the enabled capability packages.
 
     `packages=None` keeps the pre-#67 behaviour (full text) for direct runtime
-    tests; the manager always passes its resolved set. The sub-agent delegation
-    paragraph is the only package-dependent part today.
+    tests; the manager always passes its resolved set. The delegation paragraph
+    is offered only when the §subagent§ package is on **and** the legacy
+    `subagent_enabled` switch is on (they gate different layers; the text must
+    not advertise a tool the face does not mount). The default full text stays
+    byte-identical to the pre-#67 constant.
     """
-    if packages is None or "subagent" in packages:
+    if packages is None or ("subagent" in packages and subagent_enabled):
         return PLANNER_SYSTEM
     return _PLANNER_SYSTEM_WITHOUT_SUBAGENT

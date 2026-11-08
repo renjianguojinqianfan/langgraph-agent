@@ -29,7 +29,7 @@ from backend.core.agent.inject import (
     build_inject_block,
 )
 from backend.core.agent.nodes import AgentRuntime
-from backend.core.agent.prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
+from backend.core.agent.prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM, planner_system
 from backend.core.agent.state import AgentState
 from backend.core.agent.subagent import (
     EXECUTE_TIER,
@@ -588,6 +588,64 @@ def test_prompt_text_does_not_advertise_disabled_packages(tmp_path):
         tool_schemas=legacy_tm._tool_schemas,
     )
     assert legacy._planner_system == PLANNER_SYSTEM
+
+
+def _state_for_prompt() -> AgentState:
+    return cast(
+        AgentState,
+        {"messages": [{"role": "user", "content": "hi"}], "step_index": 0},
+    )
+
+
+_PRE_67_PLANNER_SYSTEM = (
+    "You are the planner for an autonomous task agent.\n\n\n"
+    "You are in PLAN mode: reading and inspecting is allowed, changing anything is not.\n"
+    "Use the read-only tools available to you when you need facts about the workspace,\n"
+    "then produce a concise, ordered plan as Markdown (a heading and a numbered list).\n"
+    "Wrap the final plan exactly in <qianfan-plan> and </qianfan-plan>; put no other\n"
+    "commentary around it. The system stores that Markdown as the task's plan file.\n"
+    "If you need a clarification, reply with your question as plain text and no markers.\n"
+    "\n"
+    "Delegation: if part of the task is a focused, self-contained job that will feed a\n"
+    "later step, plan it as one plain step such as \"Research X in a sub-agent\"; in\n"
+    "execution mode the agent may then call `spawn_subagent` for it."
+)
+
+
+def test_default_planner_prompt_is_byte_identical_to_pre_67():
+    """LOW (#306): the full/default text must not lose its blank line."""
+    assert "\n\nDelegation:" in PLANNER_SYSTEM
+    assert planner_system(None) == _PRE_67_PLANNER_SYSTEM
+    assert planner_system(PACKAGE_IDS) == _PRE_67_PLANNER_SYSTEM
+    assert planner_system(PACKAGE_IDS) == PLANNER_SYSTEM
+
+
+def test_planner_prompt_honours_the_legacy_subagent_switch(tmp_path):
+    """A package-on but subagent_enabled=false run must not advertise spawn."""
+    assert planner_system(resolve_packages("full"), subagent_enabled=False) != (
+        PLANNER_SYSTEM
+    )
+    assert "spawn_subagent" not in planner_system(
+        resolve_packages("full"), subagent_enabled=False
+    )
+    # Both enabled keeps the pre-#67 text.
+    assert planner_system(PACKAGE_IDS, subagent_enabled=True) == PLANNER_SYSTEM
+
+    settings = make_settings(tmp_path, plugins_preset="full", subagent_enabled=False)
+    tm = _manager(settings)
+    runtime = AgentRuntime(
+        task_id="t-legacy-switch",
+        task_manager=tm,
+        llm=MockLLMClient(),
+        tools=list(tm._tools),
+        tool_schemas=tm._tool_schemas,
+        packages=tm.packages,
+    )
+    planner = str(runtime._build_messages(_state_for_prompt(), runtime._planner_system)[0]["content"])
+    assert "spawn_subagent" not in planner
+    assert planner != PLANNER_SYSTEM
+    assert tm._subagent is None
+    assert "spawn_subagent" not in {tool.name for tool in tm._tools}
 
 
 # ── dispatch face: a disabled tool is unknown, not executed (spec Testing) ──
