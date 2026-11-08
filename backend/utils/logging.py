@@ -7,29 +7,56 @@ API keys are never logged (callers must redact them before logging).
 from __future__ import annotations
 
 import logging
-import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from ..config import get_settings
 
 _CONFIGURED: dict[str, logging.Logger] = {}
 
 #: D-47 (#271): the token query value is the only secret that could reach
-#: uvicorn's access log (the logged path includes the query string). The
-#: replacement keeps the parameter name and masks everything up to the next
-#: "&" / whitespace, so other query parameters and the rest of the line survive.
-_ACCESS_TOKEN_QUERY = re.compile(r"([?&]token=)[^&\s]*", re.IGNORECASE)
-
+#: uvicorn's access log (the logged path includes the query string). A literal
+#: "token=" match is not enough: FastAPI URL-decodes the *parameter name*, so
+#: `?%74oken=SEKRET` is a real token parameter while uvicorn logs the raw text.
+#: The filter parses the query, decodes each key and masks the value when the
+#: decoded key is `token` (case-insensitive). Other parameters, their encoding
+#: and their order are preserved byte-for-byte; a bare `token` pair has no
+#: value to leak and is left as logged.
 #: Private marker on the logger so installation is idempotent by identity.
 _ACCESS_REDACTION_ATTR = "_qianfan_access_log_redaction"
+
+
+def _redact_query_pair(pair: str) -> str:
+    """Mask one `key=value` query pair when the decoded key is `token`."""
+    key, sep, _value = pair.partition("=")
+    try:
+        decoded_key = unquote(key).strip().lower()
+    except Exception:  # pragma: no cover - unquote is total for str input
+        decoded_key = key.strip().lower()
+    if sep and decoded_key == "token":
+        # Keep the key exactly as logged (it may itself be percent-encoded);
+        # only the secret value changes. `?token` without "=" carries no value.
+        return key + "=***"
+    return pair
+
+
+def _redact_access_string(text: str) -> str:
+    """Mask token values inside one logged request path (query-aware)."""
+    if "?" not in text:
+        return text
+    base, _, query = text.partition("?")
+    if not query:
+        return text
+    redacted = "&".join(_redact_query_pair(pair) for pair in query.split("&"))
+    return base + "?" + redacted
 
 
 def _redact_access_arg(value: Any) -> Any:
     """Rewrite token query values inside one access-log arg (recursively)."""
     if isinstance(value, str):
-        return _ACCESS_TOKEN_QUERY.sub(lambda match: match.group(1) + "***", value)
+        return _redact_access_string(value)
     if isinstance(value, tuple):
         return tuple(_redact_access_arg(item) for item in value)
     if isinstance(value, list):

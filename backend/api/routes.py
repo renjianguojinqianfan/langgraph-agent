@@ -975,7 +975,9 @@ def auth_token(payload: AuthTokenRequest, request: Request) -> ApiResponse:
     settings = request.app.state.settings
     if not settings.auth_enabled:
         return _envelope(data={"ok": True, "note": "auth disabled"})
-    if payload.token != settings.auth_token:
+    # D-45 / #271 L4: compare like the startup guard and TokenIssuer (strip),
+    # so a token configured with surrounding whitespace logs in consistently.
+    if (payload.token or "").strip() != settings.auth_token.strip():
         raise HTTPException(status_code=401, detail="invalid token")
     issuer: TokenIssuer | None = getattr(request.app.state, "auth", None)
     if issuer is None:

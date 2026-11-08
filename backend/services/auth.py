@@ -142,6 +142,10 @@ def verify_token(
     """
     settings = getattr(request.app.state, "settings", None)
     if settings is None or not settings.auth_enabled:
+        # Known boundary (kept as-is, #271): a missing app.state.settings is
+        # only possible for a hand-assembled app without the lifespan, and it
+        # fails open exactly like auth_enabled=False. The real lifespan always
+        # sets it before any request is served.
         return "local"
     issuer: Optional[TokenIssuer] = getattr(request.app.state, "auth", None)
     if issuer is None:
