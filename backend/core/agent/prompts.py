@@ -67,7 +67,7 @@ def planner_system(
 
     `packages=None` keeps the pre-#67 behaviour (full text) for direct runtime
     tests; the manager always passes its resolved set. The delegation paragraph
-    is offered only when the §subagent§ package is on **and** the legacy
+    is offered only when the `subagent` package is on **and** the legacy
     `subagent_enabled` switch is on (they gate different layers; the text must
     not advertise a tool the face does not mount). The default full text stays
     byte-identical to the pre-#67 constant.

@@ -166,10 +166,10 @@ def main(
         return 1
     # D-55 (#67): unknown capability preset fails at startup, before anything
     # claims the single-backend lock or touches data/.
-    from .core.capability_packages import DEFAULT_PRESET, resolve_packages
+    from .core.capability_packages import resolve_packages
 
     try:
-        resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+        resolve_packages(settings.plugins_preset)
     except ValueError as exc:
         print(f"[qianfan] {exc}")
         return 1

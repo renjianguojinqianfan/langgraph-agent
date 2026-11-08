@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, Optional, Sequence
 from . import server_lock
 from .api.schemas import TaskStatus
 from .config import Settings, ensure_loopback_host, get_settings
-from .core.capability_packages import DEFAULT_PRESET, resolve_packages
+from .core.capability_packages import resolve_packages
 from .runtime import Runtime, build_runtime, model_key_is_missing
 from .services.auth import ensure_startup_auth_configured
 from .services.event_bus import Event
@@ -365,7 +365,7 @@ def repl_main(
     # D-55 (#67): unknown / empty capability preset must fail before the
     # single-backend lock is claimed, with a readable line (no traceback).
     try:
-        resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+        resolve_packages(settings.plugins_preset)
     except ValueError as exc:
         emit(f"[repl] {exc}")
         return 1

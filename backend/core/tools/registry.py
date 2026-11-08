@@ -55,9 +55,9 @@ def list_tools() -> List[Type[BaseTool]]:
 def build_tools(
     settings: Settings, *, names: Optional[Iterable[str]] = None
 ) -> List[BaseTool]:
-    """Instantiate registered tools, optionally restricted to §names§.
+    """Instantiate registered tools, optionally restricted to `names`.
 
-    §names=None§ keeps the pre-#67 behaviour (every registered tool); the
+    `names=None` keeps the pre-#67 behaviour (every registered tool); the
     capability-package assembler passes the enabled-package name set so a
     disabled package is **never constructed** (D-55 "真关").
     """
