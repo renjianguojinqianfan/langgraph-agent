@@ -49,9 +49,10 @@ qianfan repl
 ```
 
 一条命令进入常驻多轮会话：首条输入创建任务，之后继续说话沿同一 `thread_id` 续跑；`/new`
-新任务、`/stop` 停止当前任务、`exit` / `quit` 退出（Ctrl-C 同）。只渲染任务 / 步骤 / 工具 /
-final answer 与「停下」「出错」两类终态，纯 `print`、不引 Rich/TUI；**思考块（reasoning）
-只在网页端显示，终端当前不显示**——不要预期终端出现模型思考过程。
+新任务（仅当当前任务已停下；仍在跑时先 `/stop`）、`/stop` 停止当前任务、`exit` / `quit`
+退出。**Ctrl-C 分两处**：提示符处直接退出；等待任务时先停当前任务、回提示符（不退出）。
+只渲染任务 / 步骤 / 工具 / final answer 与「停下」「出错」两类终态，纯 `print`、不引
+Rich/TUI；**思考块（reasoning）只在网页端显示，终端当前不显示**——不要预期终端出现模型思考过程。
 
 - **与网页后台互斥**：终端会话写 `data/server.json`（`mode=repl`），`qianfan` / `python start.py`
   在它跑着时拒绝启动；反过来网页或开发后台在跑时 `qianfan repl` 也拒绝。**关掉终端 = 任务停下**
