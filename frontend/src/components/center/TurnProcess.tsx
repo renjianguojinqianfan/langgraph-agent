@@ -12,6 +12,9 @@ interface TurnProcessProps {
   live?: boolean;
   /** Legacy records have no round; name the block instead of guessing one. */
   title?: string;
+  /** Owning task identity, forwarded to StepRow so the thinking fold resets on
+   * a task switch (#300 L1). */
+  taskId?: string;
 }
 
 /**
@@ -24,6 +27,7 @@ export function TurnProcess({
   markers,
   live = false,
   title,
+  taskId,
 }: TurnProcessProps) {
   const [open, setOpen] = useState(live);
 
@@ -69,7 +73,7 @@ export function TurnProcess({
         <div className="pb-1">
           {steps.map((step) => (
             <div key={step.index}>
-              <StepRow step={step} />
+              <StepRow step={step} taskId={taskId} />
               {(byStep.get(step.index) ?? []).map((marker, i) => (
                 <CompressMarker key={i} marker={marker} />
               ))}

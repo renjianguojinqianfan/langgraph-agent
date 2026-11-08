@@ -7,6 +7,7 @@ import {
   FilePreview,
   ModelEntry,
   ModelKeySource,
+  ModelParamsUpdate,
   ModelProfile,
   ModelsData,
   Provider,
@@ -270,9 +271,11 @@ export const putTaskModel = (
   });
 
 // ── #243 P2-2/P2-3: providers + model catalog (D-34) ──
-// The legacy /api/models surface above stays the flat compatibility projection
-// (listModels is still the single read behind the Composer's id → label map);
-// these are the v2 write faces the settings page drives.
+// The legacy /api/models surface above stays as the flat compatibility
+// projection; since #267 the production consumers read `GET /providers` plus
+// each provider's raw catalog (`GET /providers/{id}/models`) and `listModels`
+// has no live consumer left — it is kept for the documented legacy face only.
+// These are the v2 write faces the settings page drives.
 export const listProviders = () => req<ProvidersData>("/providers");
 
 export const createProvider = (body: ProviderCreateRequest) =>
@@ -283,6 +286,26 @@ export const updateProvider = (id: string, body: ProviderUpdateRequest) =>
     method: "PUT",
     body: JSON.stringify(body),
   });
+
+/** One provider's raw model catalog (D-36 entry-level overrides included;
+ * the legacy `/api/models` projection only carries the effective values). */
+export const listProviderModels = (id: string) =>
+  req<{ models: ModelEntry[]; default: string }>(
+    `/providers/${encodeURIComponent(id)}/models`
+  );
+
+/** Edit one catalog entry's D-36 parameters (the same partial-edit face the
+ * add form already uses for model / name). An omitted field is unchanged; an
+ * explicit null clears the entry override and falls back to the provider. */
+export const updateProviderModel = (
+  providerId: string,
+  modelId: string,
+  body: ModelParamsUpdate
+) =>
+  req<ModelEntry>(
+    `/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}`,
+    { method: "PUT", body: JSON.stringify(body) }
+  );
 
 /** Envelope parser shared by the status-preserving deletes below. */
 const okEnvelope = (json: unknown): { ok: boolean } | null => {

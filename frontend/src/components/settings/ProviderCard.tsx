@@ -26,6 +26,7 @@ import {
 } from "../../lib/modelCatalog";
 import type { DiscoverCandidate, ModelEntry, Provider } from "../../types";
 import { Button } from "../ui/Button";
+import { ModelParamsForm } from "./ModelParamsForm";
 
 interface ProviderCardProps {
   provider: Provider;
@@ -42,7 +43,8 @@ type Note = { kind: "ok" | "error"; text: string } | null;
 /**
  * One Provider card (#243 P2-3 / D-37): the card facts, the mutation actions,
  * the model catalog and the discovery preview. Keys are write-only, so the card
- * shows key_set / key_source only.
+ * shows key_set / key_source only. #267 P2-4b adds the per-entry D-36 parameter
+ * form (temperature / max_tokens / thinking / reasoning_effort).
  */
 export function ProviderCard({
   provider,
@@ -65,6 +67,8 @@ export function ProviderCard({
   const [addingPicked, setAddingPicked] = useState(false);
   /** Armed model-entry delete: the row's second click confirms. */
   const [modelArmed, setModelArmed] = useState<string | null>(null);
+  /** Catalog entry whose D-36 parameter form is open (one at a time). */
+  const [paramEditing, setParamEditing] = useState<string | null>(null);
   /** Drops a discovery answer that belongs to a superseded provider config. */
   const discoverySeq = useRef(0);
 
@@ -89,6 +93,7 @@ export function ProviderCard({
     setPicked([]);
     setAddingPicked(false);
     setModelArmed(null);
+    setParamEditing(null);
   }, [
     provider.id,
     provider.protocol,
@@ -130,6 +135,7 @@ export function ProviderCard({
 
   const removeModel = async (modelId: string) => {
     setModelArmed(null);
+    if (paramEditing === modelId) setParamEditing(null);
     const result = await deleteProviderModel(provider.id, modelId);
     if (result.data) {
       report("已删除模型");
@@ -380,6 +386,16 @@ export function ProviderCard({
                 <span className="ml-auto flex items-center gap-1">
                   <Button
                     size="sm"
+                    onClick={() =>
+                      setParamEditing((prev) => (prev === entry.id ? null : entry.id))
+                    }
+                    aria-label={`编辑参数：${providerLabel(provider)} / ${entry.model}`}
+                    aria-expanded={paramEditing === entry.id}
+                  >
+                    参数
+                  </Button>
+                  <Button
+                    size="sm"
                     onClick={() => test(entry.id)}
                     aria-label={`测试模型：${providerLabel(provider)} / ${entry.model}`}
                   >
@@ -411,6 +427,16 @@ export function ProviderCard({
                     </Button>
                   )}
                 </span>
+                {paramEditing === entry.id && (
+                  <div className="basis-full">
+                    <ModelParamsForm
+                      provider={provider}
+                      entry={entry}
+                      onRefresh={onRefresh}
+                      onClose={() => setParamEditing(null)}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

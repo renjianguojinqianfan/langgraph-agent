@@ -152,11 +152,42 @@ export function applyToTask(
         : [...list, next];
       return { ...task, subtasks };
     }
-    case "final_answer":
+    case "final_answer": {
       // The conversation itself is refreshed from REST when the round parks
       // (see TaskView): appending here would duplicate every turn whenever the
       // SSE buffer is replayed on reconnect.
-      return { ...task, final_answer: ev.data.answer ?? task.final_answer };
+      const answer = ev.data.answer ?? task.final_answer;
+      // D-38/D-40: the event carries the redacted reasoning; attach it to the
+      // step that just produced the answer so the collapsed "思考" block is
+      // available without waiting for the parked snapshot (the snapshot stays
+      // authoritative and replaces this on reload). Empty / absent reasoning
+      // adds nothing — non-thinking models must not get an empty block.
+      const reasoning =
+        typeof ev.data.reasoning === "string" ? ev.data.reasoning : "";
+      const lastStep = task.steps[task.steps.length - 1];
+      const lastReasoning =
+        lastStep && typeof lastStep.reasoning === "string" ? lastStep.reasoning : "";
+      // #300 MEDIUM-1: SSE reconnect replays the bus buffer, so an old round's
+      // final_answer can arrive after the next round already opened a step.
+      // Only a *new* answer can own the current last step; a replay (answer
+      // already equal to task.final_answer), a missing step, or an existing
+      // different reasoning on that step are all stale — never attach. (When
+      // two rounds produce identical answer text the late attach is dropped;
+      // the parked snapshot remains authoritative.)
+      const stale =
+        !reasoning ||
+        !lastStep ||
+        answer === task.final_answer ||
+        lastReasoning !== "";
+      if (stale) {
+        return { ...task, final_answer: answer };
+      }
+      const last = task.steps.length - 1;
+      const steps = task.steps.map((step, index) =>
+        index === last ? { ...step, reasoning } : step
+      );
+      return { ...task, steps, final_answer: answer };
+    }
     case "task_failed":
       return { ...task, status: "FAILED", error: ev.data.error ?? task.error };
     case "task_interrupted":

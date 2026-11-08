@@ -411,3 +411,100 @@ describe("压缩标记按回放去重", () => {
     expect(useTaskStore.getState().markers["t1"]).toHaveLength(1);
   });
 });
+
+describe("D-38/D-40: final_answer reasoning 落到步骤", () => {
+  it("带 reasoning 的事件把思考挂到刚产出回答的最后一步", () => {
+    const prev = {
+      ...snapshot({
+        steps: [
+          { index: 1, thought: "先看", tool_calls: [], status: "done" },
+          { index: 2, thought: "答", tool_calls: [], status: "done" },
+        ],
+      }),
+      final_answer: "",
+    };
+    const next = applyToTask(prev, "t1", {
+      type: "final_answer",
+      data: { answer: "最终回答", reasoning: "先读文件，再总结" },
+    });
+    expect(next.final_answer).toBe("最终回答");
+    expect(next.steps[0].reasoning).toBeUndefined();
+    expect(next.steps[1].reasoning).toBe("先读文件，再总结");
+  });
+
+  it("无 reasoning 的事件不给任何步骤加空块", () => {
+    const next = applyToTask(snapshot(), "t1", {
+      type: "final_answer",
+      data: { answer: "普通回答" },
+    });
+    expect(next.final_answer).toBe("普通回答");
+    expect(next.steps.every((step) => step.reasoning === undefined)).toBe(true);
+  });
+
+  it("#300 MEDIUM-1：第 2 轮已开新步时回放第 1 轮 final_answer，不把旧思考挂到新步", () => {
+    const roundOne = {
+      ...snapshot({
+        final_answer: "第一轮答案",
+        steps: [
+          {
+            index: 1,
+            round: 1,
+            thought: "第一轮",
+            tool_calls: [],
+            status: "done" as const,
+            reasoning: "第一轮思考",
+          },
+          { index: 2, round: 2, thought: "", tool_calls: [], status: "running" as const },
+        ],
+      }),
+    };
+    const next = applyToTask(roundOne, "t1", {
+      type: "final_answer",
+      data: { answer: "第一轮答案", reasoning: "第一轮思考" },
+    });
+    expect(next.steps[1].reasoning).toBeUndefined();
+    expect(next.steps[0].reasoning).toBe("第一轮思考");
+    expect(next.final_answer).toBe("第一轮答案");
+  });
+
+  it("#300 MEDIUM-1：回放不覆盖末步已有的另一段思考", () => {
+    const prev = snapshot({
+      final_answer: "第二轮答案",
+      steps: [
+        { index: 1, thought: "第一轮", tool_calls: [], status: "done" },
+        {
+          index: 2,
+          thought: "第二轮",
+          tool_calls: [],
+          status: "done",
+          reasoning: "第二轮思考",
+        },
+      ],
+    });
+    const next = applyToTask(prev, "t1", {
+      type: "final_answer",
+      data: { answer: "第一轮答案", reasoning: "第一轮思考" },
+    });
+    expect(next.steps[1].reasoning).toBe("第二轮思考");
+  });
+
+  it("任务还没有任何步骤时带 reasoning 的 final_answer 不炸、不造步骤", () => {
+    const next = applyToTask(snapshot({ steps: [] }), "t1", {
+      type: "final_answer",
+      data: { answer: "答", reasoning: "想一想" },
+    });
+    expect(next.final_answer).toBe("答");
+    expect(next.steps).toEqual([]);
+  });
+
+  it("回放同一事件幂等（重连不产生重复思考块）", () => {
+    const event = {
+      type: "final_answer" as const,
+      data: { answer: "答", reasoning: "想一想" },
+    };
+    const once = applyToTask(snapshot(), "t1", event);
+    const twice = applyToTask(once, "t1", event);
+    expect(twice.steps[twice.steps.length - 1].reasoning).toBe("想一想");
+    expect(twice.steps.length).toBe(once.steps.length);
+  });
+});

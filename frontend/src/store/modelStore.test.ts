@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ApiResponse,
-  ModelProfile,
-  ModelsData,
+  ModelEntry,
   Provider,
   ProvidersData,
 } from "../types";
@@ -10,15 +9,15 @@ import type {
 vi.mock("../api/client", () => ({
   apiErrorText: (r: { detail?: string } | null) =>
     r && typeof r.detail === "string" ? r.detail : "操作失败",
-  listModels: vi.fn(),
+  listProviderModels: vi.fn(),
   listProviders: vi.fn(),
 }));
 
-import { listModels, listProviders } from "../api/client";
+import { listProviderModels, listProviders } from "../api/client";
 import { useModelStore } from "./modelStore";
 
 const listProvidersMock = vi.mocked(listProviders);
-const listModelsMock = vi.mocked(listModels);
+const listProviderModelsMock = vi.mocked(listProviderModels);
 
 /** A promise plus its resolver, so two refreshes can finish out of order. */
 function deferred<T>() {
@@ -38,34 +37,45 @@ const provider = (id: string): Provider => ({
   preset: false,
   key_set: false,
   key_source: "none",
+  temperature: null,
+  max_tokens: null,
+  thinking: null,
+  reasoning_effort: null,
 });
 
-const profile = (id: string): ModelProfile => ({
-  id: `${id}-model`,
-  name: `Model ${id}`,
-  base_url: `https://${id}.example.com/v1`,
-  model: `${id}-chat`,
-  api_key_env: "LLM_API_KEY",
-  preset: false,
-  key_set: false,
-  key_source: "none",
-  provider_id: id,
-  protocol: "openai-compatible",
+const entry = (providerId: string, model: string): ModelEntry => ({
+  id: `${providerId}-${model}`,
+  provider_id: providerId,
+  model,
+  name: `Model ${model}`,
+  temperature: null,
+  max_tokens: null,
+  thinking: null,
+  reasoning_effort: null,
 });
 
-function providersResponse(id: string): ApiResponse<ProvidersData> {
+function providersResponse(ids: string[]): ApiResponse<ProvidersData> {
   return {
     code: 0,
     message: "ok",
-    data: { providers: [provider(id)], default: `${id}-model` },
+    data: {
+      providers: ids.map(provider),
+      default: ids.length ? `${ids[0]}-m1` : "",
+    },
   };
 }
 
-function modelsResponse(id: string): ApiResponse<ModelsData> {
+function catalogResponse(
+  providerId: string,
+  models: string[]
+): ApiResponse<{ models: ModelEntry[]; default: string }> {
   return {
     code: 0,
     message: "ok",
-    data: { default: `${id}-model`, models: [profile(id)] },
+    data: {
+      models: models.map((model) => entry(providerId, model)),
+      default: `${providerId}-m1`,
+    },
   };
 }
 
@@ -80,97 +90,116 @@ beforeEach(() => {
   });
 });
 
-describe("modelStore refresh (#243 P2-3)", () => {
-  it("populates provider cards + entry ids + default from the two compatibility reads", async () => {
-    listProvidersMock.mockResolvedValue(providersResponse("deepseek"));
-    listModelsMock.mockResolvedValue(modelsResponse("deepseek"));
+describe("modelStore refresh (#243 P2-3 / #267 P2-4b)", () => {
+  it("populates provider cards + raw per-provider catalogs + default", async () => {
+    listProvidersMock.mockResolvedValue(providersResponse(["deepseek", "bailian"]));
+    listProviderModelsMock.mockImplementation((id) =>
+      Promise.resolve(catalogResponse(id, [id === "deepseek" ? "m1" : "qwen-max"]))
+    );
 
     await useModelStore.getState().refresh();
 
     const state = useModelStore.getState();
-    expect(state.providers.map((p) => p.id)).toEqual(["deepseek"]);
-    expect(state.models).toEqual([
-      {
-        id: "deepseek-model",
-        provider_id: "deepseek",
-        model: "deepseek-chat",
-        name: "Model deepseek",
-      },
+    expect(state.providers.map((p) => p.id)).toEqual(["deepseek", "bailian"]);
+    expect(state.models.map((m) => m.id)).toEqual([
+      "deepseek-m1",
+      "bailian-qwen-max",
     ]);
-    expect(state.defaultId).toBe("deepseek-model");
+    // Raw override fields travel through the catalog read (D-36 edit source).
+    expect(state.models[0].temperature).toBeNull();
+    expect(state.defaultId).toBe("deepseek-m1");
     expect(state.error).toBe("");
     expect(state.loading).toBe(false);
   });
 
-  it("drops a stale refresh: an earlier read resolving last cannot overwrite the newer answer (#299 LOW-9)", async () => {
+  it("drops a stale refresh: an earlier read resolving last cannot overwrite the newer answer", async () => {
     const firstProviders = deferred<ApiResponse<ProvidersData>>();
-    const firstModels = deferred<ApiResponse<ModelsData>>();
     const secondProviders = deferred<ApiResponse<ProvidersData>>();
-    const secondModels = deferred<ApiResponse<ModelsData>>();
+    const oldCatalog = deferred<ApiResponse<{ models: ModelEntry[]; default: string }>>();
     listProvidersMock
       .mockReturnValueOnce(firstProviders.promise)
       .mockReturnValueOnce(secondProviders.promise);
-    listModelsMock
-      .mockReturnValueOnce(firstModels.promise)
-      .mockReturnValueOnce(secondModels.promise);
+    listProviderModelsMock.mockImplementation((id) =>
+      id === "new" ? Promise.resolve(catalogResponse("new", ["m1"])) : oldCatalog.promise
+    );
 
     const first = useModelStore.getState().refresh();
     const second = useModelStore.getState().refresh();
 
-    secondProviders.resolve(providersResponse("new"));
-    secondModels.resolve(modelsResponse("new"));
+    secondProviders.resolve(providersResponse(["new"]));
     await second;
     expect(useModelStore.getState().providers.map((p) => p.id)).toEqual(["new"]);
 
-    firstProviders.resolve(providersResponse("old"));
-    firstModels.resolve(modelsResponse("old"));
+    firstProviders.resolve(providersResponse(["old"]));
+    oldCatalog.resolve(catalogResponse("old", ["m1"]));
     await first;
 
     const state = useModelStore.getState();
     expect(state.providers.map((p) => p.id)).toEqual(["new"]);
     expect(state.models.map((m) => m.provider_id)).toEqual(["new"]);
-    expect(state.defaultId).toBe("new-model");
-    // The stale finally must not clear the newer refresh's settled state.
+    expect(state.defaultId).toBe("new-m1");
     expect(state.loading).toBe(false);
   });
 
   it("names a failed provider read and keeps the last snapshot", async () => {
-    listProvidersMock.mockResolvedValue(providersResponse("deepseek"));
-    listModelsMock.mockResolvedValue(modelsResponse("deepseek"));
+    listProvidersMock.mockResolvedValue(providersResponse(["deepseek"]));
+    listProviderModelsMock.mockResolvedValue(catalogResponse("deepseek", ["m1"]));
     await useModelStore.getState().refresh();
 
     listProvidersMock.mockResolvedValue({
       code: 1,
       detail: "providers blew up",
     } as unknown as ApiResponse<ProvidersData>);
-    listModelsMock.mockResolvedValue(modelsResponse("deepseek"));
     await useModelStore.getState().refresh();
 
     const state = useModelStore.getState();
-    // Old snapshot survives; the failed *provider* read is named.
     expect(state.providers.map((p) => p.id)).toEqual(["deepseek"]);
-    expect(state.error).toContain("加载模型配置失败");
     expect(state.error).toContain("providers blew up");
-    expect(state.error).not.toContain("models blew up");
     expect(state.loading).toBe(false);
   });
 
-  it("names a failed flat-catalog read and keeps the last snapshot", async () => {
-    listProvidersMock.mockResolvedValue(providersResponse("deepseek"));
-    listModelsMock.mockResolvedValue(modelsResponse("deepseek"));
+  it("names the failing Provider on a multi-provider catalog read and keeps the others", async () => {
+    listProvidersMock.mockResolvedValue(providersResponse(["ok", "broken"]));
+    listProviderModelsMock.mockImplementation((id) =>
+      Promise.resolve(catalogResponse(id, ["m1"]))
+    );
+    await useModelStore.getState().refresh();
+    expect(useModelStore.getState().models).toHaveLength(2);
+
+    // One provider's catalog now fails; its name/id must be named and the
+    // previous snapshot (both providers' entries) must survive.
+    listProviderModelsMock.mockImplementation((id) =>
+      id === "broken"
+        ? Promise.resolve({
+            code: 1,
+            detail: "catalog blew up",
+          } as unknown as ApiResponse<{ models: ModelEntry[]; default: string }>)
+        : Promise.resolve(catalogResponse(id, ["m1"]))
+    );
     await useModelStore.getState().refresh();
 
-    listProvidersMock.mockResolvedValue(providersResponse("deepseek"));
-    listModelsMock.mockResolvedValue({
+    const state = useModelStore.getState();
+    expect(state.error).toContain("Provider broken（broken）");
+    expect(state.error).toContain("catalog blew up");
+    expect(state.error).toContain("其余 Provider 保持旧快照");
+    expect(state.models.map((m) => m.provider_id)).toEqual(["ok", "broken"]);
+    expect(state.loading).toBe(false);
+  });
+
+  it("names a failed catalog read and keeps the last snapshot", async () => {
+    listProvidersMock.mockResolvedValue(providersResponse(["deepseek"]));
+    listProviderModelsMock.mockResolvedValue(catalogResponse("deepseek", ["m1"]));
+    await useModelStore.getState().refresh();
+
+    listProviderModelsMock.mockResolvedValue({
       code: 1,
-      detail: "models blew up",
-    } as unknown as ApiResponse<ModelsData>);
+      detail: "catalog blew up",
+    } as unknown as ApiResponse<{ models: ModelEntry[]; default: string }>);
     await useModelStore.getState().refresh();
 
     const state = useModelStore.getState();
     expect(state.models.map((m) => m.provider_id)).toEqual(["deepseek"]);
-    expect(state.error).toContain("加载模型配置失败");
-    expect(state.error).toContain("models blew up");
+    expect(state.error).toContain("catalog blew up");
     expect(state.error).not.toContain("providers blew up");
     expect(state.loading).toBe(false);
   });

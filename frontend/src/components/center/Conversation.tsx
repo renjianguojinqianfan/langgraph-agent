@@ -50,6 +50,7 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
             steps={legacy}
             markers={legacyMarkers}
             title="历史执行过程"
+            taskId={task.id}
           />
         )}
 
@@ -66,6 +67,7 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
                   steps={roundSteps}
                   markers={roundMarkers}
                   live={running && last}
+                  taskId={task.id}
                 />
               )}
               {round.answers.map((turn, j) =>
