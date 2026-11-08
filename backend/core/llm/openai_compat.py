@@ -132,11 +132,17 @@ class OpenAICompatibleClient(LLMClient):
         payload.update(self._sampling_payload(kwargs))
 
         stream = self._client.chat.completions.create(**payload)
+        # D-38: streaming reasoning is collected instead of silently dropped.
+        # Each yielded response carries that chunk's delta (a consumer
+        # accumulates by joining `reasoning_content`), and a chunk that only
+        # carries reasoning is still yielded so none of it is lost. The graph
+        # does not consume this stream yet — the UI face is P2-4b.
         for chunk in stream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
             content = getattr(delta, "content", "") or ""
+            reasoning = getattr(delta, "reasoning_content", "") or ""
             tool_calls: List[Dict[str, Any]] = []
             if getattr(delta, "tool_calls", None):
                 for tc in delta.tool_calls:
@@ -147,8 +153,12 @@ class OpenAICompatibleClient(LLMClient):
                             "arguments": {},
                         }
                     )
-            if content or tool_calls:
-                yield LLMResponse(content=content, tool_calls=tool_calls)
+            if content or tool_calls or reasoning:
+                yield LLMResponse(
+                    content=content,
+                    tool_calls=tool_calls,
+                    reasoning_content=reasoning,
+                )
 
 
 # M1 / ADR 0010: DeepSeek is the only built-in preset. Other OpenAI-compatible

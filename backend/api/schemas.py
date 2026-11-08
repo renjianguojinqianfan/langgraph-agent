@@ -68,6 +68,10 @@ class StepRecord(BaseModel):
     #: block instead of guessing a round.
     round: int = 0
     thought: str = ""
+    #: D-38: the model's reasoning for this step. Persisted only after
+    #: `TaskManager.redact_reasoning` (known keys stripped, max 8000 chars);
+    #: the raw trace stays in `state.messages` for the next protocol turn.
+    reasoning: str = ""
     tool_calls: List[ToolCallRecord] = Field(default_factory=list)
     status: str = "pending"  # pending | running | done | failed
 

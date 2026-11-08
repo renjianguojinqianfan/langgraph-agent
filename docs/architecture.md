@@ -101,7 +101,7 @@ data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>
 | `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；旧记录里的 `COMPLETED` 在加载时映射成 `INTERRUPTED` |
 | `TaskMode` | `plan` \| `build`（黏性任务开关，默认 `build`） |
 | `ToolCallRecord` | `id` / `tool_name` / `input`（读入边界归一化：非 dict——旧 list / 标量 / provider 返回的非对象 JSON——包成 `{"value": ...}`，#255；派发读 `state["_current_tool_calls"]`，工具参数不被改写）/ `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
-| `StepRecord` | `index` / `round`（1 起的对话轮次，`0` = #265 前的旧记录）/ `thought` / `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
+| `StepRecord` | `index` / `round`（1 起的对话轮次，`0` = #265 前的旧记录）/ `thought` / `reasoning`（D-38：脱敏 + 单步 ≤8000 字符后落库；原始 trace 只留在 checkpoint 的 `messages` 里供下一轮协议回传）/ `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
 | `SubTask` | `subtask_id` / `name` / `status`（`pending \| running \| completed \| failed`）/ `summary` / `artifacts[]` / `error`。`artifacts` 是**现役字段**（子任务回传用，父任务无产物账本） |
 | `ChatTurn` | `role`（user \| assistant）/ `content`；只存人读的对话，工具流量在 `Task.steps` |
 | `Task` | `id` / `title` / `user_input` / `workspace`（绝对路径，规范化后比较）/ `model`（档案 id，空 = 全局默认）/ `status` / `mode` / `steps[]` / `plan_version` / `plan_hash` / `conversation[]` / `final_answer` / `error` / `created_at` / `updated_at` / `subtasks[]` |
@@ -125,6 +125,8 @@ START → agent ──有 tool call──→ tool ──→ agent
 - 子任务复用同一拓扑，在独立 `thread_id` 上跑，工作区继承父任务。
 
 **AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`round_no` / `step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks` / `_is_subtask`）。
+
+**D-39（reasoning 跨模型兼容）**：`state.messages` 里的 assistant 消息可带内部标记 `_reasoning_from = "<provider_id>:<protocol>"`（原始 `reasoning_content` 仍原样保留供下一轮协议回传）。请求构建时 `_build_messages` 在**副本**上删掉该标记，并在「来源 scope ≠ 当前模型 scope」时一并删 `reasoning_content`；同 provider 且同 protocol 保留。该标记永不出现在出站请求 / SSE / trace / `tasks.json`。升级前无标记的旧 checkpoint 消息按原样保留（已知边界，不做一次性迁移）。
 
 **conversation 账本**：`Task.conversation` 是逐轮只增的用户 / 助手文本账本。收尾（`_finalize_terminal` → `_merge_round_turns`）只追加本轮新增的两样东西——该轮的计划提示与末次回答——不拿 `final["messages"]` 重建：压缩可能已丢掉早期回合，而消息面只保留最新一条计划提示。旧计划提示留在原位（它就是那一轮的回答）；轮次编号按账本里的用户回合数计，压缩因此不会让编号回退。
 
@@ -205,7 +207,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | `step_start` | `{index, round, thought, model, model_profile}` | 一次 `agent` 调用（步）开始；一轮可含多步（工具往返），两种模式同形。`round` 是该步所属的 1 起对话轮次（#265，与 `StepRecord.round` 同源）；`model` / `model_profile` 是本次调用用的模型名与配置 id（M1 / ADR 0010） |
 | `tool_call` | `ToolCallRecord` | 即将/正在调用工具 |
 | `tool_result` | `ToolCallRecord`（含 `output/status`） | 工具返回 |
-| `final_answer` | `{answer:str}` | 本轮的文字回复（不是终态；下一轮会覆盖） |
+| `final_answer` | `{answer:str, reasoning?:str}` | 本轮的文字回复（不是终态；下一轮会覆盖）。`reasoning` 为 D-38 可选字段：仅思考模型有，已脱敏 + ≤8000 字符；无 reasoning 时字段省略，前端不出空块；**不新增事件类型**（`check:sse` 词汇表不变） |
 | `task_failed` | `{task_id, error}` | 失败 |
 | `task_interrupted` | `{task_id, status}` | 停下：人按停、这一轮的最后一次 `agent` 调用没有工具调用、或步数用尽——界面上不加区分（ADR 0008 决策 5） |
 | `task_resumed` | `{task_id, status}` | 从检查点续跑 / 新消息续跑启动（P3；#139 起多轮对话共用） |
