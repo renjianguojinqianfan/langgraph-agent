@@ -508,3 +508,40 @@ describe("D-38/D-40: final_answer reasoning 落到步骤", () => {
     expect(twice.steps.length).toBe(once.steps.length);
   });
 });
+
+describe("step_start 回放不降级已收尾步骤", () => {
+  it("不回退 snapshot 里 done 步骤的 status/thought", () => {
+    const prev = snapshot({
+      final_answer: "最终回答正文",
+      steps: [
+        {
+          index: 1,
+          round: 1,
+          thought: "最终回答正文",
+          tool_calls: [],
+          status: "done",
+        },
+      ],
+    });
+    const next = applyToTask(prev, "t1", {
+      type: "step_start",
+      data: { index: 1, round: 1, thought: "Step 1: planning." },
+    });
+    expect(next.steps[0].status).toBe("done");
+    expect(next.steps[0].thought).toBe("最终回答正文");
+  });
+
+  it("新步骤仍按 step_start 置 running 并写入 thought", () => {
+    const prev = snapshot({
+      steps: [
+        { index: 1, thought: "第一轮", tool_calls: [], status: "done" },
+      ],
+    });
+    const next = applyToTask(prev, "t1", {
+      type: "step_start",
+      data: { index: 2, round: 2, thought: "Step 2: acting." },
+    });
+    expect(next.steps[1].status).toBe("running");
+    expect(next.steps[1].thought).toBe("Step 2: acting.");
+  });
+});

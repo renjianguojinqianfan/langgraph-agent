@@ -63,16 +63,21 @@ export function applyToTask(
     case "step_start": {
       const round = typeof ev.data.round === "number" ? ev.data.round : undefined;
       const t = ensureStep(task, ev.data.index, round);
-      const steps = t.steps.map((s) =>
-        s.index === ev.data.index
-          ? {
-              ...s,
-              ...(round !== undefined ? { round } : {}),
-              thought: ev.data.thought ?? s.thought,
-              status: "running",
-            }
-          : s
-      );
+      const steps = t.steps.map((s) => {
+        if (s.index !== ev.data.index) return s;
+        // #300/#265 replay guard: the task snapshot is authoritative, but an
+        // SSE reconnect replays the bus buffer (step_start included). A
+        // replayed start must not downgrade a step the snapshot already
+        // settled (done/failed) back to "running", nor overwrite its thought
+        // (the backend copies the answer into the final step's thought).
+        const terminal = s.status === "done" || s.status === "failed";
+        return {
+          ...s,
+          ...(round !== undefined ? { round } : {}),
+          thought: terminal ? s.thought : (ev.data.thought ?? s.thought),
+          status: terminal ? s.status : "running",
+        };
+      });
       return { ...t, steps };
     }
     case "tool_call": {
