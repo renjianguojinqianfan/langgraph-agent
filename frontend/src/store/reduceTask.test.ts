@@ -411,3 +411,44 @@ describe("压缩标记按回放去重", () => {
     expect(useTaskStore.getState().markers["t1"]).toHaveLength(1);
   });
 });
+
+describe("D-38/D-40: final_answer reasoning 落到步骤", () => {
+  it("带 reasoning 的事件把思考挂到刚产出回答的最后一步", () => {
+    const prev = {
+      ...snapshot({
+        steps: [
+          { index: 1, thought: "先看", tool_calls: [], status: "done" },
+          { index: 2, thought: "答", tool_calls: [], status: "done" },
+        ],
+      }),
+      final_answer: "",
+    };
+    const next = applyToTask(prev, "t1", {
+      type: "final_answer",
+      data: { answer: "最终回答", reasoning: "先读文件，再总结" },
+    });
+    expect(next.final_answer).toBe("最终回答");
+    expect(next.steps[0].reasoning).toBeUndefined();
+    expect(next.steps[1].reasoning).toBe("先读文件，再总结");
+  });
+
+  it("无 reasoning 的事件不给任何步骤加空块", () => {
+    const next = applyToTask(snapshot(), "t1", {
+      type: "final_answer",
+      data: { answer: "普通回答" },
+    });
+    expect(next.final_answer).toBe("普通回答");
+    expect(next.steps.every((step) => step.reasoning === undefined)).toBe(true);
+  });
+
+  it("回放同一事件幂等（重连不产生重复思考块）", () => {
+    const event = {
+      type: "final_answer" as const,
+      data: { answer: "答", reasoning: "想一想" },
+    };
+    const once = applyToTask(snapshot(), "t1", event);
+    const twice = applyToTask(once, "t1", event);
+    expect(twice.steps[twice.steps.length - 1].reasoning).toBe("想一想");
+    expect(twice.steps.length).toBe(once.steps.length);
+  });
+});

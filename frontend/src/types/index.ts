@@ -40,6 +40,10 @@ export interface StepRecord {
   thought: string;
   tool_calls: ToolCallRecord[];
   status: string; // pending | running | done | failed
+  /** D-38: the model's reasoning for this step, already redacted/truncated by
+   * the service. Absent on records written before the field existed and on
+   * non-thinking models — the block must not render then (D-40). */
+  reasoning?: string;
 }
 
 /** One file in the task workspace (C5). */
@@ -155,9 +159,30 @@ export interface ModelsData {
   models: ModelProfile[];
 }
 
+export type ReasoningEffort = "low" | "medium" | "high";
+
+/** D-36 sampling fields (null / absent = not configured). A model entry
+ * overrides its provider's defaults; with neither set the client falls back to
+ * its documented defaults (temperature 0.2, Anthropic max_tokens 4096). */
+export interface ModelParamFields {
+  temperature?: number | null;
+  max_tokens?: number | null;
+  thinking?: boolean | null;
+  reasoning_effort?: ReasoningEffort | null;
+}
+
+/** Partial entry-parameter write (D-36): an omitted field is unchanged, an
+ * explicit null clears the entry override (back to the provider default). */
+export interface ModelParamsUpdate {
+  temperature?: number | null;
+  max_tokens?: number | null;
+  thinking?: boolean | null;
+  reasoning_effort?: ReasoningEffort | null;
+}
+
 /** One API host (D-34): several model entries share its address / key /
  * protocol. Only key_set / key_source ever leave the backend. */
-export interface Provider {
+export interface Provider extends ModelParamFields {
   id: string;
   name: string;
   protocol: ModelProtocol;
@@ -173,8 +198,9 @@ export interface ProvidersData {
   default: string;
 }
 
-/** One selectable model entry under a provider (`Task.model` stores its id). */
-export interface ModelEntry {
+/** One selectable model entry under a provider (`Task.model` stores its id).
+ * The D-36 fields are the entry's raw overrides (null = inherit provider). */
+export interface ModelEntry extends ModelParamFields {
   id: string;
   provider_id: string;
   model: string;

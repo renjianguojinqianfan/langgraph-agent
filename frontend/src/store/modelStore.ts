@@ -1,18 +1,17 @@
 import { create } from "zustand";
-import { apiErrorText, listModels, listProviders } from "../api/client";
-import { entriesFromProfiles } from "../lib/modelCatalog";
+import { apiErrorText, listProviderModels, listProviders } from "../api/client";
 import { ModelEntry, Provider } from "../types";
 
 /**
- * #243 P2-3: the shared provider + model catalog.
+ * #243 P2-3 / #267 P2-4b: the shared provider + model catalog.
  *
- * Two reads, both compatibility contracts:
- * - `GET /providers` = provider cards (new face, D-34);
- * - `GET /models` = the flat legacy projection, kept as the one-request read
- *   behind the Composer's entry-id → label map (D-34: the old surface is
- *   supported for pre-P2-3 consumers and is not deleted here).
+ * Reads the v2 faces only: `GET /providers` for provider cards (their D-36
+ * defaults included) and `GET /providers/{id}/models` for each catalog. The
+ * per-provider catalog is used instead of the legacy flat `/api/models`
+ * projection because D-36 parameter editing needs each entry's *raw* overrides
+ * (null = inherit), while the projection carries the effective values only.
  *
- * Settings and the Composer both refresh through this store so a provider edit
+ * Settings and the Composer share this store, so a provider/param edit
  * immediately changes the picker.
  */
 interface ModelState {
@@ -24,14 +23,19 @@ interface ModelState {
   loading: boolean;
   /** Empty when the last refresh succeeded. */
   error: string;
-  /** Reload providers + the flat catalog (keys never travel). */
+  /** Reload providers + their raw model catalogs (keys never travel). */
   refresh: () => Promise<void>;
+}
+
+function loadFailure(detail: string): string {
+  return detail && detail !== "操作失败"
+    ? `加载模型配置失败：${detail}`
+    : "加载模型配置失败";
 }
 
 export const useModelStore = create<ModelState>((set) => {
   // Monotonic request id: a slow earlier refresh (open dialog) must not
-  // overwrite a newer answer (post-switch refresh from the Composer) when the
-  // two finish out of order (#299 LOW).
+  // overwrite a newer answer (post-edit refresh) when they finish out of order.
   let refreshSeq = 0;
 
   return {
@@ -44,30 +48,32 @@ export const useModelStore = create<ModelState>((set) => {
       const seq = ++refreshSeq;
       set({ loading: true });
       try {
-        const [providersResult, modelsResult] = await Promise.all([
-          listProviders(),
-          listModels(),
-        ]);
+        const providersResult = await listProviders();
         if (seq !== refreshSeq) return; // superseded by a newer refresh
-        if (providersResult.data && modelsResult.data) {
-          set({
-            providers: providersResult.data.providers ?? [],
-            models: entriesFromProfiles(modelsResult.data.models ?? []),
-            defaultId: providersResult.data.default || modelsResult.data.default || "",
-            error: "",
-          });
-        } else {
-          // Name which read failed: the provider list and the flat catalog are
-          // separate faces, and a silent empty page is not a usable failure.
-          const failed = providersResult.data ? modelsResult : providersResult;
-          const detail = apiErrorText(failed);
-          set({
-            error:
-              detail === "操作失败"
-                ? "加载模型配置失败"
-                : `加载模型配置失败：${detail}`,
-          });
+        if (!providersResult.data) {
+          set({ error: loadFailure(apiErrorText(providersResult)) });
+          return;
         }
+        const providers = providersResult.data.providers ?? [];
+        const catalogs = await Promise.all(
+          providers.map((provider) => listProviderModels(provider.id))
+        );
+        if (seq !== refreshSeq) return;
+        const failed = catalogs.find((catalog) => !catalog.data);
+        if (failed) {
+          set({ error: loadFailure(apiErrorText(failed)) });
+          return;
+        }
+        const models: ModelEntry[] = [];
+        for (const catalog of catalogs) {
+          models.push(...(catalog.data?.models ?? []));
+        }
+        set({
+          providers,
+          models,
+          defaultId: providersResult.data.default || "",
+          error: "",
+        });
       } catch {
         // Keep the last snapshot; the settings page shows the failure note.
         if (seq === refreshSeq) {

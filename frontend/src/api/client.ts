@@ -7,6 +7,7 @@ import {
   FilePreview,
   ModelEntry,
   ModelKeySource,
+  ModelParamsUpdate,
   ModelProfile,
   ModelsData,
   Provider,
@@ -283,6 +284,26 @@ export const updateProvider = (id: string, body: ProviderUpdateRequest) =>
     method: "PUT",
     body: JSON.stringify(body),
   });
+
+/** One provider's raw model catalog (D-36 entry-level overrides included;
+ * the legacy `/api/models` projection only carries the effective values). */
+export const listProviderModels = (id: string) =>
+  req<{ models: ModelEntry[]; default: string }>(
+    `/providers/${encodeURIComponent(id)}/models`
+  );
+
+/** Edit one catalog entry's D-36 parameters (the same partial-edit face the
+ * add form already uses for model / name). An omitted field is unchanged; an
+ * explicit null clears the entry override and falls back to the provider. */
+export const updateProviderModel = (
+  providerId: string,
+  modelId: string,
+  body: ModelParamsUpdate
+) =>
+  req<ModelEntry>(
+    `/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}`,
+    { method: "PUT", body: JSON.stringify(body) }
+  );
 
 /** Envelope parser shared by the status-preserving deletes below. */
 const okEnvelope = (json: unknown): { ok: boolean } | null => {
