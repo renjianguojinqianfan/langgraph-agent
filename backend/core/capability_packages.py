@@ -95,14 +95,14 @@ def resolve_packages(
     name = str(preset).strip() if preset is not None else ""
     if not name:
         raise ValueError(
-            f"empty plugins preset; expected one of {sorted(PRESETS)}. Set "
+            f"empty plugins preset; expected one of {sorted(preset_names())}. Set "
             "plugins_preset (env PLUGINS_PRESET, see .env.example) to a known "
             "preset; data/plugins.json + the settings page arrive in P4-2."
         )
     if name not in PRESETS:
         raise ValueError(
             f"unknown plugins preset {name!r}; expected one of "
-            f"{sorted(PRESETS)}. Set plugins_preset (env PLUGINS_PRESET, see "
+            f"{sorted(preset_names())}. Set plugins_preset (env PLUGINS_PRESET, see "
             ".env.example) to a known preset; data/plugins.json + the settings "
             "page arrive in the next slice (P4-2)."
         )

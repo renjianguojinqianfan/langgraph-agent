@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, List, cast
 
 import pytest
@@ -35,6 +36,8 @@ from backend.core.agent.subagent import (
     EXECUTE_TIER,
     EXPLORE_TIER,
     TOOL_TIERS,
+    SubAgentExecutor,
+    SubTaskSpec,
     resolve_tool_face,
 )
 from backend.core.capability_packages import (
@@ -708,3 +711,85 @@ def test_disabled_tool_is_unknown_and_has_no_side_effect(tmp_path):
     assert rec2["status"] == "failed"
     assert "unknown tool: write" in rec2["error"]
     assert not target.exists()
+
+
+# ── post-merge hardening (#306 late report): single truth / hard attribute ──
+def test_every_registered_tool_belongs_to_a_package():
+    """Reverse registry guard: a new @register tool must be declared in a package."""
+    declared = {name for package in PACKAGES for name in package.tools}
+    assert set(_REGISTRY) == declared
+
+
+def test_subagent_face_flag_matches_the_fixed_tier_membership():
+    """`affects_subagent_face` is derived from the unchanged tier vocabulary.
+
+    The manifest declaration and the actual derivation must not drift: a package
+    affects the sub-agent face exactly when one of its tools is a tier member.
+    """
+    tier_members = {name for names in TOOL_TIERS.values() for name in names}
+    for package in PACKAGES:
+        assert package.affects_subagent_face == bool(
+            set(package.tools) & tier_members
+        ), package.id
+
+
+def test_preset_field_is_a_hard_attribute_not_a_silent_fallback():
+    """MEDIUM-2: an absent field must raise, not fall back to full."""
+    offenders = []
+    for relative in (
+        "backend/cli.py",
+        "backend/main.py",
+        "backend/runtime.py",
+        "backend/repl.py",
+        "backend/services/task_manager.py",
+        "start.py",
+    ):
+        text = (Path(__file__).resolve().parents[2] / relative).read_text(
+            encoding="utf-8"
+        )
+        if 'getattr(settings, "plugins_preset"' in text:
+            offenders.append(relative)
+    assert offenders == []
+
+    with pytest.raises(AttributeError, match="plugins_preset"):
+        build_runtime(SimpleNamespace())
+
+
+def test_child_subtask_inherits_packages_and_injection_fragments(tmp_path, monkeypatch):
+    """Late-report M2: the real `_exec_one` construction reads tm attributes.
+
+    A subtask of a minimal-package parent must not receive the skills catalogue
+    nor a planner prompt that advertises `spawn_subagent`.
+    """
+    settings = make_settings(
+        tmp_path, plugins_preset="minimal", context_inject_enabled=True
+    )
+    _write_injection_fixtures(settings)
+    tm = make_manager(settings, MockLLMClient(final_answer="subtask done"))
+    assert tm.injection_fragments == frozenset()
+
+    captured: dict = {}
+    real_runtime = AgentRuntime
+
+    class _RecordingRuntime(real_runtime):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+            captured["runtime"] = self
+
+    monkeypatch.setattr("backend.core.agent.nodes.AgentRuntime", _RecordingRuntime)
+
+    executor = SubAgentExecutor(tm, settings)
+    result = executor.run_subtask(
+        SubTaskSpec(subtask_id="probe:sub:1", name="probe", instruction="do it")
+    )
+
+    assert result.status == "completed"
+    # The parent manager's resolved fields reach the child runtime verbatim.
+    assert captured["packages"] == tm.packages
+    assert captured["injection_fragments"] == tm.injection_fragments
+    child = captured["runtime"]
+    assert SKILLS_SECTION not in child._inject_block
+    assert AGENTS_SECTION in child._inject_block
+    assert "spawn_subagent" not in child._planner_system
+    assert child._planner_system != PLANNER_SYSTEM

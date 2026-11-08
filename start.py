@@ -194,15 +194,10 @@ def main() -> int:
             # D-55 (#67): resolve the capability preset before claiming the
             # single-backend lock or spawning uvicorn/Vite; an unknown/empty
             # preset fails here with a readable line and zero children.
-            from backend.core.capability_packages import (
-                DEFAULT_PRESET,
-                resolve_packages,
-            )
+            from backend.core.capability_packages import resolve_packages
 
             try:
-                resolve_packages(
-                    getattr(settings, "plugins_preset", DEFAULT_PRESET)
-                )
+                resolve_packages(settings.plugins_preset)
             except ValueError as exc:
                 print(f"[start] {exc}", flush=True)
                 return 2

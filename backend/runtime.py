@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .core.capability_packages import DEFAULT_PRESET, resolve_packages
+from .core.capability_packages import resolve_packages
 from .services.event_bus import EventBus
 from .services.persistence import Persistence
 from .services.task_manager import TaskManager
@@ -34,7 +34,7 @@ def build_runtime(settings: Settings) -> Runtime:
     # D-55 fail-fast: an unknown preset / malformed capability config must fail
     # at startup, before any data is touched (the TaskManager resolves too; this
     # keeps the web/REPL entry error readable and early).
-    resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+    resolve_packages(settings.plugins_preset)
     settings.data_path.mkdir(parents=True, exist_ok=True)
     settings.artifacts_path.mkdir(parents=True, exist_ok=True)
     event_bus = EventBus()

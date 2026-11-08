@@ -28,6 +28,9 @@ from ...services import plan_file
 from ...services.plan_file import extract_plan, plan_hash, write_plan
 from ...utils.logging import get_logger
 from ..capability_packages import INJECTION_SKILLS
+from ..capability_packages import (
+    injection_fragments as resolve_injection_fragments,
+)
 from ..runtime_context import workspace_root
 from ..tools.base import BaseTool, ToolResult
 from . import inject
@@ -125,6 +128,7 @@ class AgentRuntime:
         model_profile: str = "",
         reasoning_scope: str = "",
         packages: Optional[frozenset[str]] = None,
+        injection_fragments: Optional[frozenset[str]] = None,
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
@@ -159,9 +163,14 @@ class AgentRuntime:
         # returns None, so the agent's decision path is unchanged (#136 AC1).
         self.danger_policy: DangerPolicy = DangerPolicy.from_settings(settings)
         # D-56: the skills package owns the skills-catalogue injection fragment.
-        # `packages=None` keeps the pre-#67 behaviour for direct runtime tests;
-        # the manager always passes its resolved set.
-        include_skills = packages is None or INJECTION_SKILLS in packages
+        # The manager passes its resolved set; direct runtime constructions may
+        # pass only `packages` (fragments are then derived from the same manifest)
+        # or neither, which keeps the pre-#67 full-injection behaviour.
+        if injection_fragments is None and packages is not None:
+            injection_fragments = resolve_injection_fragments(packages)
+        include_skills = (
+            injection_fragments is None or INJECTION_SKILLS in injection_fragments
+        )
         # Same rule for the prompt text: a disabled subagent package (or the
         # legacy subagent_enabled switch) must not be advertised in the planner
         # context (neither tool call nor delegation).

@@ -13,7 +13,7 @@ status: accepted
 ## 背景
 
 #67 是「最简 agent 一章」之后的下一章占位票，材料指向
-`docs/capability-registry-rescope.md` G-6 与 `0.2：参照 DSH 的插件可启停能力，
+`docs/capability-registry-rescope.md` G-6 与 §0.2：参照 DSH 的插件可启停能力，
 内置几套固定预设；「关」必须是真关——不留工具、不往上下文里加东西；只装本仓
 自己的代码，插件不当沙箱。旧 spec `capability-package-architecture.md` 里的
 件清单 / 语义核内容已随 ADR 0008、0009 退役，本片按新 spec 重定形态。

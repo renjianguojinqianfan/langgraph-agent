@@ -34,7 +34,6 @@ from ..core.agent.policy import DangerPolicy, warn_unmatched_rules
 from ..core.agent.state import AgentState
 from ..core.agent.subagent import SubAgentExecutor
 from ..core.capability_packages import (
-    DEFAULT_PRESET,
     enabled_tool_names,
     injection_fragments,
     mcp_package_enabled,
@@ -223,13 +222,13 @@ class TaskManager:
         #: The (profile, client) a round is pinned to; subagents inherit it.
         self._round_models: Dict[str, tuple[str, LLMClient]] = {}
         # D-53/D-56 (#67): global capability-package combination, resolved once
-        # at manager construction. §packages§ is the embedding/test seam; the
+        # at manager construction. `packages` is the embedding/test seam; the
         # production path resolves the settings preset here, so an unknown
         # preset fails startup instead of mounting a half face.
         self.packages: frozenset[str] = (
             validate_packages(packages)
             if packages is not None
-            else resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+            else resolve_packages(settings.plugins_preset)
         )
         self.injection_fragments = injection_fragments(self.packages)
         enabled_names = enabled_tool_names(self.packages)
@@ -246,8 +245,8 @@ class TaskManager:
             self._tools = [
                 tool
                 for tool in tools
-                if package_for_tool(tool.name) is None
-                or package_for_tool(tool.name) in self.packages
+                if (owner := package_for_tool(tool.name)) is None
+                or owner in self.packages
             ]
         # D-56: the sub-agent face is derived from the package face (the legacy
         # subagent_enabled switch stays as an extra gate for existing configs).
@@ -1264,6 +1263,7 @@ class TaskManager:
                 model_profile=self.model_id_for(task),
                 reasoning_scope=self.reasoning_scope_for(self.model_id_for(task)),
                 packages=self.packages,
+                injection_fragments=self.injection_fragments,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -1704,6 +1704,7 @@ class TaskManager:
                 model_profile=self.model_id_for(current),
                 reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
                 packages=self.packages,
+                injection_fragments=self.injection_fragments,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -1966,6 +1967,7 @@ class TaskManager:
                 model_profile=self.model_id_for(current),
                 reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
                 packages=self.packages,
+                injection_fragments=self.injection_fragments,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
