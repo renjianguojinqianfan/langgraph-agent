@@ -15,6 +15,7 @@ import pytest
 from backend import cli, repl, server_lock
 from backend.api.schemas import TaskStatus
 from backend.repl import (
+    PROMPT,
     RENDERED_EVENT_TYPES,
     ReplSession,
     configure_stdio_utf8,
@@ -168,6 +169,66 @@ def test_build_runtime_wires_the_same_objects(tmp_path):
         assert (tmp_path / "artifacts").is_dir()
     finally:
         runtime.task_manager.shutdown()
+
+
+def test_real_runtime_runs_two_mock_tasks_in_one_session(tmp_path, monkeypatch):
+    """Spec Testing seam 2: real build_runtime + TaskManager + EventBus, MockLLM.
+
+    Only input/output/sleep are injected — the runtime, task threads, event bus
+    and persistence are the production objects (tmp DATA_DIR). Two tasks are
+    dispatched in one session; the assertions read the real task records, not a
+    scripted history.
+    """
+    script = tmp_path / "mock-script.json"
+    script.write_text('{"final_answer": "integration-answer"}', encoding="utf-8")
+    settings = make_settings(
+        tmp_path, use_mock_llm=True, mock_llm_script_path=str(script)
+    )
+    runtime = build_runtime(settings)
+    shutdown_calls: List[int] = []
+    real_shutdown = runtime.task_manager.shutdown
+
+    def counted_shutdown() -> None:
+        shutdown_calls.append(1)
+        real_shutdown()
+
+    runtime.task_manager.shutdown = counted_shutdown
+
+    out: List[str] = []
+    prompts: List[str] = []
+    lines = iter(["first task", "/new", "second task", "exit"])
+
+    def input_fn(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(lines)
+
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+    code = repl_main(
+        [],
+        runtime_factory=lambda _settings: runtime,
+        input_fn=input_fn,
+        output=out.append,
+        configure_stdio=False,
+    )
+
+    assert code == 0
+    text = "\n".join(out)
+    assert text.count("答: integration-answer") == 2
+    assert sum(line.startswith("● 新任务") for line in out) == 2
+    assert text.count("■ 停下") == 2
+
+    tasks = runtime.task_manager.list_all_tasks()
+    assert len(tasks) == 2
+    # Deterministic terminal state: the round parked, not a timing-dependent
+    # RUNNING leftover.
+    assert all(task.status is TaskStatus.INTERRUPTED for task in tasks)
+
+    # Back at the prompt after each terminal event: base prompt, task prompt,
+    # base prompt (/new), task prompt.
+    assert prompts[0] == PROMPT
+    assert prompts[2] == PROMPT
+    assert sum(prompt.startswith("[") for prompt in prompts) == 2
+    assert shutdown_calls == [1]
 
 
 # ── rendering (D-49 / D-50 + safety) ──
@@ -592,6 +653,13 @@ def test_configure_stdio_utf8_skips_non_reconfigurable_streams():
 
 
 def test_repl_module_entry_starts_and_exits(tmp_path):
+    """Subprocess smoke (entry wiring + exit code).
+
+    AGENTS.md classifies subprocess/process-tree tests separately ("one file per
+    PR + 3 stable runs" before joining the Windows smoke list); this file is NOT
+    on that list yet — the follow-up is recorded in the PR body, not silently
+    assumed.
+    """
     env = os.environ.copy()
     env.update(
         {
