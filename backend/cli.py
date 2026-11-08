@@ -137,6 +137,16 @@ def main(
     when_ready: Optional[Callable[[str, int], None]] = None,
 ) -> int:
     settings = get_settings()
+    # D-45 (#271): the launcher uses the same startup guard as the app
+    # entrypoint (REPL, P3-3, reuses the same function). A bad auth posture
+    # must fail before anything is claimed/served.
+    from .services.auth import ensure_startup_auth_configured
+
+    try:
+        ensure_startup_auth_configured(settings)
+    except RuntimeError as exc:
+        print(f"[qianfan] {exc}")
+        return 1
     dist: Path = settings.frontend_dist_path
     browser: Callable[[str], None] = open_browser or _open_browser
     handoff_browser = open_browser or _open_browser_now

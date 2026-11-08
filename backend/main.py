@@ -34,9 +34,16 @@ from .services.auth import (
 from .services.event_bus import EventBus
 from .services.persistence import Persistence, PersistenceError
 from .services.task_manager import TaskManager
-from .utils.logging import get_logger
+from .utils.logging import get_logger, install_access_log_redaction
 
 logger = get_logger("main")
+
+# D-47 (#271): redact `?token=...` from uvicorn access-log records. Installed at
+# import time so both entries are covered — in-process `uvicorn.run` (`cli`) and
+# `python -m uvicorn backend.main:app` (including the --reload child, which
+# imports this module fresh). The filter is idempotent and only touches the
+# `uvicorn.access` logger.
+install_access_log_redaction()
 
 settings = get_settings()
 
@@ -112,6 +119,9 @@ def create_app(settings: Settings) -> FastAPI:
     # also covers `uvicorn backend.main:app`, because the module-level app is
     # built through this function at import time.
     ensure_loopback_host(settings)
+    # D-45 (#271): the entrypoint guard is reusable (cli / REPL call it too);
+    # calling it here keeps the create_app test seam on the same contract.
+    ensure_startup_auth_configured(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -152,8 +162,13 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.settings = settings
         app.state.event_bus = EventBus()
         app.state.persistence = Persistence(settings)
-        # P1 item 5: token issuer (used by verify_token when auth_enabled=True).
-        app.state.auth = TokenIssuer(settings.auth_token, settings.auth_token_ttl_sec)
+        # P1 item 5 / D-45: the issuer exists only when auth is enabled; the
+        # dependency returns "local" before it ever reads app.state.auth.
+        app.state.auth = (
+            TokenIssuer(settings.auth_token, settings.auth_token_ttl_sec)
+            if settings.auth_enabled
+            else None
+        )
         app.state.task_manager = TaskManager(
             settings,
             app.state.event_bus,
