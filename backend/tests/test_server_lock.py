@@ -672,6 +672,7 @@ def test_launcher_env_pins_the_port_for_both_children(monkeypatch):
 def test_start_passes_the_port_to_the_vite_child(monkeypatch):
     import start
 
+    monkeypatch.setattr(start, "_npm_available", lambda: True)
     monkeypatch.setattr(
         sys, "argv", ["start.py", "--frontend-only", "--port", "9123"]
     )
@@ -696,8 +697,68 @@ def test_start_passes_the_port_to_the_vite_child(monkeypatch):
     monkeypatch.setattr(start, "_run", fake_run)
 
     assert start.main() == 0
-    assert calls and calls[0][0][:2] == ["npm", "run"]
+    assert calls and calls[0][0] == start._npm_cmd("run", "dev")
     assert calls[0][1] is not None and calls[0][1]["PORT"] == "9123"
+
+
+def test_npm_cmd_uses_the_cmd_shim_on_windows():
+    import start
+
+    assert start._npm_cmd("run", "dev", windows=True) == [
+        "cmd.exe",
+        "/c",
+        "npm.cmd",
+        "run",
+        "dev",
+    ]
+    assert start._npm_cmd("run", "dev", windows=False) == ["npm", "run", "dev"]
+
+
+def test_start_refuses_readably_before_any_spawn_when_npm_is_missing(
+    monkeypatch, capsys
+):
+    """Regression: the old path spawned uvicorn first, then died WinError 2."""
+    import start
+
+    monkeypatch.setattr(sys, "argv", ["start.py"])
+    monkeypatch.setattr(start, "_npm_available", lambda: False)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("start must not spawn or claim before the npm preflight")
+
+    monkeypatch.setattr(start, "_run", boom)
+    monkeypatch.setattr(server_lock, "claim_lock", boom)
+
+    assert start.main() == 2
+    out = capsys.readouterr().out
+    assert "npm" in out and "--backend-only" in out
+
+
+def test_start_backend_only_does_not_require_npm(tmp_path, monkeypatch):
+    import start
+
+    lock_file = tmp_path / "server.json"
+    monkeypatch.setattr(server_lock, "lock_path", lambda settings: lock_file)
+    monkeypatch.setattr(start, "_running_server", lambda settings: None)
+    monkeypatch.setattr(start, "_npm_available", lambda: False)
+    monkeypatch.setattr(sys, "argv", ["start.py", "--backend-only"])
+
+    class FakeProc:
+        pid = os.getpid()
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(start, "_run", lambda *args, **kwargs: FakeProc())
+
+    assert start.main() == 0
+    assert server_lock.read_lock(lock_file) is None
 
 
 # ── #259 D-43: loopback host semantics ─────────────────────────────────────
