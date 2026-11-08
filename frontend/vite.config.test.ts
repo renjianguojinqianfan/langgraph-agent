@@ -22,7 +22,11 @@ describe("vite dev proxy (#259 D-41)", () => {
     );
   });
 
-  it("trims an empty PORT back to the default", () => {
+  it("falls back to the default for a non-port PORT value", () => {
     expect(backendProxyTarget({ PORT: "   " })).toBe("http://127.0.0.1:8000");
+    expect(backendProxyTarget({ PORT: "abc" })).toBe("http://127.0.0.1:8000");
+    expect(backendProxyTarget({ PORT: "0" })).toBe("http://127.0.0.1:8000");
+    expect(backendProxyTarget({ PORT: "70000" })).toBe("http://127.0.0.1:8000");
+    expect(backendProxyTarget({ PORT: "9123" })).toBe("http://127.0.0.1:9123");
   });
 });

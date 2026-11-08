@@ -434,21 +434,47 @@ def test_ensure_single_backend_recognises_our_own_instance(tmp_path, monkeypatch
 
 def test_ensure_single_backend_refuses_a_foreign_backend(tmp_path, monkeypatch):
     settings = _guard_settings(tmp_path)
-    monkeypatch.delenv("QIANFAN_INSTANCE", raising=False)
+    monkeypatch.setenv("QIANFAN_INSTANCE", "mine")
     path = server_lock.lock_path(settings)
     assert server_lock.claim_lock(path, _lock(port=9123, instance="other"))
 
-    with pytest.raises(RuntimeError, match="qianfan"):
+    with pytest.raises(RuntimeError, match="已有后台"):
         server_lock.ensure_single_backend(
             settings, probe=lambda port, timeout: {"instance": "other"}, wait=0
         )
 
 
-def test_ensure_single_backend_allows_a_manual_start_with_nothing_running(
-    tmp_path, monkeypatch
-):
+def test_ensure_single_backend_refuses_a_manual_start(tmp_path, monkeypatch):
+    """H2: no QIANFAN_INSTANCE -> refuse outright, launchers only."""
     settings = _guard_settings(tmp_path)
     monkeypatch.delenv("QIANFAN_INSTANCE", raising=False)
+
+    with pytest.raises(RuntimeError, match="手动 uvicorn"):
+        server_lock.ensure_single_backend(
+            settings, probe=lambda port, timeout: None, wait=0
+        )
+
+
+def test_ensure_single_backend_refuses_a_backend_that_is_still_booting(
+    tmp_path, monkeypatch
+):
+    """H1: a live pid whose /health is not up yet is occupied, not absent."""
+    settings = _guard_settings(tmp_path)
+    monkeypatch.setenv("QIANFAN_INSTANCE", "mine")
+    assert server_lock.claim_lock(
+        server_lock.lock_path(settings), _lock(port=9124, instance="other")
+    )
+
+    with pytest.raises(RuntimeError, match="启动中"):
+        server_lock.ensure_single_backend(
+            settings, probe=lambda port, timeout: None, wait=0
+        )
+
+
+def test_ensure_single_backend_allows_a_launcher_with_no_record(tmp_path, monkeypatch):
+    settings = _guard_settings(tmp_path)
+    monkeypatch.setenv("QIANFAN_INSTANCE", "mine")
+
     assert (
         server_lock.ensure_single_backend(
             settings, probe=lambda port, timeout: None, wait=0
@@ -457,14 +483,39 @@ def test_ensure_single_backend_allows_a_manual_start_with_nothing_running(
     )
 
 
+def test_ensure_single_backend_probes_the_configured_host(tmp_path, monkeypatch):
+    """M2: the readiness probe must follow settings.host (::1 included)."""
+    settings = _guard_settings(tmp_path, host="::1")
+    monkeypatch.setenv("QIANFAN_INSTANCE", "mine")
+    captured: dict = {}
+
+    def fake_find_running(path, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(server_lock, "find_running", fake_find_running)
+    assert server_lock.ensure_single_backend(settings, wait=0) is None
+    assert captured["host"] == "::1"
+
+
 def test_lifespan_refuses_when_another_backend_is_running(tmp_path, monkeypatch):
     settings = _guard_settings(tmp_path)
-    monkeypatch.delenv("QIANFAN_INSTANCE", raising=False)
+    monkeypatch.setenv("QIANFAN_INSTANCE", "mine")
     monkeypatch.setattr(
         server_lock,
         "find_running",
         lambda path, **kwargs: _lock(port=9911, instance="other"),
     )
+    guard_app = create_app(settings)
+    with pytest.raises(RuntimeError, match="已有后台"):
+        with TestClient(guard_app):
+            pass
+
+
+def test_lifespan_refuses_a_manual_uvicorn(tmp_path, monkeypatch):
+    """H2: a hand-started app has no instance id and must not serve."""
+    settings = _guard_settings(tmp_path)
+    monkeypatch.delenv("QIANFAN_INSTANCE", raising=False)
     guard_app = create_app(settings)
     with pytest.raises(RuntimeError, match="qianfan"):
         with TestClient(guard_app):
@@ -482,18 +533,31 @@ def test_lifespan_accepts_its_own_registered_instance(tmp_path, monkeypatch):
         assert client.get("/health").json()["instance"] == "mine"
 
 
-def test_manual_uvicorn_without_an_instance_id_warns_once(
-    tmp_path, monkeypatch, caplog
-):
+def test_lifespan_registers_the_worker_pid_without_reload(tmp_path, monkeypatch):
     settings = _guard_settings(tmp_path)
-    monkeypatch.delenv("QIANFAN_INSTANCE", raising=False)
+    lock_file = server_lock.lock_path(settings)
+    server_lock.claim_lock(lock_file, _lock(port=9913, instance="mine"))
+    monkeypatch.setenv("QIANFAN_INSTANCE", "mine")
+    monkeypatch.delenv("QIANFAN_LOCK_KEEP_PID", raising=False)
+
     guard_app = create_app(settings)
-    with caplog.at_level(logging.WARNING, logger="agent.main"):
-        with TestClient(guard_app, base_url="http://localhost") as client:
-            assert client.get("/health").status_code == 200
-    assert any(
-        "QIANFAN_INSTANCE" in record.getMessage() for record in caplog.records
-    )
+    with TestClient(guard_app, base_url="http://localhost"):
+        record = server_lock.read_lock(lock_file)
+        assert record is not None and record.pid == os.getpid()
+
+
+def test_lifespan_keeps_the_supervisor_pid_under_reload(tmp_path, monkeypatch):
+    """M1: --reload workers must not overwrite the supervisor's lock pid."""
+    settings = _guard_settings(tmp_path)
+    lock_file = server_lock.lock_path(settings)
+    server_lock.claim_lock(lock_file, _lock(port=9914, pid=424242, instance="mine"))
+    monkeypatch.setenv("QIANFAN_INSTANCE", "mine")
+    monkeypatch.setenv("QIANFAN_LOCK_KEEP_PID", "1")
+
+    guard_app = create_app(settings)
+    with TestClient(guard_app, base_url="http://localhost"):
+        record = server_lock.read_lock(lock_file)
+        assert record is not None and record.pid == 424242
 
 
 def test_update_lock_pid_swaps_the_launcher_for_the_backend(tmp_path):
@@ -555,6 +619,54 @@ def test_start_claims_the_lock_before_spawning_the_backend(tmp_path, monkeypatch
     assert server_lock.read_lock(lock_file) is None
 
 
+def test_launcher_env_pins_the_port_for_both_children(monkeypatch):
+    import start
+
+    monkeypatch.setenv("KEEP_ME", "yes")
+    monkeypatch.delenv("USE_MOCK_LLM", raising=False)
+    env = start._launcher_env(9123)
+    assert env["PORT"] == "9123"
+    assert env["KEEP_ME"] == "yes"
+    assert "USE_MOCK_LLM" not in env
+    assert start._launcher_env(9000, mock=True)["USE_MOCK_LLM"] == "true"
+
+    base = {"PORT": "1", "KEEP": "x"}
+    overridden = start._launcher_env(8000, base=base)
+    assert overridden["PORT"] == "8000" and overridden["KEEP"] == "x"
+    assert base == {"PORT": "1", "KEEP": "x"}  # pure: the base dict is copied
+
+
+def test_start_passes_the_port_to_the_vite_child(monkeypatch):
+    import start
+
+    monkeypatch.setattr(
+        sys, "argv", ["start.py", "--frontend-only", "--port", "9123"]
+    )
+    calls: list = []
+
+    class FakeProc:
+        pid = 424242
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+    def fake_run(cmd, cwd=None, env=None):
+        calls.append((cmd, env))
+        return FakeProc()
+
+    monkeypatch.setattr(start, "_run", fake_run)
+
+    assert start.main() == 0
+    assert calls and calls[0][0][:2] == ["npm", "run"]
+    assert calls[0][1] is not None and calls[0][1]["PORT"] == "9123"
+
+
 # ── #259 D-43: loopback host semantics ─────────────────────────────────────
 @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1", "LOCALHOST"])
 def test_create_app_accepts_loopback_hosts(tmp_path, monkeypatch, host):
@@ -569,6 +681,25 @@ def test_create_app_refuses_a_non_loopback_host(tmp_path):
     settings = _guard_settings(tmp_path, host="0.0.0.0")
     with pytest.raises(RuntimeError, match="本机访问"):
         create_app(settings)
+
+
+def test_health_accepts_ipv6_loopback_host(tmp_path, monkeypatch):
+    """M2: TrustedHost must match the bracketed IPv6 Host header."""
+    monkeypatch.delenv("QIANFAN_INSTANCE", raising=False)
+    settings = _guard_settings(
+        tmp_path, host="::1", single_backend_guard_enabled=False
+    )
+    ipv6_app = create_app(settings)
+    with TestClient(ipv6_app, base_url="http://[::1]") as client:
+        assert client.get("/health").status_code == 200
+
+
+def test_health_url_brackets_ipv6_hosts():
+    assert server_lock.health_url("::1", 8000) == "http://[::1]:8000/health"
+    assert (
+        server_lock.health_url("127.0.0.1", 8000)
+        == "http://127.0.0.1:8000/health"
+    )
 
 
 # ── #259 D-44: key posture warning ─────────────────────────────────────────
@@ -609,3 +740,30 @@ def test_mock_mode_never_warns_about_keys(tmp_path, caplog):
     store = ModelStore(settings, home_dir=tmp_path / "home")
     with caplog.at_level(logging.WARNING, logger="agent.main"):
         assert warn_if_no_usable_model_key(settings, store) is False
+
+
+class _KeySnapshotStore:
+    """Minimal store double: the startup guard only needs list_public()."""
+
+    def __init__(self, snapshot: dict) -> None:
+        self._snapshot = snapshot
+
+    def list_public(self) -> dict:
+        return self._snapshot
+
+
+def test_key_warning_skips_when_default_is_gone_but_another_entry_has_a_key(
+    tmp_path, caplog
+):
+    """L1: the old default-None shortcut warned despite a usable key."""
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    store = _KeySnapshotStore(
+        {
+            "default": "gone",
+            "models": [{"id": "alt", "key_set": True, "key_source": "pasted"}],
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="agent.main"):
+        warned = warn_if_no_usable_model_key(settings, store)
+    assert warned is False
+    assert "没有可用的模型 Key" not in caplog.text
