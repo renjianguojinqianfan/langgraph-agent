@@ -274,11 +274,16 @@ class TaskManager:
         # the tools really present, so legacy gates and dynamically mounted MCP
         # tools are reflected exactly.
         actual_names = {tool.name for tool in self._tools}
+        static_enabled = enabled_tool_names(self.packages)
         mounted = mounted_tool_names(
             self.packages,
             subagent_enabled=self._subagent_enabled,
+            # Anything actually mounted that the enabled packages do not already
+            # declare must still be reported: dynamic MCP tools, and the edge
+            # where a dynamic name collides with a disabled package's builtin
+            # (e.g. an MCP tool called "write" while the files package is off).
             extra_names=(
-                name for name in actual_names if package_for_tool(name) is None
+                name for name in actual_names if name not in static_enabled
             ),
         )
         self.assembled_tool_names: frozenset[str] = frozenset(

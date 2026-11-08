@@ -151,9 +151,10 @@ def mounted_tool_names(
 
     Single rule for "what package tools are advertised": the enabled packages'
     tool names, minus spawn_subagent when the legacy subagent switch is off, plus
-    dynamically mounted names (e.g. connected MCP tools). TaskManager and the
-    /api/plugins active face both derive from this helper; the manager then
-    intersects it with the tools it really built.
+    dynamically mounted names (connected MCP tools, or a dynamic name colliding
+    with a disabled package's builtin). TaskManager and the /api/plugins active
+    face both derive from this helper; the manager intersects it with the tools
+    it really built.
     """
     names = set(enabled_tool_names(packages))
     if not subagent_enabled:

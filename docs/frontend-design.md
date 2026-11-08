@@ -278,7 +278,7 @@
 - 需求与范围：#54（含 2026-10-23 校准段）。
 - 运行时与契约：[architecture.md](architecture.md) §3.3（REST）/ §3.4（SSE）/ §3.5（错误口径）。
 - 模式与状态机：[ADR 0008](adr/0008-single-loop-plan-build-modes.md)、日常形态 [ADR 0010](adr/0010-launch-dir-workspace-and-model-profiles.md)。
-- 网页验收：[manual-verification.md](manual-verification.md)（9 场景）。
+- 网页验收：[manual-verification.md](manual-verification.md)（10 场景）。
 - 原型：历史存档在分支 `prototype/frontend-redesign`（交互语义已过期，仅视觉参考）；本轮会话稿不入库。**实现以本文与 #54 为准**。
 
 ## 12. 变更记录
