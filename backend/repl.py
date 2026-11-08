@@ -30,6 +30,7 @@ from .config import Settings, ensure_loopback_host, get_settings
 from .runtime import Runtime, build_runtime, model_key_is_missing
 from .services.auth import ensure_startup_auth_configured
 from .services.event_bus import Event
+from .services.persistence import PersistenceError
 from .utils.logging import get_logger
 
 logger = get_logger("repl")
@@ -185,10 +186,15 @@ class ReplSession:
     def display_task(self) -> str:
         return _short_task_id(self.task_id)
 
+    def is_running(self) -> bool:
+        """True while the current task is actually RUNNING (M2 guard)."""
+        return self._status() is TaskStatus.RUNNING
+
     def new_task(self, text: str) -> None:
         self._leave_task()
         self.task_id = self.tm.create_task(None, text)
-        self._output(f"● 新任务 {self.display_task()}")
+        # No manual "新任务" line: create_task publishes task_created and the
+        # post-create subscribe replays it — printing here duplicated it (L1).
         self._subscribe()
         self._run_until_parked()
 
@@ -299,11 +305,19 @@ class ReplSession:
                 return
             now = self._clock()
             if settle_deadline is not None and now >= settle_deadline:
+                self._warn_if_still_running()
                 return
             if now >= deadline:
-                self._output("⚠ 等待任务结束超时；任务可能仍在后台跑（可用 /stop）。")
+                self._warn_if_still_running()
                 return
             self._sleep(self.wait_interval)
+
+    def _warn_if_still_running(self) -> None:
+        """M2: tell the user when the round returned without a parked status."""
+        if self._status() is TaskStatus.RUNNING:
+            self._output(
+                "⚠ 任务仍在跑：可用 /stop 停止，或等它停下再 /new。"
+            )
 
 
 def _busy_message(lock: server_lock.ServerLock) -> str:
@@ -360,6 +374,20 @@ def repl_main(
             if existing is not None and server_lock.pid_alive(existing.pid):
                 emit(_busy_message(existing))
                 return 1
+            # M1: a dead-pid or corrupt record must not wedge the REPL. Use the
+            # same stale-cleanup path cli/start use: dead pid -> release,
+            # unparsable -> drop, live-but-booting -> kept (+None), and a live
+            # backend that answered /health -> handed to _busy_message.
+            running = server_lock.find_running(lock_file, wait=0.0)
+            if running is not None:
+                emit(_busy_message(running))
+                return 1
+            if server_lock.read_lock(lock_file) is not None:
+                emit(
+                    "[repl] 后台启动中（server.json 仍被一个活进程占用）："
+                    f"请稍候再试；若确认没有进程在跑，可手动删除 {lock_file}。"
+                )
+                return 1
             instance = server_lock.new_instance()
             os.environ["QIANFAN_INSTANCE"] = instance
             claimed = server_lock.claim_lock(
@@ -373,9 +401,16 @@ def repl_main(
                 ),
             )
             if not claimed:
-                emit("[repl] 另一个 qianfan 入口刚刚启动；请稍后再试。")
+                emit(
+                    "[repl] 另一个 qianfan 入口刚刚启动；请稍后再试。"
+                    f"若确认没有进程在跑，可手动删除 {lock_file}。"
+                )
                 return 1
-            server_lock.ensure_single_backend(settings, wait=0.0)
+            try:
+                server_lock.ensure_single_backend(settings, wait=0.0)
+            except RuntimeError as exc:
+                emit(f"[repl] {exc}")
+                return 1
 
         runtime = (runtime_factory or build_runtime)(settings)
         if model_key_is_missing(settings, runtime.task_manager.models):
@@ -408,14 +443,19 @@ def repl_main(
                 continue
             if text in ("exit", "quit"):
                 break
-            if text == "/new":
-                session.leave()
-                emit("● 下一条输入创建新任务。")
-                continue
-            if text == "/stop":
-                session.stop()
-                continue
             try:
+                if text == "/new":
+                    # M2: never create a second task while the current one is
+                    # still RUNNING (timeout / slow settle leaves it live).
+                    if session.is_running():
+                        emit("✗ 当前任务还在跑：先 /stop 或等它停下，再 /new。")
+                        continue
+                    session.leave()
+                    emit("● 下一条输入创建新任务。")
+                    continue
+                if text == "/stop":
+                    session.stop()
+                    continue
                 if session.task_id is None:
                     session.new_task(text)
                 else:
@@ -423,7 +463,9 @@ def repl_main(
             except KeyboardInterrupt:
                 session.interrupt_and_stop()
                 continue
-            except (RuntimeError, ValueError) as exc:
+            except (PersistenceError, RuntimeError, ValueError) as exc:
+                # L4: command paths print the reason instead of a raw traceback;
+                # the finally block still shuts the runtime down and frees the lock.
                 emit(f"✗ {exc}")
                 continue
         return 0
