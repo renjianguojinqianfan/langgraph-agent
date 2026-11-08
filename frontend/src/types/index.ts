@@ -256,6 +256,9 @@ export interface PluginPackageInfo {
 export interface PluginConfigured {
   preset: string;
   overrides: Record<string, boolean>;
+  /** Additive backend field: whether data/plugins.json exists at all
+   * (false = defaults, nothing saved yet). Optional for older responses. */
+  exists?: boolean;
 }
 
 /** What the running backend actually assembled (GET /plugins active face). */

@@ -59,7 +59,7 @@ def test_get_plugins_returns_catalogue_saved_and_active(client):
     assert files["connects_mcp"] is False
     assert files["affects_subagent_face"] is True
 
-    assert data["saved"] == {"preset": "full", "overrides": {}}
+    assert data["saved"] == {"preset": "full", "overrides": {}, "exists": False}
     assert data["active"]["preset"] == "full"
     assert data["active"]["overrides"] == {}
     assert set(data["active"]["packages"]) == set(ALL_PACKAGE_IDS)
@@ -79,7 +79,11 @@ def test_put_plugins_writes_the_file_and_reports_restart(client):
     )
     assert response.status_code == 200
     data = _data(response)
-    assert data["saved"] == {"preset": "minimal", "overrides": {"mcp": True}}
+    assert data["saved"] == {
+        "preset": "minimal",
+        "overrides": {"mcp": True},
+        "exists": True,
+    }
     # The running process still serves the old face until restart.
     assert data["active"]["preset"] == "full"
     assert data["restart_required"] is True
@@ -102,7 +106,7 @@ def test_put_same_as_active_reports_no_restart(client):
     )
     assert response.status_code == 200
     data = _data(response)
-    assert data["saved"] == {"preset": "full", "overrides": {}}
+    assert data["saved"] == {"preset": "full", "overrides": {}, "exists": True}
     assert data["restart_required"] is False
     assert plugins_path(settings).is_file()
 
@@ -142,7 +146,11 @@ def test_get_restart_required_tracks_an_external_file_edit(client):
     test_client, settings = client
     _write_config(settings, {"preset": "research", "overrides": {"mcp": False}})
     data = _data(test_client.get("/api/plugins"))
-    assert data["saved"] == {"preset": "research", "overrides": {"mcp": False}}
+    assert data["saved"] == {
+        "preset": "research",
+        "overrides": {"mcp": False},
+        "exists": True,
+    }
     assert data["active"]["preset"] == "full"
     assert data["restart_required"] is True
 
@@ -167,7 +175,10 @@ def test_cli_override_only_marks_restart_until_the_file_matches(
         data = _data(test_client.get("/api/plugins"))
         assert data["active"]["preset"] == "minimal"
         assert data["saved"]["preset"] == "full"
-        assert data["restart_required"] is True
+        # LOW4: no saved file yet -> nothing to restart (the CLI override is
+        # the running configuration); the status must not get stuck on true.
+        assert data["saved"]["exists"] is False
+        assert data["restart_required"] is False
 
         response = test_client.put(
             "/api/plugins", json={"preset": "minimal", "overrides": {}}

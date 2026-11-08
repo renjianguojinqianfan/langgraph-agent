@@ -226,6 +226,11 @@ export function CapabilitiesSection() {
             <span className="font-mono text-machine tabular-nums text-tertiary">
               {activeFaceSummary(data.active).summary}
             </span>
+            {data.saved.exists === false && (
+              <span className="text-meta text-tertiary">
+                尚未保存过能力配置：当前生效面来自默认 / 启动参数。
+              </span>
+            )}
             <span className="text-machine text-tertiary">
               能力包：
               {data.active.packages.length

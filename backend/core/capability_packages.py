@@ -89,22 +89,24 @@ def resolve_packages(
     """Resolve a preset (+ optional per-package overrides) to enabled package ids.
 
     Unknown presets / package ids raise a readable `ValueError`: this is the
-    startup fail-fast required by D-55/D-56. `overrides` is already the shape
-    P4-2's `data/plugins.json` will feed in; P4-1 exposes no file/API path.
+    startup fail-fast required by D-55/D-56. `overrides` is the shape
+    `data/plugins.json` feeds in (written by the settings page / PUT
+    /api/plugins); the env `PLUGINS_PRESET` is only the file-missing fallback.
     """
     name = str(preset).strip() if preset is not None else ""
     if not name:
         raise ValueError(
-            f"empty plugins preset; expected one of {sorted(preset_names())}. Set "
-            "plugins_preset (env PLUGINS_PRESET, see .env.example) to a known "
-            "preset; data/plugins.json + the settings page arrive in P4-2."
+            f"empty plugins preset; expected one of {sorted(preset_names())}. "
+            "Set a known preset via data/plugins.json, the settings page "
+            "「能力」section, or the plugins_preset fallback (env PLUGINS_PRESET, "
+            "see .env.example)."
         )
     if name not in PRESETS:
         raise ValueError(
             f"unknown plugins preset {name!r}; expected one of "
-            f"{sorted(preset_names())}. Set plugins_preset (env PLUGINS_PRESET, see "
-            ".env.example) to a known preset; data/plugins.json + the settings "
-            "page arrive in the next slice (P4-2)."
+            f"{sorted(preset_names())}. Fix data/plugins.json or the settings "
+            "page 「能力」section, or set the plugins_preset fallback (env "
+            "PLUGINS_PRESET, see .env.example)."
         )
     enabled = set(PRESETS[name])
     for package_id, flag in dict(overrides or {}).items():

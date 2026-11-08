@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getTaskSnapshot, listFiles, listTasksSnapshot } from "./client";
+import {
+  apiErrorText,
+  getTaskSnapshot,
+  listFiles,
+  listTasksSnapshot,
+} from "./client";
 import {
   detailLoadFailure,
   detailLoadState,
@@ -178,5 +183,28 @@ describe("listFiles (#258 AC5: 文件列表失败按状态命名)", () => {
     expect(r.status).toBe(0);
     expect(r.data).toBeNull();
     expect(filesLoadFailure(r.status)).toContain("无法连接后台");
+  });
+});
+
+describe("apiErrorText：FastAPI 422 detail 数组（#308 LOW④）", () => {
+  it("从校验错误数组里取 msg，而不是落回「操作失败」", () => {
+    const body = {
+      detail: [
+        { type: "missing", loc: ["body", "preset"], msg: "Field required", input: null },
+      ],
+    };
+    expect(apiErrorText(body)).toBe("Field required");
+  });
+
+  it("多条校验错误 join；字符串 detail 与 envelope message 分支不变", () => {
+    const body = { detail: [{ msg: "preset 非法" }, { message: "overrides 需为对象" }] };
+    expect(apiErrorText(body)).toBe("preset 非法；overrides 需为对象");
+    expect(apiErrorText({ detail: "plain detail" })).toBe("plain detail");
+    expect(apiErrorText({ message: "envelope message" })).toBe("envelope message");
+  });
+
+  it("无可读内容时仍回退「操作失败」", () => {
+    expect(apiErrorText({ detail: [] })).toBe("操作失败");
+    expect(apiErrorText(null)).toBe("操作失败");
   });
 });

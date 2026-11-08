@@ -170,7 +170,6 @@ def create_app(settings: Settings) -> FastAPI:
         # #67 P4-2: GET/PUT /api/plugins compare the running configuration with
         # the saved file; the running one is frozen for this process.
         app.state.plugins_active = runtime.plugins
-        app.state.plugins_saved = runtime.plugins.saved
         # D-44 (#259): startup posture, not client construction -- warn only
         # when no model entry can actually serve a call.
         warn_if_no_usable_model_key(settings, runtime.task_manager.models)

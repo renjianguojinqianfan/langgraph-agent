@@ -67,9 +67,10 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    `data/plugins.json`（文件存在即权威，env 不再生效）> `PLUGINS_PRESET` env
    （仅文件缺失时作为 P4-1 兼容回退）> 默认 `full`**。存储用 atomic 写
    （`*.tmp` + `os.replace`；与 tasks.json / models.json 同款），校验失败不落盘。
-   §GET /api/plugins§ 返回目录 + saved（文件）+ active（本进程启动时装配的面）+
-   `restart_required`（saved 的 preset/overrides 与 active 不同）；§PUT§ 校验后写
-   文件并返回同形状，未知 preset / 包 id → 4xx 且不写。非法文件 / preset 在
+   `GET /api/plugins` 返回目录 + saved（文件 + `exists` 标记）+ active（本进程
+   启动时装配的面）+ `restart_required`（仅当文件存在且其 preset/overrides 与 active
+   不同；无文件时 false）；`PUT` 校验后写文件并返回同形状，未知 preset / 包 id → 4xx
+   且不写。非法文件 / preset 在
    `create_app` / `build_runtime` / CLI / REPL / `start.py` 启动期报可读错误
    （含 `data/plugins.json` 路径与修法），不静默回退 `full`。**CLI `--preset` 不豁免坏
    文件**：文件非法时即使带一次性覆盖也启动即错（文件是权威配置，绕过后 API 的 saved /

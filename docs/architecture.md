@@ -288,9 +288,11 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
   `build_runtime` / CLI / REPL / `start.py` 启动期可读报错（指出文件路径与修法）。
   `GET /api/plugins` 的 `active` 是**实际装配面**：`active.packages` 是启用的能力包，
   `active.tools` 与 `TaskManager` 真实挂载一致（叠加 legacy `subagent_enabled` / `mcp_enabled`
-  等门；MCP 动态工具在服务器连接成功后一并列入，未连接时只有静态工具名）。`saved` 是文件内容；
-  两者不同即 `restart_required=true`。写入失败（IO / 权限 / 磁盘）与校验失败分开：校验 4xx
-  不落盘，写入 500 且旧文件保持；atomic 临时文件名唯一，并发 PUT 不互踩。
+  等门；MCP 动态工具在服务器连接成功后一并列入，未连接时只有静态工具名）。`saved` 是文件内容
+  （含 `exists` 标记）：仅当**文件存在**且 preset/overrides 与 active 不同才
+  `restart_required=true`；无文件时 false（否则「有 env 值、无文件」会永远提示重启）。
+  写入失败（IO / 权限 / 磁盘）与校验失败分开：校验 4xx 不落盘，写入 500 且旧文件保持；
+  atomic 临时文件名唯一，并发 PUT 不互踩。
 - 工具注册：`BaseTool` 子类 + `@register`，由 `registry.build_tools` 自动实例化（新增工具零接线）。
 - **MCP 工具例外**：由 `task_manager` 显式追加（不经 `@register`）；每次 `call_tool` 只执行一次。
 - 危险动作：`policy_rules`（JSON 数组，`{tool, pattern?, reason?}`）在 `agent` 节点里由**一个钩子**匹配入参；命中即不执行，把 `{block, reason}` 当该次调用结果回给模型，记录 `status="skipped"`。**不弹框、不进图重入、不改参数、不 terminate**（与 pi 的有意分歧，ADR 0008 决策 6）。空表 = 不拦，它不是安全边界（见 §7）。

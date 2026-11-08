@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,12 @@ PLUGIN_PRESET_OVERRIDE_ENV = "QIANFAN_PLUGIN_PRESET_OVERRIDE"
 
 #: File name under Settings.data_path.
 PLUGINS_FILE_NAME = "plugins.json"
+
+#: Serialize the write+replace critical section inside this process. Unique
+#: temp names keep concurrent savers from clobbering each other's temp file;
+#: the lock additionally avoids Windows "target briefly held" races between our
+#: own writers (parallel PUTs).
+_SAVE_LOCK = threading.Lock()
 
 
 class PluginsConfigError(ValueError):
@@ -80,7 +87,7 @@ class EffectivePluginsConfig:
     overrides: Dict[str, bool]
     packages: frozenset[str]
     tools: frozenset[str]
-    #: Where the preset came from: cli | file | env | default.
+    #: Where the preset came from: cli | file | env.
     source: str
     saved: SavedPluginsConfig
 
@@ -205,19 +212,24 @@ def save_plugins_config(
     tmp: Optional[Path] = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent)
-        )
-        tmp = Path(tmp_name)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-        try:
-            os.replace(tmp, path)
-        except PermissionError:
-            # Windows: a concurrent PUT can hold the target open for a moment.
-            # Same bounded retry as Persistence._dump.
-            time.sleep(0.05)
-            os.replace(tmp, path)
+        with _SAVE_LOCK:
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent)
+            )
+            tmp = Path(tmp_name)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+            # Windows: AV scanners / a concurrent reader can hold the target
+            # open briefly. Same bounded-retry family as Persistence._dump,
+            # widened because the full offline suite adds disk load.
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
     except OSError as exc:
         if tmp is not None:
             try:
@@ -247,12 +259,19 @@ def resolve_effective_plugins(
     elif saved.exists:
         preset = saved.preset
         source = "file"
-    elif str(settings.plugins_preset).strip():
-        preset = settings.plugins_preset
-        source = "env"
     else:
-        preset = DEFAULT_PRESET
-        source = "default"
+        configured = settings.plugins_preset
+        if configured is None or not str(configured).strip():
+            # P4-1 guard: an empty env/field is a configuration error, not a
+            # silent full fallback (an empty value normally means a broken .env).
+            raise PluginsConfigError(
+                "PLUGINS_PRESET 为空/空白；"
+                f"expected one of {sorted(preset_names())}. "
+                "请设置 minimal / research / full 之一，或删除该变量使用默认 full；"
+                "也可以创建 data/plugins.json / 在设置页「能力」区保存。"
+            )
+        preset = str(configured)
+        source = "env"
     overrides = dict(saved.overrides) if saved.exists else {}
     try:
         packages = resolve_packages(preset, overrides)
@@ -282,7 +301,13 @@ def resolve_effective_plugins(
 
 
 def restart_required(active: EffectivePluginsConfig, saved: SavedPluginsConfig) -> bool:
-    """True when the saved file differs from what this process assembled."""
+    """True when a *saved file* differs from what this process assembled.
+
+    No file means nothing needs restarting: the env/default settings are what is
+    already running, so the status can never get stuck on true.
+    """
+    if not saved.exists:
+        return False
     return (active.preset, dict(active.overrides)) != (
         saved.preset,
         dict(saved.overrides),

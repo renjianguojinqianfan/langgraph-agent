@@ -1046,7 +1046,13 @@ def _plugins_data(
     return {
         "presets": presets_catalog(),
         "packages": packages,
-        "saved": {"preset": saved.preset, "overrides": dict(saved.overrides)},
+        "saved": {
+            "preset": saved.preset,
+            "overrides": dict(saved.overrides),
+            # #308 LOW4 (additive): no file means env/default settings are the
+            # active ones, so restart_required is always false.
+            "exists": saved.exists,
+        },
         "active": {
             "preset": active.preset,
             "overrides": dict(active.overrides),

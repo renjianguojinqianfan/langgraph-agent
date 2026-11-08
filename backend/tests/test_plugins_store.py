@@ -6,6 +6,7 @@ import json
 import os
 import socket
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, List
 
 import pytest
@@ -75,17 +76,33 @@ def _cli_settings(tmp_path, monkeypatch, **overrides):
 
 
 # ── store: missing / valid / invalid / atomic ──
-def test_missing_file_means_default_full(tmp_path):
-    settings = make_settings(tmp_path, plugins_preset="")
+def test_missing_file_with_default_settings_is_full(tmp_path):
+    # The field default is full; with no file it is the env fallback that wins.
+    settings = make_settings(tmp_path)
     saved = load_plugins_config(settings)
     assert saved.preset == DEFAULT_PRESET
     assert saved.overrides == {}
     assert saved.exists is False
 
     effective = resolve_effective_plugins(settings)
-    assert effective.source == "default"
+    assert effective.source == "env"
     assert effective.packages == ALL_PACKAGES
     assert effective.tools == enabled_tool_names(ALL_PACKAGES)
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_empty_env_preset_is_an_error_not_a_silent_full(tmp_path, blank):
+    settings = make_settings(tmp_path, plugins_preset=blank)
+    with pytest.raises(PluginsConfigError, match="PLUGINS_PRESET"):
+        resolve_effective_plugins(settings)
+
+
+def test_missing_env_preset_value_is_an_error_not_a_silent_full(tmp_path):
+    settings = SimpleNamespace(
+        data_path=tmp_path, plugins_preset=None, subagent_enabled=True
+    )
+    with pytest.raises(PluginsConfigError, match="PLUGINS_PRESET"):
+        resolve_effective_plugins(settings)
 
 
 def test_missing_file_falls_back_to_the_env_field(tmp_path):
@@ -209,6 +226,20 @@ def test_restart_required_compares_saved_with_active(tmp_path):
     assert restart_required(active, changed) is True
     same = save_plugins_config(settings, active.preset, dict(active.overrides))
     assert restart_required(active, same) is False
+
+
+def test_restart_required_three_cases(tmp_path):
+    settings = make_settings(tmp_path)
+    active = resolve_effective_plugins(settings)
+
+    # 1) No file: nothing to restart (env/default is what is running).
+    assert restart_required(active, load_plugins_config(settings)) is False
+    # 2) File exists and matches the running configuration.
+    same = save_plugins_config(settings, active.preset, dict(active.overrides))
+    assert restart_required(active, same) is False
+    # 3) File exists and differs from the running configuration.
+    changed = save_plugins_config(settings, "minimal", {})
+    assert restart_required(active, changed) is True
 
 
 def test_invalid_cli_preset_is_readable(tmp_path):

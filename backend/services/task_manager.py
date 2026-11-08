@@ -228,17 +228,12 @@ class TaskManager:
         # the runtime's resolved `plugins` config (file/CLI) > resolve from
         # settings here (direct constructions, P4-1 compatibility). An unknown
         # preset fails startup instead of mounting a half face.
-        self.plugins_config: Optional[EffectivePluginsConfig]
         if packages is not None:
             self.packages = validate_packages(packages)
-            self.plugins_config = plugins
         elif plugins is not None:
             self.packages = plugins.packages
-            self.plugins_config = plugins
         else:
-            resolved = resolve_effective_plugins(settings)
-            self.packages = resolved.packages
-            self.plugins_config = resolved
+            self.packages = resolve_effective_plugins(settings).packages
         self.injection_fragments = injection_fragments(self.packages)
         enabled_names = enabled_tool_names(self.packages)
         if tools is None:
