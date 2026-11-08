@@ -6,7 +6,7 @@ status: accepted
 
 > 2026-11-08 由 spec #287 Phase 4（#67）P4-1…P4-3 三片落地；拍板点为 spec #287 的
 > D-53 … D-57。本文只记决策与边界，不复制实施细节；现役装配事实以
-> `docs/architecture.md` `4.5 / `4.6 与 `backend/core/capability_packages.py` 为准。
+> `docs/architecture.md` 的 4.5 / 4.6 节与 `backend/core/capability_packages.py` 为准。
 > 上一章最简 agent 的退役清单见 [ADR 0009](0009-minimal-agent-chapter.md)；本 ADR
 > **不复活**其中退役的语义核四节点、件清单与冻结区约束，只引入「能力包 / 预设」两个词。
 
