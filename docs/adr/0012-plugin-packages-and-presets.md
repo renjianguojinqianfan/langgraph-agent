@@ -4,7 +4,7 @@ status: accepted
 
 # 插件 + 预设：能力包与全局组合（真关）
 
-> 2026-11-08 由 spec #287 Phase 4 切片 P4-1（#67）落地；拍板点为 spec #287 的
+> 2026-11-08 由 spec #287 Phase 4（#67）P4-1…P4-3 三片落地；拍板点为 spec #287 的
 > D-53 … D-57。本文只记决策与边界，不复制实施细节；现役装配事实以
 > `docs/architecture.md` `4.5 / `4.6 与 `backend/core/capability_packages.py` 为准。
 > 上一章最简 agent 的退役清单见 [ADR 0009](0009-minimal-agent-chapter.md)；本 ADR
@@ -19,12 +19,13 @@ status: accepted
 件清单 / 语义核内容已随 ADR 0008、0009 退役，本片按新 spec 重定形态。
 
 P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json`、设置页、
-`qianfan --preset`、API 属 P4-2，不在本片。
+`qianfan --preset`、API 属 P4-2，不在本片。（P4-2 / P4-3 已于 2026-11-08 交付，
+承载面与优先级见决策 8。）
 
 ## 决策
 
 1. **全局组合、服务级生效（D-53）**：一个后台进程只有一套能力包组合，启动时解析、
-   改完重启生效（设置页在 P4-2 明示）。**不做每任务预设**：G-2 的学习场景是
+   改完重启生效（设置页「能力」区已明示）。**不做每任务预设**：G-2 的学习场景是
    同一道题在不同全局组合下对比，任务级会把「任务 × 组合 × 持久化」的状态矩阵
    与续跑语义乘上去；重开条件见文末。
 2. **承载面（D-54）**：`data/plugins.json` 形态 =
@@ -50,7 +51,8 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    import」**：import 是 Python 的加载形态，不是能力面；真关约束的是实例化与接线。
    `explore` / `execute` 两个子代理 tier 常量**零改动**；子代理实际面 =
    固定档位 ∩ 已启用包（父任务已挂载工具再与 tier 求交）。未知 preset / 非法
-   包 id 一律**启动即错**（可读错误指向 `.env.example` 与 P4-2 设置页）。
+   包 id 一律**启动即错**（可读错误指向 `.env.example`、`data/plugins.json` 与
+   设置页「能力」区）。
 5. **装配面（D-56）**：`TaskManager` 从「启用包清单」装配工具面与注入片段；
    `nodes.py` 对 `spawn_subagent` 的特殊照顾改为由面派生（禁用 `subagent` 时工具
    自然缺席、执行器不构造）；MCP 只在 `mcp` 包启用且 `mcp_enabled` 时连接
@@ -77,7 +79,7 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    restart_required 会与真相不一致）。写文件失败（IO / 权限 / 磁盘）与校验失败分开：
    校验错误 4xx 不落盘；写入失败 500（旧文件保持、unique 临时文件清理），并发 PUT 不共用
    固定临时名。`GET /api/plugins` 的 `active.tools` 是实际装配面（含 legacy 开关与已连接
-   的 MCP 动态工具），与 `TaskManager` 共用同一个 pure 派生 helper。P4-3 补三预设 ×
+   的 MCP 动态工具），与 `TaskManager` 共用同一个 pure 派生 helper。P4-3 已补三预设 ×
    overrides 的**面快照**、**文件配置的关闭面端到端**（schema / dispatch / 注入 / MCP /
    子代理面）与文档对账——无新增决策；#67 到此交付完成（真机手测归 P5-1）。
 
@@ -109,8 +111,9 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
 2. **两个「开关」并存**：`subagent_enabled` / `mcp_enabled` 仍是附加门，
    `subagent` / `mcp` 包是能力面门；两者都开才挂载。文档写清「默认 full =
    现行为」，避免把旧开关当已退役。
-3. **重启生效的 UX 债**：P4-1 只能改 `.env` / 环境变量并重启；P4-2 的设置页要
-   明确「保存后需重启后台」并做文件校验与回退。
+3. **重启生效的 UX 债（P4-2 已收口）**：P4-1 当时只能改 `.env` / 环境变量并重启；P4-2 的
+   设置页「能力」区已明示「保存后需重启后台」，并做文件校验（未知 preset / 包 id → 可读错误、
+   不落盘）与失败回退（保存失败保留旧快照、可重试）。
 
 ## 重开条件
 
