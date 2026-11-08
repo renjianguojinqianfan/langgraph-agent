@@ -23,9 +23,20 @@ function processEnv(): ProxyEnv {
   return proc?.env ?? {};
 }
 
+function parseBackendPort(raw: string | undefined): number {
+  // L4 (#259): only a positive integer in the valid port range is a port;
+  // anything else (empty, "abc", "0", "70000") falls back to 8000 instead of
+  // building a broken proxy URL.
+  const text = raw?.trim() ?? "";
+  if (!/^[0-9]+$/.test(text)) {
+    return DEFAULT_BACKEND_PORT;
+  }
+  const port = Number(text);
+  return port >= 1 && port <= 65535 ? port : DEFAULT_BACKEND_PORT;
+}
+
 export function backendProxyTarget(env: ProxyEnv = processEnv()): string {
-  const port = env.PORT?.trim() || String(DEFAULT_BACKEND_PORT);
-  return `http://127.0.0.1:${port}`;
+  return `http://127.0.0.1:${parseBackendPort(env.PORT)}`;
 }
 
 // /health is proxied too: it is outside /api but the dev page and manual

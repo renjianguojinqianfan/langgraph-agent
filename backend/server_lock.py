@@ -166,9 +166,21 @@ def _windows_pid_alive(pid: int) -> bool:
         close_handle(handle)
 
 
-def probe_health(port: int, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
+def health_url(host: str, port: int) -> str:
+    """The health URL for a configured loopback host (M2 / #259).
+
+    IPv6 literals need brackets in a URL authority; callers pass the plain
+    configured host (`::1`), never a pre-bracketed form.
+    """
+    target = f"[{host}]" if ":" in host else host
+    return f"http://{target}:{port}/health"
+
+
+def probe_health(
+    port: int, timeout: float = 1.0, host: str = "127.0.0.1"
+) -> Optional[Dict[str, Any]]:
     try:
-        with urlrequest.urlopen(f"http://127.0.0.1:{port}/health", timeout=timeout) as response:
+        with urlrequest.urlopen(health_url(host, port), timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception:
         return None
@@ -177,9 +189,10 @@ def probe_health(port: int, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
 def find_running(
     lock_file: Path,
     *,
-    probe: Callable[[int, float], Optional[Dict[str, Any]]] = probe_health,
+    probe: Optional[Callable[[int, float], Optional[Dict[str, Any]]]] = None,
     wait: float = 15.0,
     interval: float = 0.2,
+    host: str = "127.0.0.1",
 ) -> Optional[ServerLock]:
     """Return the live backend, or clear a stale record and return None.
 
@@ -197,9 +210,14 @@ def find_running(
     if not pid_alive(lock.pid):
         release_lock(lock_file, lock.instance)
         return None
+    effective_probe = probe
+    if effective_probe is None:
+
+        def effective_probe(target_port: int, target_timeout: float) -> Optional[Dict[str, Any]]:
+            return probe_health(target_port, target_timeout, host=host)
     deadline = time.monotonic() + wait
     while True:
-        health = probe(lock.port, 1.0)
+        health = effective_probe(lock.port, 1.0)
         if health is not None:
             if str(health.get("instance") or "") == lock.instance:
                 return lock
@@ -213,37 +231,55 @@ def find_running(
 def ensure_single_backend(
     settings: Any,
     *,
-    probe: Callable[[int, float], Optional[Dict[str, Any]]] = probe_health,
+    probe: Optional[Callable[[int, float], Optional[Dict[str, Any]]]] = None,
     wait: float = 1.0,
     instance: Optional[str] = None,
 ) -> Optional[ServerLock]:
-    """D-42 (#259): startup guard — never serve beside a different live backend.
+    """D-42 (#259): startup guard — only launcher-managed backends may serve.
 
     The caller's own identity comes from `QIANFAN_INSTANCE` (set by `cli` /
     `start.py`). When the recorded instance is ours we return immediately
     instead of probing our own health: `find_running` would otherwise wait for
     a server that is this very process, i.e. "waiting on ourselves".
 
-    A different live instance raises (the app is expected to fail startup; the
-    launcher `cli` treats the same condition as a handoff). A manual
-    `uvicorn backend.main:app` has no instance id: it is refused while anything
-    runs, and the caller only warns about the missing id when nothing runs.
+    A manual `uvicorn backend.main:app` has no instance id and is refused
+    outright (H2): allowing it would bypass the single-backend, loopback-host
+    and key-posture guards that only the launchers wire up. A different live
+    instance raises (the app fails startup; `cli` treats the same condition as
+    a handoff). A record whose pid is alive but whose `/health` never answers is
+    a *boot in progress*, not "nothing running" (H1): refusing it closes the
+    window in which a second writer could start.
     """
     lock_file = lock_path(settings)
     own = instance if instance is not None else os.environ.get("QIANFAN_INSTANCE", "")
+    if not own:
+        raise RuntimeError(
+            "手动 uvicorn 启动被拒绝：没有 QIANFAN_INSTANCE 实例标识，"
+            "会绕过单后台 / 回环 host / Key 启动守卫。请用 `qianfan`（日常）"
+            "或 `python start.py`（开发）启动。"
+        )
     record = read_lock(lock_file)
-    if record is not None and own and record.instance == own:
+    if record is not None and record.instance == own:
         return record
-    running = find_running(lock_file, probe=probe, wait=wait)
-    if running is None:
-        return None
-    if own and running.instance == own:
-        return running
-    raise RuntimeError(
-        f"已有后台在 http://127.0.0.1:{running.port}/ 运行；"
-        "同一台机器只允许一个后台写 data/。请直接打开现有页面，"
-        "或先停掉它（关掉启动它的终端）；手动 uvicorn 请改用 qianfan。"
-    )
+    host = str(getattr(settings, "host", "") or "127.0.0.1").strip() or "127.0.0.1"
+    running = find_running(lock_file, probe=probe, wait=wait, host=host)
+    if running is not None:
+        if running.instance == own:
+            return running
+        raise RuntimeError(
+            f"已有后台在 http://{host}:{running.port}/ 运行；"
+            "同一台机器只允许一个后台写 data/。请直接打开现有页面，"
+            "或先停掉它（关掉启动它的终端）；手动 uvicorn 请改用 qianfan。"
+        )
+    # find_running returns None both for "no record" and for "live pid, health
+    # not up (still booting, record kept)". Only the latter is occupied.
+    pending = read_lock(lock_file)
+    if pending is not None and pid_alive(pending.pid):
+        raise RuntimeError(
+            f"后台正在启动中（pid={pending.pid}, port={pending.port}）："
+            "请稍候再试，或直接使用 qianfan；不要同时启动第二个后台。"
+        )
+    return None
 
 
 def update_lock_pid(path: Path, instance: str, pid: int) -> bool:
@@ -253,6 +289,12 @@ def update_lock_pid(path: Path, instance: str, pid: int) -> bool:
     launcher can slip a writer in during the boot gap), then rewrites the pid
     once the child exists. False means the record was lost or taken over; the
     launcher must back out instead of running unregistered.
+
+    `uvicorn --reload` complicates this (M1): the recorded pid must stay the
+    reload *supervisor* (the launcher-spawned process that survives reloads),
+    not a worker — a worker pid dies on every reload and a stale-detector would
+    then free a lock the supervisor still holds. `start.py` sets
+    `QIANFAN_LOCK_KEEP_PID` and the app lifespan skips this transfer.
     """
     lock = read_lock(path)
     if lock is None or lock.instance != instance:

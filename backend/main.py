@@ -48,7 +48,9 @@ logger.info(auth_state_message(settings))
 # DNS-rebinding guard (ADR 0009 decision 5): the service is opened as localhost,
 # so any other Host name is refused before routing. Independent of
 # ``settings.host`` on purpose — this chapter does not support remote access.
-TRUSTED_HOSTS = ["127.0.0.1", "localhost"]
+# Starlette's TrustedHostMiddleware compares the parsed host with brackets kept
+# around IPv6 literals ("[::1]"), so the IPv6 loopback entry is bracketed (M2).
+TRUSTED_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"]
 
 
 def warn_if_no_usable_model_key(settings: Settings, store: Any) -> bool:
@@ -69,7 +71,9 @@ def warn_if_no_usable_model_key(settings: Settings, store: Any) -> bool:
     default = next((m for m in models if m.get("id") == default_id), None)
     default_source = str((default or {}).get("key_source") or "none")
     any_key = any(bool(m.get("key_set")) for m in models)
-    if default is not None and (default_source != "none" or any_key):
+    # Any usable key anywhere is enough (L1: the old default-is-None shortcut
+    # warned even when another entry demonstrably had a key).
+    if default_source != "none" or any_key:
         return False
     logger.warning(
         "没有可用的模型 Key：默认模型 %r 的来源是 none，且没有任何模型条目配过 Key。"
@@ -113,8 +117,10 @@ def create_app(settings: Settings) -> FastAPI:
     async def lifespan(app: FastAPI):
         # D-42 (#259): single-backend guard before touching data/. The launcher
         # passes its identity through `QIANFAN_INSTANCE`, which is what stops
-        # this guard from "waiting on ourselves"; a hand-started uvicorn has no
-        # id and is refused while any other backend runs.
+        # this guard from "waiting on ourselves". A hand-started
+        # `uvicorn backend.main:app` has no id and is refused outright (H2):
+        # only the launchers wire up the host / key guards, so a manual start
+        # would silently skip them.
         if settings.single_backend_guard_enabled:
             own_instance = os.environ.get("QIANFAN_INSTANCE", "")
             try:
@@ -122,20 +128,25 @@ def create_app(settings: Settings) -> FastAPI:
             except RuntimeError as exc:
                 logger.error("%s", exc)
                 raise
-            if not own_instance:
-                logger.warning(
-                    "未通过 qianfan / start.py 启动（缺少 QIANFAN_INSTANCE 实例标识）："
-                    "本次按手动开发模式放行，单后台守卫只在 qianfan / start.py 下生效。"
-                )
-            elif not server_lock.update_lock_pid(
-                server_lock.lock_path(settings), own_instance, os.getpid()
-            ):
-                # The launcher's record vanished mid-boot: keep serving, but say
-                # so -- a second launcher would otherwise think nobody is home.
-                logger.warning(
-                    "单实例记录已被接管：本次启动未登记 pid（instance=%s）",
-                    own_instance,
-                )
+            # M1 (#259): start.py runs `uvicorn --reload`; its spawned process
+            # is the reload *supervisor* and stays alive across reloads, so the
+            # lock keeps the supervisor pid. Transferring this worker pid would
+            # make the record look stale on the next reload while the
+            # supervisor is still serving.
+            keep_supervisor_pid = os.environ.get(
+                "QIANFAN_LOCK_KEEP_PID", ""
+            ).strip().lower() in {"1", "true", "yes"}
+            if own_instance and not keep_supervisor_pid:
+                if not server_lock.update_lock_pid(
+                    server_lock.lock_path(settings), own_instance, os.getpid()
+                ):
+                    # The launcher's record vanished mid-boot: keep serving, but
+                    # say so -- a second launcher would otherwise think nobody
+                    # is home.
+                    logger.warning(
+                        "单实例记录已被接管：本次启动未登记 pid（instance=%s）",
+                        own_instance,
+                    )
         settings.data_path.mkdir(parents=True, exist_ok=True)
         settings.artifacts_path.mkdir(parents=True, exist_ok=True)
         app.state.settings = settings

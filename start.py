@@ -95,11 +95,32 @@ def _install_backend_deps() -> None:
         Path(filtered).unlink(missing_ok=True)
 
 
+def _launcher_env(port: int, *, mock: bool = False, base: dict | None = None) -> dict:
+    """Environment shared by the backend and Vite children (D-41 / #259).
+
+    The single `PORT` value is what keeps `--port`, the backend's own-origin
+    CORS list and the Vite proxy target in step (frontend/vite.config.ts reads
+    the same variable). The dict is a copy: callers may add launcher-private
+    entries (`QIANFAN_INSTANCE` / `QIANFAN_LOCK_KEEP_PID`) without touching the
+    parent process environment, and a supplied `base` is never mutated.
+    """
+    env = dict(os.environ if base is None else base)
+    env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PORT"] = str(port)
+    if mock:
+        env["USE_MOCK_LLM"] = "true"
+    return env
+
+
 def _running_server(settings):
     """The live qianfan/dev backend, if one is registered (W2)."""
     from backend import server_lock
 
-    return server_lock.find_running(server_lock.lock_path(settings))
+    # M2 (#259): probe the configured loopback host, not always 127.0.0.1, so a
+    # ::1-bound dev backend is still recognised as running.
+    return server_lock.find_running(
+        server_lock.lock_path(settings), host=settings.host
+    )
 
 
 def _refuse_if_running(settings) -> bool:
@@ -127,15 +148,11 @@ def main() -> int:
     if args.install:
         _install_backend_deps()
         print("[start] installing frontend deps...")
-        subprocess.run(["npm", "install"], cwd=str(ROOT / "frontend"), check=True)
+        subprocess.run(["npm", "ci"], cwd=str(ROOT / "frontend"), check=True)
 
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    # Keep the backend's settings in step with --port: CORS derives the app's
-    # own origin from `settings.port`.
-    env["PORT"] = str(args.port)
-    if args.mock:
-        env["USE_MOCK_LLM"] = "true"
+    # Both children (uvicorn and Vite) get the same PORT: the backend's CORS
+    # own-origin follows settings.port, and the Vite proxy reads it too (D-41).
+    env = _launcher_env(args.port, mock=args.mock)
 
     # backend.server_lock is stdlib-only; backend.config needs the runtime deps
     # and is imported only when this launch actually starts the backend.
@@ -181,6 +198,11 @@ def main() -> int:
                 )
                 return 2
             env["QIANFAN_INSTANCE"] = instance
+            # M1 (#259): --reload spawns a supervisor + reload workers. The
+            # record must keep the supervisor pid (the process the launcher
+            # spawned), so the app lifespan must not overwrite it with a worker
+            # pid that dies on every reload.
+            env["QIANFAN_LOCK_KEEP_PID"] = "1"
             backend_cmd = [
                 sys.executable, "-m", "uvicorn", "backend.main:app",
                 "--host", settings.host, "--port", str(args.port), "--reload",
