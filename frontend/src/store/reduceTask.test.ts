@@ -441,6 +441,53 @@ describe("D-38/D-40: final_answer reasoning 落到步骤", () => {
     expect(next.steps.every((step) => step.reasoning === undefined)).toBe(true);
   });
 
+  it("#300 MEDIUM-1：第 2 轮已开新步时回放第 1 轮 final_answer，不把旧思考挂到新步", () => {
+    const roundOne = {
+      ...snapshot({
+        final_answer: "第一轮答案",
+        steps: [
+          {
+            index: 1,
+            round: 1,
+            thought: "第一轮",
+            tool_calls: [],
+            status: "done" as const,
+            reasoning: "第一轮思考",
+          },
+          { index: 2, round: 2, thought: "", tool_calls: [], status: "running" as const },
+        ],
+      }),
+    };
+    const next = applyToTask(roundOne, "t1", {
+      type: "final_answer",
+      data: { answer: "第一轮答案", reasoning: "第一轮思考" },
+    });
+    expect(next.steps[1].reasoning).toBeUndefined();
+    expect(next.steps[0].reasoning).toBe("第一轮思考");
+    expect(next.final_answer).toBe("第一轮答案");
+  });
+
+  it("#300 MEDIUM-1：回放不覆盖末步已有的另一段思考", () => {
+    const prev = snapshot({
+      final_answer: "第二轮答案",
+      steps: [
+        { index: 1, thought: "第一轮", tool_calls: [], status: "done" },
+        {
+          index: 2,
+          thought: "第二轮",
+          tool_calls: [],
+          status: "done",
+          reasoning: "第二轮思考",
+        },
+      ],
+    });
+    const next = applyToTask(prev, "t1", {
+      type: "final_answer",
+      data: { answer: "第一轮答案", reasoning: "第一轮思考" },
+    });
+    expect(next.steps[1].reasoning).toBe("第二轮思考");
+  });
+
   it("任务还没有任何步骤时带 reasoning 的 final_answer 不炸、不造步骤", () => {
     const next = applyToTask(snapshot({ steps: [] }), "t1", {
       type: "final_answer",

@@ -74,33 +74,33 @@ export function StepRow({
       {open && (
         <div className="flex flex-col gap-1.5 pb-2 pl-5 pr-1">
           {hasReasoning && (
-            <div className="rounded-well border border-rule bg-surface-well">
+            <div className="rounded-well bg-surface-well">
               <button
                 type="button"
                 aria-expanded={reasoningOpen}
                 aria-controls={reasoningId}
                 aria-label={reasoningOpen ? "收起模型思考" : "展开模型思考"}
                 onClick={() => setReasoningOpen((value) => !value)}
-                className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-meta text-tertiary"
+                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-meta text-tertiary"
               >
-                <Icon
-                  name="chevron"
-                  size={12}
-                  className={cx(
-                    "transition-transform duration-150",
-                    reasoningOpen && "rotate-180"
-                  )}
-                />
                 <span>思考</span>
                 <span className="ml-auto text-machine">
                   {reasoningOpen ? "收起" : "展开"}
                 </span>
+                <Icon
+                  name="chevron"
+                  size={12}
+                  className={cx(
+                    "shrink-0 transition-transform duration-150",
+                    reasoningOpen && "rotate-180"
+                  )}
+                />
               </button>
               <p
                 id={reasoningId}
                 hidden={!reasoningOpen}
                 className={cx(
-                  "max-h-60 overflow-y-auto overscroll-contain whitespace-pre-wrap px-2 pb-2 text-meta text-secondary",
+                  "max-h-60 overflow-y-auto overscroll-contain whitespace-pre-wrap border-t border-rule px-2 py-2 text-meta text-secondary",
                   LONG_TEXT
                 )}
               >

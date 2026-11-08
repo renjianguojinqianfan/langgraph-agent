@@ -271,9 +271,11 @@ export const putTaskModel = (
   });
 
 // ── #243 P2-2/P2-3: providers + model catalog (D-34) ──
-// The legacy /api/models surface above stays the flat compatibility projection
-// (listModels is still the single read behind the Composer's id → label map);
-// these are the v2 write faces the settings page drives.
+// The legacy /api/models surface above stays as the flat compatibility
+// projection; since #267 the production consumers read `GET /providers` plus
+// each provider's raw catalog (`GET /providers/{id}/models`) and `listModels`
+// has no live consumer left — it is kept for the documented legacy face only.
+// These are the v2 write faces the settings page drives.
 export const listProviders = () => req<ProvidersData>("/providers");
 
 export const createProvider = (body: ProviderCreateRequest) =>

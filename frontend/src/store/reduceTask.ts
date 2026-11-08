@@ -164,7 +164,22 @@ export function applyToTask(
       // adds nothing — non-thinking models must not get an empty block.
       const reasoning =
         typeof ev.data.reasoning === "string" ? ev.data.reasoning : "";
-      if (!reasoning || task.steps.length === 0) {
+      const lastStep = task.steps[task.steps.length - 1];
+      const lastReasoning =
+        lastStep && typeof lastStep.reasoning === "string" ? lastStep.reasoning : "";
+      // #300 MEDIUM-1: SSE reconnect replays the bus buffer, so an old round's
+      // final_answer can arrive after the next round already opened a step.
+      // Only a *new* answer can own the current last step; a replay (answer
+      // already equal to task.final_answer), a missing step, or an existing
+      // different reasoning on that step are all stale — never attach. (When
+      // two rounds produce identical answer text the late attach is dropped;
+      // the parked snapshot remains authoritative.)
+      const stale =
+        !reasoning ||
+        !lastStep ||
+        answer === task.final_answer ||
+        lastReasoning !== "";
+      if (stale) {
         return { ...task, final_answer: answer };
       }
       const last = task.steps.length - 1;

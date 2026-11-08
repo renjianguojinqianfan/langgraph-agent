@@ -120,22 +120,22 @@ export function paramInheritHints(
 ): Record<"temperature" | "max_tokens" | "thinking" | "reasoning_effort", string> {
   const temperature =
     provider.temperature == null
-      ? "未设置（内置默认 0.2）"
-      : `继承 Provider 默认 ${provider.temperature}`;
+      ? "清空后使用内置默认 0.2"
+      : `清空后继承 Provider 默认 ${provider.temperature}`;
   const maxTokens =
     provider.max_tokens == null
       ? protocol === PROTOCOL_ANTHROPIC
-        ? "未设置（内置默认 4096）"
-        : "未设置（内置默认）"
-      : `继承 Provider 默认 ${provider.max_tokens}`;
+        ? "清空后使用内置默认 4096"
+        : "清空后使用内置默认"
+      : `清空后继承 Provider 默认 ${provider.max_tokens}`;
   const thinking =
     provider.thinking == null
-      ? "继承 Provider（未设置）"
-      : `继承 Provider 默认（${provider.thinking ? "开" : "关"}）`;
+      ? "清空后继承 Provider（未设置）"
+      : `清空后继承 Provider 默认（${provider.thinking ? "开" : "关"}）`;
   const reasoning =
     provider.reasoning_effort == null
-      ? "继承 Provider（未设置）"
-      : `继承 Provider 默认（${provider.reasoning_effort}）`;
+      ? "清空后继承 Provider（未设置）"
+      : `清空后继承 Provider 默认（${provider.reasoning_effort}）`;
   return {
     temperature,
     max_tokens: maxTokens,

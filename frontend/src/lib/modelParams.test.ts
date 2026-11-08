@@ -152,9 +152,13 @@ describe("paramInheritHints (entry override vs provider default)", () => {
       provider({ temperature: 0.6, max_tokens: 2048, thinking: false, reasoning_effort: "low" }),
       "openai-compatible"
     );
-    expect(hints.temperature).toBe("继承 Provider 默认 0.6");
-    expect(hints.max_tokens).toBe("继承 Provider 默认 2048");
+    // #300 L-3: the hint says what *clearing* inherits, so an entry that
+    // currently overrides the value is not misread as "already inherited".
+    expect(hints.temperature).toBe("清空后继承 Provider 默认 0.6");
+    expect(hints.max_tokens).toBe("清空后继承 Provider 默认 2048");
+    expect(hints.thinking).toContain("清空后继承");
     expect(hints.thinking).toContain("关");
+    expect(hints.reasoning_effort).toContain("清空后继承");
     expect(hints.reasoning_effort).toContain("low");
   });
 });
