@@ -468,7 +468,11 @@ def test_cli_rejects_unknown_preset_before_serving(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     served: List[tuple] = []
 
-    code = cli.main([], serve=lambda host, port: served.append((host, port)))
+    code = cli.main(
+        [],
+        serve=lambda host, port: served.append((host, port)),
+        when_ready=lambda url, port: None,
+    )
 
     assert code == 1
     assert served == []
@@ -633,6 +637,11 @@ def test_planner_prompt_honours_the_legacy_subagent_switch(tmp_path):
     )
     # Both enabled keeps the pre-#67 text.
     assert planner_system(PACKAGE_IDS, subagent_enabled=True) == PLANNER_SYSTEM
+    # Even with packages=None, an explicit legacy-off must hide the paragraph
+    # (packages=None means "no face info", not "assume subagent is on").
+    none_off = planner_system(None, subagent_enabled=False)
+    assert "spawn_subagent" not in none_off
+    assert none_off != PLANNER_SYSTEM
 
     settings = make_settings(tmp_path, plugins_preset="full", subagent_enabled=False)
     tm = _manager(settings)

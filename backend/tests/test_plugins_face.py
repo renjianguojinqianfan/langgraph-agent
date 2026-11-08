@@ -280,12 +280,12 @@ def test_mcp_on_does_trigger_the_guarded_lazy_import_positive_control(
     """Positive control for the mcp-off __import__ guard above.
 
     Without this, a future change to importlib semantics could make the mcp-off
-    test pass forever without exercising anything. With the mcp package on, the
-    same import hook must record the client module import; the fake manager
-    keeps the test offline (no subprocess / no connection).
+    test pass forever without exercising anything. Evidence that the guard
+    predicate matches the real path: with the mcp package on, the same recorder
+    sees the client-module import and the manager is assigned. The test-level
+    import of backend.core.mcp.client below is only how the fake manager is
+    installed, not the evidence.
     """
-    import sys
-
     import backend.core.mcp.client as mcp_client
 
     class _FakeManager:
@@ -316,7 +316,6 @@ def test_mcp_on_does_trigger_the_guarded_lazy_import_positive_control(
     save_plugins_config(settings, "full", {})
     tm = make_manager(settings)
 
-    assert "backend.core.mcp.client" in sys.modules
     assert seen, "mcp package on must import the MCP client module"
     assert tm._mcp is not None
 

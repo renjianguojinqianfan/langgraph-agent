@@ -70,8 +70,10 @@ def planner_system(
     is offered only when the `subagent` package is on **and** the legacy
     `subagent_enabled` switch is on (they gate different layers; the text must
     not advertise a tool the face does not mount). The default full text stays
-    byte-identical to the pre-#67 constant.
+    byte-identical to the pre-#67 constant. An explicit `subagent_enabled=False`
+    hides the paragraph even when `packages` is `None`: the legacy switch is a
+    real gate, not a packages-only shortcut.
     """
-    if packages is None or ("subagent" in packages and subagent_enabled):
+    if subagent_enabled and (packages is None or "subagent" in packages):
         return PLANNER_SYSTEM
     return _PLANNER_SYSTEM_WITHOUT_SUBAGENT

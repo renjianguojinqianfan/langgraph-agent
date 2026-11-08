@@ -13,6 +13,7 @@ from backend.main import create_app
 from backend.services import plugins_store
 from backend.services.plugins_store import (
     PLUGIN_PRESET_OVERRIDE_ENV,
+    packages_catalog,
     plugins_path,
 )
 from backend.services.task_manager import TaskManager
@@ -224,15 +225,11 @@ def test_active_tools_include_connected_mcp_tools(tmp_path, monkeypatch):
 def test_active_tools_keeps_dynamic_names_in_the_dynamic_segment():
     from backend.api.routes import _active_tools
 
-    packages = [
-        {"id": "files", "tools": ["read", "write"], "connects_mcp": False,
-         "affects_subagent_face": True},
-        {"id": "bash", "tools": ["bash"], "connects_mcp": False,
-         "affects_subagent_face": False},
-    ]
+    # Use the real catalogue (not a hand-written stub): files is disabled, so a
+    # dynamically mounted "write" must land in the dynamic segment.
     ordered = _active_tools(
         frozenset({"bash", "write", "mcp_fetch"}),
-        packages,
+        packages_catalog(),
         frozenset({"bash"}),
     )
     # write's package (files) is disabled, so it is dynamic, not static files.

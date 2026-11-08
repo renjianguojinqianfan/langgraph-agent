@@ -170,7 +170,11 @@ def test_cli_refuses_enabled_auth_with_the_placeholder(tmp_path, monkeypatch, ca
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     served: list = []
 
-    code = cli.main([], serve=lambda host, port: served.append(port))
+    code = cli.main(
+        [],
+        serve=lambda host, port: served.append(port),
+        when_ready=lambda url, port: None,
+    )
 
     assert code == 1
     assert served == []

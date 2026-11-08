@@ -41,7 +41,11 @@ def _write_dist(tmp_path):
 def test_missing_dist_prints_build_hint_and_does_not_serve(tmp_path, monkeypatch, capsys):
     _settings(monkeypatch, tmp_path / "missing")
     served = []
-    code = cli.main([], serve=lambda host, port: served.append((host, port)))
+    code = cli.main(
+        [],
+        serve=lambda host, port: served.append((host, port)),
+        when_ready=lambda url, port: None,
+    )
 
     out = capsys.readouterr().out
     assert code == 1
@@ -56,7 +60,11 @@ def test_explicit_port_occupancy_is_reported(tmp_path, monkeypatch, capsys):
         probe.listen(1)
         port = probe.getsockname()[1]
         served = []
-        code = cli.main(["--port", str(port)], serve=lambda host, port: served.append((host, port)))
+        code = cli.main(
+            ["--port", str(port)],
+            serve=lambda host, port: served.append((host, port)),
+            when_ready=lambda url, port: None,
+        )
 
     assert code == 1
     assert str(port) in capsys.readouterr().out
@@ -108,7 +116,11 @@ def test_invalid_ports_are_rejected_before_serving(tmp_path, monkeypatch, capsys
     _settings(monkeypatch, _write_dist(tmp_path))
     served = []
     for port in ("0", "70000"):
-        code = cli.main(["--port", port], serve=lambda host, port: served.append((host, port)))
+        code = cli.main(
+            ["--port", port],
+            serve=lambda host, port: served.append((host, port)),
+            when_ready=lambda url, port: None,
+        )
         assert code == 1
         assert port in capsys.readouterr().out
     assert served == []

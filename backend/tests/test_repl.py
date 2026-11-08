@@ -619,7 +619,11 @@ def test_web_launcher_refuses_a_running_repl_without_probing(
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     served: List[tuple] = []
 
-    code = cli.main([], serve=lambda host, port: served.append((host, port)))
+    code = cli.main(
+        [],
+        serve=lambda host, port: served.append((host, port)),
+        when_ready=lambda url, port: None,
+    )
 
     assert code == 2
     assert served == []
