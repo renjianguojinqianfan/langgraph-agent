@@ -1,13 +1,15 @@
-"""P1 item 5 — basic auth tests (fully offline).
+"""P1 item 5 / #271 — auth tests (fully offline).
 
-Covers :class:`TokenIssuer` signing/verification/expiry and the FastAPI
-integration: 401 without a token, login issuance, Bearer acceptance, SSE
-``?token=`` handling, and the ``auth_enabled=false`` passthrough (zero
+Covers :class:`TokenIssuer` signing/verification/expiry and its fail-closed
+constructor (D-45), the FastAPI integration: 401 without a token, login
+issuance, Bearer-only REST, the two-endpoint ``?token=`` whitelist (D-46),
+access log redaction (D-47), and the ``auth_enabled=false`` passthrough (zero
 regression).
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -19,17 +21,22 @@ from fastapi.testclient import TestClient
 
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
-from backend.main import app
+from backend.main import app, create_app
 from backend.services.auth import (
     TokenIssuer,
     auth_state_message,
     ensure_startup_auth_configured,
+    verify_token,
 )
 from backend.services.event_bus import EventBus
 from backend.services.model_store import ModelStore
 from backend.services.persistence import Persistence
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
+from backend.utils.logging import (
+    AccessLogRedactionFilter,
+    install_access_log_redaction,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -120,6 +127,53 @@ def test_import_logs_the_auth_state(tmp_path, env, expected):
     assert expected in (result.stdout + result.stderr)
 
 
+# ── entrypoint wiring (D-45 / #271) ──
+def test_create_app_refuses_enabled_auth_with_the_placeholder(tmp_path):
+    """The test seam (create_app) runs the same entrypoint guard."""
+    settings = make_settings(tmp_path, auth_enabled=True, auth_token="changeme")
+    with pytest.raises(RuntimeError, match="auth_token"):
+        create_app(settings)
+
+
+def test_auth_disabled_app_state_has_no_issuer(tmp_path):
+    """Off means None: no issuer is constructed just to sit unused (D-45)."""
+    settings = make_settings(tmp_path, auth_enabled=False)
+    guarded_app = create_app(settings)
+    with TestClient(guarded_app, base_url="http://localhost") as client:
+        assert client.app.state.auth is None
+        assert client.get("/health").json()["auth_enabled"] is False
+
+
+def test_auth_enabled_app_state_has_a_real_issuer(tmp_path):
+    settings = make_settings(tmp_path, auth_enabled=True, auth_token="real-secret")
+    guarded_app = create_app(settings)
+    with TestClient(guarded_app, base_url="http://localhost") as client:
+        assert isinstance(client.app.state.auth, TokenIssuer)
+
+
+def test_cli_refuses_enabled_auth_with_the_placeholder(tmp_path, monkeypatch, capsys):
+    """The qianfan launcher uses the same reusable guard before doing anything."""
+    from backend import cli
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    settings = make_settings(
+        tmp_path,
+        auth_enabled=True,
+        auth_token="changeme",
+        frontend_dist=str(dist),
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    served: list = []
+
+    code = cli.main([], serve=lambda host, port: served.append(port))
+
+    assert code == 1
+    assert served == []
+    assert "auth_token" in capsys.readouterr().out
+
+
 # ── TokenIssuer unit tests ──
 def test_issue_and_verify():
     issuer = TokenIssuer("secret", ttl_sec=86400)
@@ -156,6 +210,20 @@ def test_verify_rejects_unregistered_token():
 def test_verify_rejects_garbage():
     assert TokenIssuer("s").verify("not-a-token") is False
     assert TokenIssuer("s").verify("") is False
+
+
+# ── TokenIssuer fail-closed (D-45 / #271) ──
+@pytest.mark.parametrize("secret", ["", "   ", "changeme", "CHANGEME", " changeme "])
+def test_token_issuer_refuses_empty_or_placeholder_secret(secret):
+    """The constructor is the last line of defence after the startup guard."""
+    with pytest.raises(ValueError, match="auth"):
+        TokenIssuer(secret)
+
+
+def test_token_issuer_accepts_a_real_secret_and_strips_whitespace():
+    issuer = TokenIssuer("  real-secret  ")
+    token, _ = issuer.issue()
+    assert issuer.verify(token) is True
 
 
 # ── API integration ──
@@ -234,25 +302,56 @@ def test_auth_disabled_passthrough(open_client):
     assert r.json()["data"]["ok"] is True
 
 
-def test_verify_token_accepts_query_param(tmp_path):
-    """SSE uses ``?token=`` (EventSource cannot set headers) — the dependency
-    must read the query parameter directly."""
+def _fake_auth_request(settings, issuer, path, method="GET"):
     from types import SimpleNamespace
 
-    from fastapi import HTTPException
+    return SimpleNamespace(
+        method=method,
+        url=SimpleNamespace(path=path),
+        app=SimpleNamespace(state=SimpleNamespace(settings=settings, auth=issuer)),
+    )
 
-    from backend.services.auth import verify_token
+
+def test_verify_token_query_whitelist_two_directions(tmp_path):
+    """D-46: `?token=` only on the two browser-native GETs; REST is header-only."""
+    from fastapi import HTTPException
 
     settings = make_settings(tmp_path, auth_enabled=True, auth_token="secret")
     issuer = TokenIssuer("secret", ttl_sec=86400)
     token, _ = issuer.issue()
-    fake_app = SimpleNamespace(state=SimpleNamespace(settings=settings, auth=issuer))
-    fake_req = SimpleNamespace(app=fake_app)
 
-    assert verify_token(fake_req, authorization=None, token=token) == token
+    events = _fake_auth_request(settings, issuer, "/api/tasks/abc/events")
+    download = _fake_auth_request(
+        settings, issuer, "/api/tasks/abc/files/download"
+    )
+    assert verify_token(events, authorization=None, token=token) == token
+    assert verify_token(download, authorization=None, token=token) == token
+
+    # JSON endpoints, prefix tricks and non-GET requests all refuse the query.
+    for path, method in (
+        ("/api/tasks", "GET"),
+        ("/api/tasks/abc", "GET"),
+        ("/api/tasks/abc/events-extra", "GET"),
+        ("/api/tasks/abc/events", "POST"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            verify_token(
+                _fake_auth_request(settings, issuer, path, method),
+                authorization=None,
+                token=token,
+            )
+        assert exc.value.status_code == 401
+
+    # A malformed Authorization header does not fall back to ?token=.
     with pytest.raises(HTTPException) as exc:
-        verify_token(fake_req, authorization=None, token="bad-token")
+        verify_token(events, authorization="Token abc", token=token)
     assert exc.value.status_code == 401
+
+    # The Bearer header always wins over a (bad) query value.
+    assert (
+        verify_token(events, authorization=f"Bearer {token}", token="bad")
+        == token
+    )
 
 
 def test_sse_without_token_401(auth_client):
@@ -273,3 +372,128 @@ def test_health_reports_auth_enabled(tmp_path):
         r = c.get("/health")
         assert r.status_code == 200
         assert r.json()["auth_enabled"] is True
+
+
+# ── query-token whitelist at the HTTP layer (D-46 / #271) ──
+def test_json_endpoint_rejects_query_token(auth_client):
+    """A JSON endpoint ignores ?token= entirely; only Bearer authenticates."""
+    token = _login(auth_client)
+    r = auth_client.get("/api/tasks", params={"token": token})
+    assert r.status_code == 401
+    # The same valid token works through the REST contract.
+    r = auth_client.get("/api/tasks", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+
+
+def test_sse_accepts_query_token(auth_client):
+    """EventSource cannot set headers, so /events keeps ?token= (D-46)."""
+    token = _login(auth_client)
+    tid = auth_client.post(
+        "/api/tasks",
+        json={"input": "t"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["data"]["task_id"]
+
+    with auth_client.stream(
+        "GET", f"/api/tasks/{tid}/events", params={"token": token}
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+
+
+def test_download_accepts_query_token(auth_client, tmp_path):
+    """`<a href>` navigation cannot set headers either — download keeps it."""
+    token = _login(auth_client)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "hello.txt").write_text("hello-download", encoding="utf-8")
+    tid = auth_client.post(
+        "/api/tasks",
+        json={"input": "t", "workspace": str(workspace)},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["data"]["task_id"]
+
+    r = auth_client.get(
+        f"/api/tasks/{tid}/files/download",
+        params={"path": "hello.txt", "token": token},
+    )
+    assert r.status_code == 200
+    assert r.text == "hello-download"
+
+    # Without any credential the same download is a 401.
+    assert (
+        auth_client.get(
+            f"/api/tasks/{tid}/files/download", params={"path": "hello.txt"}
+        ).status_code
+        == 401
+    )
+
+
+# ── access log redaction (D-47 / #271) ──
+def _access_log_record(args):
+    return logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        args,
+        None,
+    )
+
+
+def test_access_log_filter_redacts_the_token_query_only():
+    record = _access_log_record(
+        (
+            "127.0.0.1:1",
+            "GET",
+            "/api/tasks/x/events?token=SEKRET&a=1",
+            "1.1",
+            200,
+        )
+    )
+    assert AccessLogRedactionFilter().filter(record) is True
+    message = record.getMessage()
+    assert "SEKRET" not in message
+    assert "token=***" in message
+    assert "&a=1" in message
+
+
+def test_access_log_filter_leaves_clean_paths_alone():
+    args = ("127.0.0.1:1", "GET", "/api/tasks?dir=current", "1.1", 200)
+    record = _access_log_record(args)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args == args
+
+
+def test_access_log_install_is_idempotent():
+    first = install_access_log_redaction()
+    second = install_access_log_redaction()
+    assert first is second
+    logger = logging.getLogger("uvicorn.access")
+    assert sum(
+        isinstance(item, AccessLogRedactionFilter) for item in logger.filters
+    ) == 1
+
+
+def test_access_log_chain_redacts_and_keeps_other_query_params(caplog):
+    """A real logging call through uvicorn.access must never emit the secret."""
+    install_access_log_redaction()
+    with caplog.at_level(logging.INFO, logger="uvicorn.access"):
+        logging.getLogger("uvicorn.access").info(
+            '%s - "%s %s HTTP/%s" %d',
+            "127.0.0.1:1",
+            "GET",
+            "/api/tasks/x/files/download?path=a&token=SEKRET",
+            "1.1",
+            200,
+        )
+    assert "SEKRET" not in caplog.text
+    assert "token=***" in caplog.text
+    assert "path=a" in caplog.text
+
+
+def test_access_log_filter_does_not_touch_other_loggers(caplog):
+    with caplog.at_level(logging.INFO, logger="agent.other"):
+        logging.getLogger("agent.other").info("query?token=SEKRET&a=1")
+    assert "SEKRET" in caplog.text

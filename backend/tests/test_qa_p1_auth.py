@@ -2,7 +2,8 @@
 
 Adds API-level checks beyond the engineer's unit tests:
 
-* ``?token=`` query parameter works at the REST layer (SSE-style);
+* ``?token=`` is accepted only on the two browser-native GETs (#271 D-46);
+  a JSON endpoint ignores it and still requires Authorization;
 * an *expired* issued token is rejected by the API (401), not just by a
   direct store manipulation;
 * a token signed with a different secret (forged) is rejected by the API;
@@ -70,14 +71,21 @@ def _login(client) -> str:
     return client.post("/api/auth/token", json={"token": "secret"}).json()["data"]["token"]
 
 
-def test_api_accepts_query_token(auth_client):
-    """REST layer accepts ?token= (the SSE transport has no headers)."""
+def test_api_rejects_query_token_on_json_endpoint(auth_client):
+    """Contract change (#271 D-46): REST is Bearer-only.
+
+    Old assertion: a valid `?token=` returned 200 on `GET /api/tasks`.
+    New assertion: `?token=` is ignored there (401 without Authorization); it
+    survives only on SSE `/events` and file `/files/download`, whose browser
+    transports cannot set headers.
+    """
     token = _login(auth_client)
     r = auth_client.get("/api/tasks", params={"token": token})
-    assert r.status_code == 200
+    assert r.status_code == 401
 
 
-def test_api_rejects_query_bad_token(auth_client):
+def test_api_rejects_query_bad_token_on_json_endpoint(auth_client):
+    """Same contract: even a forged query value never reaches verification."""
     r = auth_client.get("/api/tasks", params={"token": "forged"})
     assert r.status_code == 401
 
