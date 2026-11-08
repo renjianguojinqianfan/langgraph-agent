@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { cx } from "../../lib/cx";
 import { LONG_TEXT } from "../../lib/longContent";
 import { stepHasReasoning } from "../../lib/reasoning";
+import { stepSummary } from "../../lib/stepSummary";
 import type { StepRecord } from "../../types";
 import { Icon } from "../ui/Icon";
 import { DisclosureHead } from "./DisclosureHead";
@@ -17,11 +18,15 @@ const STATUS: Record<string, { label: string; dot: string }> = {
 export function StepRow({
   step,
   taskId,
+  answers,
 }: {
   step: StepRecord;
   /** Parent task identity: switching tasks must fold the thinking block even
    * when the new record's reasoning text happens to be identical (#300 L1). */
   taskId?: string;
+  /** This round's answer contents; a final-answer step's thought is collapsed
+   * to 「最终回答」 instead of repeating the answer body (#287). */
+  answers?: readonly string[];
 }) {
   // Running steps open by themselves so live tool traffic is visible.
   const [open, setOpen] = useState(step.status === "running");
@@ -45,10 +50,7 @@ export function StepRow({
   };
   const toolCount = step.tool_calls.length;
   const hasReasoning = stepHasReasoning(step);
-  const summary =
-    step.thought.trim() ||
-    step.tool_calls.map((tc) => tc.tool_name).join("、") ||
-    "步骤";
+  const summary = stepSummary(step, answers ?? []);
 
   return (
     <div className="border-b border-rule last:border-b-0">

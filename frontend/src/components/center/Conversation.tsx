@@ -68,6 +68,7 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
                   markers={roundMarkers}
                   live={running && last}
                   taskId={task.id}
+                  answers={round.answers.map((turn) => turn.content)}
                 />
               )}
               {round.answers.map((turn, j) =>

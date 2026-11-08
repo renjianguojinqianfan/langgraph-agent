@@ -15,6 +15,8 @@ interface TurnProcessProps {
   /** Owning task identity, forwarded to StepRow so the thinking fold resets on
    * a task switch (#300 L1). */
   taskId?: string;
+  /** This round's answer contents, forwarded to StepRow (#287). */
+  answers?: readonly string[];
 }
 
 /**
@@ -28,6 +30,7 @@ export function TurnProcess({
   live = false,
   title,
   taskId,
+  answers,
 }: TurnProcessProps) {
   const [open, setOpen] = useState(live);
 
@@ -73,7 +76,7 @@ export function TurnProcess({
         <div className="pb-1">
           {steps.map((step) => (
             <div key={step.index}>
-              <StepRow step={step} taskId={taskId} />
+              <StepRow step={step} taskId={taskId} answers={answers} />
               {(byStep.get(step.index) ?? []).map((marker, i) => (
                 <CompressMarker key={i} marker={marker} />
               ))}

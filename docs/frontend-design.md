@@ -207,7 +207,7 @@
 
 ### P2-4 思考展示与参数入口手测清单（#267，D-38 / D-40）
 
-机械面由 `lib/reasoning.ts`（空 / 缺省不渲染）、`lib/modelParams.ts`（tri-state 映射、区间校验、只提交改动字段、继承提示）的纯函数断言与 `store/reduceTask` 的 `final_answer.reasoning` 断言覆盖；下列为组件接线与真实模型走查项（本片只做条目级参数，Provider 级默认以继承提示展示、不提供编辑；**Provider 级默认编辑留后续片（#267 后续 / 参数入口二期）**）。
+机械面由 `lib/reasoning.ts`（空 / 缺省不渲染）、`lib/stepSummary.ts`（最终回答步骤摘要不重复回答正文）、`lib/modelParams.ts`（tri-state 映射、区间校验、只提交改动字段、继承提示）的纯函数断言与 `store/reduceTask` 的 `final_answer.reasoning` 断言覆盖；下列为组件接线与真实模型走查项（本片只做条目级参数，Provider 级默认以继承提示展示、不提供编辑；**Provider 级默认编辑留后续片（#267 后续 / 参数入口二期）**）。
 
 > **前置条件（已满足）**：两条依赖后端持久化的走查项（「刷新页面 / 重新选中任务后思考仍在」「思考随停下后的快照出现」）依赖 **P2-4a（PR #301，master 1505f49 已合入）**；合入前停靠快照没有 `reasoning` 字段时这两条会显示「无思考块」，不代表前端回归。
 
@@ -216,6 +216,7 @@
 - [ ] 刷新页面 / 重新选中任务后思考仍在（来自持久化快照）；运行中不显示半截思考（思考随停下后的快照出现，事件里的脱敏 reasoning 只做即时补充）。
 - [ ] 长思考：超长文本按字符断行、块内限高滚动，不把对话列撑出横向滚动；`prefers-reduced-motion` 下折叠动画不位移。
 - [ ] 回答面（`AnswerSheet`）与 `TurnProcess` 汇总行不重复显示思考。
+- [ ] 最终回答步骤行显示「最终回答」，不重复回答正文；思考仍只在独立折叠块。历史任务同样如此（`step.thought` 与 `final_answer` 同文时，不再把回答正文塞进行首摘要）。
 - [ ] 参数编辑：设置 → 模型目录行「参数」→ 表单初值来自条目原始覆盖值；未设置字段显示「继承 Provider 默认 / 内置默认」；Anthropic 卡给出 thinking / reasoning_effort 限制提示。
 - [ ] 只改一个字段保存：DevTools Network 的 `PUT /providers/{id}/models/{model_id}` 请求体只含该字段；保存后刷新设置 / 刷新页面值仍在。
 - [ ] 清空数值（如 temperature）保存：请求体该字段为 `null`（回到继承）；表单提示重新显示继承值，而不是把 Provider 默认误当条目覆盖。
@@ -302,3 +303,4 @@
 - 2026-11-07（P2-3 / #243，rebase 到 #298 合并后）：协议文案按已合并事实更新——Anthropic 原生（非流式）创建 / 编辑可用（不再有「保存 400 / 后端 PR B」说法）；提示明示两项剩余限制：模型目录发现仅 OpenAI 兼容支持、thinking / reasoning_effort 对 Anthropic 暂不支持；§6 对应手测项与纯函数断言同步（`PROTOCOL_OPTIONS` 的 hint 不得回退到旧 400 文案）。
 - 2026-11-08（P2-4b / #267，D-38 / D-40）：思考展示与参数入口——`StepRecord.reasoning` 可选字段（D-38 契约，字段暂缺时兼容）；`StepRow` 展开区新增默认折叠的「思考」块（空 / 缺省不渲染，长文本断行 + 限高滚动，行头标「思考」），`TurnProcess` / `AnswerSheet` 不变；reducer 把 `final_answer.reasoning` 挂到最后一步（快照仍权威）；`lib/modelParams` 收敛参数表单的 tri-state 映射、区间校验（temperature 按协议 / max_tokens 正整数）、显式 null 清空与「只提交改动字段」，设置页模型行新增「参数」表单（条目级；Provider 默认以继承提示展示；Provider 级默认编辑留后续片 / 参数入口二期）；`store/modelStore` 模型目录改读 `GET /providers/{id}/models` 原始条目（D-36 需要 raw 覆盖值，legacy 投影只有生效值）；§6 增 P2-4 手测清单。
 - 2026-11-08（P4-2 / #67）：设置页新增「能力」区——预设三选一（minimal / research / full）+ 每包三态 override（跟随预设 / 强制开 / 强制关）；「当前生效」面展示能力包与工具清单（来自 `GET /api/plugins` 的 `active`，前端不自行推导）；**文件存在时** `saved` 与 `active` 不同才提示「重启后台后生效」（无文件时 `restart_required` 恒 false，当前生效面来自默认 / 启动参数）；保存中禁用预设与三态并显示「保存中…」、错误横幅「重试」可重试、服务端 4xx / 422 原因原样显示；`lib/plugins.ts` 纯函数（三态 ↔ PUT body、dirty 判定、active 摘要）与 `store/pluginsStore.ts`（加载 / 保存 / 失败保留旧快照 / in-flight 守卫）覆盖机械面；§6 增 P4-2 手测清单（含 D-24 接线项与保存中错误态）。
+- 2026-11-09（#287 修复）：最终回答步骤的行首摘要不再重复回答正文——`lib/stepSummary` 把 `step.thought`（trim 后）与本轮任一 `AnswerSheet` 回答相等时收敛为「最终回答」；`Conversation` 按轮把 answers 传给 `TurnProcess` → `StepRow`，历史任务同规则生效；§6 P2-4 清单补对应手测项。
