@@ -382,6 +382,9 @@ class SubAgentExecutor:
                 parent_task_id=spec.parent_task_id,  # Issue #60: obey the parent's stop
                 model_profile=model_profile,
                 reasoning_scope=reasoning_scope,
+                # D-56 (#67): a subtask inherits the parent's enabled packages,
+                # so the skills injection fragment and tool face stay in step.
+                packages=getattr(self.tm, "packages", None),
             )
             from .graph import build_graph
 

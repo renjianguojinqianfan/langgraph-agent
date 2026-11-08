@@ -9,7 +9,7 @@ decorating it with ``@register`` — the Agent picks it up automatically.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, Iterable, List, Optional, Type
 
 from ...config import Settings
 from ...utils.logging import get_logger
@@ -52,11 +52,25 @@ def list_tools() -> List[Type[BaseTool]]:
     return list(_REGISTRY.values())
 
 
-def build_tools(settings: Settings) -> List[BaseTool]:
-    """Instantiate all registered tools with the given settings."""
-    return [cls(settings) for cls in _REGISTRY.values()]
+def build_tools(
+    settings: Settings, *, names: Optional[Iterable[str]] = None
+) -> List[BaseTool]:
+    """Instantiate registered tools, optionally restricted to §names§.
+
+    §names=None§ keeps the pre-#67 behaviour (every registered tool); the
+    capability-package assembler passes the enabled-package name set so a
+    disabled package is **never constructed** (D-55 "真关").
+    """
+    wanted = None if names is None else set(names)
+    return [
+        cls(settings)
+        for name, cls in _REGISTRY.items()
+        if wanted is None or name in wanted
+    ]
 
 
-def build_tool_schemas(settings: Settings) -> List[Dict[str, Any]]:
-    """OpenAI-compatible function schemas for every registered tool."""
-    return [tool.to_openai_schema() for tool in build_tools(settings)]
+def build_tool_schemas(
+    settings: Settings, *, names: Optional[Iterable[str]] = None
+) -> List[Dict[str, Any]]:
+    """OpenAI-compatible function schemas for the built tool face."""
+    return [tool.to_openai_schema() for tool in build_tools(settings, names=names)]

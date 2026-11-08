@@ -59,11 +59,18 @@ def test_plugin_and_openapi_discovery_helpers_are_gone():
 
 
 def test_settings_have_no_removed_prefixes():
-    removed_prefixes = ("kb_", "git_", "openapi_", "plugins_", "aux_llm_")
+    # #67 P4-1 / ADR 0012 deliberately reintroduces exactly ONE global
+    # capability-preset field. The retired plugin-system prefixes stay gone;
+    # the exact-set assertion below keeps this from silently widening into a
+    # new plugins_* namespace (contract old->new->why in the P4-1 PR body).
+    removed_prefixes = ("kb_", "git_", "openapi_", "aux_llm_")
     leftovers = [
         name for name in Settings.model_fields if name.startswith(removed_prefixes)
     ]
     assert leftovers == []
+    assert {name for name in Settings.model_fields if name.startswith("plugins_")} == {
+        "plugins_preset"
+    }
     for derived in ("plugins_path", "kb_path", "git_repo_path"):
         assert not hasattr(Settings, derived)
 

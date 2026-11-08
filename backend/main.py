@@ -26,6 +26,7 @@ from starlette.staticfiles import StaticFiles
 from . import server_lock
 from .api.routes import router
 from .config import Settings, ensure_loopback_host, get_settings
+from .core.capability_packages import DEFAULT_PRESET, resolve_packages
 from .runtime import build_runtime, model_key_is_missing
 from .services.auth import (
     TokenIssuer,
@@ -112,6 +113,8 @@ def create_app(settings: Settings) -> FastAPI:
     # D-45 (#271): the entrypoint guard is reusable (cli / REPL call it too);
     # calling it here keeps the create_app test seam on the same contract.
     ensure_startup_auth_configured(settings)
+    # D-55 (#67): unknown preset / bad capability config fails at startup.
+    resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

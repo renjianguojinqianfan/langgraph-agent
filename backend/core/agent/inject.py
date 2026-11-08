@@ -40,7 +40,12 @@ _DEFAULT_SKILLS_BUDGET = 4000
 SKILLS_LAYER_SUBPATH = Path(".agents") / "skills"
 
 
-def build_inject_block(settings: Settings, *, home_dir: Optional[Path] = None) -> str:
+def build_inject_block(
+    settings: Settings,
+    *,
+    home_dir: Optional[Path] = None,
+    include_skills: bool = True,
+) -> str:
     """Assemble the task-level injection block.
 
     ``home_dir`` defaults to ``Path.home()`` and is parameterised so tests can
@@ -53,9 +58,12 @@ def build_inject_block(settings: Settings, *, home_dir: Optional[Path] = None) -
     budget = int(getattr(settings, "context_inject_skills_budget", _DEFAULT_SKILLS_BUDGET))
     sections = [
         _render_agents_md(home, sandbox_root),
-        _render_skills(home, sandbox_root, budget),
         _render_env_facts(sandbox_root),
     ]
+    if include_skills:
+        # D-56: the skills capability package owns this fragment; when it is
+        # disabled the catalogue is never injected (AGENTS/env stay untouched).
+        sections.insert(1, _render_skills(home, sandbox_root, budget))
     parts = [s for s in sections if s]
     if not parts:
         return ""

@@ -27,6 +27,7 @@ from ...config import get_settings
 from ...services import plan_file
 from ...services.plan_file import extract_plan, plan_hash, write_plan
 from ...utils.logging import get_logger
+from ..capability_packages import INJECTION_SKILLS
 from ..runtime_context import workspace_root
 from ..tools.base import BaseTool, ToolResult
 from . import inject
@@ -123,6 +124,7 @@ class AgentRuntime:
         parent_task_id: str = "",
         model_profile: str = "",
         reasoning_scope: str = "",
+        packages: Optional[frozenset[str]] = None,
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
@@ -156,8 +158,12 @@ class AgentRuntime:
         # the NEXT task. An empty table compiles to zero rules and `check` always
         # returns None, so the agent's decision path is unchanged (#136 AC1).
         self.danger_policy: DangerPolicy = DangerPolicy.from_settings(settings)
+        # D-56: the skills package owns the skills-catalogue injection fragment.
+        # `packages=None` keeps the pre-#67 behaviour for direct runtime tests;
+        # the manager always passes its resolved set.
+        include_skills = packages is None or INJECTION_SKILLS in packages
         self._inject_block: str = (
-            inject.build_inject_block(settings)
+            inject.build_inject_block(settings, include_skills=include_skills)
             if getattr(settings, "context_inject_enabled", True)
             else ""
         )

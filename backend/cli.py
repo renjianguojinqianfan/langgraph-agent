@@ -169,6 +169,15 @@ def main(
     except RuntimeError as exc:
         print(f"[qianfan] {exc}")
         return 1
+    # D-55 (#67): unknown capability preset fails at startup, before anything
+    # claims the single-backend lock or touches data/.
+    from .core.capability_packages import DEFAULT_PRESET, resolve_packages
+
+    try:
+        resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+    except ValueError as exc:
+        print(f"[qianfan] {exc}")
+        return 1
     dist: Path = settings.frontend_dist_path
     browser: Callable[[str], None] = open_browser or _open_browser
     handoff_browser = open_browser or _open_browser_now
