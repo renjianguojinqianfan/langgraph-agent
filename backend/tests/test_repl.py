@@ -22,6 +22,8 @@ from backend.repl import (
     repl_main,
 )
 from backend.runtime import build_runtime
+from backend.services.event_bus import EventBus
+from backend.services.persistence import PersistenceError
 from backend.tests.conftest import make_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -54,6 +56,7 @@ class _FakeTaskManager:
         self.status = TaskStatus.INTERRUPTED
         self.status_sequence = list(status_sequence or [])
         self.send_error: Optional[Exception] = None
+        self.stop_error: Optional[Exception] = None
         #: When true, a created/sent round stays RUNNING until stop()/sequence.
         self.stay_running = False
 
@@ -80,6 +83,8 @@ class _FakeTaskManager:
         return {"ok": True}
 
     def stop(self, task_id):
+        if self.stop_error is not None:
+            raise self.stop_error
         self.stopped.append(task_id)
         self.status = TaskStatus.INTERRUPTED
         return {"ok": True}
@@ -266,6 +271,10 @@ def test_two_tasks_run_in_one_session_with_new(tmp_path, monkeypatch):
     ]
     assert out.count("答: done") == 2
     assert any("下一条输入创建新任务" in line for line in out)
+    # L1: the replayed task_created event is the only task-created line per
+    # task (the header and the /new hint also mention 新任务, so match the
+    # rendered line prefix).
+    assert sum(line.startswith("● 新任务") for line in out) == 2
     assert runtime.task_manager.shutdown_calls == 1
 
 
@@ -554,6 +563,9 @@ def test_web_launcher_refuses_a_running_repl_without_probing(
     assert code == 2
     assert served == []
     assert "关终端会停任务" in capsys.readouterr().out
+    # A live record is refused but must not be deleted by the refused launcher.
+    record = server_lock.read_lock(lock_file)
+    assert record is not None and record.instance == "repl-1"
 
 
 # ── CLI dispatch + encoding + module entry (D-48 / D-51) ──
@@ -608,3 +620,149 @@ def test_repl_module_entry_starts_and_exits(tmp_path):
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
     assert "qianfan 终端会话" in output
+
+
+# ── PR #304 rework: stale lock recovery (M1) ──
+def test_repl_recovers_from_a_dead_lock_record(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
+    lock_file = server_lock.lock_path(settings)
+    assert server_lock.claim_lock(
+        lock_file,
+        server_lock.ServerLock(
+            pid=999_999,
+            port=settings.port,
+            started_at=server_lock.now_iso(),
+            instance="dead",
+            mode="repl",
+        ),
+    )
+    runtime = _fake_runtime()
+    iterator = iter(["exit"])
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+    out: List[str] = []
+
+    code = repl_main(
+        [],
+        runtime_factory=lambda _settings: runtime,
+        input_fn=lambda prompt: next(iterator),
+        output=out.append,
+        configure_stdio=False,
+    )
+
+    assert code == 0
+    assert server_lock.read_lock(lock_file) is None
+    assert runtime.task_manager.shutdown_calls == 1
+
+
+def test_repl_recovers_from_a_corrupt_lock_record(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
+    lock_file = server_lock.lock_path(settings)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text("{not json", encoding="utf-8")
+    runtime = _fake_runtime()
+    iterator = iter(["exit"])
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+    out: List[str] = []
+
+    code = repl_main(
+        [],
+        runtime_factory=lambda _settings: runtime,
+        input_fn=lambda prompt: next(iterator),
+        output=out.append,
+        configure_stdio=False,
+    )
+
+    assert code == 0
+    assert server_lock.read_lock(lock_file) is None
+    assert runtime.task_manager.shutdown_calls == 1
+
+
+def test_repl_reports_manual_cleanup_when_claim_races(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
+    lock_file = server_lock.lock_path(settings)
+    monkeypatch.setattr(server_lock, "claim_lock", lambda *args, **kwargs: False)
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+    out: List[str] = []
+
+    code = repl_main(
+        [],
+        runtime_factory=lambda _settings: _fake_runtime(),
+        input_fn=lambda prompt: "exit",
+        output=out.append,
+        configure_stdio=False,
+    )
+
+    assert code == 1
+    message = " ".join(out)
+    assert "删除" in message
+    assert str(lock_file) in message
+
+
+# ── PR #304 rework: /new while RUNNING (M2) + replay dedupe (L1/L2) ──
+def test_new_is_refused_while_the_task_is_still_running(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    runtime = _fake_runtime(history=_final_events())
+    runtime.task_manager.stay_running = True
+    clock, sleep = _clock_pair()
+
+    code, out = _run(
+        monkeypatch,
+        settings,
+        runtime,
+        ["first", "/new", "/stop", "/new", "second", "exit"],
+        sleep=sleep,
+        clock=clock,
+    )
+
+    assert code == 0
+    assert any("还在跑" in line for line in out), "RUNNING + /new must be refused"
+    assert any("仍在跑" in line for line in out), "settle timeout must warn"
+    # Refused /new did not create a task; after /stop the next /new works.
+    assert [text for _, text in runtime.task_manager.created] == ["first", "second"]
+    assert runtime.task_manager.stopped
+
+
+def test_real_event_bus_replay_renders_task_created_once(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    runtime = _fake_runtime()
+    runtime.event_bus = EventBus()
+    task_id = "task00000001deadbeef"
+    runtime.event_bus.publish(task_id, "task_created", {"task_id": task_id})
+
+    code, out = _run(monkeypatch, settings, runtime, ["first", "exit"])
+
+    assert code == 0
+    assert sum(line.startswith("● 新任务") for line in out) == 1
+
+
+# ── PR #304 rework: command errors print, never a bare traceback (L4) ──
+def test_stop_errors_are_printed_not_raised(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    runtime = _fake_runtime(history=_final_events())
+    runtime.task_manager.stay_running = True
+    runtime.task_manager.stop_error = PersistenceError("tasks.json write failed")
+    clock, sleep = _clock_pair()
+
+    code, out = _run(
+        monkeypatch,
+        settings,
+        runtime,
+        ["first", "/stop", "exit"],
+        sleep=sleep,
+        clock=clock,
+    )
+
+    assert code == 0
+    assert any("✗" in line and "write failed" in line for line in out)
+    assert runtime.task_manager.shutdown_calls == 1
+
+
+def test_send_persistence_error_is_printed(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    runtime = _fake_runtime(history=_final_events())
+    runtime.task_manager.send_error = PersistenceError("tasks.json write failed")
+
+    code, out = _run(monkeypatch, settings, runtime, ["first", "second", "exit"])
+
+    assert code == 0
+    assert any("✗" in line and "write failed" in line for line in out)
