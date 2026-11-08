@@ -1061,24 +1061,28 @@ def _plugins_data(
                 for package in packages
                 if package["id"] in active.packages
             ],
-            "tools": _active_tools(active.tools, packages),
+            "tools": _active_tools(active.tools, packages, active.packages),
         },
         "restart_required": restart_required(active, saved),
     }
 
 
 def _active_tools(
-    assembled: frozenset[str], packages: list[dict]
+    assembled: frozenset[str],
+    packages: list[dict],
+    enabled_packages: frozenset[str],
 ) -> list[str]:
-    """Manifest order first, then dynamically mounted names (e.g. MCP tools).
+    """Static segment first (enabled packages, manifest order), then dynamic.
 
-    The assembled face is authoritative (#308 M1); dynamic tool names have no
-    package entry, so they are appended after the static ones instead of being
-    dropped by the package loop.
+    The assembled face is authoritative (#308 M1). A name that belongs to a
+    *disabled* package but is mounted dynamically (e.g. an MCP tool called
+    "write" while files is off) must not be listed in that package's static
+    segment — it goes to the dynamic segment (sorted) instead.
     """
     static = [
         tool
         for package in packages
+        if package["id"] in enabled_packages
         for tool in package["tools"]
         if tool in assembled
     ]
