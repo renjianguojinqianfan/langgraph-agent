@@ -10,6 +10,8 @@ import {
   ModelParamsUpdate,
   ModelProfile,
   ModelsData,
+  PluginsData,
+  PluginsSaveRequest,
   Provider,
   ProviderCreateRequest,
   ProvidersData,
@@ -343,6 +345,18 @@ export const discoverProviderModels = (id: string) =>
     `/providers/${encodeURIComponent(id)}/models/discover`,
     { method: "POST" }
   );
+
+// ── #67 P4-2: plugin packages / presets (data/plugins.json) ──
+// GET returns the presets, package manifest, the saved file and the backend's
+// active face; PUT validates + writes the file and answers with the same shape
+// (restart_required tells the page a restart is still needed).
+export const getPlugins = () => req<PluginsData>("/plugins");
+
+export const putPlugins = (body: PluginsSaveRequest) =>
+  req<PluginsData>("/plugins", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 
 // ── P1 item 5: auth ──
 export type LoginAttempt = StatusResult<AuthTokenResponse>;

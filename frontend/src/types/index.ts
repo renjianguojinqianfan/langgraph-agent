@@ -234,6 +234,52 @@ export interface ProviderUpdateRequest {
   key?: string;
 }
 
+// --- #67 P4-2: plugin packages / presets (data/plugins.json) ---
+
+/** One fixed preset: its package membership. The id is server-authoritative
+ * (currently `minimal` / `research` / `full`); overrides layer on top. */
+export interface PluginPresetInfo {
+  id: string;
+  packages: string[];
+}
+
+/** One capability package: the tools it contributes and its side effects. */
+export interface PluginPackageInfo {
+  id: string;
+  tools: string[];
+  connects_mcp: boolean;
+  affects_subagent_face: boolean;
+}
+
+/** The persisted configuration: a preset plus explicit per-package overrides
+ * (`true` = force on, `false` = force off, absent = follow the preset). */
+export interface PluginConfigured {
+  preset: string;
+  overrides: Record<string, boolean>;
+}
+
+/** What the running backend actually assembled (GET /plugins active face). */
+export interface PluginActive extends PluginConfigured {
+  packages: string[];
+  tools: string[];
+}
+
+export interface PluginsData {
+  presets: PluginPresetInfo[];
+  packages: PluginPackageInfo[];
+  saved: PluginConfigured;
+  active: PluginActive;
+  /** True when saved ≠ active: the file/CLI change needs a backend restart. */
+  restart_required: boolean;
+}
+
+/** PUT /plugins body: only explicit overrides travel; "follow preset" is
+ * expressed by omitting the package id. */
+export interface PluginsSaveRequest {
+  preset: string;
+  overrides: Record<string, boolean>;
+}
+
 export interface ApiResponse<T = any> {
   code: number;
   data: T;
