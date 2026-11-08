@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from uvicorn.logging import AccessFormatter
+from uvicorn.protocols.utils import get_path_with_query_string
 
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.registry import build_tools
@@ -26,6 +28,7 @@ from backend.services.auth import (
     TokenIssuer,
     auth_state_message,
     ensure_startup_auth_configured,
+    query_token_allowed,
     verify_token,
 )
 from backend.services.event_bus import EventBus
@@ -227,11 +230,11 @@ def test_token_issuer_accepts_a_real_secret_and_strips_whitespace():
 
 
 # ── API integration ──
-def _make_client(tmp_path, auth_enabled):
+def _make_client(tmp_path, auth_enabled, auth_token="secret"):
     settings = make_settings(
         tmp_path,
         auth_enabled=auth_enabled,
-        auth_token="secret",
+        auth_token=auth_token,
         auth_token_ttl_sec=86400,
     )
     eb = EventBus()
@@ -497,3 +500,133 @@ def test_access_log_filter_does_not_touch_other_loggers(caplog):
     with caplog.at_level(logging.INFO, logger="agent.other"):
         logging.getLogger("agent.other").info("query?token=SEKRET&a=1")
     assert "SEKRET" in caplog.text
+
+
+# ── H1 (#271 返工): URL-encoded parameter names must not bypass redaction ──
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/tasks/x/events?%74oken=SEKRET&a=1",
+        "/api/tasks/x/events?%54OKEN=SEKRET&a=1",
+        "/api/tasks/x/events?a=1&%74oken=SEKRET",
+        "/api/tasks/x/events?token=SEKRET&token=OTHER&a=1",
+        "/api/tasks/x/events?%74%6Fken=SEKRET",
+        "/api/tasks/x/files/download?path=a&%74oken=SEKRET",
+    ],
+)
+def test_access_log_filter_redacts_encoded_token_names(path):
+    record = _access_log_record(("127.0.0.1:1", "GET", path, "1.1", 200))
+    AccessLogRedactionFilter().filter(record)
+    message = record.getMessage()
+    assert "SEKRET" not in message
+    assert "OTHER" not in message
+    assert "***" in message
+    if "a=1" in path:
+        assert "a=1" in message
+
+
+def test_access_log_filter_keeps_other_params_and_bare_token():
+    path = "/api/tasks?%61=1&tokenizer=SEKRET&token"
+    record = _access_log_record(("127.0.0.1:1", "GET", path, "1.1", 200))
+    AccessLogRedactionFilter().filter(record)
+    # tokenizer is not the token parameter; a bare token has no value to leak.
+    assert record.getMessage() == (
+        '127.0.0.1:1 - "GET /api/tasks?%61=1&tokenizer=SEKRET&token HTTP/1.1" 200'
+    )
+
+
+def test_access_log_filter_clean_path_is_byte_identical():
+    args = (
+        "127.0.0.1:1",
+        "GET",
+        "/api/tasks/x/events?%74okenizer=SEKRET&a=1",
+        "1.1",
+        200,
+    )
+    record = _access_log_record(args)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args == args
+
+
+def test_access_log_filter_handles_uvicorns_real_path_shape_and_formatter():
+    """L2: uvicorn produces args via get_path_with_query_string + AccessFormatter."""
+    scope = {
+        "path": "/api/tasks/abc/files/download",
+        "query_string": b"%74oken=SEKRET&path=a",
+        "root_path": "",
+    }
+    full_path = get_path_with_query_string(scope)
+    assert full_path == "/api/tasks/abc/files/download?%74oken=SEKRET&path=a"
+
+    record = _access_log_record(
+        ("127.0.0.1:1", "GET", full_path, "1.1", 200)
+    )
+    AccessLogRedactionFilter().filter(record)
+    output = AccessFormatter(
+        '%(client_addr)s - "%(request_line)s" %(status_code)s'
+    ).formatMessage(record)
+    assert "SEKRET" not in output
+    assert "***" in output
+    assert "path=a" in output
+
+
+# ── L1 (#271 返工): whitelist boundary evidence ──
+def test_verify_token_whitelist_boundaries(tmp_path):
+    from fastapi import HTTPException
+
+    settings = make_settings(tmp_path, auth_enabled=True, auth_token="secret")
+    issuer = TokenIssuer("secret", ttl_sec=86400)
+    token, _ = issuer.issue()
+    events = _fake_auth_request(settings, issuer, "/api/tasks/abc/events")
+
+    # Anchored matches only: trailing slash / extra segment / HEAD / empty
+    # Bearer header all refuse the query parameter.
+    for path, method in (
+        ("/api/tasks/abc/events/", "GET"),
+        ("/api/tasks/abc/events/extra", "GET"),
+        ("/api/tasks/abc/files/download/", "GET"),
+        ("/api/tasks//events", "GET"),
+        ("/api/tasks/abc/events", "HEAD"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            verify_token(
+                _fake_auth_request(settings, issuer, path, method),
+                authorization=None,
+                token=token,
+            )
+        assert exc.value.status_code == 401
+
+    # "Bearer " with no value is a present-but-empty header: no query fallback.
+    with pytest.raises(HTTPException) as exc:
+        verify_token(events, authorization="Bearer ", token=token)
+    assert exc.value.status_code == 401
+    assert query_token_allowed("GET", "/api/tasks/abc/events") is True
+    assert query_token_allowed("GET", "/api/tasks/abc/events/") is False
+
+
+def test_events_duplicate_query_tokens_never_bypass(auth_client):
+    token = _login(auth_client)
+    tid = auth_client.post(
+        "/api/tasks",
+        json={"input": "t"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["data"]["task_id"]
+    with auth_client.stream(
+        "GET",
+        f"/api/tasks/{tid}/events",
+        params=[("token", "bad"), ("token", "also-bad")],
+    ) as response:
+        assert response.status_code == 401
+
+
+# ── L4 (#271 返工): login password comparison strips like the issuer/guard ──
+def test_login_password_is_compared_after_stripping(tmp_path):
+    client = _make_client(
+        tmp_path, auth_enabled=True, auth_token="  real-secret  "
+    )
+    r = client.post("/api/auth/token", json={"token": "real-secret"})
+    assert r.status_code == 200
+    r = client.post("/api/auth/token", json={"token": "  real-secret  "})
+    assert r.status_code == 200
+    r = client.post("/api/auth/token", json={"token": "nope"})
+    assert r.status_code == 401
