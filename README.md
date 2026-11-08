@@ -40,6 +40,32 @@ python start.py            # 虚拟环境请叫 .venv311；start.py 会拦住根
 直接 `UnicodeDecodeError`（#259）。`--port 9123` 时 Vite 代理跟随 `PORT`，且 `/health`
 也在代理内（`frontend/vite.config.ts`）。
 
+## 终端
+
+不想开浏览器时，用同一个 `qianfan` 命令进终端会话：
+
+```bash
+qianfan repl
+```
+
+一条命令进入常驻多轮会话：首条输入创建任务，之后继续说话沿同一 `thread_id` 续跑；`/new`
+新任务（仅当当前任务已停下；仍在跑时先 `/stop`）、`/stop` 停止当前任务、`exit` / `quit`
+退出。**Ctrl-C 分两处**：提示符处直接退出；等待任务时先停当前任务、回提示符（不退出）。
+只渲染任务 / 步骤 / 工具 / final answer 与「停下」「出错」两类终态，纯 `print`、不引
+Rich/TUI；**思考块（reasoning）只在网页端显示，终端当前不显示**——不要预期终端出现模型思考过程。
+
+- **与网页后台互斥**：终端会话写 `data/server.json`（`mode=repl`），`qianfan` / `python start.py`
+  在它跑着时拒绝启动；反过来网页或开发后台在跑时 `qianfan repl` 也拒绝。**关掉终端 = 任务停下**
+  （退出走 `TaskManager.shutdown()` 释放后台线程与锁；停下后可在网页/下次会话续说）。
+- **启动守卫复用**：与网页入口同一套（`auth_enabled` 校验、回环 host 校验、单实例锁），
+  `auth_enabled=true` 时 REPL 同样先过启动校验，不另开旁路。
+- **编码**：入口把 stdout/stderr `reconfigure(encoding="utf-8", errors="replace")`（有
+  `hasattr` 守卫），Windows GBK 控制台不会因 emoji / CJK 崩溃；重定向到文件同样是 UTF-8。
+- **不重开交互确认闸门**：危险动作仍由设置里的 `policy_rules` 规则表在钩子处**当场拒绝**
+  （ADR 0008 决策 6），终端也不弹 y/n。#20 票面的「y/n 交互确认」与「`--auto-approve` 旁路」
+  二选一已按 spec 作废（2026-10-19 校准：确认闸门已随 ADR 0008 删除，交互式终端有人在场
+  也不重开它）。
+
 ## 核心模型
 
 一个任务 = 一段多轮对话：

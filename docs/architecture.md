@@ -25,7 +25,7 @@
 | 存储 | sqlite（checkpoint）+ JSON（任务/模型档案）+ JSONL（trace） | `data/` 为运行态、不入库；Key 在仓库外（`~/.qianfan/credentials.json` 或环境变量） |
 | 通信 | REST + **SSE**（单向事件流） | SSE 事件词汇表是本仓最强的机械契约（§3.4） |
 
-**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），两者互斥（`backend/server_lock.py`）。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；`--reload` 下锁保持 supervisor pid；pid 活但 `/health` 未就绪视为「启动中」而非空闲；**无实例标识的手动 uvicorn 一律拒绝**）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝；`::1` 的健康探针与 `TrustedHost` 用方括号形态）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
+**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），**终端入口**是 `qianfan repl`（[`backend/repl.py`](../backend/repl.py)：进程内直接复用同一 TaskManager/EventBus，不起 uvicorn，锁 `mode=repl` 与网页 / 开发后台互斥），三者共用 `backend/server_lock.py` 的单实例语义。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；`--reload` 下锁保持 supervisor pid；pid 活但 `/health` 未就绪视为「启动中」而非空闲；**无实例标识的手动 uvicorn 一律拒绝**）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝；`::1` 的健康探针与 `TrustedHost` 用方括号形态）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
 
 ---
 
@@ -35,7 +35,9 @@
 backend/
 ├── config.py            Settings（pydantic-settings；.env / 环境变量）
 ├── main.py              FastAPI app：/health、/api 路由挂载、静态前端（StaticFiles）、Host 检查、CORS
-├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查
+├── runtime.py           进程运行时组装（EventBus / Persistence / TaskManager；web lifespan 与 REPL 共用；D-48）
+├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查；`repl` 子命令转终端会话
+├── repl.py              qianfan repl：thin 终端会话（事件入队→主线程渲染、mode=repl 锁；D-48…D-52）
 ├── server_lock.py       单实例锁与启动守卫（一台机器只允许一个后台；ensure_single_backend / update_lock_pid）
 ├── api/
 │   ├── routes.py        36 条 REST 路由（§3.3）；统一 {code,data,message} 信封
@@ -330,6 +332,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 
 ```bash
 qianfan                       # 日常：uv tool install -e . --overrides overrides.txt，单后台 + 自动开浏览器
+qianfan repl                  # 终端：常驻多轮会话（无浏览器 / 无 uvicorn；锁 mode=repl，与上面两者互斥）
 python start.py --install     # 开发：先按 CI 同口径装后端依赖（过滤 mcp 行 + mcp --no-deps）与前端依赖
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
 ```

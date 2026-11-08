@@ -3,6 +3,7 @@
 The launcher is deliberately thin: it checks the build output and the port,
 exports the chosen port so the app's CORS own-origin follows it, then hands
 over to uvicorn. Development keeps using ``start.py`` (Vite hot reload).
+``qianfan repl`` routes to the terminal session instead (D-48, backend/repl.py).
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import socket
+import sys
 import threading
 import time
 import webbrowser
@@ -110,6 +112,13 @@ def _serve(host: str, port: int) -> None:
     uvicorn.run("backend.main:app", host=host, port=port)
 
 
+def _repl_entry(argv: list[str]) -> int:
+    """D-48 (#20): lazily import the terminal session (keeps web startup light)."""
+    from .repl import repl_main
+
+    return repl_main(argv)
+
+
 def _open_at(port: int, no_browser: bool, browser: Callable[[str], None]) -> None:
     url = f"http://{HOST}:{port}/?dir={quote(os.getcwd())}"
     if not no_browser:
@@ -118,6 +127,12 @@ def _open_at(port: int, no_browser: bool, browser: Callable[[str], None]) -> Non
 
 
 def _handoff(running: server_lock.ServerLock, no_browser: bool, browser: Callable[[str], None]) -> int:
+    if running.mode == "repl":
+        print(
+            "[qianfan] 终端会话（qianfan repl）在跑；请先在该终端输入 exit"
+            " —— 关终端会停任务。"
+        )
+        return 2
     if running.mode != "serve":
         print(
             "[qianfan] 开发后台（start.py）在跑，qianfan 不接开发后台；"
@@ -135,7 +150,14 @@ def main(
     open_browser: Callable[[str], None] | None = None,
     probe: Optional[Callable[[int, float], Optional[dict[str, Any]]]] = None,
     when_ready: Optional[Callable[[str, int], None]] = None,
+    repl: Optional[Callable[[list[str]], int]] = None,
 ) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and raw_argv[0] == "repl":
+        # D-48 (#20): qianfan repl is the terminal session; the default
+        # command still serves the web UI.
+        return (repl or _repl_entry)(raw_argv[1:])
+
     settings = get_settings()
     # D-45 (#271): the launcher uses the same startup guard as the app
     # entrypoint (REPL, P3-3, reuses the same function). A bad auth posture
@@ -161,6 +183,21 @@ def main(
     if not 1 <= args.port <= 65535:
         print(f"[qianfan] 端口必须在 1–65535 之间：{args.port}")
         return 1
+
+    # D-48 (#20): a terminal REPL holds the lock with mode="repl" but serves no
+    # HTTP health endpoint, so find_running would wait out its 15s boot window.
+    # Check the record directly: fast, deterministic refusal.
+    existing = server_lock.read_lock(lock_file)
+    if (
+        existing is not None
+        and existing.mode == "repl"
+        and server_lock.pid_alive(existing.pid)
+    ):
+        print(
+            "[qianfan] 终端会话（qianfan repl）在跑；请先在该终端输入 exit"
+            " —— 关终端会停任务。"
+        )
+        return 2
 
     # ADR 0010 decision 3: one backend per machine. Hand the browser to the
     # live instance instead of starting a second writer of tasks.json.
