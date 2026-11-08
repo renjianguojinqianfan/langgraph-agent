@@ -738,6 +738,57 @@ def test_openai_client_forwards_d36_params_through_extra_body(monkeypatch):
     assert captured[-1]["extra_body"] == {"thinking": False, "reasoning_effort": "low"}
 
 
+# ── #267 D-38：流式 reasoning 不再被丢弃 ──
+def test_openai_compat_stream_collects_reasoning_deltas(monkeypatch):
+    import openai
+
+    chunks = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content="", tool_calls=None, reasoning_content="想 "
+                    )
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content="", tool_calls=None, reasoning_content="一下"
+                    )
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content="答", tool_calls=None, reasoning_content=None
+                    )
+                )
+            ]
+        ),
+    ]
+
+    def _fake_openai(**kwargs):
+        return SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **kw: iter(chunks))
+            )
+        )
+
+    monkeypatch.setattr(openai, "OpenAI", _fake_openai)
+    client = OpenAICompatibleClient("https://gw.test/v1", "sk-test", "m", timeout=5)
+
+    responses = list(client.stream([{"role": "user", "content": "hi"}]))
+
+    # Reasoning-only chunks are still yielded (no silent drop).
+    assert "".join(r.reasoning_content for r in responses) == "想 一下"
+    assert "".join(r.content for r in responses) == "答"
+
+
 # ── PR #298 返工：thinking=False / max_tokens=None / 连续同角色消息 ──
 def test_anthropic_client_treats_thinking_false_as_off():
     captured: List[Dict[str, Any]] = []
