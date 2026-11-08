@@ -60,6 +60,7 @@ def test_second_launch_hands_off_and_opens_the_current_directory(tmp_path, monke
     code = cli.main(
         [],
         serve=lambda host, port: served.append((host, port)),
+        when_ready=lambda url, port: None,
         open_browser=opened.append,
         probe=lambda port, timeout: {"instance": "tok"},
     )
@@ -78,6 +79,7 @@ def test_handoff_with_no_browser_does_not_open(tmp_path, monkeypatch):
     code = cli.main(
         ["--no-browser"],
         serve=lambda host, port: None,
+        when_ready=lambda url, port: None,
         open_browser=opened.append,
         probe=lambda port, timeout: {"instance": "tok"},
     )
@@ -100,6 +102,7 @@ def test_stale_pid_is_taken_over(tmp_path, monkeypatch):
     code = cli.main(
         ["--port", "9130"],
         serve=fake_serve,
+        when_ready=lambda url, port: None,
         open_browser=lambda url: None,
         probe=lambda port, timeout: None,
     )
@@ -119,6 +122,7 @@ def test_pid_reuse_with_a_mismatched_identity_is_taken_over(tmp_path, monkeypatc
     code = cli.main(
         [],
         serve=lambda host, port: served.append(port),
+        when_ready=lambda url, port: None,
         open_browser=lambda url: None,
         probe=lambda port, timeout: {"instance": "someone-else"},
     )
@@ -137,6 +141,7 @@ def test_port_occupied_by_a_non_qianfan_program_is_an_error(tmp_path, monkeypatc
         code = cli.main(
             ["--port", str(port)],
             serve=lambda host, port: served.append(port),
+            when_ready=lambda url, port: None,
             open_browser=lambda url: None,
             probe=lambda port, timeout: None,
         )
@@ -296,6 +301,7 @@ def test_qianfan_refuses_to_hand_off_to_the_dev_backend(tmp_path, monkeypatch):
     code = cli.main(
         [],
         serve=lambda host, port: served.append(port),
+        when_ready=lambda url, port: None,
         open_browser=opened.append,
         probe=lambda port, timeout: {"instance": "dev"},
     )

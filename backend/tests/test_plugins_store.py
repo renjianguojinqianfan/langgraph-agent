@@ -380,7 +380,11 @@ def test_cli_web_invalid_file_fails_before_claim_or_spawn(
     settings = _cli_settings(tmp_path, monkeypatch)
     path = _write_raw(settings, "{broken")
     served: List[Any] = []
-    code = cli.main([], serve=lambda host, port: served.append((host, port)))
+    code = cli.main(
+        [],
+        serve=lambda host, port: served.append((host, port)),
+        when_ready=lambda url, port: None,
+    )
     assert code == 1
     assert served == []
     assert not server_lock.lock_path(settings).exists()
