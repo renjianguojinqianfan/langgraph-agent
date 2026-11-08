@@ -5,7 +5,8 @@ route or tier member fails mechanically instead of surviving as a ghost:
 
 * the built-in tool face (knowledge base, Git, plugins, OpenAPI);
 * the read-only / sub-agent tiers (no Git, no knowledge base);
-* settings (`kb_*`, `git_*`, `openapi_*`, `plugins_*`, `aux_llm_*`);
+* settings (`kb_*`, `git_*`, `openapi_*`, `aux_llm_*`; #67 reintroduces
+  exactly one explicit `plugins_preset` field — see the contract note below);
 * REST routes (`/kb*`, `/tasks/{id}/replan`) and the runtime knobs behind them
   (re-plan round, auxiliary model);
 * plugin auto-discovery and OpenAPI generation helpers.

@@ -33,7 +33,7 @@ from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
 from .policy import DangerPolicy
-from .prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
+from .prompts import EXECUTOR_SYSTEM, planner_system
 from .state import AgentState
 
 logger = get_logger("agent.runtime")
@@ -162,6 +162,9 @@ class AgentRuntime:
         # `packages=None` keeps the pre-#67 behaviour for direct runtime tests;
         # the manager always passes its resolved set.
         include_skills = packages is None or INJECTION_SKILLS in packages
+        # Same rule for the prompt text: a disabled subagent package must not be
+        # advertised in the planner context (neither tool call nor delegation).
+        self._planner_system: str = planner_system(packages)
         self._inject_block: str = (
             inject.build_inject_block(settings, include_skills=include_skills)
             if getattr(settings, "context_inject_enabled", True)
@@ -469,7 +472,7 @@ class AgentRuntime:
         """
         face = self._tool_face(PLAN_MODE)
         schemas = [t.to_openai_schema() for t in face.values()]
-        resp = self._complete_plan(state, PLANNER_SYSTEM, schemas)
+        resp = self._complete_plan(state, self._planner_system, schemas)
         if resp is None:
             return state
         if resp.tool_calls:

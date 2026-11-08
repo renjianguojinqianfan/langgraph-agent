@@ -238,7 +238,11 @@ class TaskManager:
             self._tools = build_tools(settings, names=enabled_names)
         else:
             # Test / embedding seam: drop tools owned by a disabled package but
-            # keep unknown names (test doubles and dynamic MCP tools).
+            # keep unknown names (test doubles and dynamic MCP tools). This is a
+            # trust boundary for callers that inject their own list: production
+            # always passes tools=None and only the package manifest decides the
+            # face. An injected unknown name is treated as deliberately mounted
+            # by the embedding test, not as a way to widen the capability face.
             self._tools = [
                 tool
                 for tool in tools

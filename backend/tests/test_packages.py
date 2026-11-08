@@ -4,16 +4,23 @@ Tests pin the static manifest, the assembly face (tools / schema / dispatch
 view / injection / MCP / sub-agent), startup fail-fast and the "full = the old
 behaviour" equivalence. Behaviour of the default face is additionally covered
 by the pre-#67 suites, which must keep passing unchanged.
+
+Spec Testing exception (P4-1): this suite reads `TaskManager._tools` /
+`_tool_schemas` / `_subagent` and `AgentRuntime._planner_system` directly.
+P4-1 deliberately ships no public face-query API (that would freeze one before
+P4-2's settings page); the private reads are the bounded seam the spec Testing
+section calls for, not a product contract.
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any, List, cast
 
 import pytest
 
-from backend import cli
+from backend import cli, repl, server_lock
 from backend.config import Settings
 from backend.core.agent.inject import (
     AGENTS_SECTION,
@@ -22,6 +29,7 @@ from backend.core.agent.inject import (
     build_inject_block,
 )
 from backend.core.agent.nodes import AgentRuntime
+from backend.core.agent.prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
 from backend.core.agent.state import AgentState
 from backend.core.agent.subagent import (
     EXECUTE_TIER,
@@ -142,8 +150,14 @@ def test_presets_are_the_declared_combinations_and_full_is_default():
     }
     assert DEFAULT_PRESET == "full"
     assert resolve_packages("full") == PACKAGE_IDS
-    assert resolve_packages("") == PACKAGE_IDS
     assert resolve_packages("minimal") == frozenset({"files", "bash"})
+
+
+def test_empty_preset_is_an_error_not_a_silent_full_fallback():
+    # M-rework: str(preset or DEFAULT) used to turn "" into "full" silently.
+    for empty in ("", "   ", None):
+        with pytest.raises(ValueError, match="empty plugins preset"):
+            resolve_packages(empty)
 
 
 def test_unknown_preset_and_package_ids_raise_readable_errors():
@@ -457,3 +471,182 @@ def test_cli_rejects_unknown_preset_before_serving(tmp_path, monkeypatch, capsys
     assert served == []
     out = capsys.readouterr().out
     assert "unknown plugins preset" in out
+
+
+def test_cli_repl_dispatch_goes_through_the_preset_guard(tmp_path, monkeypatch, capsys):
+    """#306 M1: `qianfan repl` must not bypass the preset validation."""
+    settings = make_settings(tmp_path, plugins_preset="bogus")
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    entered: List[List[str]] = []
+
+    code = cli.main(["repl"], repl=lambda argv: entered.append(argv) or 0)
+
+    assert code == 1
+    assert entered == []
+    assert "unknown plugins preset" in capsys.readouterr().out
+
+
+def test_repl_rejects_unknown_preset_before_claiming(tmp_path, monkeypatch):
+    settings = make_settings(
+        tmp_path, plugins_preset="bogus", single_backend_guard_enabled=True
+    )
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+    claimed: List[int] = []
+    built: List[int] = []
+    monkeypatch.setattr(
+        server_lock, "claim_lock", lambda *args, **kwargs: claimed.append(1) or True
+    )
+    out: List[str] = []
+
+    code = repl.repl_main(
+        [],
+        runtime_factory=lambda _settings: built.append(1),
+        input_fn=lambda prompt: "exit",
+        output=out.append,
+        configure_stdio=False,
+    )
+
+    assert code == 1
+    assert claimed == []
+    assert built == []
+    assert any("unknown plugins preset" in line for line in out)
+
+
+def test_start_rejects_unknown_preset_before_claim_or_spawn(
+    tmp_path, monkeypatch, capsys
+):
+    import start
+    from backend import config as backend_config
+
+    settings = make_settings(tmp_path, plugins_preset="bogus")
+    monkeypatch.setattr(backend_config, "get_settings", lambda: settings)
+    monkeypatch.setattr(sys, "argv", ["start.py", "--backend-only"])
+    actions: List[str] = []
+    monkeypatch.setattr(start, "_run", lambda *args, **kwargs: actions.append("spawn"))
+    monkeypatch.setattr(
+        server_lock,
+        "claim_lock",
+        lambda *args, **kwargs: actions.append("claim") or True,
+    )
+
+    code = start.main()
+
+    assert code == 2
+    assert actions == []
+    assert "unknown plugins preset" in capsys.readouterr().out
+
+
+# ── prompt text follows enabled packages (D-56) ──
+def test_prompt_text_does_not_advertise_disabled_packages(tmp_path):
+    state = cast(
+        AgentState,
+        {"messages": [{"role": "user", "content": "hi"}], "step_index": 0},
+    )
+
+    minimal_tm = _manager(make_settings(tmp_path, plugins_preset="minimal"))
+    minimal = AgentRuntime(
+        task_id="t-min-prompt",
+        task_manager=minimal_tm,
+        llm=MockLLMClient(),
+        tools=list(minimal_tm._tools),
+        tool_schemas=minimal_tm._tool_schemas,
+        packages=minimal_tm.packages,
+    )
+    minimal_planner = str(
+        minimal._build_messages(state, minimal._planner_system)[0]["content"]
+    )
+    # No unavailable tool may be advertised in the model context, and the
+    # delegation paragraph becomes package-neutral.
+    assert "spawn_subagent" not in minimal_planner
+    assert "load_skill" not in minimal_planner
+    assert "web_search" not in minimal_planner
+    assert minimal_planner != PLANNER_SYSTEM
+
+    for preset in ("research", "full"):
+        tm = _manager(make_settings(tmp_path, plugins_preset=preset))
+        runtime = AgentRuntime(
+            task_id=f"t-{preset}-prompt",
+            task_manager=tm,
+            llm=MockLLMClient(),
+            tools=list(tm._tools),
+            tool_schemas=tm._tool_schemas,
+            packages=tm.packages,
+        )
+        planner = str(runtime._build_messages(state, runtime._planner_system)[0]["content"])
+        executor = str(runtime._build_messages(state, EXECUTOR_SYSTEM)[0]["content"])
+        assert planner == PLANNER_SYSTEM  # default full/research keep old text
+        assert "spawn_subagent" in planner
+        assert "spawn_subagent" not in executor
+
+    # packages=None keeps the pre-#67 prompt for direct runtime tests.
+    legacy_tm = _manager(make_settings(tmp_path, plugins_preset="minimal"))
+    legacy = AgentRuntime(
+        task_id="t-legacy-prompt",
+        task_manager=legacy_tm,
+        llm=MockLLMClient(),
+        tools=list(legacy_tm._tools),
+        tool_schemas=legacy_tm._tool_schemas,
+    )
+    assert legacy._planner_system == PLANNER_SYSTEM
+
+
+# ── dispatch face: a disabled tool is unknown, not executed (spec Testing) ──
+def _call_state(tool_name: str, tool_input: dict) -> AgentState:
+    return cast(
+        AgentState,
+        {
+            "step_index": 1,
+            "steps": [
+                {"index": 1, "thought": "", "tool_calls": [], "status": "running"}
+            ],
+            "_current_tool_calls": [
+                {
+                    "id": "c1",
+                    "tool_name": tool_name,
+                    "input": tool_input,
+                    "output": None,
+                    "status": "pending",
+                    "error": "",
+                }
+            ],
+        },
+    )
+
+
+def test_disabled_tool_is_unknown_and_has_no_side_effect(tmp_path):
+    # (a) minimal: spawn_subagent is absent from the face and dispatch refuses it.
+    settings = make_settings(tmp_path)
+    tm = _manager(settings, packages=resolve_packages("minimal"))
+    runtime = AgentRuntime(
+        task_id="t-dispatch",
+        task_manager=tm,
+        llm=MockLLMClient(),
+        tools=list(tm._tools),
+        tool_schemas=tm._tool_schemas,
+        packages=tm.packages,
+    )
+    state = _call_state("spawn_subagent", {"name": "x", "instruction": "y"})
+    runtime.tool_node(state)
+    rec = state["_current_tool_calls"][0]
+    assert rec["status"] == "failed"
+    assert "unknown tool: spawn_subagent" in rec["error"]
+    assert "spawn_subagent" not in {tool.name for tool in tm._tools}
+
+    # (b) an explicitly narrowed face (skills only): write is unknown and the
+    #     target file is never created.
+    skills_only = _manager(settings, packages=frozenset({"skills"}))
+    runtime2 = AgentRuntime(
+        task_id="t-dispatch-2",
+        task_manager=skills_only,
+        llm=MockLLMClient(),
+        tools=list(skills_only._tools),
+        tool_schemas=skills_only._tool_schemas,
+        packages=skills_only.packages,
+    )
+    target = tmp_path / "must-not-exist.txt"
+    state2 = _call_state("write", {"path": str(target), "content": "nope"})
+    runtime2.tool_node(state2)
+    rec2 = state2["_current_tool_calls"][0]
+    assert rec2["status"] == "failed"
+    assert "unknown tool: write" in rec2["error"]
+    assert not target.exists()

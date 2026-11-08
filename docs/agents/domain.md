@@ -30,6 +30,7 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 > | 0009 | 现役（2026-10-22 已交付） | 最简 agent 一章：pi 式工具面、计划文件、一条命令启动 | 本章退役 0003 / 0004 |
 > | 0010 | 现役（2026-10-22 已交付） | 日常形态：启动目录即工作区、共用后台、模型配置 | 修订 0009 决策 4 / 6 / 7 |
 > | 0011 | 现役（2026-11-07 已交付） | 模型配置双协议：Provider 层 + Anthropic 原生适配器（D-35 / D-36） | 修订 0010 决策 7「只 OpenAI 兼容」 |
+> | 0012 | 现役（2026-11-08 起 P4-1） | 插件 + 预设：能力包 / 全局组合与真关（D-53…D-57） | 首片 P4-1 交付静态 manifest + 装配；P4-2 补 data/plugins.json / 设置页 / --preset |
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
 > dirs (`.qoder/`, `.trae/`, `.mimosa/`), which are untracked by design. Full rule table:

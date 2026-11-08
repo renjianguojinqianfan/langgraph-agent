@@ -92,7 +92,13 @@ def resolve_packages(
     startup fail-fast required by D-55/D-56. `overrides` is already the shape
     P4-2's `data/plugins.json` will feed in; P4-1 exposes no file/API path.
     """
-    name = str(preset or DEFAULT_PRESET).strip()
+    name = str(preset).strip() if preset is not None else ""
+    if not name:
+        raise ValueError(
+            f"empty plugins preset; expected one of {sorted(PRESETS)}. Set "
+            "plugins_preset (env PLUGINS_PRESET, see .env.example) to a known "
+            "preset; data/plugins.json + the settings page arrive in P4-2."
+        )
     if name not in PRESETS:
         raise ValueError(
             f"unknown plugins preset {name!r}; expected one of "

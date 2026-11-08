@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, Optional, Sequence
 from . import server_lock
 from .api.schemas import TaskStatus
 from .config import Settings, ensure_loopback_host, get_settings
+from .core.capability_packages import DEFAULT_PRESET, resolve_packages
 from .runtime import Runtime, build_runtime, model_key_is_missing
 from .services.auth import ensure_startup_auth_configured
 from .services.event_bus import Event
@@ -361,6 +362,13 @@ def repl_main(
     except RuntimeError as exc:
         emit(f"[repl] {exc}")
         return 1
+    # D-55 (#67): unknown / empty capability preset must fail before the
+    # single-backend lock is claimed, with a readable line (no traceback).
+    try:
+        resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+    except ValueError as exc:
+        emit(f"[repl] {exc}")
+        return 1
 
     lock_file: Optional[Any] = None
     instance: Optional[str] = None
@@ -412,7 +420,14 @@ def repl_main(
                 emit(f"[repl] {exc}")
                 return 1
 
-        runtime = (runtime_factory or build_runtime)(settings)
+        try:
+            runtime = (runtime_factory or build_runtime)(settings)
+        except ValueError as exc:
+            # Defence in depth (the preset was validated above): a runtime
+            # factory raising a config ValueError still reports readably and the
+            # finally block releases the claimed lock.
+            emit(f"[repl] {exc}")
+            return 1
         if model_key_is_missing(settings, runtime.task_manager.models):
             emit(
                 "[repl] 没有可用的模型 Key：在网页设置页给 Provider 粘贴，"

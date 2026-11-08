@@ -321,6 +321,10 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         # P2: disable subprocess-spawning MCP children by default so the
         # offline suite never starts them. The MCP tests opt in explicitly.
         mcp_enabled=False,
+        # #67: pin the capability preset explicitly — an exported PLUGINS_PRESET
+        # in the developer's shell or .env must not silently change the face
+        # every test is written against. Tests override it per case.
+        plugins_preset="full",
     )
     base.update(overrides)
     return make_isolated_settings(**base)
