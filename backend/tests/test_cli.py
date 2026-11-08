@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
+import pytest
+
 from backend import cli
 from backend.config import Settings
 
@@ -208,3 +210,14 @@ def test_open_when_ready_timeout_prints_url_without_opening(capsys):
     out = capsys.readouterr().out
     assert url in out
     assert "未自动打开浏览器" in out
+
+
+def test_help_mentions_the_repl_subcommand(capsys):
+    """--help must mention qianfan repl (behaviour otherwise unchanged)."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help"])
+
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "repl" in out
+    assert "terminal session" in out
