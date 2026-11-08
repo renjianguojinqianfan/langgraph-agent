@@ -55,7 +55,7 @@
 # 判据与已排除项见 docs/harness-bash-false-red.md。
 
 # Windows 敏感面（与 CI backend-windows-smoke 同清单；改路径 / 进程 / os 分支时跑）
-.\.venv311\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py backend/tests/test_test_isolation.py backend/tests/test_server_lock.py -q -rs
+.\.venv311\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py backend/tests/test_test_isolation.py backend/tests/test_server_lock.py backend/tests/test_repl.py -q -rs
 
 # 质量门禁（与 CI backend-test 同命令；工具链：pip install -r requirements-dev.txt）
 .\.venv311\Scripts\python.exe -m ruff check backend scripts start.py

@@ -122,6 +122,7 @@ jobs:
   #   test_auth.py                   启动期 auth 守卫（子进程探针 / 导入期拒绝启动；#254）
   #   test_test_isolation.py         conftest 的 os.name==nt 临时根探测（#264 c2/c3；#261 AC1）
   #   test_server_lock.py            单实例锁 / 浏览器交接 / 真子进程退出取证（#261 AC1/D-13）
+  #   test_repl.py                   REPL 会话 / 锁互斥 / 编码 / 子进程 smoke（#20；连跑 3 次稳定后纳入）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
     name: Backend Windows smoke
@@ -163,6 +164,7 @@ jobs:
           backend/tests/test_auth.py
           backend/tests/test_test_isolation.py
           backend/tests/test_server_lock.py
+          backend/tests/test_repl.py
           -q -rs
 
   # ── 前端：类型检查 + 单元测试 + 生产构建 ─────────────────────────────────
