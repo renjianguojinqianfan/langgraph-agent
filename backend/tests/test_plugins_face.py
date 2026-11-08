@@ -274,6 +274,53 @@ def test_file_config_mcp_off_skips_lazy_import_and_connection(tmp_path, monkeypa
     assert "mcp_fetch" not in _names(tm)
 
 
+def test_mcp_on_does_trigger_the_guarded_lazy_import_positive_control(
+    tmp_path, monkeypatch
+):
+    """Positive control for the mcp-off __import__ guard above.
+
+    Without this, a future change to importlib semantics could make the mcp-off
+    test pass forever without exercising anything. With the mcp package on, the
+    same import hook must record the client module import; the fake manager
+    keeps the test offline (no subprocess / no connection).
+    """
+    import sys
+
+    import backend.core.mcp.client as mcp_client
+
+    class _FakeManager:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def connect_all(self):
+            return []
+
+        def cleanup(self):
+            return None
+
+    monkeypatch.setattr(mcp_client, "McpClientManager", _FakeManager)
+    seen: list = []
+    real_import = builtins.__import__
+
+    def recorder(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.endswith("core.mcp.client") or name.endswith("mcp.client"):
+            seen.append(name)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", recorder)
+    settings = make_settings(
+        tmp_path,
+        mcp_enabled=True,
+        mcp_servers='[{"name": "demo", "command": "demo-cmd"}]',
+    )
+    save_plugins_config(settings, "full", {})
+    tm = make_manager(settings)
+
+    assert "backend.core.mcp.client" in sys.modules
+    assert seen, "mcp package on must import the MCP client module"
+    assert tm._mcp is not None
+
+
 # ── 3) LOW: dynamic name colliding with a disabled package's builtin ──
 def test_dynamic_name_colliding_with_disabled_builtin_is_reported(
     tmp_path, monkeypatch

@@ -137,6 +137,7 @@ D0 文档 → C4 命令 → S1 bash 后台进程 → S2 搜索源 → W1 目录�
 
 - 内容：照票面，校准三点：真模型场景从 5 个扩到 **9 个**（§6）；残影检查词加 Docker / 快照 / 回滚 / `PlanStep` / openai 与 ollama 预设；ADR 修订核对加 ADR 0010 列出的四处 + `AGENTS.md`「密钥」行；README 放一张现有界面截图。
 - 判据：9 个场景逐个跑通并写进 `docs/` 的清单；关 #155。
+- 校准（2026-11-08，原文保留）：现清单为 **10 场景**，见 `docs/manual-verification.md`（新增预设对比场景；真实手测归 P5-1）。
 
 ### D1 文档全量审计（新票，C7 之后）
 
@@ -203,6 +204,7 @@ D0 文档 → C4 命令 → S1 bash 后台进程 → S2 搜索源 → W1 目录�
 
 - **已执行**：spec 票 [#166](https://github.com/renjianguojinqianfan/langgraph-agent/issues/166)（2026-10-20，经 `/to-spec` 发布，标签 `spec`）——本文的需求面与测试接缝以它为对外入口，后续新票挂在它下面。父 spec 按 `docs/agents/triage-labels.md` **只打 `spec`**；`ready-for-agent` 只打轮到的那一片实施票。
 - **已改票（末尾追加校准段，原文一字不删）**：#159 C4（F6、删 Docker 与 CI job、工作区本片不动）；#160 C5（范围 = 任务目录 + W3 判断、依赖 W1）；#161 C6（`.qianfan/plans/` 路径、原文显示）；#162 C7（9 个场景、残影词、ADR 0010 核对、截图）；#155 父票（切片重排，链到本文）。
+- 校准（2026-11-08，原文保留）：现清单为 **10 场景**，见 `docs/manual-verification.md`（新增预设对比场景；真实手测归 P5-1）。
 - **已开新票**：S1 [#168](https://github.com/renjianguojinqianfan/langgraph-agent/issues/168)、W1 [#169](https://github.com/renjianguojinqianfan/langgraph-agent/issues/169)、W2 [#170](https://github.com/renjianguojinqianfan/langgraph-agent/issues/170)、W3 [#171](https://github.com/renjianguojinqianfan/langgraph-agent/issues/171)、M1 [#172](https://github.com/renjianguojinqianfan/langgraph-agent/issues/172)、M2 [#173](https://github.com/renjianguojinqianfan/langgraph-agent/issues/173)、D1 [#174](https://github.com/renjianguojinqianfan/langgraph-agent/issues/174)；以及 2026-10-20 开跑前环境检查后插入的 S2 [#175](https://github.com/renjianguojinqianfan/langgraph-agent/issues/175)（本机 duckduckgo 连接超时；票面见 §4 新小节）。
 - **#148**：S1 合并后评论审计结论（链到审计文档）并关闭。
 - **PR**：D0 文档 PR [#167](https://github.com/renjianguojinqianfan/langgraph-agent/pull/167) 已合（`316a510`）；C4 起每片一个堆叠 PR（目标 `master`）。

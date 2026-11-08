@@ -221,6 +221,24 @@ def test_active_tools_include_connected_mcp_tools(tmp_path, monkeypatch):
         assert "read" in data["active"]["tools"]
 
 
+def test_active_tools_keeps_dynamic_names_in_the_dynamic_segment():
+    from backend.api.routes import _active_tools
+
+    packages = [
+        {"id": "files", "tools": ["read", "write"], "connects_mcp": False,
+         "affects_subagent_face": True},
+        {"id": "bash", "tools": ["bash"], "connects_mcp": False,
+         "affects_subagent_face": False},
+    ]
+    ordered = _active_tools(
+        frozenset({"bash", "write", "mcp_fetch"}),
+        packages,
+        frozenset({"bash"}),
+    )
+    # write's package (files) is disabled, so it is dynamic, not static files.
+    assert ordered == ["bash", "mcp_fetch", "write"]
+
+
 # ── #308 M3: write failures are 500 and leave the old file in place ──
 def test_put_write_failure_is_500_and_preserves_the_file(client, monkeypatch):
     test_client, settings = client
