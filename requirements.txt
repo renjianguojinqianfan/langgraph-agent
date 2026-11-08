@@ -1,43 +1,66 @@
 # Backend Python dependencies (LangGraph autonomous-task agent)
 #
-# langgraph 1.2.x LTS 线。0.2.76 → 1.2.11 为原地迁移（2026-09，Issue #7）；
-# 评估、实测证据与重写面见 docs/migration-langgraph-1x.md。
+# ASCII-only on purpose: Windows pip reads requirements by locale; keep ASCII
+# so cp936 does not fail (#259). Do not add non-ASCII comments here.
+#
+# langgraph 1.2.x LTS line. 0.2.76 -> 1.2.11 was an in-place migration
+# (2026-09, Issue #7); evaluation, measured evidence and rewrite surface live
+# in docs/migration-langgraph-1x.md.
 langgraph>=1.2,<1.3
 langgraph-checkpoint==4.3.0
 langgraph-checkpoint-sqlite==3.1.2
-# 三个包一起钉：它们是 resume 契约的完整存储面。
-# - langgraph 只放 1.2.x 补丁级（spec：1.2.x LTS 线），跨小版本重新走评估流程。
-# - langgraph-checkpoint 必须显式钉：serde（JsonPlusSerializer）住在这个包里，而它
-#   否则只被上游约束在一个浮动窗口里（当前 [4.3,5)）——一次普通 pip install 就能把
-#   它抬到 4.5 并改掉快照语义，既过不了钉版也过不了 CHECKPOINT_FORMAT_VERSION（打标
-#   只区分迁移前/后，感知不到 4.x 内部漂移），而失败形态正是「静默腐蚀 resume」。
-# - langgraph-checkpoint-sqlite 钉死：存储格式直接决定 resume 契约。
-# 抬版必须由人评估后放行。上一钉 3.1.1 曾闭环了在 2.0.11 上被评估为 not_used 而
-# dismiss 的两条公告（GHSA-9rwj-6rc7-p77c / CVE-2025-67644 与 GHSA-47pj-3jcm-6whg /
-# CVE-2026-71433），安全故事由「已接受」变「已修复」。
-# 旧钉版的理由「3.x 破坏 resume serde 兼容」已实测推翻（3.1.1 能无损读回 2.0.11
-# 写的快照）；旧快照仍然作废，但理由换成「跨大版本的执行位置等价性未证明，
-# 而 data/ 可弃」，并在启动时检测 + 拒绝挂载（task_manager.CHECKPOINT_FORMAT_VERSION）。
+# The three packages are pinned together: they are the complete storage surface
+# of the resume contract.
+# - langgraph: patch-level only inside the 1.2.x LTS line; crossing a minor
+#   goes through a fresh evaluation.
+# - langgraph-checkpoint must be pinned explicitly: serde (JsonPlusSerializer)
+#   lives in this package and is otherwise only constrained by upstream to a
+#   floating window (currently [4.3,5)) -- one ordinary pip install could raise
+#   it to 4.5 and change snapshot semantics. That would fail both the pin and
+#   CHECKPOINT_FORMAT_VERSION (the marker only distinguishes pre/post migration,
+#   not 4.x internal drift), and the failure mode is "silently corrupt resume".
+# - langgraph-checkpoint-sqlite is pinned hard: the storage format directly
+#   defines the resume contract.
+# Upgrades must be evaluated and approved by a human. The previous pin 3.1.1
+# closed two advisories that had been evaluated as "not_used" and dismissed on
+# 2.0.11 (GHSA-9rwj-6rc7-p77c / CVE-2025-67644 and GHSA-47pj-3jcm-6whg /
+# CVE-2026-71433), turning the security story from "accepted" to "fixed".
+# The old rationale "3.x breaks resume serde compatibility" was disproved by
+# measurement (3.1.1 reads 2.0.11 snapshots back losslessly); old snapshots are
+# still invalid, but the reason is now "cross-major execution-position
+# equivalence is unproven, and data/ is disposable", detected at startup and
+# refused mount (task_manager.CHECKPOINT_FORMAT_VERSION).
 #
-# 2026-10-25 两钉抬版（#204，Dependabot alert #16）：checkpoint 4.2.0→4.3.0、
-# sqlite 3.1.1→3.1.2。两包同批修 Store namespace 标签校验（上游 #9217）；4.3.0 另含
-# serde 回建失败时保留序列化数据（上游 #9251）与 delta 重放顺序（上游 #8544/#9114），
-# 3.1.2 另含空 checkpoint_id（上游 #9262）与 delta 祖先按 parent 指针遍历（上游 #8557）。
-# langgraph 行不动：1.2.11 接受 checkpoint >=4.1,<5，但 CI 解析到的 1.2.x 最新补丁
-# （2026-10-25 解析到 1.2.17）要求 checkpoint >=4.3.0,<5；sqlite 3.1.2 同样要求
-# >=4.3.0,<5，故两钉同抬。旧组合 4.2.0 不能配新 langgraph。本仓结论：磁盘格式未变
-# （CHECKPOINT_FORMAT_VERSION 仍为 2），旧库（4.2.0/3.1.1 写入）实测 16/16 线程读回
-# 无损，无需迁移或拒绝；resume / serde 回归全绿（证据见 #204 关联 PR）。
+# 2026-10-25 dual pin bump (#204, Dependabot alert #16): checkpoint 4.2.0 ->
+# 4.3.0, sqlite 3.1.1 -> 3.1.2. Both fix Store namespace label validation
+# (upstream #9217); 4.3.0 also keeps serialized data when serde rebuild fails
+# (upstream #9251) and fixes delta replay ordering (upstream #8544/#9114);
+# 3.1.2 also fixes empty checkpoint_id (upstream #9262) and delta ancestor
+# traversal via parent pointers (upstream #8557). The langgraph row is
+# unchanged: 1.2.11 accepts checkpoint >=4.1,<5, but the newest 1.2.x patch CI
+# resolves (1.2.17 on 2026-10-25) requires checkpoint >=4.3.0,<5; sqlite 3.1.2
+# does too, so both pins moved together. The old 4.2.0 combination cannot pair
+# with the new langgraph. Repo conclusion: on-disk format is unchanged
+# (CHECKPOINT_FORMAT_VERSION is still 2); the old database (written by
+# 4.2.0/3.1.1) read back losslessly across 16/16 threads in measurement, so no
+# migration or refusal is needed; resume/serde regressions are all green
+# (evidence in the PR linked from #204).
 #
-# langchain-core 1.x 由 langgraph 传递引入；本仓库 0 处 import langchain*，故不再显式
-# 钉 langchain / langchain-openai / langchain-core（旧钉 langchain-core<0.3 与 langgraph
-# 1.x 要求的 >=1.0 直接冲突，删除是升级的前置条件）。
-# aiosqlite / sqlite-vec / ormsgpack 同为 checkpoint(-sqlite) 自己声明的硬依赖，随正常
-# 安装到位；只有 mcp 需要 --no-deps（见文件末尾）。
-# Web 栈：starlette 1.3.1 起，2026 同批 CVE（含静态路径 CVE-2026-48818，修复线 1.1.0）
-# 全部离开受影响区间；本仓随 fastapi 0.162 抬到 1.x 后，SafeStaticFiles 缓解退役。
-# starlette 必须显式钉下限：fastapi 自身只要求 >=0.46。fastapi 0.162 的硬依赖新增
-# opentelemetry-api 与 annotated-doc（传递安装，不在本文件重复列出）。
+# langchain-core 1.x comes in transitively via langgraph; this repo has zero
+# "import langchain*", so langchain / langchain-openai / langchain-core are no
+# longer pinned explicitly (the old langchain-core<0.3 pin directly conflicted
+# with langgraph 1.x's >=1.0 requirement; removing it was a prerequisite of the
+# upgrade).
+# aiosqlite / sqlite-vec / ormsgpack are hard dependencies declared by
+# checkpoint(-sqlite) and arrive with a normal install; only mcp needs
+# --no-deps (see the end of this file).
+# Web stack: since starlette 1.3.1 all 2026 same-batch CVEs (including static
+# path CVE-2026-48818, fixed line 1.1.0) are outside the affected range. After
+# this repo moved fastapi 0.162 onto the 1.x line, the SafeStaticFiles
+# mitigation was retired.
+# starlette needs an explicit lower bound: fastapi itself only requires >=0.46.
+# fastapi 0.162 added hard dependencies on opentelemetry-api and annotated-doc
+# (installed transitively, not repeated here).
 fastapi>=0.162.0,<0.163.0
 starlette>=1.3.1,<2
 uvicorn[standard]>=0.30.0,<0.31.0
@@ -50,9 +73,11 @@ httpx>=0.27.0,<0.29.0
 pytest>=8.0.0
 pyyaml>=6.0,<7.0
 mcp>=1.2,<2.0
-# mcp 由 --no-deps 安装（防其拉高 uvicorn/starlette），以下是其运行期必需的传递
-# 依赖；mcp 根包 __init__ 即导入 FastMCP，因此 sse-starlette/jsonschema 也必须显式列出。
+# mcp is installed with --no-deps (to stop it from raising uvicorn/starlette);
+# the following are its required runtime transitive dependencies. The mcp root
+# package imports FastMCP at __init__, so sse-starlette/jsonschema must also be
+# listed explicitly.
 httpx-sse>=0.4,<1  # metadata dep of mcp (--no-deps install); ClientSession import chain
-sse-starlette>=3.5,<4  # metadata dep of mcp (--no-deps install); 旧 <2 上限随旧 fastapi/starlette 区间退役
-jsonschema>=4.20,<5  # metadata dep of mcp (--no-deps install); FastMCP schema 校验
+sse-starlette>=3.5,<4  # metadata dep of mcp (--no-deps install); old <2 cap retired with old fastapi/starlette range
+jsonschema>=4.20,<5  # metadata dep of mcp (--no-deps install); FastMCP schema validation
 pywin32>=310; sys_platform == "win32"  # metadata dep of mcp stdio on Windows (--no-deps install)

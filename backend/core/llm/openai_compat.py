@@ -199,8 +199,10 @@ def create_llm_client(settings: Settings) -> LLMClient:
     base_url = settings.llm_base_url or _PROVIDER_PRESETS["deepseek"]["base_url"]
     api_key = settings.llm_api_key
     model = settings.llm_model
-    if not api_key:
-        logger.warning("llm_api_key is empty — live calls will fail until configured.")
+    # D-44 (#259): no key warning here. Client construction runs lazily (per
+    # task / per entry) and cannot see pasted keys; the startup posture check
+    # (backend.main.warn_if_no_usable_model_key) warns once, only when no model
+    # entry can serve a call.
     # Same factory as the per-task path (D-35): the settings seed constructs an
     # OpenAI-compatible client, but the dispatch itself lives in one place.
     from .factory import build_llm_client

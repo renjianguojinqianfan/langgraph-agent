@@ -1,8 +1,11 @@
-# Dependency overrides for `uv tool install -e .` (see README).
+# Dependency overrides for the user-level tool install ("uv tool install -e .", see README).
 #
-# mcp declares `uvicorn>=0.31.1`, but this repo pins `uvicorn>=0.30.0,<0.31.0`
-# (AGENTS.md「依赖面」). The same combination already runs in .venv311, where
-# mcp is installed with --no-deps. The override lets a clean tool environment
-# reproduce the pinned versions instead of raising uvicorn.
+# ASCII-only on purpose: Windows tooling reads these files by locale; keep ASCII
+# so cp936 does not fail (#259).
+#
+# mcp declares "uvicorn>=0.31.1", but this repo pins "uvicorn>=0.30.0,<0.31.0"
+# (AGENTS.md "dependency surface"). The same combination already runs in
+# .venv311, where mcp is installed with --no-deps. The override lets a clean
+# tool environment reproduce the pinned versions instead of raising uvicorn.
 # Keep the line below identical to requirements.txt's uvicorn requirement.
 uvicorn[standard]>=0.30.0,<0.31.0

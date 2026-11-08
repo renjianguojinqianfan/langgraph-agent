@@ -188,6 +188,18 @@ def main(
         os.environ["QIANFAN_INSTANCE"] = instance
         reset_settings()
 
+        # D-42 (#259): the launcher entry checks the same invariant as the
+        # app's lifespan. We just claimed the record, so this recognises our own
+        # instance without probing our own health; a foreign live record was
+        # already handled by the handoff above.
+        try:
+            server_lock.ensure_single_backend(
+                get_settings(), probe=probe_health, wait=0.0
+            )
+        except RuntimeError as exc:
+            print(f"[qianfan] {exc}")
+            return 2
+
         url = f"http://{HOST}:{args.port}/?dir={quote(os.getcwd())}"
         if not args.no_browser:
             opener = when_ready or (

@@ -1,18 +1,27 @@
-# 质量门禁工具链（ruff/mypy 与 CI backend-test job 同版本；pre-commit 仅本地 git 钩子框架，CI 从不跑钩子，钉版只为本地可复现）
+# Quality-gate toolchain (ruff/mypy match the CI backend-test job; pre-commit is
+# only the local git-hook framework -- CI never runs hooks, the pin exists for
+# reproducible local runs).
 #
-# 为什么不并进 requirements.txt：运行期只装 requirements.txt，不需要 linter；
-# 并进去等于让 `qianfan` 的工具环境多装两把工具。
+# ASCII-only on purpose: Windows pip reads requirements by locale; keep ASCII
+# so cp936 does not fail (#259).
 #
-# 为什么钉死而不是给区间：ruff/mypy 的规则集与默认值本身会随版本漂移——抬一个小
-# 版本就能在**零代码改动**的前提下把 CI 变红（新规则、新默认 select、新类型推断）。
-# 与 requirements.txt 里 langgraph 三包同钉是同一条理由：闸门的判据必须稳定，
-# 抬版走人评估（本地跑一遍、清完新违规、再改这里）。
+# Why not merge into requirements.txt: runtime installs only requirements.txt
+# and does not need linters; merging would add two extra tools to the qianfan
+# tool environment.
 #
-# 本地用法：
+# Why exact pins instead of ranges: ruff/mypy rule sets and defaults drift on
+# their own -- a minor bump can turn CI red with ZERO code changes (new rules,
+# new default selects, new type inference). Same rationale as the three pinned
+# langgraph packages in requirements.txt: the gate's judge must be stable;
+# upgrades go through human evaluation (run locally, clear new violations,
+# then change this file).
+#
+# Local usage:
 #   .venv311\Scripts\python.exe -m pip install -r requirements-dev.txt
 #   .venv311\Scripts\python.exe -m ruff check backend scripts start.py
 #   .venv311\Scripts\python.exe -m mypy
 ruff==0.16.7
 mypy==2.3.1
-pre-commit==4.6.2   # 提交前钩子框架：配置在 .pre-commit-config.yaml（含 commit-msg 钩子）；
-                    # hook 内容一律 language: system 直调 .venv311，零第二版本源
+pre-commit==4.6.2   # commit-time hook framework: config in .pre-commit-config.yaml (including the
+                    # commit-msg hook); hook content always language: system invoking .venv311,
+                    # with zero second version source
