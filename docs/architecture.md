@@ -52,7 +52,8 @@ backend/
 │   ├── tools/           base.py 契约 · registry.py @register · file_io.py（read/write/edit/ls/glob/grep）
 │   │                    bash.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
 │   ├── mcp/             MCP 客户端（stdio 现役；http 预留）
-│   └── workspace_files.py  工作区文件可见性过滤（W3）
+│   ├── workspace_files.py  工作区文件可见性过滤（W3）
+│   └── capability_packages.py 能力包 / 预设静态声明与真关装配清单（#67 P4-1；ADR 0012）
 ├── services/            task_manager.py 生命周期/worker/续说/续跑/事件 · event_bus.py
 │                        persistence.py tasks.json · plan_file.py 计划文件 · trace.py JSONL trace
 │                        model_store.py Provider/模型目录与凭据 · auth.py token 签发/校验
@@ -263,13 +264,19 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 
 ### 4.4 上下文供给链
 
-1. **注入块**（`context_inject_enabled`，默认开）：home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md` 两层合并 + skills 清单（字符预算，超额从尾部整卡丢弃）+ 环境事实；每任务计算一次，**不计入压缩预算**，永不淘汰。实现 [`backend/core/agent/inject.py`](../backend/core/agent/inject.py)。
+1. **注入块**（`context_inject_enabled`，默认开）：home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md` 两层合并 + skills 清单（字符预算，超额从尾部整卡丢弃）+ 环境事实；每任务计算一次，**不计入压缩预算**，永不淘汰。skills 清单片段归 `skills` 能力包（关闭则该片段不注入；AGENTS.md / 环境事实不受影响）。实现 [`backend/core/agent/inject.py`](../backend/core/agent/inject.py)。
 2. **工具结果驱逐**（`context_evict_enabled`，默认开）：单条 tool 消息超过阈值（默认 4000 字符）时替换为「标记 + 工具名 + 原文字数 + trace 指针 + 首尾预览」；最近 N 条永不驱逐；纯机械、零额外 LLM 调用。发 `tool_result_evicted`。
 3. **压缩**（`context_*`）：估算 token（chars/4）超预算或条数超限时触发；默认 `truncate`（零额外调用），可选 `summarize`（用当前模型写摘要）。先驱逐、后压缩（顺序固定）。发 `context_compressed`。
 4. 计划的版本核对插在第 1、3 步之间/之后（见 §4.3）。
 
 ### 4.5 工具执行与危险动作
 
+- **能力包 / 预设**（#67 P4-1，ADR 0012）：`backend/core/capability_packages.py` 静态声明六个包
+  （`files` / `bash` / `skills` / `web-search` / `subagent` / `mcp`：工具名集合 + 注入片段 +
+  是否连 MCP + 是否影响子代理面）与三预设（`minimal` / `research` / `full`，默认 `full` =
+  #67 前行为）；`TaskManager` 启动期解析包清单后按名单装配工具面与注入片段。**真关**：禁用包
+  不实例化、不进 schema / dispatch、不加注入片段、不连 MCP。未知 preset 启动即错；本片由
+  `plugins_preset`（env `PLUGINS_PRESET`）指定，`data/plugins.json` / 设置页在 P4-2。
 - 工具注册：`BaseTool` 子类 + `@register`，由 `registry.build_tools` 自动实例化（新增工具零接线）。
 - **MCP 工具例外**：由 `task_manager` 显式追加（不经 `@register`）；每次 `call_tool` 只执行一次。
 - 危险动作：`policy_rules`（JSON 数组，`{tool, pattern?, reason?}`）在 `agent` 节点里由**一个钩子**匹配入参；命中即不执行，把 `{block, reason}` 当该次调用结果回给模型，记录 `status="skipped"`。**不弹框、不进图重入、不改参数、不 terminate**（与 pi 的有意分歧，ADR 0008 决策 6）。空表 = 不拦，它不是安全边界（见 §7）。
@@ -277,7 +284,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`�
 
 ### 4.6 子任务
 
-- 单入口工具 `spawn_subagent`（`subagent_enabled`，默认开）；两档工具面 `explore`（只读）/ `execute`，只能比父任务**收窄**。
+- 单入口工具 `spawn_subagent`（由 `subagent` 能力包派生；`subagent_enabled` 保留为附加门，默认开）；两档工具面 `explore`（只读）/ `execute`，只能比父任务**收窄**。实际面 = 固定档 ∩ 已启用包 ∩ 父任务已挂载工具；`subagent` 包关闭时工具自然缺席、执行器不构造。
 - 子任务在独立 `thread_id` 上跑同一张图，工作区继承父任务；父频道只收 `subtask_start / subtask_result / subtask_failed`，子任务自己的频道不带这三条。
 - `SubTask` 记录折进父任务 `Task.subtasks`；超时（`subagent_timeout_sec`）或崩溃折回 `failed`，与一条失败的 `tool_result` 并存，父任务不死。
 - 并发由 `subagent_max_concurrency` 控制（1 = 串行）。

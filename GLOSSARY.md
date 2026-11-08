@@ -2,7 +2,7 @@
 
 > 本文件是**词汇表入口**，不是第二份词汇表。定义型权威在 `backend/core/agent/state.py`
 > （状态字段与节点名，图拓扑见 `backend/core/agent/graph.py`）与 `AGENTS.md`「跨任务安全边界」表；
-> 已定居决策在 `docs/adr/`（现役 0001 / 0002（部分退役）/ 0008 / 0009 / 0010；0003 随 C2 退役，0004 随 C5 退役，0005–0007 随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
+> 已定居决策在 `docs/adr/`（现役 0001 / 0002（部分退役）/ 0008 / 0009 / 0010 / 0011 / 0012；0003 随 C2 退役，0004 随 C5 退役，0005–0007 随 0008 退役）。本文件只放指针与一行速查；技能（tdd /
 > diagnosing-bugs / wait-what / domain-modeling / triage …）读完本文件，按指针去读权威源。
 > 单上下文仓库：无 `GLOSSARY-MAP.md`。
 
@@ -12,7 +12,7 @@
 |---|---|
 | 节点 / 状态字段术语的定义 | `backend/core/agent/state.py`（节点名见 `graph.py`） |
 | 硬规则与边界不变量 | `AGENTS.md`「跨任务安全边界」表 |
-| 已定居的决策与理由 | `docs/adr/0001`–`0010`（0002 部分退役；0003 随 C2 退役；0004 随 C5 退役；0005–0007 随 0008 退役，均保留历史） |
+| 已定居的决策与理由 | `docs/adr/0001`–`0012`（0002 部分退役；0003 随 C2 退役；0004 随 C5 退役；0005–0007 随 0008 退役；0011 模型配置双协议；0012 能力包与预设，均保留历史） |
 | 计划 / 执行两模式、停下、交付 | [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（决策 1–8） |
 | 技能组配置（tracker / 标签 / 本文档的消费规则） | `docs/agents/` 三件套 |
 
@@ -26,6 +26,7 @@
 「续说」= 停下后 `POST /api/tasks/{id}/messages`，沿同一 `thread_id` / checkpoint 接着跑，不是重开任务（决策 1）。
 「交付」= 停下时人去看工作区里的文件，不是新状态（决策 8）。
 运行时概念：`checkpoint` / `resume` / `workspace`（任务目录）/ 运行上下文 / 两层注入 / 模型配置。
+能力包 / 预设：**能力包** = 本仓代码的静态工具面声明（`files` / `bash` / `skills` / `web-search` / `subagent` / `mcp`：工具名集合 + 注入片段 + 是否连 MCP + 是否影响子代理面）；**预设** = 全局组合（`minimal` / `research` / `full`，默认 `full` = #67 前行为）。全局、服务级、重启生效；关掉是真关（不实例化 / 不进 schema / 不进 dispatch / 不加注入 / 不连 MCP；不承诺模块不被 import）；子代理实际面 = 固定 tier ∩ 已启用包。权威见 [ADR 0012](docs/adr/0012-plugin-packages-and-presets.md) 与 `backend/core/capability_packages.py`。
 「模型配置」= `data/models.json` v2 里的 **Provider**（id、名称、协议、API 地址、Key 环境变量名、是否预设）+ **模型条目**（id、所属 Provider、模型名、显示名、来源 `manual` / `migrated`）；`Task.model` 存模型条目的 id，空 = 全局默认（`default` 也指向模型条目 id）；取 Key 顺序 = 粘贴（`~/.qianfan/credentials.json`，按 Provider id）> 该 Provider 的环境变量，接口只回 `key_set` / `key_source`（pasted / env / none）；预设只有 DeepSeek。`protocol` 取 `openai-compatible` / `anthropic`，两种都可创建与使用（Anthropic 为非流式适配器；`thinking` / `reasoning_effort` 可配置，但 Anthropic 路径写入即拒，见 ADR 0011）；D-36 采样参数 `temperature` / `max_tokens` / `thinking` / `reasoning_effort` 挂模型条目、Provider 可给默认值。v1 扁平 profile 首次加载自动迁移为同 id 的 Provider + 模型条目（`source: migrated`），迁移前备份 `models.json.bak-v1`，幂等（ADR 0010 决策 7 经 ADR 0011 修订；数据结构 v2 见 `docs/architecture.md` `3.3）。
 工作区：`Task.workspace`（绝对路径，存储前用 `normalize_workspace` 解析 `~`、相对路径、`..` 与符号链接；比较用 `workspace_key`，Windows 上再折叠盘符大小写与斜杠方向，所以同一目录的不同写法过滤结果一致）。新建任务取页面 `?dir=`，缺省为后台启动目录；旧任务补 `data/artifacts`。文件工具、`bash`、`load_skill` 与注入块都从运行上下文（`backend/core/runtime_context.py`）取这个目录；子代理继承父任务的目录（ADR 0010 决策 1）。
 任务：`thread_id`（= task_id，resume 与续说寻址恒等）；工作区文件列表 = 任务目录里按 `.gitignore` 可见的文件（C5，无产物账本）。

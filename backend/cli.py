@@ -153,11 +153,6 @@ def main(
     repl: Optional[Callable[[list[str]], int]] = None,
 ) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    if raw_argv and raw_argv[0] == "repl":
-        # D-48 (#20): qianfan repl is the terminal session; the default
-        # command still serves the web UI.
-        return (repl or _repl_entry)(raw_argv[1:])
-
     settings = get_settings()
     # D-45 (#271): the launcher uses the same startup guard as the app
     # entrypoint (REPL, P3-3, reuses the same function). A bad auth posture
@@ -169,6 +164,20 @@ def main(
     except RuntimeError as exc:
         print(f"[qianfan] {exc}")
         return 1
+    # D-55 (#67): unknown capability preset fails at startup, before anything
+    # claims the single-backend lock or touches data/.
+    from .core.capability_packages import DEFAULT_PRESET, resolve_packages
+
+    try:
+        resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+    except ValueError as exc:
+        print(f"[qianfan] {exc}")
+        return 1
+    if raw_argv and raw_argv[0] == "repl":
+        # D-48 (#20): qianfan repl is the terminal session; the default
+        # command still serves the web UI. Dispatch lives after the startup
+        # guards so an unknown preset fails before the REPL can claim a lock.
+        return (repl or _repl_entry)(raw_argv[1:])
     dist: Path = settings.frontend_dist_path
     browser: Callable[[str], None] = open_browser or _open_browser
     handoff_browser = open_browser or _open_browser_now

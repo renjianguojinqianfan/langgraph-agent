@@ -33,6 +33,16 @@ from ..core.agent.nodes import AgentRuntime
 from ..core.agent.policy import DangerPolicy, warn_unmatched_rules
 from ..core.agent.state import AgentState
 from ..core.agent.subagent import SubAgentExecutor
+from ..core.capability_packages import (
+    DEFAULT_PRESET,
+    enabled_tool_names,
+    injection_fragments,
+    mcp_package_enabled,
+    package_for_tool,
+    resolve_packages,
+    subagent_package_enabled,
+    validate_packages,
+)
 from ..core.llm.client import LLMClient
 from ..core.llm.factory import build_llm_client
 from ..core.llm.openai_compat import create_llm_client
@@ -191,6 +201,7 @@ class TaskManager:
         default_workspace: Optional[Path] = None,
         model_store: Optional[ModelStore] = None,
         llm_factory: Optional[Callable[[Any, str], LLMClient]] = None,
+        packages: Optional[frozenset[str]] = None,
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
@@ -211,18 +222,47 @@ class TaskManager:
         self._known_secrets: set[str] = set()
         #: The (profile, client) a round is pinned to; subagents inherit it.
         self._round_models: Dict[str, tuple[str, LLMClient]] = {}
-        self._tools = tools if tools is not None else build_tools(settings)
-        # P1 item 2: sub-agent executor (None when disabled).
-        self._subagent = SubAgentExecutor(self, settings) if settings.subagent_enabled else None
+        # D-53/D-56 (#67): global capability-package combination, resolved once
+        # at manager construction. §packages§ is the embedding/test seam; the
+        # production path resolves the settings preset here, so an unknown
+        # preset fails startup instead of mounting a half face.
+        self.packages: frozenset[str] = (
+            validate_packages(packages)
+            if packages is not None
+            else resolve_packages(getattr(settings, "plugins_preset", DEFAULT_PRESET))
+        )
+        self.injection_fragments = injection_fragments(self.packages)
+        enabled_names = enabled_tool_names(self.packages)
+        if tools is None:
+            # True close (D-55): disabled package tools are never instantiated.
+            self._tools = build_tools(settings, names=enabled_names)
+        else:
+            # Test / embedding seam: drop tools owned by a disabled package but
+            # keep unknown names (test doubles and dynamic MCP tools). This is a
+            # trust boundary for callers that inject their own list: production
+            # always passes tools=None and only the package manifest decides the
+            # face. An injected unknown name is treated as deliberately mounted
+            # by the embedding test, not as a way to widen the capability face.
+            self._tools = [
+                tool
+                for tool in tools
+                if package_for_tool(tool.name) is None
+                or package_for_tool(tool.name) in self.packages
+            ]
+        # D-56: the sub-agent face is derived from the package face (the legacy
+        # subagent_enabled switch stays as an extra gate for existing configs).
+        self._subagent_enabled = (
+            subagent_package_enabled(self.packages) and settings.subagent_enabled
+        )
+        self._subagent = (
+            SubAgentExecutor(self, settings) if self._subagent_enabled else None
+        )
         # P2 item 1: connect MCP servers and append their tools (startup once).
         self._mcp: Optional[McpClientManager] = None
         self._load_mcp_tools(settings)
-        # Issue #56: ``subagent_enabled`` now gates exactly one thing — the
-        # ``spawn_subagent`` tool. It used to also mount the keyword-triggered
-        # ``subagent_split`` node, which could dispatch a subtask (and its side
-        # effects) with nobody approving it; that entry is gone, so "off" simply
-        # keeps the tool off the face.
-        if not settings.subagent_enabled:
+        # Issue #56: the spawn tool rides the subagent package now; the legacy
+        # switch only removes it from the face (no second mount path).
+        if not self._subagent_enabled:
             self._tools = [t for t in self._tools if t.name != "spawn_subagent"]
         self._tool_schemas = [t.to_openai_schema() for t in self._tools]
         self._wire_injected_tools()
@@ -565,6 +605,12 @@ class TaskManager:
         existing tool and logs a warning. A missing SDK or a failing server only
         logs a warning — startup always continues.
         """
+        # D-56 (#67): the mcp capability package is a real off switch — even
+        # with mcp_enabled=true, a disabled package must not connect or lazily
+        # import the MCP client.
+        if not mcp_package_enabled(self.packages):
+            logger.info("mcp capability package disabled; skipping MCP tools.")
+            return
         if not settings.mcp_enabled:
             logger.info("mcp_enabled=false; skipping MCP tools.")
             return
@@ -1217,6 +1263,7 @@ class TaskManager:
                 max_steps=self.settings.max_steps,
                 model_profile=self.model_id_for(task),
                 reasoning_scope=self.reasoning_scope_for(self.model_id_for(task)),
+                packages=self.packages,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
@@ -1656,6 +1703,7 @@ class TaskManager:
                 max_steps=self.settings.max_steps,
                 model_profile=self.model_id_for(current),
                 reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
+                packages=self.packages,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 
@@ -1917,6 +1965,7 @@ class TaskManager:
                 max_steps=self.settings.max_steps,
                 model_profile=self.model_id_for(current),
                 reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
+                packages=self.packages,
             )
             graph = build_graph(runtime, checkpointer=self._checkpointer)
 

@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     # ── Agent / orchestration ──
     max_steps: int = 15  # max agent LLM calls per round (P0-1; #139 resets per round)
 
+    # ── Capability packages / presets (#67 P4-1; global, restart to apply) ──
+    # full = pre-#67 behaviour (all packages). minimal = files+bash;
+    # research = files+bash+skills+web-search+subagent+mcp (D-55). P4-2 adds
+    # data/plugins.json + settings UI; until then this env/field is the only
+    # explicit path. Unknown preset fails startup.
+    plugins_preset: str = "full"
+
     # ── Bash tool ──
     sandbox_timeout: int = 30  # default wall-clock seconds for one bash command
     bash_path: str = ""  # explicit bash executable; empty = Git install dir, then PATH
