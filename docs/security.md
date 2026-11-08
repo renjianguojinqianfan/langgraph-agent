@@ -87,9 +87,15 @@
 
 - **隔离**：不可信任务（陌生网页 / 仓库 / 外部 MCP server）在容器、虚拟机或专用低权账户
   里跑；不要用带敏感凭据的账户跑不可信内容。
-- **收口**：服务只留 `127.0.0.1`，端口不做转发 / 内网暴露；必须暴露时先开 `auth_enabled`
-  并把占位 token 换掉。`auth_enabled=true` 且 token 为空 / 占位会**拒绝启动**，启动日志也会
-  明示当前认证状态（#254）——不会出现「以为开了锁、其实没锁」。
+- **收口**：服务只留 `127.0.0.1`，端口不做转发 / 内网暴露。`host` 非回环（如 `0.0.0.0`）
+  在启动期直接拒绝（#259），所以「临时对外暴露」只能走受控端口转发；真要做时按序：
+  ① 开 `auth_enabled=true` 并换掉占位 token——空 / 占位会**拒绝启动**，启动日志明示认证状态
+  （#254 / #271，`TokenIssuer` 构造亦 fail-closed）；② 浏览器原生例外端点只有
+  `GET /api/tasks/{id}/events`（EventSource 不能设 header）与
+  `GET /api/tasks/{id}/files/download`（`<a href>` 导航不能设 header）接受 `?token=`，
+  其余端点一律只认 `Authorization: Bearer`（带 `?token=` 也是 401，#271 D-46）；
+  ③ uvicorn access log 已装脱敏 filter，query 里的 `token=...` 输出为 `token=***`
+  （#271 D-47）；④ 仍按 `README`「这不是安全边界」理解：同机进程可直接打 API。
 - **兜底**：危险动作规则表是最后一道机械闸，不是完整防护；删条目 = 放行该类动作，加规则按
   `.env.example` 的格式（正则对每个入参文本叶子做不区分大小写搜索，不跨叶子拼接）。
   规则漏掉的场景靠上面的隔离兜底，而不是把本文读成安全承诺。
@@ -187,6 +193,13 @@
   回退到公开的 `changeme` 密钥，`/auth/token` 甚至接受空密码）；启动日志（info 级）明示
   当前认证状态。默认 `auth_enabled=false` 的本地演示语义不变（§4 收口条目）。
   守卫只挂在进程入口 `backend.main`；新增入口需同样调用 `ensure_startup_auth_configured`。
+- 2026-11-08（#271，auth 收尾）：`TokenIssuer` 构造 fail-closed（空 / 占位 `changeme`
+  直接抛，不再回退公开密钥）；`main` 只在 `auth_enabled=true` 时构造、关闭置 None，`cli`
+  入口复用同一 `ensure_startup_auth_configured`。`verify_token` 拆两档：REST 仅
+  `Authorization: Bearer`；`?token=` 只允许 `GET /api/tasks/{id}/events` 与
+  `GET /api/tasks/{id}/files/download`（锚定路径匹配，非前缀），其余端点忽略查询 token。
+  `uvicorn.access` 日志在 `backend.main` import 时装幂等 filter，query 的 `token=...`
+  输出为 `token=***`（其它查询参数保留）。§4 checklist 记录例外端点与脱敏。
 - 2026-11-07（#243 P2-2 A2）：模型发现接口 `POST /api/providers/{id}/models/discover` 的
   出站面口径列入 §2（只打 Provider 自己配置的 base_url、带其 Key、拒重定向、超时/大小上限、
   错误脱敏、响应不落库）；本机单用户 / 回环部署下**不视为新增 SSRF 面**。
