@@ -72,6 +72,9 @@ logger = get_logger("task_manager")
 #: D-38: one step's reasoning is capped before it is persisted / sent over SSE.
 REASONING_TRUNCATE_LIMIT = 8000
 
+#: Settlement text for a call no live process will ever answer.
+IN_FLIGHT_TOOL_CALL_TEXT = "interrupted before the tool call returned"
+
 # langgraph 1.x durability mode — the one 1.x feature this migration adopts
 # (Issue #7; selection rationale in docs/migration-langgraph-1x.md §5).
 #
@@ -569,34 +572,73 @@ class TaskManager:
             logger.exception("trace cleanup failed for %s", task_id)
 
     def _reconcile_orphans(self) -> None:
-        """Mark persisted RUNNING/PENDING tasks as INTERRUPTED on startup.
+        """Settle whatever a previous process left in flight.
 
         Runs exactly once per construction (the constructor), when no worker
-        threads exist yet, so every non-terminal record in tasks.json is by
-        definition an orphan of a previous process (PENDING covers the crash
-        window between create_task() persisting and the thread flipping the
-        status to RUNNING). Terminal statuses are left untouched.
+        threads exist yet, so every in-flight step or call in tasks.json is by
+        definition a dead process's leftover. RUNNING/PENDING tasks become
+        INTERRUPTED (PENDING covers the crash window between create_task()
+        persisting and the thread flipping the status to RUNNING); every
+        record's in-flight steps are settled too — including INTERRUPTED
+        records an older startup already flipped without touching their steps.
+        Statuses outside RUNNING/PENDING are never rewritten.
         """
         reconciled = 0
         for task in self.persistence.list_all():
-            if task.status not in (TaskStatus.RUNNING, TaskStatus.PENDING):
-                continue
             try:
-                orphan_status = task.status.value
-                task.status = TaskStatus.INTERRUPTED
+                original_status = task.status.value
+                was_live = task.status in (TaskStatus.RUNNING, TaskStatus.PENDING)
+                changed = self._settle_in_flight_steps(task)
+                if was_live:
+                    task.status = TaskStatus.INTERRUPTED
+                    changed = True
+                if not changed:
+                    continue
                 task.updated_at = _now()
                 if not self._save_task(task, strict=False):
                     continue
-                reconciled += 1
-                logger.warning(
-                    "Orphaned %s task %s reconciled to INTERRUPTED",
-                    orphan_status,
-                    task.id,
-                )
+                if was_live:
+                    reconciled += 1
+                    logger.warning(
+                        "Orphaned %s task %s reconciled to INTERRUPTED",
+                        original_status,
+                        task.id,
+                    )
+                else:
+                    logger.warning(
+                        "Settled in-flight steps on %s task %s",
+                        original_status,
+                        task.id,
+                    )
             except Exception:  # per-task isolation: one bad record can't stall the sweep
                 logger.exception("Failed to reconcile orphan task %s", task.id)
         if reconciled:
             logger.info("Startup reconciliation completed: %d task(s).", reconciled)
+
+    def _settle_in_flight_steps(self, task: Task) -> bool:
+        """Settle steps/calls no live process can finish; True when changed.
+
+        Two callers write records whose in-flight state has no owner left:
+        startup reconciliation (a dead process's leftovers) and
+        ``_finalize_terminal`` (resume restores checkpoint steps verbatim and
+        ``finish`` only settles the current round's last step, so the dead
+        round's step would be re-persisted). Flipping the task status alone is
+        not enough: without this a parked record keeps its round labelled
+        执行中 forever. A step interrupted mid-flight is ``failed`` (its round
+        never completed) and its pending calls become ``skipped``; already
+        settled steps/calls are untouched.
+        """
+        changed = False
+        for step in task.steps:
+            if step.status == "running":
+                step.status = "failed"
+                changed = True
+            for call in step.tool_calls:
+                if call.status == "pending":
+                    call.status = "skipped"
+                    call.error = call.error or IN_FLIGHT_TOOL_CALL_TEXT
+                    changed = True
+        return changed
 
     # ── P1 wiring of runtime-injected tools ──
     def _wire_injected_tools(self) -> None:
@@ -1496,6 +1538,7 @@ class TaskManager:
         """
         status = final.get("status") or "FAILED"
         task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
+        self._settle_in_flight_steps(task)
         task.plan_version = int(final.get("plan_version", task.plan_version))
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
         task.final_answer = self.redact(final.get("final_answer", "") or "")

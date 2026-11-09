@@ -3,8 +3,10 @@
 A crash leaves tasks stuck in RUNNING (or PENDING, before the worker thread
 flipped the state) in ``tasks.json`` even though their execution threads are
 gone. On construction, TaskManager must reconcile such orphans into
-INTERRUPTED (the resumable state) exactly once, and never touch tasks that
-already have a terminal status.
+INTERRUPTED (the resumable state) exactly once, never rewrite an already
+terminal status, and settle every step/tool call the dead process left in
+flight — including on records an older startup flipped to INTERRUPTED without
+touching their steps.
 
 Also pins the persistence durability contract the resume feature rests on:
 a torn ``tasks.json`` must never silently wipe task history.
@@ -14,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from backend.api.schemas import Task, TaskStatus
+from backend.api.schemas import StepRecord, Task, TaskStatus, ToolCallRecord
 from backend.core.llm.client import MockLLMClient
 from backend.services.persistence import Persistence
 from backend.tests.conftest import make_manager, make_settings
@@ -57,6 +59,89 @@ class TestOrphanReconciliation:
         assert task is not None
         assert task.status == TaskStatus.INTERRUPTED
 
+    def test_running_step_and_pending_call_are_settled(self, tmp_path):
+        """A hard kill leaves the last step `running` and its call `pending`;
+        the dead process can no longer run `finish()`, so startup settles them.
+        A parked task must not keep a round labelled 执行中 forever."""
+        settings = make_settings(tmp_path)
+        now = datetime.now(timezone.utc).isoformat()
+        persistence = Persistence(settings)
+        persistence.save_task(
+            Task(
+                id="t-step",
+                title="orphan with a running step",
+                user_input="demo input",
+                status=TaskStatus.RUNNING,
+                created_at=now,
+                updated_at=now,
+                steps=[
+                    StepRecord(
+                        index=1,
+                        round=1,
+                        status="done",
+                        tool_calls=[
+                            ToolCallRecord(id="c1", tool_name="ls", status="success")
+                        ],
+                    ),
+                    StepRecord(
+                        index=2,
+                        round=1,
+                        status="running",
+                        tool_calls=[
+                            ToolCallRecord(id="c2", tool_name="bash", status="pending")
+                        ],
+                    ),
+                ],
+            )
+        )
+
+        rebuilt = make_manager(settings, MockLLMClient())
+        task = rebuilt.get_task("t-step")
+        assert task is not None
+        assert task.status == TaskStatus.INTERRUPTED
+        assert task.steps[0].status == "done"
+        assert task.steps[0].tool_calls[0].status == "success"
+        assert task.steps[1].status == "failed"
+        assert task.steps[1].tool_calls[0].status == "skipped"
+        assert task.steps[1].tool_calls[0].error
+
+    def test_already_interrupted_record_is_still_settled(self, tmp_path):
+        """An older startup flipped the status but kept the dead step running;
+        the next startup heals it without rewriting the parked status."""
+        settings = make_settings(tmp_path)
+        now = datetime.now(timezone.utc).isoformat()
+        Persistence(settings).save_task(
+            Task(
+                id="t-legacy",
+                title="parked with a leftover running step",
+                user_input="demo input",
+                status=TaskStatus.INTERRUPTED,
+                created_at=now,
+                updated_at=now,
+                steps=[
+                    StepRecord(
+                        index=1,
+                        round=1,
+                        status="running",
+                        tool_calls=[
+                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                        ],
+                    )
+                ],
+            )
+        )
+
+        rebuilt = make_manager(settings, MockLLMClient())
+        task = rebuilt.get_task("t-legacy")
+        assert task is not None
+        assert task.status == TaskStatus.INTERRUPTED
+        assert task.steps[0].status == "failed"
+        assert task.steps[0].tool_calls[0].status == "skipped"
+        # Persisted, not just fixed in memory.
+        persisted = Persistence(settings).load_task("t-legacy")
+        assert persisted is not None
+        assert persisted.steps[0].status == "failed"
+
     def test_terminal_statuses_are_untouched(self, tmp_path):
         settings = make_settings(tmp_path)
         for tid, status in [
@@ -70,6 +155,93 @@ class TestOrphanReconciliation:
         assert rebuilt.get_task("t-done").status == TaskStatus.INTERRUPTED
         assert rebuilt.get_task("t-fail").status == TaskStatus.FAILED
         assert rebuilt.get_task("t-int").status == TaskStatus.INTERRUPTED
+
+
+class TestTerminalRecordSettlement:
+    def test_finalize_never_repersists_a_stale_running_step(self, tmp_path):
+        """resume() restores checkpoint steps verbatim and finish() settles
+        only the current round's last step, so finalize must settle the dead
+        round's leftover or the next resume brings 「执行中」 back."""
+        settings = make_settings(tmp_path)
+        manager = make_manager(settings, MockLLMClient())
+        now = datetime.now(timezone.utc).isoformat()
+        task = Task(
+            id="t-resumed",
+            title="resumed after a hard kill",
+            user_input="demo input",
+            status=TaskStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+
+        manager._finalize_terminal(
+            task,
+            {
+                "status": "INTERRUPTED",
+                "steps": [
+                    {
+                        "index": 2,
+                        "round": 1,
+                        "thought": "Step 2: acting.",
+                        "reasoning": "",
+                        "status": "running",
+                        "tool_calls": [
+                            {
+                                "id": "c2",
+                                "tool_name": "bash",
+                                "input": {},
+                                "output": None,
+                                "status": "pending",
+                                "error": None,
+                            }
+                        ],
+                    }
+                ],
+                "messages": [],
+                "final_answer": "",
+            },
+        )
+
+        assert task.status == TaskStatus.INTERRUPTED
+        assert task.steps[0].status == "failed"
+        assert task.steps[0].tool_calls[0].status == "skipped"
+        assert task.steps[0].tool_calls[0].error
+        persisted = Persistence(settings).load_task("t-resumed")
+        assert persisted is not None
+        assert persisted.steps[0].status == "failed"
+
+    def test_failed_record_with_in_flight_step_is_settled(self, tmp_path):
+        """The sweep is status-agnostic about the leftovers: a FAILED record
+        can also carry a step the crash cut down mid-flight."""
+        settings = make_settings(tmp_path)
+        now = datetime.now(timezone.utc).isoformat()
+        Persistence(settings).save_task(
+            Task(
+                id="t-failed-leftover",
+                title="failed with a running step",
+                user_input="demo input",
+                status=TaskStatus.FAILED,
+                created_at=now,
+                updated_at=now,
+                steps=[
+                    StepRecord(
+                        index=1,
+                        round=1,
+                        status="running",
+                        tool_calls=[
+                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                        ],
+                    )
+                ],
+            )
+        )
+
+        rebuilt = make_manager(settings, MockLLMClient())
+        task = rebuilt.get_task("t-failed-leftover")
+        assert task is not None
+        assert task.status == TaskStatus.FAILED
+        assert task.steps[0].status == "failed"
+        assert task.steps[0].tool_calls[0].status == "skipped"
 
 
 class TestPersistenceDurability:

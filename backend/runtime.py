@@ -17,6 +17,10 @@ from .services.event_bus import EventBus
 from .services.persistence import Persistence
 from .services.plugins_store import EffectivePluginsConfig, resolve_effective_plugins
 from .services.task_manager import TaskManager
+from .utils.logging import get_logger
+from .utils.net import normalize_no_proxy
+
+logger = get_logger("runtime")
 
 
 @dataclass
@@ -39,7 +43,13 @@ def build_runtime(
     D-54 (#67): resolve data/plugins.json (CLI override > file > env > full)
     before touching data/. An invalid file / preset fails here with a readable
     error naming the file path and the fix, for both the web and REPL entries.
+
+    The process env is sanitized first: a bracketed IPv6 NO_PROXY entry makes
+    every env-reading HTTP client (OpenAI SDK included) raise while it is
+    constructed, so it is rewritten before the task manager can build one.
     """
+    if normalize_no_proxy():
+        logger.warning("NO_PROXY normalized: IPv6 brackets removed")
     plugins = resolve_effective_plugins(settings, preset_override=preset_override)
     settings.data_path.mkdir(parents=True, exist_ok=True)
     settings.artifacts_path.mkdir(parents=True, exist_ok=True)
