@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { turnVerdict } from "../../lib/rounds";
 import type { StepRecord, TraceMarker } from "../../types";
 import { CompressMarker } from "./CompressMarker";
 import { DisclosureHead } from "./DisclosureHead";
@@ -47,15 +48,21 @@ export function TurnProcess({
   }
   if (!steps.length) return null;
 
-  const failed = steps.some((step) => step.status === "failed");
-  const running = live || steps.some((step) => step.status === "running");
+  const verdict = turnVerdict(steps, live);
   const toolCount = steps.reduce((n, step) => n + step.tool_calls.length, 0);
-  const label = title ?? (failed ? "处理失败" : running ? "执行中" : "已完成");
-  const dot = failed
-    ? "bg-state-danger"
-    : running
-      ? "bg-signal-now animate-pulse"
-      : "bg-tertiary";
+  const label =
+    title ??
+    (verdict === "failed"
+      ? "处理失败"
+      : verdict === "running"
+        ? "执行中"
+        : "已完成");
+  const dot =
+    verdict === "failed"
+      ? "bg-state-danger"
+      : verdict === "running"
+        ? "bg-signal-now animate-pulse"
+        : "bg-tertiary";
 
   return (
     <section aria-label={label} className="border-y border-rule">

@@ -229,6 +229,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 - **统一信封**：除 `/events`（SSE）、`/trace` 默认 NDJSON、`/files/download`（文件流）三条路径外，成功响应都是 `{code:int, data:any, message:str}`；HTTP 层错误用 FastAPI 的 `detail`（400/401/404/409/413/415/422/500；413 / 422 由 `/trace` 的 `?format=json` 分支引入——大小上限与逐行校验；409 含 `/plan` 读失败、500 含 `/trace` 读取失败，两者都是通用 detail、全因只进服务端日志，#260）。
 - **工具失败两个面各说一次**（#95）：事件面 `tool_result.error`（人可见），对话面 `role:"tool"` 消息 `{"ok": false, "error": ...}`（模型可见）——两者取同一个 `rec["error"]`。
 - **被规则当场拒的调用**走第三形状（ADR 0008 决策 6）：对话面 `{"block": true, "reason": ...}`，记录面 `status:"skipped"` + 理由在 `error`（「不许做」与「做失败了」分得开）。
+- **死进程收尾的调用**也记 `status:"skipped"`（启动对账 / 终态写入把遗留 `pending` 收口），`error` 写中断说明；没有对话面回答——那段对话已经不存在（#317）。
 - **只执行一次**：工具调用无自动重试、无熔断（ADR 0003 已退役）；失败原因原样回给模型。
 - **任务级异常**：节点级异常被 `TaskManager` 捕获并发布 `task_failed`（`status=FAILED`）。
 
@@ -252,7 +253,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 停止 | 用户按停 | `TaskManager.stop()` 翻 `_stop_flags` 与 state、发布 `task_interrupted`；worker 在节点入口检测后收口，状态 `INTERRUPTED` |
 | 续说 | 停下后发消息 | `POST /api/tasks/{id}/messages`：同一 `thread_id` / checkpoint 继续同一段对话（多轮入口） |
 | 续跑 | 停止 / 崩溃后 | `POST /api/tasks/{id}/resume`：从最近 durable checkpoint 重建并继续；发布 `task_resumed` |
-| 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），逐条隔离；悬空 tool call 的清扫在 `agent` 节点循环入口（#46），不在启动对账里 |
+| 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），并收尾死进程留下的在途状态：`running` 步骤 → `failed`、`pending` 调用 → `skipped`（含旧启动逻辑只翻状态、不动步骤的 INTERRUPTED 记录；任务状态不重写），逐条隔离；消息面悬空 tool call 的清扫仍在 `agent` 节点循环入口（#46），不在启动对账里。`_finalize_terminal` 写记录前也走同一收尾（resume 会原样恢复 checkpoint 的 steps） |
 
 checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`），格式戳 v2；v1 旧库启动时拒绝挂载并按迁移文档 §2.4 处置。`data/` 可弃，不做跨大版本快照兼容。
 
@@ -361,6 +362,8 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 ```
 
 一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
+
+启动装配（`build_runtime`，Web 与 REPL 共用）还会先改写进程 env 的 `NO_PROXY` / `no_proxy`：括号化 IPv6 条目改成裸主机，`[host]:port` 丢掉端口。httpx 把 `NO_PROXY` 拼成代理挂载键时只认裸主机，`[::1]` 会让 OpenAI 客户端在构造时抛 `InvalidURL`；发生改写时打一条 WARNING 日志（#317）。
 
 `frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示先构建。
 

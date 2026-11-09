@@ -32,6 +32,7 @@
 任务：`thread_id`（= task_id，resume 与续说寻址恒等）；工作区文件列表 = 任务目录里按 `.gitignore` 可见的文件（C5，无产物账本）。
 工具调用状态：`pending | success | failed | skipped`——只有后三是终态（`nodes.py` 的 `TERMINAL_TOOL_CALL_STATUSES`，#100）；`pending` 未收口即 `dangling tool call`（消息面也没有配对的 `role: tool` 回答）。
 危险动作：`policy_rules` 规则表 + `agent` 里那一个钩子；命中 → `skipped` 记录 + `{block, reason}` 回模型（ADR 0008 决策 6）。**默认空表 = 不拦**，它不是安全边界（见 README「这不是安全边界」）。
+`skipped` 的第二个来源：死进程收尾——启动对账 / 终态写入把遗留 `pending` 调用收为 `skipped`，`error` 写中断说明，没有对话面回答（#317）。
 注入：`两层注入`（home 层 `AGENTS.md` → 任务目录 `AGENTS.md`；实现 `inject.py`）。
 记录：`trace`（系统侧事件/轨迹 JSONL，可回放；**不进** LLM 上下文——压缩留痕里只放指针）——与 `transcript` 是两回事，勿混。
 

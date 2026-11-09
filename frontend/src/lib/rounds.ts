@@ -37,6 +37,22 @@ export function stepsForRound(steps: StepRecord[], round: number): StepRecord[] 
   return steps.filter((step) => step.round === round);
 }
 
+export type TurnVerdict = "failed" | "running" | "done";
+
+/**
+ * A round's verdict comes from its last step (#287 review F2): a round resumed
+ * after a hard kill carries the dead attempt as a failed step, while the
+ * answer that followed is what the round delivered. `live` keeps 执行中 while
+ * the round is still running even if its last persisted step already closed.
+ */
+export function turnVerdict(steps: StepRecord[], live: boolean): TurnVerdict {
+  const last = steps[steps.length - 1];
+  if (last?.status === "failed") return "failed";
+  if (live || last?.status === "running") return "running";
+  if (steps.some((step) => step.status === "running")) return "running";
+  return "done";
+}
+
 /**
  * Steps persisted before #265 (no round). They are rendered once as a legacy
  * block instead of being guessed into the last round — that guess caused the

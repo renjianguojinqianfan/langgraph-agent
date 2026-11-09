@@ -17,12 +17,21 @@ import os
 
 import httpx
 import pytest
+
+# Private on purpose: proxy mounts are built by this httpx seam, and the suite
+# is pinned to httpx <0.29 (requirements.txt). Re-check both on any bump.
 from httpx._utils import URLPattern, get_environment_proxies
 
 from backend.core.llm.openai_compat import OpenAICompatibleClient
 from backend.runtime import build_runtime
 from backend.tests.conftest import make_settings
 from backend.utils.net import normalize_no_proxy
+
+
+def _set_proxy_env(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """Set both spellings so a POSIX shell's lowercase copy is restored too."""
+    monkeypatch.setenv("NO_PROXY", value)
+    monkeypatch.setenv("no_proxy", value)
 
 
 def _proxy_patterns_parse() -> None:
@@ -52,7 +61,7 @@ def test_clean_values_report_no_change():
 
 
 def test_httpx_proxy_patterns_parse_after_normalization(monkeypatch):
-    monkeypatch.setenv("NO_PROXY", "[::1],localhost")
+    _set_proxy_env(monkeypatch, "[::1],localhost")
     with pytest.raises(httpx.InvalidURL):
         _proxy_patterns_parse()
 
@@ -62,7 +71,7 @@ def test_httpx_proxy_patterns_parse_after_normalization(monkeypatch):
 
 def test_openai_client_constructs_after_normalization(monkeypatch):
     """The exact startup failure: OpenAI(...) builds its httpx client from env."""
-    monkeypatch.setenv("NO_PROXY", "[::1]")
+    _set_proxy_env(monkeypatch, "[::1]")
     with pytest.raises(httpx.InvalidURL):
         OpenAICompatibleClient(
             base_url="http://example.invalid/v1",
@@ -81,6 +90,6 @@ def test_openai_client_constructs_after_normalization(monkeypatch):
 
 def test_build_runtime_normalizes_the_process_env(monkeypatch, tmp_path):
     """The web and REPL entries share this seam; deleting the call must fail."""
-    monkeypatch.setenv("NO_PROXY", "[::1],localhost")
+    _set_proxy_env(monkeypatch, "[::1],localhost")
     build_runtime(make_settings(tmp_path))
     assert os.environ["NO_PROXY"] == "::1,localhost"

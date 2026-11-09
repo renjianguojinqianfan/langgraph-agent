@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ChatTurn, StepRecord } from "../types";
-import { isPlanNotice, legacySteps, splitRounds, stepsForRound } from "./rounds";
+import {
+  isPlanNotice,
+  legacySteps,
+  splitRounds,
+  stepsForRound,
+  turnVerdict,
+} from "./rounds";
 
 describe("splitRounds", () => {
   it("空对话 → 无轮次", () => {
@@ -79,6 +85,38 @@ describe("stepsForRound / legacySteps", () => {
 
   it("旧记录（round=0 或缺失）单独归为 legacy，不猜轮次", () => {
     expect(legacySteps(steps).map((s) => s.index)).toEqual([3, 4]);
+  });
+});
+
+describe("turnVerdict", () => {
+  const step = (index: number, status: string): StepRecord => ({
+    index,
+    round: 1,
+    thought: "",
+    tool_calls: [],
+    status,
+  });
+
+  it("崩溃后续跑完成：末步 done，前面失败的断点步不改写本轮结论", () => {
+    expect(turnVerdict([step(1, "failed"), step(2, "done")], false)).toBe("done");
+  });
+
+  it("末步失败才是处理失败", () => {
+    expect(turnVerdict([step(1, "done"), step(2, "failed")], false)).toBe("failed");
+    expect(turnVerdict([step(1, "failed")], false)).toBe("failed");
+  });
+
+  it("运行中的轮次保持执行中，即使末步已收尾", () => {
+    expect(turnVerdict([step(1, "done")], true)).toBe("running");
+  });
+
+  it("运行中末步已失败则显示处理失败", () => {
+    expect(turnVerdict([step(1, "failed")], true)).toBe("failed");
+  });
+
+  it("末步 running 或历史残留 running 都按执行中处理", () => {
+    expect(turnVerdict([step(1, "running")], false)).toBe("running");
+    expect(turnVerdict([step(1, "running"), step(2, "done")], false)).toBe("running");
   });
 });
 

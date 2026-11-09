@@ -206,6 +206,42 @@ class TestTerminalRecordSettlement:
         assert task.steps[0].status == "failed"
         assert task.steps[0].tool_calls[0].status == "skipped"
         assert task.steps[0].tool_calls[0].error
+        persisted = Persistence(settings).load_task("t-resumed")
+        assert persisted is not None
+        assert persisted.steps[0].status == "failed"
+
+    def test_failed_record_with_in_flight_step_is_settled(self, tmp_path):
+        """The sweep is status-agnostic about the leftovers: a FAILED record
+        can also carry a step the crash cut down mid-flight."""
+        settings = make_settings(tmp_path)
+        now = datetime.now(timezone.utc).isoformat()
+        Persistence(settings).save_task(
+            Task(
+                id="t-failed-leftover",
+                title="failed with a running step",
+                user_input="demo input",
+                status=TaskStatus.FAILED,
+                created_at=now,
+                updated_at=now,
+                steps=[
+                    StepRecord(
+                        index=1,
+                        round=1,
+                        status="running",
+                        tool_calls=[
+                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                        ],
+                    )
+                ],
+            )
+        )
+
+        rebuilt = make_manager(settings, MockLLMClient())
+        task = rebuilt.get_task("t-failed-leftover")
+        assert task is not None
+        assert task.status == TaskStatus.FAILED
+        assert task.steps[0].status == "failed"
+        assert task.steps[0].tool_calls[0].status == "skipped"
 
 
 class TestPersistenceDurability:
