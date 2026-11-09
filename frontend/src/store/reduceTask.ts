@@ -36,6 +36,10 @@ function ensureStep(task: Task, index: number, round?: number): Task {
   return { ...task, steps };
 }
 
+function findCallOwner(steps: StepRecord[], id: string): StepRecord | undefined {
+  return steps.find((s) => s.tool_calls.some((tc) => tc.id === id));
+}
+
 /**
  * Apply a single SSE event to a task snapshot. `prev` is the snapshot the store
  * already holds for this task, or `undefined` when it has none yet (#189).
@@ -87,7 +91,7 @@ export function applyToTask(
       // call to the step that already owns its id — appending it to the last
       // step doubled the counts there and flipped that settled step back to
       // "running" (the round header then read 执行中).
-      const owner = task.steps.find((s) => s.tool_calls.some((tc) => tc.id === rec.id));
+      const owner = findCallOwner(task.steps, rec.id);
       if (owner) {
         const steps = task.steps.map((s) => {
           if (s !== owner) return s;
@@ -114,8 +118,10 @@ export function applyToTask(
     }
     case "tool_result": {
       const rec = ev.data as ToolCallRecord;
+      const owner = findCallOwner(task.steps, rec.id);
+      if (!owner) return task;
       const steps = task.steps.map((s) => {
-        if (!s.tool_calls.some((tc) => tc.id === rec.id)) return s;
+        if (s !== owner) return s;
         return {
           ...s,
           tool_calls: s.tool_calls.map((tc) =>

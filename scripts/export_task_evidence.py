@@ -5,8 +5,10 @@ Usage:
 
 Default output follows the evidence convention in ``docs/manual-verification.md``:
 ``docs/assets/verification/<YYYY-MM-DD>/task-<task_id>.json``. The repo root and
-the user home become ``<repo>`` / ``~`` so the file passes
-``scripts/check_no_machine_paths.py`` before it is committed.
+the user home become ``<repo>`` / ``~``; any other absolute path (a workspace
+opened from a different directory) becomes the documented ``<workspace>``
+placeholder, so the file passes ``scripts/check_no_machine_paths.py`` before it
+is committed.
 """
 
 from __future__ import annotations
@@ -42,8 +44,19 @@ KEEP = (
 def _path_regex(path: Path) -> re.Pattern[str]:
     escaped = re.escape(str(path))
     # The record may carry either separator style; match both, case-insensitively.
-    return re.compile(escaped.replace("\\\\", r"[\\/]"), re.IGNORECASE)
+    # The trailing lookahead keeps a sibling that merely extends the root name
+    # (``.../<repo>-old``) from being whitewashed along with it.
+    return re.compile(
+        escaped.replace("\\\\", r"[\\/]") + r"(?![A-Za-z0-9_-])", re.IGNORECASE
+    )
 
+
+#: Remaining absolute paths the machine-path gate would flag: a drive path, a
+#: git-bash mount (``/c/...``) or a POSIX home path. The lookbehind keeps URLs
+#: (``https://example.com/home/x``) from matching.
+_RESIDUAL_ABS = re.compile(
+    r"(?i)(?:(?<![\w])[a-z]:[\\/]|(?<![\w.:/])/(?:[a-z]|users|home)[\\/])[^\s\"'`|<>]*"
+)
 
 _REPO_RE = _path_regex(ROOT)
 _HOME_RE = _path_regex(Path.home())
@@ -52,7 +65,8 @@ _HOME_RE = _path_regex(Path.home())
 def scrub(value: Any) -> Any:
     """Replace machine-specific absolute paths anywhere in the record."""
     if isinstance(value, str):
-        return _HOME_RE.sub("~", _REPO_RE.sub("<repo>", value))
+        text = _HOME_RE.sub("~", _REPO_RE.sub("<repo>", value))
+        return _RESIDUAL_ABS.sub("<workspace>", text)
     if isinstance(value, list):
         return [scrub(item) for item in value]
     if isinstance(value, dict):

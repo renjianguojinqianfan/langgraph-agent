@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -18,7 +17,6 @@ SCRIPT = REPO_ROOT / "scripts" / "export_task_evidence.py"
 _spec = importlib.util.spec_from_file_location("export_task_evidence", SCRIPT)
 assert _spec is not None and _spec.loader is not None
 export = importlib.util.module_from_spec(_spec)
-sys.modules["export_task_evidence"] = export
 _spec.loader.exec_module(export)
 
 
@@ -41,6 +39,28 @@ def test_scrub_matches_both_separator_styles():
     forward = str(REPO_ROOT).replace("\\", "/") + "/frontend"
 
     assert export.scrub(forward) == "<repo>/frontend"
+
+
+def test_scrub_replaces_absolute_paths_outside_repo_and_home():
+    """A task opened from another directory must not leak its launch path."""
+    record = {
+        "workspace": "D:\\work\\demo",
+        "output": "wrote D:\\work\\demo\\a.txt",
+        "mount": "/c/projects/demo/file.txt",
+    }
+
+    cleaned = export.scrub(record)
+
+    assert cleaned["workspace"] == "<workspace>"
+    assert cleaned["output"] == "wrote <workspace>"
+    assert cleaned["mount"] == "<workspace>"
+
+
+def test_scrub_keeps_urls():
+    assert (
+        export.scrub("see https://example.com/home/docs")
+        == "see https://example.com/home/docs"
+    )
 
 
 def test_scrub_leaves_plain_values_alone():
