@@ -1,0 +1,29 @@
+{
+  "task_id": "874f0ecd3fb0416082072e7fc69599c2",
+  "status": "INTERRUPTED",
+  "model_entry": "eeda03bb9980",
+  "model_profile_by_step_start": [
+    [
+      "12:20:01",
+      "33568d4bd39f"
+    ],
+    [
+      "12:20:03",
+      "33568d4bd39f"
+    ],
+    [
+      "12:20:04",
+      "33568d4bd39f"
+    ],
+    [
+      "12:31:10",
+      "eeda03bb9980"
+    ],
+    [
+      "12:31:12",
+      "eeda03bb9980"
+    ]
+  ],
+  "round2_file": "switched-to-mimo\n",
+  "note": "Mid-task switch on an existing task: entry set to MiMo eeda03bb9980, next message used it (trace model_profile changes)"
+}

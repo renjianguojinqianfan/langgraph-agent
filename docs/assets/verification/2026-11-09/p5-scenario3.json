@@ -1,0 +1,88 @@
+{
+  "task_id": "3b81858a7d1f4b86ba4c21ef4a6d7020",
+  "status": "INTERRUPTED",
+  "rounds": [
+    1,
+    2,
+    3
+  ],
+  "steps": [
+    {
+      "index": 5,
+      "round": 2,
+      "status": "done",
+      "tools": [
+        {
+          "name": "write",
+          "status": "success",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "round": 2,
+      "status": "done",
+      "tools": [
+        {
+          "name": "bash",
+          "status": "failed",
+          "error": "command stopped: task stop requested"
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "round": 3,
+      "status": "done",
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "round": 3,
+      "status": "done",
+      "tools": [
+        {
+          "name": "write",
+          "status": "success",
+          "error": ""
+        },
+        {
+          "name": "write",
+          "status": "success",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "round": 3,
+      "status": "done",
+      "tools": [
+        {
+          "name": "bash",
+          "status": "success",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "round": 3,
+      "status": "done",
+      "tools": []
+    }
+  ],
+  "files": {
+    "stop-begin-p5.txt": "begin",
+    "stop-end-p5.txt": "end",
+    "continued-p5.txt": "resumed-same-task"
+  },
+  "download_confirmed_in_browser": true
+}

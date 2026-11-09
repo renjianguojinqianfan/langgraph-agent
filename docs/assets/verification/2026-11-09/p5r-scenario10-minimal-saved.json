@@ -1,0 +1,118 @@
+{
+  "presets": [
+    {
+      "id": "minimal",
+      "packages": [
+        "files",
+        "bash"
+      ]
+    },
+    {
+      "id": "research",
+      "packages": [
+        "files",
+        "bash",
+        "skills",
+        "web-search",
+        "subagent",
+        "mcp"
+      ]
+    },
+    {
+      "id": "full",
+      "packages": [
+        "files",
+        "bash",
+        "skills",
+        "web-search",
+        "subagent",
+        "mcp"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "id": "files",
+      "tools": [
+        "read",
+        "write",
+        "edit",
+        "ls",
+        "glob",
+        "grep"
+      ],
+      "connects_mcp": false,
+      "affects_subagent_face": true
+    },
+    {
+      "id": "bash",
+      "tools": [
+        "bash"
+      ],
+      "connects_mcp": false,
+      "affects_subagent_face": false
+    },
+    {
+      "id": "skills",
+      "tools": [
+        "load_skill"
+      ],
+      "connects_mcp": false,
+      "affects_subagent_face": true
+    },
+    {
+      "id": "web-search",
+      "tools": [
+        "web_search"
+      ],
+      "connects_mcp": false,
+      "affects_subagent_face": true
+    },
+    {
+      "id": "subagent",
+      "tools": [
+        "spawn_subagent"
+      ],
+      "connects_mcp": false,
+      "affects_subagent_face": false
+    },
+    {
+      "id": "mcp",
+      "tools": [],
+      "connects_mcp": true,
+      "affects_subagent_face": false
+    }
+  ],
+  "saved": {
+    "preset": "minimal",
+    "overrides": {},
+    "exists": true
+  },
+  "active": {
+    "preset": "full",
+    "overrides": {},
+    "packages": [
+      "files",
+      "bash",
+      "skills",
+      "web-search",
+      "subagent",
+      "mcp"
+    ],
+    "tools": [
+      "read",
+      "write",
+      "edit",
+      "ls",
+      "glob",
+      "grep",
+      "bash",
+      "load_skill",
+      "web_search",
+      "spawn_subagent",
+      "mcp__echo__echo",
+      "mcp__echo__write_file"
+    ]
+  },
+  "restart_required": true
+}

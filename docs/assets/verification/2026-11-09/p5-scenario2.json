@@ -1,0 +1,58 @@
+{
+  "task_id": "070b4adaf7244a1998917b4446a8a53b",
+  "status": "INTERRUPTED",
+  "mode": "build",
+  "plan_version": 2,
+  "plan_version_api": 2,
+  "plan_text_prefix": "# 人工修改的 P5 计划\n\n1. 只用 write 创建 human-edited-p5.txt，内容必须是 edit",
+  "human_edited_exists": true,
+  "human_edited_content": "edited-by-human",
+  "original_not_created": true,
+  "qianfan_dir_present": true,
+  "steps": [
+    {
+      "index": 1,
+      "status": "done",
+      "tools": [
+        [
+          "ls",
+          "success"
+        ],
+        [
+          "glob",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 2,
+      "status": "done",
+      "tools": []
+    },
+    {
+      "index": 3,
+      "status": "done",
+      "tools": [
+        [
+          "write",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 4,
+      "status": "done",
+      "tools": [
+        [
+          "bash",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 5,
+      "status": "done",
+      "tools": []
+    }
+  ]
+}

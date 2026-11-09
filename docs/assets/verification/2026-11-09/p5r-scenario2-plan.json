@@ -1,0 +1,4 @@
+{
+  "version": 2,
+  "text": "# 计划：创建人工改过的文件\n\n1. 用 write 工具在当前目录创建 `p5r-human-edited.txt`，内容为 `EDITED-P5R`。\n2. 不创建 `p5r-plan-v1.txt`。\n3. 回报文件路径与内容。\n"
+}

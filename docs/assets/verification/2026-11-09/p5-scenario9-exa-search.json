@@ -1,0 +1,22 @@
+{
+  "task_id": "0055c384a0cc4ffaa3897bcd583dd608",
+  "status": "INTERRUPTED",
+  "provider": "exa",
+  "tools": [
+    [
+      "web_search",
+      "success"
+    ],
+    [
+      "write",
+      "success"
+    ],
+    [
+      "bash",
+      "success"
+    ]
+  ],
+  "file_size": 2020,
+  "file_head": "exa-search-ok\n\nQuery: \"Python 3.13 release date\"\nSearches performed: 1\nTool: web_search (Exa-backed search test)\nScope: only this sandbox workspace (<workspace>\\proj",
+  "search_ok": true
+}

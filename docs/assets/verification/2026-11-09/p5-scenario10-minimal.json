@@ -1,0 +1,23 @@
+{
+  "task_id": "690aeace1f874a7cae83bbdb1b471f53",
+  "status": "INTERRUPTED",
+  "preset_active": "minimal",
+  "active_packages": [
+    "files",
+    "bash"
+  ],
+  "active_tools": [
+    "read",
+    "write",
+    "edit",
+    "ls",
+    "glob",
+    "grep",
+    "bash"
+  ],
+  "tools_called": [
+    "write",
+    "bash"
+  ],
+  "file": "preset-case\n"
+}

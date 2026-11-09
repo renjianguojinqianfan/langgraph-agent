@@ -1,0 +1,42 @@
+{
+  "task_id": "095fa421fa684fd796434101d6d8e9e1",
+  "step_models": [
+    {
+      "index": 1,
+      "round": 1,
+      "model": "deepseek-flash",
+      "model_profile": "33568d4bd39f"
+    },
+    {
+      "index": 2,
+      "round": 1,
+      "model": "deepseek-flash",
+      "model_profile": "33568d4bd39f"
+    },
+    {
+      "index": 3,
+      "round": 2,
+      "model": "deepseek-flash",
+      "model_profile": "33568d4bd39f"
+    },
+    {
+      "index": 4,
+      "round": 2,
+      "model": "deepseek-flash",
+      "model_profile": "33568d4bd39f"
+    },
+    {
+      "index": 5,
+      "round": 3,
+      "model": "mimo-v2.6-flash",
+      "model_profile": "eeda03bb9980"
+    },
+    {
+      "index": 6,
+      "round": 3,
+      "model": "mimo-v2.6-flash",
+      "model_profile": "eeda03bb9980"
+    }
+  ],
+  "note": "rounds 1-2 deepseek, round 3 MiMo after mid-task switch"
+}

@@ -1,0 +1,37 @@
+{
+  "task_id": "c2db922e70864c478877f93afb172f36",
+  "status": "INTERRUPTED",
+  "background_command": "sleep 600 >/dev/null 2>&1 & echo BG_PID=$!",
+  "bg_pid": 119,
+  "foreground_sleep_pid": 120,
+  "tool_returned_before_sleep_end": true,
+  "after_stop": {
+    "119": "gone",
+    "120": "gone"
+  },
+  "steps": [
+    {
+      "index": 1,
+      "status": "done",
+      "tools": [
+        [
+          "bash",
+          "success",
+          ""
+        ]
+      ]
+    },
+    {
+      "index": 2,
+      "status": "done",
+      "tools": [
+        [
+          "bash",
+          "failed",
+          "command stopped: task stop requested"
+        ]
+      ]
+    }
+  ],
+  "note": "停止按钮点击后两个 sleep 均消失；前台 sleep 120 记为 failed，后台 sleep 600 一并回收"
+}

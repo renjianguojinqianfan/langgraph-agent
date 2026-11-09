@@ -1,0 +1,6 @@
+{
+  "background_pid": 31656,
+  "foreground_pid": 29184,
+  "after_stop": [],
+  "note": "background sleep 600 returned immediately (empty $! via tool shell); foreground sleep 60 was killed by stop; neither PID alive after stop"
+}

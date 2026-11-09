@@ -1,0 +1,19 @@
+{
+  "handoff": {
+    "cwd": "<workspace>/project-b",
+    "url": "http://127.0.0.1:8000/?dir=E%3A%5Ccode%5Clanggraph-agent%5C.qoder%5Ctmp%5Cp5-20261109%5Cproject-b",
+    "rc": 0
+  },
+  "workspaces": {
+    "<workspace>\\project-b": [
+      "b1815a59"
+    ],
+    "<workspace>\\project-a": [
+      "070b4ada",
+      "3b81858a"
+    ]
+  },
+  "a_continued_file_in_a": "a-workspace-ok",
+  "a_continued_file_not_in_b": true,
+  "b_file": "b-dir-ok"
+}

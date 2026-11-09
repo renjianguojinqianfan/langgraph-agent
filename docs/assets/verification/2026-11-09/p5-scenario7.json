@@ -1,0 +1,67 @@
+{
+  "task_id": "119b803052d04cc1a02f19a80b4d9a9a",
+  "status": "INTERRUPTED",
+  "workspace": "<workspace>\\project-a",
+  "steps": [
+    {
+      "index": 1,
+      "round": 1,
+      "status": "done",
+      "tools": [
+        [
+          "write",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 2,
+      "round": 1,
+      "status": "running",
+      "tools": [
+        [
+          "bash",
+          "skipped"
+        ]
+      ]
+    },
+    {
+      "index": 3,
+      "round": 2,
+      "status": "done",
+      "tools": [
+        [
+          "write",
+          "success"
+        ],
+        [
+          "write",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 4,
+      "round": 2,
+      "status": "done",
+      "tools": [
+        [
+          "bash",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 5,
+      "round": 2,
+      "status": "done",
+      "tools": []
+    }
+  ],
+  "files": {
+    "orphan2-begin-p5.txt": "orphan2-begin",
+    "orphan2-end-p5.txt": "orphan2-end",
+    "resume-after-kill-p5.txt": "resumed-after-kill"
+  },
+  "ui_note": "After hard kill, an already-open tab kept RUNNING and stop button until reload; reload showed parked state. Screenshot p5-scenario7-stale-running.png"
+}

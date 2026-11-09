@@ -1,0 +1,49 @@
+{
+  "task_id": "29f82c5fda06442a9198e7365d6af012",
+  "status": "INTERRUPTED",
+  "model_entry": "eeda03bb9980",
+  "status_model": "mimo-v2.6-flash",
+  "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+  "model_profile_events": [
+    [
+      "step_start",
+      "eeda03bb9980"
+    ],
+    [
+      "step_start",
+      "eeda03bb9980"
+    ],
+    [
+      "step_start",
+      "eeda03bb9980"
+    ]
+  ],
+  "steps": [
+    {
+      "index": 1,
+      "status": "done",
+      "tools": [
+        [
+          "write",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 2,
+      "status": "done",
+      "tools": [
+        [
+          "bash",
+          "success"
+        ]
+      ]
+    },
+    {
+      "index": 3,
+      "status": "done",
+      "tools": []
+    }
+  ],
+  "file": "mimo-ok"
+}

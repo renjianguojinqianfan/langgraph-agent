@@ -1,0 +1,30 @@
+{
+  "task_id": "874f0ecd3fb0416082072e7fc69599c2",
+  "status": "INTERRUPTED",
+  "preset_active": "full",
+  "active_packages": [
+    "files",
+    "bash",
+    "skills",
+    "web-search",
+    "subagent",
+    "mcp"
+  ],
+  "active_tools": [
+    "read",
+    "write",
+    "edit",
+    "ls",
+    "glob",
+    "grep",
+    "bash",
+    "load_skill",
+    "web_search",
+    "spawn_subagent"
+  ],
+  "tools_called": [
+    "write",
+    "bash"
+  ],
+  "file": "preset-case\n"
+}

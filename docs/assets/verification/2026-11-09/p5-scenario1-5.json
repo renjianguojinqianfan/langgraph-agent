@@ -1,0 +1,59 @@
+{
+  "task_id": "3b81858a7d1f4b86ba4c21ef4a6d7020",
+  "status": "INTERRUPTED",
+  "model_profile": "33568d4bd39f",
+  "steps": [
+    {
+      "index": 1,
+      "status": "done",
+      "round": 1,
+      "tool_calls": [
+        {
+          "tool_name": "write",
+          "status": "success",
+          "exit_code": null
+        },
+        {
+          "tool_name": "bash",
+          "status": "success",
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "status": "done",
+      "round": 1,
+      "tool_calls": [
+        {
+          "tool_name": "bash",
+          "status": "success",
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "status": "done",
+      "round": 1,
+      "tool_calls": [
+        {
+          "tool_name": "bash",
+          "status": "success",
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "status": "done",
+      "round": 1,
+      "tool_calls": []
+    }
+  ],
+  "files": {
+    "hello-p5.txt": "P5-file-ok",
+    "bash-made-p5.txt": "P5-bash-ok"
+  },
+  "ui_regression": "Reopened task: header parked, process executing; final step acting with prior tool calls attached. See screenshot."
+}

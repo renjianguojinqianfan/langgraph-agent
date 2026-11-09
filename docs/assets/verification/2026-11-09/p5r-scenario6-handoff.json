@@ -1,0 +1,6 @@
+{
+  "exit": 0,
+  "backend_url": "http://127.0.0.1:8000/",
+  "cwd": "<repo>/.qoder/tmp/p5r-20261109/project-b",
+  "note": "second qianfan launch from project-b handed off to the single running backend; exit 0"
+}
