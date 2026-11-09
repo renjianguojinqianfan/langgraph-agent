@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from backend.api.schemas import Task, TaskStatus
+from backend.api.schemas import StepRecord, Task, TaskStatus, ToolCallRecord
 from backend.core.llm.client import MockLLMClient
 from backend.services.persistence import Persistence
 from backend.tests.conftest import make_manager, make_settings
@@ -56,6 +56,89 @@ class TestOrphanReconciliation:
         task = rebuilt.get_task("t-pending")
         assert task is not None
         assert task.status == TaskStatus.INTERRUPTED
+
+    def test_running_step_and_pending_call_are_settled(self, tmp_path):
+        """A hard kill leaves the last step `running` and its call `pending`;
+        the dead process can no longer run `finish()`, so startup settles them.
+        A parked task must not keep a round labelled 执行中 forever."""
+        settings = make_settings(tmp_path)
+        now = datetime.now(timezone.utc).isoformat()
+        persistence = Persistence(settings)
+        persistence.save_task(
+            Task(
+                id="t-step",
+                title="orphan with a running step",
+                user_input="demo input",
+                status=TaskStatus.RUNNING,
+                created_at=now,
+                updated_at=now,
+                steps=[
+                    StepRecord(
+                        index=1,
+                        round=1,
+                        status="done",
+                        tool_calls=[
+                            ToolCallRecord(id="c1", tool_name="ls", status="success")
+                        ],
+                    ),
+                    StepRecord(
+                        index=2,
+                        round=1,
+                        status="running",
+                        tool_calls=[
+                            ToolCallRecord(id="c2", tool_name="bash", status="pending")
+                        ],
+                    ),
+                ],
+            )
+        )
+
+        rebuilt = make_manager(settings, MockLLMClient())
+        task = rebuilt.get_task("t-step")
+        assert task is not None
+        assert task.status == TaskStatus.INTERRUPTED
+        assert task.steps[0].status == "done"
+        assert task.steps[0].tool_calls[0].status == "success"
+        assert task.steps[1].status == "failed"
+        assert task.steps[1].tool_calls[0].status == "skipped"
+        assert task.steps[1].tool_calls[0].error
+
+    def test_already_interrupted_record_is_still_settled(self, tmp_path):
+        """An older startup flipped the status but kept the dead step running;
+        the next startup heals it without rewriting the parked status."""
+        settings = make_settings(tmp_path)
+        now = datetime.now(timezone.utc).isoformat()
+        Persistence(settings).save_task(
+            Task(
+                id="t-legacy",
+                title="parked with a leftover running step",
+                user_input="demo input",
+                status=TaskStatus.INTERRUPTED,
+                created_at=now,
+                updated_at=now,
+                steps=[
+                    StepRecord(
+                        index=1,
+                        round=1,
+                        status="running",
+                        tool_calls=[
+                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                        ],
+                    )
+                ],
+            )
+        )
+
+        rebuilt = make_manager(settings, MockLLMClient())
+        task = rebuilt.get_task("t-legacy")
+        assert task is not None
+        assert task.status == TaskStatus.INTERRUPTED
+        assert task.steps[0].status == "failed"
+        assert task.steps[0].tool_calls[0].status == "skipped"
+        # Persisted, not just fixed in memory.
+        persisted = Persistence(settings).load_task("t-legacy")
+        assert persisted is not None
+        assert persisted.steps[0].status == "failed"
 
     def test_terminal_statuses_are_untouched(self, tmp_path):
         settings = make_settings(tmp_path)
