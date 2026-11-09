@@ -20,10 +20,13 @@ _PROXY_KEYS = ("NO_PROXY", "no_proxy")
 def normalize_no_proxy(env: MutableMapping[str, str] | None = None) -> bool:
     """Rewrite bracketed IPv6 NO_PROXY entries in place; True when changed.
 
-    Empty entries are dropped; every remaining entry is a bare host. Both env
-    spellings are handled because ``os.environ`` on Windows is case-insensitive
-    while the child-process contract and httpx's own lookup are not guaranteed
-    to be.
+    Only values carrying ``[`` are rebuilt, so a clean entry list is left
+    byte-for-byte. Brackets become the bare host httpx detects as IPv6, and a
+    ``[host]:port`` suffix drops its port: httpx's environment matcher only
+    compares hosts, and keeping the digits would turn the entry into a
+    different address. Both env spellings are handled because ``os.environ`` on
+    Windows is case-insensitive while the child-process contract and httpx's
+    own lookup are not guaranteed to be.
     """
     target = os.environ if env is None else env
     changed = False
@@ -36,8 +39,15 @@ def normalize_no_proxy(env: MutableMapping[str, str] | None = None) -> bool:
             item = piece.strip()
             if not item:
                 continue
-            if item.startswith("[") and "]" in item:
-                item = item.replace("[", "").replace("]", "")
+            if item.startswith("[") and "]" in item[1:]:
+                close = item.index("]")
+                host = item[1:close]
+                if not host:
+                    continue
+                tail = item[close + 1 :]
+                if tail.startswith(":") and tail[1:].isdigit():
+                    tail = ""
+                item = host + tail
             entries.append(item)
         cleaned = ",".join(entries)
         if cleaned != raw:

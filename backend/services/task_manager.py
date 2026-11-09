@@ -72,8 +72,8 @@ logger = get_logger("task_manager")
 #: D-38: one step's reasoning is capped before it is persisted / sent over SSE.
 REASONING_TRUNCATE_LIMIT = 8000
 
-#: Startup settlement text for a call the dead process never returned.
-ORPHAN_TOOL_CALL_TEXT = "interrupted before the tool call returned; settled at startup"
+#: Settlement text for a call no live process will ever answer.
+IN_FLIGHT_TOOL_CALL_TEXT = "interrupted before the tool call returned"
 
 # langgraph 1.x durability mode — the one 1.x feature this migration adopts
 # (Issue #7; selection rationale in docs/migration-langgraph-1x.md §5).
@@ -586,9 +586,9 @@ class TaskManager:
         reconciled = 0
         for task in self.persistence.list_all():
             try:
-                orphan_status = task.status.value
+                original_status = task.status.value
                 was_live = task.status in (TaskStatus.RUNNING, TaskStatus.PENDING)
-                changed = self._settle_orphan_steps(task)
+                changed = self._settle_in_flight_steps(task)
                 if was_live:
                     task.status = TaskStatus.INTERRUPTED
                     changed = True
@@ -601,13 +601,13 @@ class TaskManager:
                     reconciled += 1
                     logger.warning(
                         "Orphaned %s task %s reconciled to INTERRUPTED",
-                        orphan_status,
+                        original_status,
                         task.id,
                     )
                 else:
                     logger.warning(
                         "Settled in-flight steps on %s task %s",
-                        orphan_status,
+                        original_status,
                         task.id,
                     )
             except Exception:  # per-task isolation: one bad record can't stall the sweep
@@ -615,14 +615,18 @@ class TaskManager:
         if reconciled:
             logger.info("Startup reconciliation completed: %d task(s).", reconciled)
 
-    def _settle_orphan_steps(self, task: Task) -> bool:
-        """Settle steps/calls a dead process left in flight; True when changed.
+    def _settle_in_flight_steps(self, task: Task) -> bool:
+        """Settle steps/calls no live process can finish; True when changed.
 
-        Flipping the task status alone is not enough: the ``finish`` node that
-        settles the last step lived in the dead process, so a parked record
-        would keep its round labelled 执行中 forever. A step interrupted
-        mid-flight is ``failed`` (its round never completed) and its pending
-        calls become ``skipped``; already settled steps/calls are untouched.
+        Two callers write records whose in-flight state has no owner left:
+        startup reconciliation (a dead process's leftovers) and
+        ``_finalize_terminal`` (resume restores checkpoint steps verbatim and
+        ``finish`` only settles the current round's last step, so the dead
+        round's step would be re-persisted). Flipping the task status alone is
+        not enough: without this a parked record keeps its round labelled
+        执行中 forever. A step interrupted mid-flight is ``failed`` (its round
+        never completed) and its pending calls become ``skipped``; already
+        settled steps/calls are untouched.
         """
         changed = False
         for step in task.steps:
@@ -632,7 +636,7 @@ class TaskManager:
             for call in step.tool_calls:
                 if call.status == "pending":
                     call.status = "skipped"
-                    call.error = call.error or ORPHAN_TOOL_CALL_TEXT
+                    call.error = call.error or IN_FLIGHT_TOOL_CALL_TEXT
                     changed = True
         return changed
 
@@ -1534,6 +1538,7 @@ class TaskManager:
         """
         status = final.get("status") or "FAILED"
         task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
+        self._settle_in_flight_steps(task)
         task.plan_version = int(final.get("plan_version", task.plan_version))
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
         task.final_answer = self.redact(final.get("final_answer", "") or "")

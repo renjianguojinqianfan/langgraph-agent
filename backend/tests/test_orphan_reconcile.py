@@ -3,8 +3,10 @@
 A crash leaves tasks stuck in RUNNING (or PENDING, before the worker thread
 flipped the state) in ``tasks.json`` even though their execution threads are
 gone. On construction, TaskManager must reconcile such orphans into
-INTERRUPTED (the resumable state) exactly once, and never touch tasks that
-already have a terminal status.
+INTERRUPTED (the resumable state) exactly once, never rewrite an already
+terminal status, and settle every step/tool call the dead process left in
+flight — including on records an older startup flipped to INTERRUPTED without
+touching their steps.
 
 Also pins the persistence durability contract the resume feature rests on:
 a torn ``tasks.json`` must never silently wipe task history.
@@ -153,6 +155,57 @@ class TestOrphanReconciliation:
         assert rebuilt.get_task("t-done").status == TaskStatus.INTERRUPTED
         assert rebuilt.get_task("t-fail").status == TaskStatus.FAILED
         assert rebuilt.get_task("t-int").status == TaskStatus.INTERRUPTED
+
+
+class TestTerminalRecordSettlement:
+    def test_finalize_never_repersists_a_stale_running_step(self, tmp_path):
+        """resume() restores checkpoint steps verbatim and finish() settles
+        only the current round's last step, so finalize must settle the dead
+        round's leftover or the next resume brings 「执行中」 back."""
+        settings = make_settings(tmp_path)
+        manager = make_manager(settings, MockLLMClient())
+        now = datetime.now(timezone.utc).isoformat()
+        task = Task(
+            id="t-resumed",
+            title="resumed after a hard kill",
+            user_input="demo input",
+            status=TaskStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+
+        manager._finalize_terminal(
+            task,
+            {
+                "status": "INTERRUPTED",
+                "steps": [
+                    {
+                        "index": 2,
+                        "round": 1,
+                        "thought": "Step 2: acting.",
+                        "reasoning": "",
+                        "status": "running",
+                        "tool_calls": [
+                            {
+                                "id": "c2",
+                                "tool_name": "bash",
+                                "input": {},
+                                "output": None,
+                                "status": "pending",
+                                "error": None,
+                            }
+                        ],
+                    }
+                ],
+                "messages": [],
+                "final_answer": "",
+            },
+        )
+
+        assert task.status == TaskStatus.INTERRUPTED
+        assert task.steps[0].status == "failed"
+        assert task.steps[0].tool_calls[0].status == "skipped"
+        assert task.steps[0].tool_calls[0].error
 
 
 class TestPersistenceDurability:

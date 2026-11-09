@@ -31,9 +31,11 @@ def _proxy_patterns_parse() -> None:
 
 
 def test_bracketed_ipv6_entries_are_unwrapped():
+    # A bracketed port cannot travel into httpx's host-only matcher: keeping
+    # the digits would make "::1:8000" a different IPv6 address.
     env = {"NO_PROXY": "[::1], localhost ,[::1]:8000"}
     assert normalize_no_proxy(env) is True
-    assert env["NO_PROXY"] == "::1,localhost,::1:8000"
+    assert env["NO_PROXY"] == "::1,localhost,::1"
 
 
 def test_both_cases_are_normalized_and_empty_entries_dropped():
@@ -61,6 +63,13 @@ def test_httpx_proxy_patterns_parse_after_normalization(monkeypatch):
 def test_openai_client_constructs_after_normalization(monkeypatch):
     """The exact startup failure: OpenAI(...) builds its httpx client from env."""
     monkeypatch.setenv("NO_PROXY", "[::1]")
+    with pytest.raises(httpx.InvalidURL):
+        OpenAICompatibleClient(
+            base_url="http://example.invalid/v1",
+            api_key="test-key",
+            model="test-model",
+        )
+
     normalize_no_proxy()
     client = OpenAICompatibleClient(
         base_url="http://example.invalid/v1",
