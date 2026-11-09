@@ -39,6 +39,7 @@
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
 | 前端改动 | `frontend/package.json` + `.github/workflows/ci.yml` 的 frontend-build job；视觉 / 交互 / 组件**设计规则（已交付）**加读 [`docs/frontend-design.md`](docs/frontend-design.md) | `npm ci` 口径；`npm run typecheck`（双项目：`tsconfig.json` + `tsconfig.node.json`）/ `npm test` 与 `npm run build` 通过；**状态面孔 / 组件接线改动**必须配一条纯函数或 store 断言 + 一条手测清单项，纯布局 / 视觉改动可只手测，不引 jsdom（`docs/frontend-design.md` §10.1，2026-11-07 拍板）；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse`；设计 token 面（`DESIGN.md` ↔ `index.css` `@theme`）→ `python scripts/check_design_tokens.py`；键盘与 #189 回归见设计基线 §6 / §10 |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
+| 启动对账 / 终态写入 | `docs/architecture.md` §4.2 + `docs/incremental-arch-p3-resume.md`（§2.3 孤儿对账） | 终态记录（INTERRUPTED / FAILED）里没有 `running` / `pending` 的步骤或工具调用——启动对账与 `_finalize_terminal` 两个写入口走同一收尾，测试用 `assert_no_in_flight` 对**读盘记录**断言；RUNNING / PENDING 孤儿转 INTERRUPTED，旧记录只收尾步骤、不重写任务状态 |
 | 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/archive/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑）+ `backend/services/plan_file.py`（计划文件） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源） |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
@@ -79,7 +80,7 @@ npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.node.json  # �
 npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面必跑，细则见 docs/architecture.md §3.4
 ```
 
-- **触发词指针**：沙箱 / 预演合并 / 临时 worktree 跑门禁的判据与配方 → [`docs/agents/verification-notes.md`](docs/agents/verification-notes.md)（渐进披露，不内联；bash 假红专篇见 [`docs/harness-bash-false-red.md`](docs/harness-bash-false-red.md)）。
+- **触发词指针**：沙箱 / 预演合并 / 临时 worktree 跑门禁 / 真机手测的网页驱动与后台进程取证 → [`docs/agents/verification-notes.md`](docs/agents/verification-notes.md)（渐进披露，不内联；bash 假红专篇见 [`docs/harness-bash-false-red.md`](docs/harness-bash-false-red.md)）。
 - 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。pre-commit entry 用仓库相对 `.venv311`，无本机绝对路径。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
 - **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单（**机械守卫**：`backend/tests/test_smoke_list_parity.py` 解析两处断言集合相等，且做 **Windows-only 标记扫描**——`backend/tests/test_*.py` 出现 `os.name` / `sys.platform` / `WinDLL` / `taskkill` 必须已在清单，已知例外走显式白名单 + 理由；漂移即红）；**进程树 / 子进程类由 B1（#197）起逐个验证并纳入**（连跑 3 次稳定才入清单）；新增同类文件仍按「一个文件一个 PR + 连跑 3 次观察」纳入，抖先修环境适配、不放宽断言；当前清单以上面那条命令为准。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。

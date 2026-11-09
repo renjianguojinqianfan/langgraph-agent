@@ -1,6 +1,6 @@
-# 验证环境笔记：沙箱 / 预演合并 / 临时 worktree 跑门禁
+# 验证环境笔记：沙箱 / 预演合并 / 临时 worktree / 真机手测配方
 
-> 触发词：**沙箱 / 预演 / 临时树 / full-access / 假红** → 本文件（AGENTS.md「验证入口」的
+> 触发词：**沙箱 / 预演 / 临时树 / full-access / 假红 / 真机手测 / CDP / 后台 PID** → 本文件（AGENTS.md「验证入口」的
 > 前置指针，渐进披露、不内联）。2026-10-31 retro C24 立档：素材来自 #254 三切片交付
 > （实施 / 评审两条会话各把同一批环境问题重新诊断一次）与 2026-11-02 的一次全量实测。
 > 本文件记**环境判据与配方**，不记现役测试计数（数字必腐，以实跑为准）。
@@ -51,3 +51,22 @@ cd frontend; npm run typecheck; npm test; npm run check:sse; npm run build
 **对照（同一提交、dsh 默认沙箱）**：5 failed + 181 passed + 562 errors——两层假红签名全中，
 代码零回退。结论：**harness 内不给 full-access 时，任何红都不能信**；看到红先对照本节签名，
 别急着改代码。
+
+## 6. 真机手测：网页驱动与后台进程取证（2026-11-09 P5-1 retro）
+
+**应用内浏览器不可用时的网页驱动**：browser-use 的页面在未挂载 / 隐藏时视口为 0×0，截图与点击报
+`NATIVE_BROWSER_VIEWPORT_UNAVAILABLE`（环境问题，不是页面 bug）。换本机 Chrome + CDP +
+playwright-core，**一条命令跑一个动作**：
+
+1. 起独立配置的 Chrome（不碰日常配置与登录态）：
+   `chrome --remote-debugging-port=9222 --user-data-dir=<仓库外临时目录> http://127.0.0.1:8000`。
+2. 驱动脚本用 `chromium.connectOverCDP("http://127.0.0.1:9222")`，取
+   `contexts()[0].pages()[0]`，按 label / role / 可见文本定位；`NODE_PATH` 指向装有
+   `playwright-core` 的 `node_modules` 的**上一级**（任一前端项目 `npm i playwright-core` 即可）。
+3. 动作拆成 `goto` / `fill` / `click` / `select` / `screenshot` / `evaluate` 等单步脚本，
+   跑完 `process.exit(0)`。长驻脚本在 harness 里容易被信号打断；失败就重连再跑下一步。
+4. 留证用 `page.screenshot({path})`；判据做元素级断言（状态 / 文本 / 计数），不要整图像素 diff。
+
+**后台 PID 取证**：应用内 bash 工具里的 `$!` 可能为空（`start` / 子 shell 的作业表不保证），
+不能拿「回显为空」判定进程没起来。用系统进程表核对（`tasklist /FI "PID eq <pid>"` 或 Win32
+进程查询），停止后再查一次确认消失；证据里记 PID 与两次查询结果。
