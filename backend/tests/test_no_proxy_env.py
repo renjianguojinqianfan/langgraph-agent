@@ -47,7 +47,7 @@ def test_bracketed_ipv6_entries_are_unwrapped():
     assert env["NO_PROXY"] == "::1,localhost,::1"
 
 
-def test_both_cases_are_normalized_and_empty_entries_dropped():
+def test_both_env_spellings_are_normalized():
     env = {"NO_PROXY": "localhost,, [::1] ", "no_proxy": "127.0.0.1, [::1]"}
     assert normalize_no_proxy(env) is True
     assert env["NO_PROXY"] == "localhost,::1"

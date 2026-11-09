@@ -44,6 +44,8 @@ export type TurnVerdict = "failed" | "running" | "done";
  * after a hard kill carries the dead attempt as a failed step, while the
  * answer that followed is what the round delivered. `live` keeps 执行中 while
  * the round is still running even if its last persisted step already closed.
+ * The `some(running)` fallback only covers records written before startup
+ * settlement existed; a live round never leaves an earlier step running.
  */
 export function turnVerdict(steps: StepRecord[], live: boolean): TurnVerdict {
   const last = steps[steps.length - 1];

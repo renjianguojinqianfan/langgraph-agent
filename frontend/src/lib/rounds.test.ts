@@ -58,13 +58,13 @@ describe("splitRounds", () => {
   });
 });
 
-function makeStep(index: number, round?: number): StepRecord {
+function makeStep(index: number, round?: number, status = "done"): StepRecord {
   return {
     index,
     ...(round !== undefined ? { round } : {}),
     thought: "",
     tool_calls: [],
-    status: "done",
+    status,
   };
 }
 
@@ -89,34 +89,28 @@ describe("stepsForRound / legacySteps", () => {
 });
 
 describe("turnVerdict", () => {
-  const step = (index: number, status: string): StepRecord => ({
-    index,
-    round: 1,
-    thought: "",
-    tool_calls: [],
-    status,
-  });
-
   it("崩溃后续跑完成：末步 done，前面失败的断点步不改写本轮结论", () => {
-    expect(turnVerdict([step(1, "failed"), step(2, "done")], false)).toBe("done");
+    expect(turnVerdict([makeStep(1, 1, "failed"), makeStep(2, 1)], false)).toBe("done");
   });
 
   it("末步失败才是处理失败", () => {
-    expect(turnVerdict([step(1, "done"), step(2, "failed")], false)).toBe("failed");
-    expect(turnVerdict([step(1, "failed")], false)).toBe("failed");
+    expect(turnVerdict([makeStep(1, 1), makeStep(2, 1, "failed")], false)).toBe("failed");
+    expect(turnVerdict([makeStep(1, 1, "failed")], false)).toBe("failed");
   });
 
   it("运行中的轮次保持执行中，即使末步已收尾", () => {
-    expect(turnVerdict([step(1, "done")], true)).toBe("running");
+    expect(turnVerdict([makeStep(1, 1)], true)).toBe("running");
   });
 
   it("运行中末步已失败则显示处理失败", () => {
-    expect(turnVerdict([step(1, "failed")], true)).toBe("failed");
+    expect(turnVerdict([makeStep(1, 1, "failed")], true)).toBe("failed");
   });
 
-  it("末步 running 或历史残留 running 都按执行中处理", () => {
-    expect(turnVerdict([step(1, "running")], false)).toBe("running");
-    expect(turnVerdict([step(1, "running"), step(2, "done")], false)).toBe("running");
+  it("末步 running 或旧记录残留 running 按执行中兜底", () => {
+    expect(turnVerdict([makeStep(1, 1, "running")], false)).toBe("running");
+    expect(
+      turnVerdict([makeStep(1, 1, "running"), makeStep(2, 1)], false),
+    ).toBe("running");
   });
 });
 

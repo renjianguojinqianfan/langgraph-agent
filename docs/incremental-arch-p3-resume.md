@@ -55,7 +55,7 @@ resume(task_id):
 
 TaskManager 构造器尾部单次执行：持久化里 status ∈ {RUNNING, PENDING} 的记录全部转 INTERRUPTED。构造时无 worker 线程，PENDING 覆盖「create_task 落盘 ↔ 线程置 RUNNING」之间的崩溃窗。逐条 try，单条失败不阻断清扫。P0 死循环修复代码零触碰。
 
-同一趟清扫还收尾死进程留下的在途状态：仍停在 `running` 的步骤收为 `failed`，仍挂 `pending` 的工具调用收为 `skipped`（死亡进程的 `finish` 不会再跑，不收尾的话已停下的一轮会一直显示「执行中」）。这项收尾对已是 INTERRUPTED 的旧记录同样生效——旧启动逻辑只翻状态、不动步骤；**任务状态本身不重写**。`_finalize_terminal` 写记录前也走同一收尾：resume 会原样恢复 checkpoint 里的 steps，而 `finish` 只收本轮最后一步，否则下一次续说/续跑会把死轮留下的 `running` 又写回记录。
+同一趟清扫还收尾死进程留下的在途状态：仍停在 `running` 的步骤收为 `failed`，仍挂 `pending` 的工具调用收为 `skipped`（死亡进程的 `finish` 不会再跑，不收尾的话已停下的一轮会一直显示「执行中」）。这项收尾对已是 INTERRUPTED / FAILED 的旧记录同样生效——旧启动逻辑只翻状态、不动步骤；**任务状态本身不重写**。`_finalize_terminal` 写记录前也走同一收尾：resume 会原样恢复 checkpoint 里的 steps，而 `finish` 只收本轮最后一步，否则下一次续说/续跑会把死轮留下的 `running` 又写回记录。
 
 ## 3. FATAL 发现与修复：stop 在 checkpointer 下失效
 
