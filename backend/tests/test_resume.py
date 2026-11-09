@@ -28,7 +28,7 @@ from backend.core.llm.client import MockLLMClient
 from backend.main import app
 from backend.services.event_bus import EventBus
 from backend.services.persistence import Persistence
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import assert_no_in_flight, make_manager, make_settings
 
 
 class _SlowMockLLMClient(MockLLMClient):
@@ -140,6 +140,22 @@ class TestBlackBoxResume:
         types = {e["type"] for e in bus2.replay(task_id)}
         assert "task_resumed" in types
         assert "task_interrupted" in types
+
+    def test_stopped_record_persists_no_in_flight_leftovers(self, tmp_path):
+        """A physical stop must settle the record on disk, not only in memory:
+        a reopen renders whatever tasks.json holds (no 「执行中」 round)."""
+        settings = _ckpt_settings(tmp_path)
+        _tm, task_id = _interrupt_midway(settings, EventBus())
+
+        deadline = time.time() + 10
+        record = None
+        while time.time() < deadline:
+            record = Persistence(settings).load_task(task_id)
+            if record is not None and record.status == TaskStatus.INTERRUPTED:
+                break
+            time.sleep(0.02)
+        assert record is not None and record.status == TaskStatus.INTERRUPTED
+        assert_no_in_flight(record)
 
     def test_trace_file_grows_across_resume(self, tmp_path):
         settings = _ckpt_settings(tmp_path)

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from backend.api.schemas import StepRecord, Task, TaskStatus, ToolCallRecord
 from backend.core.llm.client import MockLLMClient
 from backend.services.persistence import Persistence
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import assert_no_in_flight, make_manager, make_settings
 
 
 def _make_task_record(settings, task_id: str, status: str):
@@ -104,6 +104,7 @@ class TestOrphanReconciliation:
         assert task.steps[1].status == "failed"
         assert task.steps[1].tool_calls[0].status == "skipped"
         assert task.steps[1].tool_calls[0].error
+        assert_no_in_flight(Persistence(settings).load_task("t-step"))
 
     def test_already_interrupted_record_is_still_settled(self, tmp_path):
         """An older startup flipped the status but kept the dead step running;
@@ -141,6 +142,7 @@ class TestOrphanReconciliation:
         persisted = Persistence(settings).load_task("t-legacy")
         assert persisted is not None
         assert persisted.steps[0].status == "failed"
+        assert_no_in_flight(persisted)
 
     def test_terminal_statuses_are_untouched(self, tmp_path):
         settings = make_settings(tmp_path)
@@ -209,6 +211,7 @@ class TestTerminalRecordSettlement:
         persisted = Persistence(settings).load_task("t-resumed")
         assert persisted is not None
         assert persisted.steps[0].status == "failed"
+        assert_no_in_flight(persisted)
 
     def test_failed_record_with_in_flight_step_is_settled(self, tmp_path):
         """The sweep is status-agnostic about the leftovers: a FAILED record
@@ -242,6 +245,7 @@ class TestTerminalRecordSettlement:
         assert task.status == TaskStatus.FAILED
         assert task.steps[0].status == "failed"
         assert task.steps[0].tool_calls[0].status == "skipped"
+        assert_no_in_flight(Persistence(settings).load_task("t-failed-leftover"))
 
 
 class TestPersistenceDurability:

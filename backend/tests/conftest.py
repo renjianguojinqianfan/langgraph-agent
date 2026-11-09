@@ -211,6 +211,7 @@ if str(ROOT) not in sys.path:
 
 import pytest  # noqa: E402
 
+from backend.api.schemas import Task  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.core.llm.client import MockLLMClient  # noqa: E402
 from backend.core.tools.registry import build_tools  # noqa: E402
@@ -387,6 +388,29 @@ def cleanup_managers(managers: list) -> None:
             errors.append(exc)
     if errors:
         raise errors[0]
+
+
+def assert_no_in_flight(task: Task | None) -> None:
+    """Terminal task records must not carry an ownerless in-flight step/call.
+
+    A parked or failed record is what the UI renders after a reopen and what a
+    resume restores; a leftover ``running`` step keeps the round labelled
+    「执行中」 and a ``pending`` call shows a tool that will never answer. Both
+    terminal writers (startup reconciliation and ``_finalize_terminal``) funnel
+    through the same settlement, so this helper is the one assertion every
+    terminal-path test applies to the **persisted** record.
+    """
+    assert task is not None, "terminal task record disappeared"
+    for step in task.steps:
+        assert step.status not in ("running", "pending"), (
+            f"task {task.id} status {task.status.value} kept step "
+            f"{step.index} {step.status!r}"
+        )
+        for call in step.tool_calls:
+            assert call.status not in ("running", "pending"), (
+                f"task {task.id} status {task.status.value} kept call "
+                f"{call.id} {call.status!r} on step {step.index}"
+            )
 
 
 @pytest.fixture
