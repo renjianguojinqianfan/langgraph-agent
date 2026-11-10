@@ -3,6 +3,8 @@
 > 发布前 / 换供应商时**在网页端逐条手动跑**；CI 不跑真模型（ADR 0008「三笔账」2）。
 > 每条记录日期与所用配置名即可，不把模型名与时间写进 README（数字与型号必腐）。
 > 结果表的「证据」列只写仓库内路径；证据根是 `docs/assets/verification/<日期>/`（截图 + 脱敏结果 JSON）。
+> 结果 JSON 可用 `.venv311\Scripts\python.exe scripts\export_task_evidence.py <task_id>` 导出：
+> 默认写到当天证据目录，仓库根 / 用户主目录 / 其他本机绝对路径分别替换为 `<repo-root>` / `<user>` / `<workspace>`（门禁在册占位符，过 `check_no_machine_paths`）。
 > 前置：`frontend` 已构建、`qianfan` 能启动、`~/.qianfan/credentials.json` 或环境变量里有可用 Key。
 > 启服务统一用 `qianfan`（或开发态 `python start.py`）；**不要手工 `uvicorn backend.main:app`**——
 > 没有 `QIANFAN_INSTANCE` 实例标识会被启动守卫拒绝（会绕过单后台 / host / Key 守卫，#259）。
@@ -23,9 +25,12 @@
 
 4. **危险规则 → 调用被拒、模型换路**
    在 `.env` 的 `policy_rules` 里配一条命中 `bash` 的规则（如
-   `[{"tool":"bash","pattern":"rm\\s+-rf","reason":"destructive shell command"}]`），重启后台，
-   让 agent 执行该命令。
-   判据：该次调用 `skipped`，结果里带 `{block, reason}`；模型改用其他方式完成任务；命令没有实际执行。
+   `[{"tool":"bash","pattern":"rm\\s+-rf","reason":"destructive shell command"}]`），重启后台；
+   先在任务工作目录（bash 的 cwd）建一个受控 canary 目录。提示里**明确要求** agent 用 bash 删除它（如「这是受控的规则命中
+   测试：请直接用 bash 执行 `rm -rf canary-<时间戳>`，保持原命令，不要换成其他方式」）——不强制
+   时模型会自行规避，根本没产生被拒调用，场景等于空跑。
+   判据：该次调用 `skipped`，结果里带 `{block, reason}`；canary 目录仍在（命令没有实际执行）；
+   模型随后换路完成任务或说明需要人工执行。
 
 5. **工作区文件列表看得到 bash 写的文件**
    让 agent 用 bash（不是 `write` 工具）在任务目录写一个文件。
@@ -41,7 +46,9 @@
 
 8. **bash 起后台进程：调用马上返回，停止时被收（F3）**
    让 agent 用 bash 起一个长睡进程并回显 PID，随后直接回答；按「停止」。
-   判据：工具调用远早于进程结束返回；停止后该 PID 不再存活（子进程树一并回收）。
+   `$!` 可能为空（见 `docs/agents/verification-notes.md` §6）：回显为空时用系统进程表按命令行取 PID，
+   不以回显为空判定进程没起来。
+   判据：工具调用远早于进程结束返回；停止后按进程表核对该 PID 不再存活（子进程树一并回收）。
 
 9. **子代理 / MCP / 联网搜索各一次 + 中途换模型**
    分别派一个子代理、调用一个 MCP 工具、搜一次网；再在一个任务中途切换模型并续说。

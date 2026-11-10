@@ -36,6 +36,10 @@ function ensureStep(task: Task, index: number, round?: number): Task {
   return { ...task, steps };
 }
 
+function findCallOwner(steps: StepRecord[], id: string): StepRecord | undefined {
+  return steps.find((s) => s.tool_calls.some((tc) => tc.id === id));
+}
+
 /**
  * Apply a single SSE event to a task snapshot. `prev` is the snapshot the store
  * already holds for this task, or `undefined` when it has none yet (#189).
@@ -82,32 +86,60 @@ export function applyToTask(
     }
     case "tool_call": {
       const rec = ev.data as ToolCallRecord;
+      // Replay guard (P5-1 manual test): a reconnect replays the bus buffer
+      // onto a REST snapshot that already carries these calls. Attribute the
+      // call to the step that already owns its id — appending it to the last
+      // step doubled the counts there and flipped that settled step back to
+      // "running" (the round header then read 执行中).
+      const owner = findCallOwner(task.steps, rec.id);
+      if (owner) {
+        const steps = task.steps.map((s) => {
+          if (s !== owner) return s;
+          const tool_calls = s.tool_calls.map((tc) =>
+            // The snapshot may already hold the settled result; a replayed
+            // dispatch frame must not walk output/status back to pending.
+            tc.id === rec.id ? { ...rec, ...tc } : tc
+          );
+          return { ...s, tool_calls };
+        });
+        return { ...task, steps };
+      }
+      // A call no step has seen yet is live: it belongs to the step currently
+      // streaming. (Replay of an older call is caught by the owner branch.)
+      // Same terminal guard as step_start: when the snapshot already settled
+      // the last step, a buffered call that outran the snapshot must not flip
+      // that step — and the round header — back to "running".
       const steps = task.steps.length ? [...task.steps] : [makeStep(1)];
       const lastIdx = steps.length - 1;
       const last = steps[lastIdx];
-      const exists = last.tool_calls.some((tc) => tc.id === rec.id);
-      const tool_calls = exists
-        ? last.tool_calls.map((tc) => (tc.id === rec.id ? { ...tc, ...rec } : tc))
-        : [...last.tool_calls, rec];
-      steps[lastIdx] = { ...last, tool_calls, status: "running" };
+      const terminal = last.status === "done" || last.status === "failed";
+      steps[lastIdx] = {
+        ...last,
+        tool_calls: [...last.tool_calls, rec],
+        status: terminal ? last.status : "running",
+      };
       return { ...task, steps };
     }
     case "tool_result": {
       const rec = ev.data as ToolCallRecord;
+      const owner = findCallOwner(task.steps, rec.id);
+      if (!owner) return task;
       const steps = task.steps.map((s) => {
-        if (!s.tool_calls.some((tc) => tc.id === rec.id)) return s;
+        if (s !== owner) return s;
         return {
           ...s,
-          tool_calls: s.tool_calls.map((tc) =>
-            tc.id === rec.id
-              ? {
-                  ...tc,
-                  output: rec.output,
-                  status: rec.status,
-                  error: rec.error,
-                }
-              : tc
-          ),
+          tool_calls: s.tool_calls.map((tc) => {
+            if (tc.id !== rec.id) return tc;
+            // Snapshot authority: only a call still pending takes the frame.
+            // A replayed / partial result must not overwrite a settled record.
+            if (tc.status !== "pending") return tc;
+            return {
+              ...tc,
+              output: rec.output,
+              status: rec.status,
+              error: rec.error,
+            };
+          }),
         };
       });
       return { ...task, steps };

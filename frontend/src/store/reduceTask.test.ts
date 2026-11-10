@@ -545,3 +545,209 @@ describe("step_start 回放不降级已收尾步骤", () => {
     expect(next.steps[1].thought).toBe("Step 2: acting.");
   });
 });
+
+describe("tool_call 回放归属与幂等", () => {
+  const settled = () =>
+    snapshot({
+      status: "INTERRUPTED",
+      steps: [
+        {
+          index: 1,
+          round: 1,
+          thought: "第一步",
+          status: "done",
+          tool_calls: [
+            {
+              id: "c1",
+              tool_name: "write",
+              input: { path: "a.txt" },
+              output: "ok",
+              status: "success",
+            },
+          ],
+        },
+        {
+          index: 2,
+          round: 1,
+          thought: "第二步",
+          status: "done",
+          tool_calls: [
+            {
+              id: "c2",
+              tool_name: "bash",
+              input: { command: "ls" },
+              output: "a.txt",
+              status: "success",
+            },
+          ],
+        },
+      ],
+    });
+
+  const buffer = (): SSEvent[] => [
+    {
+      type: "step_start",
+      data: { task_id: "t1", index: 1, round: 1, thought: "Step 1: planning." },
+    },
+    {
+      type: "tool_call",
+      data: {
+        id: "c1",
+        tool_name: "write",
+        input: { path: "a.txt" },
+        output: null,
+        status: "pending",
+      },
+    },
+    {
+      type: "tool_result",
+      data: {
+        id: "c1",
+        tool_name: "write",
+        input: { path: "a.txt" },
+        output: "ok",
+        status: "success",
+      },
+    },
+    {
+      type: "step_start",
+      data: { task_id: "t1", index: 2, round: 1, thought: "Step 2: acting." },
+    },
+    {
+      type: "tool_call",
+      data: {
+        id: "c2",
+        tool_name: "bash",
+        input: { command: "ls" },
+        output: null,
+        status: "pending",
+      },
+    },
+    {
+      type: "tool_result",
+      data: {
+        id: "c2",
+        tool_name: "bash",
+        input: { command: "ls" },
+        output: "a.txt",
+        status: "success",
+      },
+    },
+    { type: "final_answer", data: { task_id: "t1", answer: "做完了" } },
+    { type: "task_interrupted", data: { task_id: "t1" } },
+  ];
+
+  it("回放已快照的调用落在原步骤，不追加到末步、不把收尾步骤翻回 running", () => {
+    const next = applyToTask(settled(), "t1", {
+      type: "tool_call",
+      data: {
+        id: "c1",
+        tool_name: "write",
+        input: { path: "a.txt" },
+        output: null,
+        status: "pending",
+      },
+    });
+
+    expect(next.steps[0].tool_calls).toHaveLength(1);
+    expect(next.steps[0].tool_calls[0].status).toBe("success");
+    expect(next.steps[0].status).toBe("done");
+    expect(next.steps[1].tool_calls).toHaveLength(1);
+    expect(next.steps[1].status).toBe("done");
+  });
+
+  it("快照未见过、但末步已收尾的调用：追加到末步且不翻回 running", () => {
+    const next = applyToTask(settled(), "t1", {
+      type: "tool_call",
+      data: {
+        id: "c9",
+        tool_name: "bash",
+        input: { command: "pwd" },
+        output: null,
+        status: "pending",
+      },
+    });
+
+    expect(next.steps[1].tool_calls).toHaveLength(2);
+    expect(next.steps[1].status).toBe("done");
+  });
+
+  it("回放的 tool_result 不覆盖快照里已收尾的调用", () => {
+    const next = applyToTask(settled(), "t1", {
+      type: "tool_result",
+      data: {
+        id: "c1",
+        tool_name: "write",
+        input: { path: "a.txt" },
+        output: "stale",
+        status: "failed",
+        error: "old frame",
+      },
+    });
+
+    expect(next.steps[0].tool_calls[0]).toMatchObject({
+      output: "ok",
+      status: "success",
+    });
+  });
+
+  it("pending 调用接受 tool_result", () => {
+    const prev = snapshot({
+      steps: [
+        {
+          index: 1,
+          thought: "跑一下",
+          status: "running",
+          tool_calls: [
+            {
+              id: "c1",
+              tool_name: "bash",
+              input: { command: "ls" },
+              output: null,
+              status: "pending",
+            },
+          ],
+        },
+      ],
+    });
+
+    const next = applyToTask(prev, "t1", {
+      type: "tool_result",
+      data: {
+        id: "c1",
+        tool_name: "bash",
+        input: { command: "ls" },
+        output: "a.txt",
+        status: "success",
+      },
+    });
+
+    expect(next.steps[0].tool_calls[0]).toMatchObject({
+      output: "a.txt",
+      status: "success",
+    });
+  });
+
+  it("同一事件缓冲区回放两遍，快照逐字段不变（重连不翻倍、不复活）", () => {
+    const once = buffer().reduce((task, ev) => applyToTask(task, "t1", ev), settled());
+    const twice = buffer().reduce((task, ev) => applyToTask(task, "t1", ev), once);
+
+    expect(twice).toEqual(once);
+    expect(twice.steps.map((s) => s.tool_calls.length)).toEqual([1, 1]);
+    expect(twice.steps.map((s) => s.status)).toEqual(["done", "done"]);
+    expect(twice.status).toBe("INTERRUPTED");
+    expect(twice.final_answer).toBe("做完了");
+  });
+
+  it("store 层：重开已停下任务回放缓冲区，末步不显示运行中", () => {
+    useTaskStore.setState({ currentTaskId: "t1", detail: { t1: settled() } });
+
+    for (const ev of buffer()) useTaskStore.getState().applyEvent(ev);
+    for (const ev of buffer()) useTaskStore.getState().applyEvent(ev);
+
+    const task = useTaskStore.getState().detail["t1"];
+    expect(task.steps[1].status).toBe("done");
+    expect(task.steps[1].tool_calls).toHaveLength(1);
+    expect(task.status).toBe("INTERRUPTED");
+  });
+});
