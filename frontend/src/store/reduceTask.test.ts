@@ -656,6 +656,78 @@ describe("tool_call 回放归属与幂等", () => {
     expect(next.steps[1].status).toBe("done");
   });
 
+  it("快照未见过、但末步已收尾的调用：追加到末步且不翻回 running", () => {
+    const next = applyToTask(settled(), "t1", {
+      type: "tool_call",
+      data: {
+        id: "c9",
+        tool_name: "bash",
+        input: { command: "pwd" },
+        output: null,
+        status: "pending",
+      },
+    });
+
+    expect(next.steps[1].tool_calls).toHaveLength(2);
+    expect(next.steps[1].status).toBe("done");
+  });
+
+  it("回放的 tool_result 不覆盖快照里已收尾的调用", () => {
+    const next = applyToTask(settled(), "t1", {
+      type: "tool_result",
+      data: {
+        id: "c1",
+        tool_name: "write",
+        input: { path: "a.txt" },
+        output: "stale",
+        status: "failed",
+        error: "old frame",
+      },
+    });
+
+    expect(next.steps[0].tool_calls[0]).toMatchObject({
+      output: "ok",
+      status: "success",
+    });
+  });
+
+  it("pending 调用接受 tool_result", () => {
+    const prev = snapshot({
+      steps: [
+        {
+          index: 1,
+          thought: "跑一下",
+          status: "running",
+          tool_calls: [
+            {
+              id: "c1",
+              tool_name: "bash",
+              input: { command: "ls" },
+              output: null,
+              status: "pending",
+            },
+          ],
+        },
+      ],
+    });
+
+    const next = applyToTask(prev, "t1", {
+      type: "tool_result",
+      data: {
+        id: "c1",
+        tool_name: "bash",
+        input: { command: "ls" },
+        output: "a.txt",
+        status: "success",
+      },
+    });
+
+    expect(next.steps[0].tool_calls[0]).toMatchObject({
+      output: "a.txt",
+      status: "success",
+    });
+  });
+
   it("同一事件缓冲区回放两遍，快照逐字段不变（重连不翻倍、不复活）", () => {
     const once = buffer().reduce((task, ev) => applyToTask(task, "t1", ev), settled());
     const twice = buffer().reduce((task, ev) => applyToTask(task, "t1", ev), once);

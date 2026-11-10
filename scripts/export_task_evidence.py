@@ -5,10 +5,10 @@ Usage:
 
 Default output follows the evidence convention in ``docs/manual-verification.md``:
 ``docs/assets/verification/<YYYY-MM-DD>/task-<task_id>.json``. The repo root and
-the user home become ``<repo>`` / ``~``; any other absolute path (a workspace
-opened from a different directory) becomes the documented ``<workspace>``
-placeholder, so the file passes ``scripts/check_no_machine_paths.py`` before it
-is committed.
+the user home become the documented ``<repo-root>`` / ``<user>`` placeholders;
+any other absolute path (a workspace opened from a different directory) becomes
+``<workspace>`` — so the file passes ``scripts/check_no_machine_paths.py``
+before it is committed.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _path_regex(path: Path) -> re.Pattern[str]:
     escaped = re.escape(str(path))
     # The record may carry either separator style; match both, case-insensitively.
     # The trailing lookahead keeps a sibling that merely extends the root name
-    # (``.../<repo>-old``) from being whitewashed along with it.
+    # (``.../<repo-root>-old``) from being whitewashed along with it.
     return re.compile(
         escaped.replace("\\\\", r"[\\/]") + r"(?![A-Za-z0-9_-])", re.IGNORECASE
     )
@@ -65,7 +65,7 @@ _HOME_RE = _path_regex(Path.home())
 def scrub(value: Any) -> Any:
     """Replace machine-specific absolute paths anywhere in the record."""
     if isinstance(value, str):
-        text = _HOME_RE.sub("~", _REPO_RE.sub("<repo>", value))
+        text = _HOME_RE.sub("<user>", _REPO_RE.sub("<repo-root>", value))
         return _RESIDUAL_ABS.sub("<workspace>", text)
     if isinstance(value, list):
         return [scrub(item) for item in value]

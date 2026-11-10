@@ -29,16 +29,16 @@ def test_scrub_replaces_repo_root_and_home():
 
     cleaned = export.scrub(record)
 
-    assert cleaned["workspace"].startswith("<repo>")
-    assert cleaned["home_file"].startswith("~")
-    assert cleaned["nested"][0]["path"] == "<repo>"
+    assert cleaned["workspace"].startswith("<repo-root>")
+    assert cleaned["home_file"].startswith("<user>")
+    assert cleaned["nested"][0]["path"] == "<repo-root>"
     assert str(REPO_ROOT) not in json.dumps(cleaned, ensure_ascii=False)
 
 
 def test_scrub_matches_both_separator_styles():
     forward = str(REPO_ROOT).replace("\\", "/") + "/frontend"
 
-    assert export.scrub(forward) == "<repo>/frontend"
+    assert export.scrub(forward) == "<repo-root>/frontend"
 
 
 def test_scrub_replaces_absolute_paths_outside_repo_and_home():

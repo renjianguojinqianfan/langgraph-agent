@@ -106,13 +106,17 @@ export function applyToTask(
       }
       // A call no step has seen yet is live: it belongs to the step currently
       // streaming. (Replay of an older call is caught by the owner branch.)
+      // Same terminal guard as step_start: when the snapshot already settled
+      // the last step, a buffered call that outran the snapshot must not flip
+      // that step — and the round header — back to "running".
       const steps = task.steps.length ? [...task.steps] : [makeStep(1)];
       const lastIdx = steps.length - 1;
       const last = steps[lastIdx];
+      const terminal = last.status === "done" || last.status === "failed";
       steps[lastIdx] = {
         ...last,
         tool_calls: [...last.tool_calls, rec],
-        status: "running",
+        status: terminal ? last.status : "running",
       };
       return { ...task, steps };
     }
@@ -124,16 +128,18 @@ export function applyToTask(
         if (s !== owner) return s;
         return {
           ...s,
-          tool_calls: s.tool_calls.map((tc) =>
-            tc.id === rec.id
-              ? {
-                  ...tc,
-                  output: rec.output,
-                  status: rec.status,
-                  error: rec.error,
-                }
-              : tc
-          ),
+          tool_calls: s.tool_calls.map((tc) => {
+            if (tc.id !== rec.id) return tc;
+            // Snapshot authority: only a call still pending takes the frame.
+            // A replayed / partial result must not overwrite a settled record.
+            if (tc.status !== "pending") return tc;
+            return {
+              ...tc,
+              output: rec.output,
+              status: rec.status,
+              error: rec.error,
+            };
+          }),
         };
       });
       return { ...task, steps };
