@@ -1,0 +1,947 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fix-walkthrough</title>
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --column: #131316;
+    --sheet: #17171b;
+    --well: #121215;
+    --hover: #202027;
+    --primary: #e8e8ea;
+    --secondary: #a6abb2;
+    --tertiary: #8b9097;
+    --rule: rgba(255, 255, 255, 0.07);
+    --rule-strong: rgba(255, 255, 255, 0.12);
+    --accent: #4c8dff;
+    --on-accent: #0a0a0b;
+    --ok: #3fb97f;
+    --warn: #d9a441;
+    --danger: #e5534b;
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--primary);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  button {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    border-radius: 7px;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: 0.35; cursor: default; }
+  button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+  }
+  a { color: var(--accent); }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 24px;
+    background: rgba(10, 10, 11, 0.92);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .brand {
+    flex: 0 0 auto;
+    min-width: max-content;
+    white-space: nowrap;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--tertiary);
+  }
+  .headline { flex: 1; min-width: 0; }
+  h1 {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.4;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    margin-top: 2px;
+    color: var(--tertiary);
+    font-family: var(--mono);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .view-switch { display: flex; gap: 4px; flex: none; }
+  #banner { padding: 8px 24px 0; }
+  .banner {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--secondary);
+    background: var(--column);
+  }
+  .banner.ok { border-color: rgba(63, 185, 127, 0.3); }
+  .banner.warn {
+    border-color: rgba(217, 164, 65, 0.4);
+    background: rgba(217, 164, 65, 0.06);
+    color: var(--warn);
+  }
+  main {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 18px 24px 64px;
+  }
+  .intro {
+    border: 1px solid var(--rule);
+    background: var(--column);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .summary { margin: 0 0 6px; color: var(--primary); font-size: 14px; }
+  .hint { margin: 0; color: var(--tertiary); font-size: 12px; }
+  .links { margin: 8px 0 0; font-size: 12px; }
+  .scenario-tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 18px 0 12px;
+  }
+  .scenario-tabs button { font-size: 12px; }
+  .scenario-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .scenario-head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .desc { margin: 4px 0 0; color: var(--secondary); font-size: 13px; max-width: 980px; }
+  .badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--rule-strong);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--tertiary);
+    font-family: var(--mono);
+  }
+  .badge.diff { color: var(--warn); border-color: rgba(217, 164, 65, 0.4); }
+  .player {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .player { grid-template-columns: 1fr; }
+    .topbar { flex-wrap: wrap; }
+  }
+  .step-list {
+    border: 1px solid var(--rule);
+    background: var(--column);
+    border-radius: var(--radius);
+    padding: 10px;
+    position: sticky;
+    top: 78px;
+  }
+  .step-list-title {
+    font-size: 11px;
+    color: var(--tertiary);
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 8px 6px;
+  }
+  .step-list ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  .step-list button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    border-radius: 7px;
+    padding: 7px 8px;
+    text-align: left;
+    font-size: 12px;
+  }
+  .step-list button.active { background: var(--hover); color: var(--primary); }
+  .step-list .idx {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--rule-strong);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--tertiary);
+  }
+  .step-list button.active .idx { border-color: var(--accent); color: var(--accent); }
+  .step-list .label { min-width: 0; flex: 1; }
+  .dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warn);
+  }
+  .step-main { min-width: 0; }
+  .step-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .step-label { font-size: 14px; font-weight: 600; }
+  .step-action { margin-top: 2px; color: var(--tertiary); font-family: var(--mono); font-size: 11px; }
+  .step-nav { display: flex; align-items: center; gap: 8px; flex: none; }
+  .counter { color: var(--tertiary); font-family: var(--mono); font-size: 11px; }
+  .state-grid { display: grid; gap: 12px; }
+  .state-grid.compare { grid-template-columns: 1fr 1fr; }
+  .state-grid.single { grid-template-columns: 1fr; }
+  @media (max-width: 1180px) {
+    .state-grid.compare { grid-template-columns: 1fr; }
+  }
+  .side {
+    min-width: 0;
+    border: 1px solid var(--rule);
+    background: var(--column);
+    border-radius: var(--radius);
+    padding: 12px;
+  }
+  .side.before { border-top: 2px solid var(--danger); }
+  .side.after { border-top: 2px solid var(--ok); }
+  .side.missing { opacity: 0.6; }
+  .side-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .side-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .metrics { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+  .metric {
+    display: inline-flex;
+    gap: 5px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--tertiary);
+  }
+  .metric .v { color: var(--secondary); }
+  .note {
+    margin: 0 0 8px;
+    border-left: 2px solid var(--accent);
+    padding-left: 8px;
+    color: var(--secondary);
+    font-size: 12px;
+  }
+  .protocol {
+    border-radius: 7px;
+    padding: 5px 9px;
+    margin-bottom: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .protocol.ok { background: rgba(63, 185, 127, 0.08); color: var(--ok); }
+  .protocol.bad { background: rgba(229, 83, 75, 0.08); color: var(--danger); }
+  .messages { display: flex; flex-direction: column; gap: 6px; }
+  .msg {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 7px 9px;
+    background: var(--well);
+  }
+  .msg.has-issue { border-color: rgba(229, 83, 75, 0.55); background: rgba(229, 83, 75, 0.05); }
+  .msg.assistant { border-left: 3px solid var(--accent); }
+  .msg.user { border-left: 3px solid var(--secondary); }
+  .msg.tool { border-left: 3px solid var(--warn); }
+  .msg.system { border-left: 3px solid var(--tertiary); opacity: 0.85; }
+  .msg-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 3px;
+  }
+  .role {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tertiary);
+  }
+  .role.assistant { color: var(--accent); }
+  .role.tool { color: var(--warn); }
+  .idx { font-family: var(--mono); font-size: 10px; color: var(--tertiary); }
+  .issue { font-size: 11px; color: var(--danger); }
+  .content {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--secondary);
+    font-size: 12px;
+  }
+  details.content > summary { cursor: pointer; color: var(--secondary); }
+  details.content > div { margin-top: 4px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--secondary);
+    background: var(--sheet);
+  }
+  .chip-id { color: var(--tertiary); }
+  .step-cards { display: flex; flex-direction: column; gap: 6px; }
+  .step-card {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: var(--well);
+  }
+  .step-card.status-done { border-left: 3px solid var(--ok); }
+  .step-card.status-failed { border-left: 3px solid var(--danger); }
+  .step-card.status-running { border-left: 3px solid var(--accent); }
+  .step-card.status-skipped { border-left: 3px solid var(--warn); }
+  .round { font-family: var(--mono); font-size: 10px; color: var(--tertiary); }
+  .status {
+    font-family: var(--mono);
+    font-size: 10px;
+    border-radius: 999px;
+    padding: 1px 7px;
+    border: 1px solid var(--rule-strong);
+    color: var(--tertiary);
+  }
+  .status.done { color: var(--ok); border-color: rgba(63, 185, 127, 0.4); }
+  .status.failed { color: var(--danger); border-color: rgba(229, 83, 75, 0.4); }
+  .status.running { color: var(--accent); border-color: rgba(76, 141, 255, 0.4); }
+  .status.skipped { color: var(--warn); border-color: rgba(217, 164, 65, 0.4); }
+  .records { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .records th, .records td {
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+    padding: 5px 7px;
+    vertical-align: top;
+  }
+  .records th { color: var(--tertiary); font-weight: 500; font-family: var(--mono); font-size: 10px; }
+  .mono, .json, .diff { font-family: var(--mono); }
+  .json {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 11px;
+    color: var(--secondary);
+    background: var(--well);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 10px;
+    max-height: 420px;
+    overflow: auto;
+  }
+  .images { display: flex; flex-direction: column; gap: 10px; }
+  .image-figure { margin: 0; }
+  .image-figure img {
+    max-width: 100%;
+    display: block;
+    border: 1px solid var(--rule-strong);
+    border-radius: 8px;
+    background: var(--well);
+  }
+  .image-figure figcaption {
+    margin-top: 4px;
+    color: var(--tertiary);
+    font-size: 11px;
+  }
+  .checks { margin-top: 12px; }
+  .checks-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+  .checks-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .checks-table th, .checks-table td {
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+    padding: 6px 8px;
+    vertical-align: top;
+  }
+  .checks-table th { color: var(--tertiary); font-weight: 500; font-size: 11px; }
+  .check {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-family: var(--mono);
+    font-size: 10px;
+    border: 1px solid var(--rule-strong);
+    color: var(--tertiary);
+  }
+  .check.ok { color: var(--ok); border-color: rgba(63, 185, 127, 0.4); }
+  .check.bad { color: var(--danger); border-color: rgba(229, 83, 75, 0.4); }
+  .check.na { opacity: 0.6; }
+  .detail { color: var(--tertiary); font-size: 11px; }
+  .panel {
+    margin-top: 14px;
+    border: 1px solid var(--rule);
+    background: var(--column);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+  }
+  .panel > summary {
+    cursor: pointer;
+    color: var(--secondary);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .panel[open] > summary { margin-bottom: 10px; }
+  .code-block { margin: 12px 0; }
+  .code-block:first-child { margin-top: 0; }
+  .code-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 5px;
+  }
+  .path { font-family: var(--mono); font-size: 11.5px; color: var(--primary); }
+  .refs { font-family: var(--mono); font-size: 10.5px; color: var(--tertiary); }
+  .diff {
+    margin: 0;
+    padding: 10px;
+    background: var(--well);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    font-size: 11px;
+    line-height: 1.55;
+    overflow: auto;
+    max-height: 360px;
+  }
+  .diff-line { display: block; white-space: pre; }
+  .diff-line.add { color: var(--ok); background: rgba(63, 185, 127, 0.06); }
+  .diff-line.del { color: var(--danger); background: rgba(229, 83, 75, 0.06); }
+  .diff-line.hunk { color: var(--accent); }
+  .diff-line.file { color: var(--tertiary); }
+  .empty { color: var(--tertiary); font-size: 12px; margin: 0; }
+  footer {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 0 24px 32px;
+    color: var(--tertiary);
+    font-family: var(--mono);
+    font-size: 10.5px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition-duration: 0s !important; animation-duration: 0s !important; }
+  }
+</style>
+</head>
+<body data-default-view="__DEFAULT_VIEW__">
+<header class="topbar">
+  <div class="brand">fix-walkthrough</div>
+  <div class="headline">
+    <h1 id="title">行为对比</h1>
+    <div class="subtitle" id="subtitle"></div>
+  </div>
+  <div class="view-switch" id="view-switch" role="group" aria-label="视图"></div>
+</header>
+<div id="banner"></div>
+<main>
+  <section class="intro" id="intro"></section>
+  <nav class="scenario-tabs" id="scenario-tabs" role="tablist" aria-label="场景"></nav>
+  <section class="scenario" aria-live="polite">
+    <div class="scenario-head">
+      <div>
+        <h2 id="scenario-title"></h2>
+        <p class="desc" id="scenario-desc"></p>
+      </div>
+      <span class="badge" id="scenario-badge"></span>
+    </div>
+    <div class="player">
+      <aside class="step-list">
+        <div class="step-list-title">步骤</div>
+        <ol id="steps"></ol>
+      </aside>
+      <div class="step-main">
+        <div class="step-head">
+          <div>
+            <div class="step-label" id="step-label"></div>
+            <div class="step-action" id="step-action"></div>
+          </div>
+          <div class="step-nav">
+            <button id="prev" type="button">← 上一步</button>
+            <span class="counter" id="step-counter"></span>
+            <button id="next" type="button">下一步 →</button>
+          </div>
+        </div>
+        <div class="state-grid" id="state-grid"></div>
+        <div class="checks" id="checks"></div>
+      </div>
+    </div>
+    <details class="panel" id="code-panel">
+      <summary>代码为什么变</summary>
+      <div id="code"></div>
+    </details>
+    <details class="panel" id="evidence-panel">
+      <summary>证据（原始数据）</summary>
+      <div id="evidence"></div>
+    </details>
+  </section>
+</main>
+<footer id="footer"></footer>
+<script type="application/json" id="demo-data">__DEMO_JSON__</script>
+<script>
+(function () {
+  "use strict";
+  var DEMO = JSON.parse(document.getElementById("demo-data").textContent);
+  var state = {
+    scenario: 0,
+    step: 0,
+    view: document.body.getAttribute("data-default-view") || "compare"
+  };
+
+  function $(sel) { return document.querySelector(sel); }
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function sideLabel(side) {
+    var m = DEMO.meta || {};
+    var info = side === "before" ? m.before : m.after;
+    var name = side === "before" ? "改动前" : "改动后";
+    if (!info) return name;
+    return name + " · " + (info.ref || "") + (info.commit && info.commit !== info.ref ? " (" + info.commit + ")" : "");
+  }
+  function currentScenario() { return DEMO.scenarios[state.scenario]; }
+  function currentStep() { return currentScenario().steps[state.step]; }
+
+  function renderHeader() {
+    var m = DEMO.meta || {};
+    $("#title").textContent = m.title || "行为对比";
+    var parts = [];
+    if (m.issue && m.issue.number) parts.push("issue #" + m.issue.number);
+    if (m.pr && m.pr.number) parts.push("PR #" + m.pr.number);
+    if (m.before) parts.push((m.before.ref || m.before.label || "before") + " → " + (m.after && (m.after.ref || m.after.label) || "after"));
+    $("#subtitle").textContent = parts.join(" · ");
+    var views = [["before", "改动前"], ["after", "改动后"], ["compare", "并排对比"]];
+    $("#view-switch").innerHTML = views.map(function (v) {
+      return '<button type="button" data-view="' + v[0] + '" class="' + (state.view === v[0] ? "active" : "") + '">' + v[1] + "</button>";
+    }).join("");
+    $("#view-switch").querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { state.view = b.getAttribute("data-view"); renderAll(); });
+    });
+    var source = m.source || "unknown";
+    var labels = {
+      "real-function": "真实函数执行",
+      "testclient": "TestClient 真实执行",
+      "screenshot": "真实截图",
+      "simulated": "手写模拟（低保真）"
+    };
+    var notes = {
+      "real-function": "页面里的状态来自真实函数执行，这里只是重绘成可读面板。",
+      "testclient": "页面里的状态来自进程内真实 TestClient 运行（LLM 用 mock），这里只是重绘成可读面板。",
+      "screenshot": "页面里的界面来自真实浏览器截图；判据来自采集结果。",
+      "simulated": "本页展示的是手写模拟，不是真实代码执行结果；请只把它当作示意。"
+    };
+    var warn = source === "simulated";
+    $("#banner").innerHTML =
+      '<div class="banner ' + (warn ? "warn" : "ok") + '"><strong>' +
+      esc(labels[source] || source) + "</strong> · " +
+      esc(notes[source] || "来源未标注。") +
+      "</div>";
+    $("#footer").textContent = "generated " + (m.generated_at || "") + " · " + (m.command || "fix-walkthrough render");
+  }
+
+  function renderIntro() {
+    var m = DEMO.meta || {};
+    var links = [];
+    if (m.issue && m.issue.url) links.push('<a href="' + esc(m.issue.url) + '">issue #' + esc(m.issue.number) + "</a>");
+    if (m.pr && m.pr.url) links.push('<a href="' + esc(m.pr.url) + '">PR #' + esc(m.pr.number) + "</a>");
+    $("#intro").innerHTML =
+      '<p class="summary">' + esc(m.summary || "") + "</p>" +
+      '<p class="hint">读法：先选场景，点“下一步”看状态怎么变；“并排对比”把改动前/后放在一起；底部是代码 diff 和原始证据。</p>' +
+      (links.length ? '<p class="links">' + links.join(" ") + "</p>" : "");
+  }
+
+  function renderScenarioTabs() {
+    $("#scenario-tabs").innerHTML = DEMO.scenarios.map(function (s, i) {
+      return '<button type="button" role="tab" aria-selected="' + (i === state.scenario) + '" data-i="' + i + '" class="' + (i === state.scenario ? "active" : "") + '">' + esc(s.title) + "</button>";
+    }).join("");
+    $("#scenario-tabs").querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        state.scenario = Number(b.getAttribute("data-i"));
+        state.step = firstDiffStep(DEMO.scenarios[state.scenario]);
+        renderAll();
+      });
+    });
+  }
+
+  function stepHasDiff(step) {
+    if (!step.before || !step.after) return true;
+    return JSON.stringify(step.before.state) !== JSON.stringify(step.after.state);
+  }
+
+  function firstDiffStep(scenario) {
+    var steps = (scenario && scenario.steps) || [];
+    for (var i = 0; i < steps.length; i++) {
+      if (stepHasDiff(steps[i])) return i;
+    }
+    return 0;
+  }
+
+  function renderStepList() {
+    var s = currentScenario();
+    $("#steps").innerHTML = s.steps.map(function (step, i) {
+      return '<li><button type="button" data-i="' + i + '" class="' + (i === state.step ? "active" : "") + '">' +
+        '<span class="idx">' + (i + 1) + "</span>" +
+        '<span class="label">' + esc(step.label) + "</span>" +
+        (stepHasDiff(step) ? '<span class="dot" title="这一步前后有差异"></span>' : "") +
+        "</button></li>";
+    }).join("");
+    $("#steps").querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { state.step = Number(b.getAttribute("data-i")); renderStep(); renderStepList(); });
+    });
+  }
+
+  function renderStep() {
+    var step = currentStep();
+    $("#step-label").textContent = step.label || "";
+    $("#step-action").textContent = step.action || "";
+    $("#step-counter").textContent = (state.step + 1) + " / " + currentScenario().steps.length;
+    $("#prev").disabled = state.step === 0;
+    $("#next").disabled = state.step === currentScenario().steps.length - 1;
+    renderStateGrid(step);
+    renderChecks(step);
+  }
+
+  function renderStateGrid(step) {
+    var grid = $("#state-grid");
+    grid.className = "state-grid " + (state.view === "compare" ? "compare" : "single");
+    var sides = state.view === "compare" ? ["before", "after"] : [state.view];
+    grid.innerHTML = sides.map(function (side) { return renderSide(step, side); }).join("");
+  }
+
+  function renderSide(step, side) {
+    var data = step[side];
+    if (!data) {
+      return '<section class="side missing"><div class="side-head"><span class="side-label">' + esc(sideLabel(side)) + '</span></div><p class="empty">这一侧没有数据。</p></section>';
+    }
+    var other = step[side === "before" ? "after" : "before"];
+    var changed = other && JSON.stringify(data.state) !== JSON.stringify(other.state);
+    return '<section class="side ' + side + '">' +
+      '<div class="side-head"><span class="side-label">' + esc(sideLabel(side)) + "</span>" +
+      (changed ? '<span class="badge diff">有差异</span>' : "") +
+      "</div>" +
+      renderMetrics(data.metrics) +
+      (data.note ? '<p class="note">' + esc(data.note) + "</p>" : "") +
+      '<div class="state">' + renderState(data.state) + "</div>" +
+      "</section>";
+  }
+
+  function renderMetrics(metrics) {
+    if (!metrics) return "";
+    return '<div class="metrics">' + Object.keys(metrics).map(function (k) {
+      var v = metrics[k];
+      return '<span class="metric"><span class="k">' + esc(k) + '</span><span class="v">' + esc(typeof v === "string" ? v : JSON.stringify(v)) + "</span></span>";
+    }).join("") + "</div>";
+  }
+
+  function renderState(s) {
+    if (!s) return '<p class="empty">无状态</p>';
+    switch (s.kind) {
+      case "messages": return renderMessages(s.messages || []);
+      case "steps": return renderSteps(s.steps || []);
+      case "records": return renderRecords(s.records || []);
+      case "json": return renderJson(s.value);
+      case "image": return renderImages(Array.isArray(s.images) ? s.images : [s]);
+      default: return renderJson(s);
+    }
+  }
+
+  function analyzeMessages(messages) {
+    var issues = [];
+    var i = 0;
+    while (i < messages.length) {
+      var m = messages[i] || {};
+      if (m.role === "tool") {
+        issues.push({ at: i, text: "孤立的 tool 回复（" + (m.tool_call_id || "?") + "）" });
+        i += 1;
+        continue;
+      }
+      var calls = (m.role === "assistant" && Array.isArray(m.tool_calls)) ? m.tool_calls.map(function (tc) { return tc && tc.id; }) : [];
+      if (calls.length) {
+        var replies = [];
+        var j = i + 1;
+        while (j < messages.length && messages[j] && messages[j].role === "tool") {
+          replies.push(messages[j].tool_call_id);
+          j += 1;
+        }
+        var same = replies.length === calls.length && calls.every(function (id, k) { return id === replies[k]; });
+        if (!same) {
+          issues.push({
+            at: i,
+            text: "assistant 的调用 [" + calls.join(", ") + "] 与紧随的回复 [" + replies.join(", ") + "] 不配对"
+          });
+        }
+        i = j;
+        continue;
+      }
+      i += 1;
+    }
+    return issues;
+  }
+
+  function contentBlock(text) {
+    if (!text) return "";
+    if (text.length <= 320) return '<div class="content">' + esc(text) + "</div>";
+    return '<details class="content"><summary>' + esc(text.slice(0, 120)) + "…（展开）</summary><div>" + esc(text) + "</div></details>";
+  }
+
+  function renderMessages(messages) {
+    var issues = analyzeMessages(messages);
+    var proto = issues.length === 0
+      ? '<div class="protocol ok">协议：配对合法</div>'
+      : '<div class="protocol bad">协议：配对断裂（' + issues.length + " 处）</div>";
+    var cards = messages.map(function (m, i) {
+      m = m || {};
+      var issue = null;
+      for (var k = 0; k < issues.length; k++) if (issues[k].at === i) { issue = issues[k]; break; }
+      var role = m.role || "unknown";
+      var content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      var calls = (m.tool_calls || []).map(function (tc) {
+        var name = (tc && tc.function && tc.function.name) || (tc && tc.name) || "call";
+        return '<span class="chip">' + esc(name) + '<span class="chip-id">' + esc(tc && tc.id) + "</span></span>";
+      }).join("");
+      var toolId = m.role === "tool" ? '<span class="chip">tool_call_id <span class="chip-id">' + esc(m.tool_call_id) + "</span></span>" : "";
+      return '<article class="msg ' + esc(role) + (issue ? " has-issue" : "") + '">' +
+        '<div class="msg-head"><span class="role ' + esc(role) + '">' + esc(role) + '</span><span class="idx">#' + i + "</span>" +
+        (issue ? '<span class="issue">' + esc(issue.text) + "</span>" : "") +
+        "</div>" + contentBlock(content) +
+        (calls ? '<div class="chips">' + calls + "</div>" : "") +
+        (toolId ? '<div class="chips">' + toolId + "</div>" : "") +
+        "</article>";
+    }).join("");
+    return proto + '<div class="messages">' + cards + "</div>";
+  }
+
+  function renderSteps(steps) {
+    return '<div class="step-cards">' + steps.map(function (s) {
+      s = s || {};
+      var tools = (s.tool_calls || []).map(function (tc) {
+        return '<span class="chip">' + esc((tc && tc.tool_name) || (tc && tc.name) || "tool") + '<span class="chip-id">' + esc(tc && tc.id) + "</span></span>";
+      }).join("");
+      return '<article class="step-card status-' + esc(s.status || "unknown") + '">' +
+        '<div class="msg-head"><span class="role">step ' + esc(s.index) + '</span><span class="round">round ' + esc(s.round == null ? "—" : s.round) + '</span><span class="status ' + esc(s.status || "") + '">' + esc(s.status || "unknown") + "</span></div>" +
+        (s.thought ? '<div class="content">' + esc(s.thought) + "</div>" : "") +
+        (tools ? '<div class="chips">' + tools + "</div>" : "") +
+        "</article>";
+    }).join("") + "</div>";
+  }
+
+  function renderRecords(records) {
+    var rows = records.map(function (r) {
+      r = r || {};
+      return "<tr><td class=\"mono\">" + esc(r.id) + "</td><td>" + esc(r.tool_name) + '</td><td><span class="status ' + esc(r.status || "") + '">' + esc(r.status || "") + '</span></td><td class="mono">' + esc(JSON.stringify(r.input == null ? null : r.input)) + "</td><td>" + esc(r.error || "") + "</td></tr>";
+    }).join("");
+    return '<table class="records"><thead><tr><th>id</th><th>tool</th><th>status</th><th>input</th><th>error</th></tr></thead><tbody>' + rows + "</tbody></table>";
+  }
+
+  function renderJson(value) {
+    return '<pre class="json">' + esc(JSON.stringify(value, null, 2)) + "</pre>";
+  }
+
+  function renderImages(images) {
+    if (!images.length) return '<p class="empty">没有图片</p>';
+    return '<div class="images">' + images.map(function (img) {
+      img = img || {};
+      return '<figure class="image-figure">' +
+        '<img src="' + esc(img.src || "") + '" alt="' + esc(img.alt || "") + '" loading="lazy" />' +
+        (img.caption ? "<figcaption>" + esc(img.caption) + "</figcaption>" : "") +
+        "</figure>";
+    }).join("") + "</div>";
+  }
+
+  function renderChecks(step) {
+    var labels = [];
+    var seen = {};
+    ["before", "after"].forEach(function (side) {
+      var checks = (step[side] && step[side].checks) || [];
+      checks.forEach(function (c) {
+        if (c && c.label && !seen[c.label]) { seen[c.label] = true; labels.push(c.label); }
+      });
+    });
+    if (!labels.length) { $("#checks").innerHTML = ""; return; }
+    var rows = labels.map(function (label) {
+      function find(side) {
+        var checks = (step[side] && step[side].checks) || [];
+        for (var i = 0; i < checks.length; i++) if (checks[i].label === label) return checks[i];
+        return null;
+      }
+      var b = find("before"), a = find("after");
+      function badge(c) {
+        if (!c) return '<span class="check na">—</span>';
+        return '<span class="check ' + (c.ok ? "ok" : "bad") + '">' + (c.ok ? "通过" : "未通过") + "</span>";
+      }
+      var detail = [b && b.detail, a && a.detail].filter(Boolean).join(" / ");
+      return "<tr><td>" + esc(label) + "</td><td>" + badge(b) + "</td><td>" + badge(a) + '</td><td class="detail">' + esc(detail) + "</td></tr>";
+    }).join("");
+    $("#checks").innerHTML = '<div class="checks-title">判据</div><table class="checks-table"><thead><tr><th>检查</th><th>改动前</th><th>改动后</th><th>说明</th></tr></thead><tbody>' + rows + "</tbody></table>";
+  }
+
+  function renderDiff(diff) {
+    if (!diff) return "";
+    return diff.split("\n").map(function (line) {
+      var cls = "";
+      if (line.indexOf("+++") === 0 || line.indexOf("---") === 0) cls = "file";
+      else if (line.indexOf("@@") === 0) cls = "hunk";
+      else if (line.charAt(0) === "+") cls = "add";
+      else if (line.charAt(0) === "-") cls = "del";
+      return '<span class="diff-line ' + cls + '">' + esc(line) + "</span>";
+    }).join("\n");
+  }
+
+  function renderCode() {
+    var s = currentScenario();
+    var code = s.code || [];
+    if (!code.length) {
+      $("#code").innerHTML = '<p class="empty">这个场景没有附代码 diff。</p>';
+      return;
+    }
+    $("#code").innerHTML = code.map(function (c) {
+      return '<article class="code-block">' +
+        '<div class="code-head"><span class="path">' + esc(c.path) + '</span><span class="refs">' + esc(c.before_ref || "") + " → " + esc(c.after_ref || "") + "</span></div>" +
+        (c.note ? '<p class="note">' + esc(c.note) + "</p>" : "") +
+        '<pre class="diff">' + renderDiff(c.diff || "") + "</pre>" +
+        "</article>";
+    }).join("");
+  }
+
+  function renderEvidence() {
+    var payload = { meta: DEMO.meta, scenario: currentScenario(), step: currentStep() };
+    $("#evidence").innerHTML = '<p class="hint">下面是这一步的原始数据；生成本页的命令与来源在 meta 里。</p><pre class="json">' + esc(JSON.stringify(payload, null, 2)) + "</pre>";
+  }
+
+  function renderScenario() {
+    var s = currentScenario();
+    $("#scenario-title").textContent = s.title || "";
+    $("#scenario-desc").textContent = s.description || "";
+    $("#scenario-badge").textContent = s.steps.length + " 步";
+    renderStepList();
+    renderStep();
+    renderCode();
+    renderEvidence();
+  }
+
+  function renderAll() {
+    renderHeader();
+    renderScenarioTabs();
+    renderIntro();
+    renderScenario();
+    syncHash();
+  }
+
+  function go(delta) {
+    var total = currentScenario().steps.length;
+    state.step = Math.max(0, Math.min(total - 1, state.step + delta));
+    renderStepList();
+    renderStep();
+    renderEvidence();
+    syncHash();
+  }
+
+  function syncHash() {
+    try {
+      var params = new URLSearchParams();
+      params.set("s", String(state.scenario));
+      params.set("step", String(state.step));
+      params.set("view", state.view);
+      history.replaceState(null, "", "#" + params.toString());
+    } catch (e) { /* file:// may restrict history; ignore */ }
+  }
+
+  function readHash() {
+    try {
+      var params = new URLSearchParams(location.hash.slice(1));
+      var s = Number(params.get("s"));
+      var step = Number(params.get("step"));
+      var view = params.get("view");
+      if (Number.isInteger(s) && s >= 0 && s < DEMO.scenarios.length) state.scenario = s;
+      if (Number.isInteger(step) && step >= 0) state.step = step;
+      if (view === "before" || view === "after" || view === "compare") state.view = view;
+      var total = DEMO.scenarios[state.scenario].steps.length;
+      if (!params.has("step")) {
+        // Land on the first step whose two sides differ; opening a comparison
+        // page on an identical input step hides the whole point of the demo.
+        state.step = firstDiffStep(DEMO.scenarios[state.scenario]);
+      }
+      state.step = Math.max(0, Math.min(total - 1, state.step));
+    } catch (e) { /* ignore */ }
+  }
+
+  $("#prev").addEventListener("click", function () { go(-1); });
+  $("#next").addEventListener("click", function () { go(1); });
+  document.addEventListener("keydown", function (e) {
+    var tag = (document.activeElement && document.activeElement.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+    if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+  });
+
+  if (!Array.isArray(DEMO.scenarios) || !DEMO.scenarios.length) {
+    document.body.innerHTML = '<main><p class="empty">demo 数据里没有场景。</p></main>';
+    return;
+  }
+  readHash();
+  renderAll();
+})();
+</script>
+</body>
+</html>
