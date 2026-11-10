@@ -107,7 +107,7 @@
 
 > **2026-10-20 起 C4 及以后的排序与内容以 [`docs/specs/qianfan-daily-form-plan.md`](specs/qianfan-daily-form-plan.md) §4 为准**（[ADR 0010](adr/0010-launch-dir-workspace-and-model-profiles.md)，spec #166）；本节正文冻结为 C1–C3 的过程记录，不再改。
 >
-> **2026-10-23 复核补注**：下表 **C4–C7 行是当时的计划原样**，已被重排覆盖——C6 的计划路径实为 `.qianfan/plans/<task_id>.md` 且 `PUT /plan` 保留；C7 的真模型验收场景数为 9（见 [`docs/manual-verification.md`](manual-verification.md)）。现役以 qianfan 规划 §4 + ADR 0009 / 0010 为准。
+> **2026-10-23 复核补注**：下表 **C4–C7 行是当时的计划原样**，已被重排覆盖——C6 的计划路径实为 `.qianfan/plans/<task_id>.md` 且 `PUT /plan` 保留；C7 的真模型验收场景数为 9（2026-11-08 起为 10——新增场景 10；见 [`docs/manual-verification.md`](manual-verification.md)）。现役以 qianfan 规划 §4 + ADR 0009 / 0010 为准。
 
 串行，一片一个 PR；每片按 `docs/archive/pivot-plan-build.md` §纪律走（删测试逐条写明删的是哪个已删功能的测试；`AGENTS.md` 局部改动随片；C3 / C5 / C6 合前手跑一次真模型）。动到 SSE 事件的片同步 `docs/architecture.md` §3.4 并跑 `npm run check:sse`（改 architecture 会触发全套 CI）。
 
@@ -275,6 +275,8 @@ pi = `<pi-checkout>` @ `4dd2b149d`；dsh = `<dsh-checkout>` @ `687f282e86`（rc.
 
 ## 5. D6 待拍板：三个选项
 
+> **历史记录（2026-11-10 整理）**：D6 已按选项 C 拍板并落 ADR 0009 / 0012（能力包 + 预设已交付）；本节与 §6 保留当时的口语与 checklist 作过程记录，不再代表未决事项。
+
 ### 选项 A — 保留能力包线，按单 loop 重写
 
 - 注册表继续做，但只贡献三样：工具、EventBus 订阅者、LLM 包装；不新增图节点。
@@ -306,6 +308,8 @@ pi = `<pi-checkout>` @ `4dd2b149d`；dsh = `<dsh-checkout>` @ `687f282e86`（rc.
 3. 下一章更想要「架构可拆装」的叙事，还是「可观测 / 可学习」的叙事？
 
 ## 6. 拍板后的动作
+
+> 历史记录：下列动作大部分已随 #287 P4 三片闭环（2026-11-08，open issues = 0）；保留作核对清单。
 
 无论选哪个：
 

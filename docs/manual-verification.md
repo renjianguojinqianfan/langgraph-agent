@@ -59,7 +59,7 @@
     用同一道题执行一次任务；再改成 `{"preset": "full", "overrides": {}}` 重启，用同一道题执行第二次。
     判据：两次任务都能完成；`GET /api/plugins` 的 `active` 面与页面展示一致（minimal 无 skills / web_search /
     spawn_subagent / MCP 工具）；minimal 轮不出现被关闭工具的调用；切回 full 后工具面恢复。
-    **P4-3 只交付场景，未运行；P5-1 真机执行。**
+    **P4-3 交付场景；P5-1（2026-11-09）真机执行，结果见结果表。**
 
 ## 结果记录
 
@@ -79,7 +79,6 @@
 | 6 | 2026-10-27 | 默认 | 通过（UI 部分）：A / B 两个工作区各自列表；「全部」按目录分组；从「全部」打开 A 续说，`a2.txt` 落在 A。CLI 交接步骤沿用 2026-10-22 证据，未重跑 | `scenario6.json` / `scenario6-*.png`，任务 `25c55dcc` / `f1477ef0` |
 | 7 | 2026-10-27 | 默认 | 通过：重启后历史仍在；停下任务续说 `a3.txt`；RUNNING 孤儿重启后转 INTERRUPTED，续说被接受并完成（6 步，回答 7 字） | `scenario7.json` / `scenario7-*.png`，任务 `25c55dcc` / `a940d160` |
 | B1 | 2026-10-27 | 坏 Key 档案（`B1_BAD_KEY`，env）→ 默认 | 通过：401 `invalid_api_key` → FAILED；失败态计划可编辑；切默认档案续说，同一任务完成、`error` 清空 | `b1-failed-continue.json` / `b1-failed.png` / `b1-plan-editable.png` / `b1-continued.png`，任务 `1da34aa6` |
-| 10 | 未运行 | — | 未运行（P4-3 交付场景；P5-1 真机执行 minimal vs full 同题） | — |
 | 1 | 2026-11-09 | 默认（真模型） | 通过：`write` + `bash(git init && git status)` 成功；文件在任务目录，`git status` 列出为未跟踪 | `p5-scenario1-5.json`，任务 `3b81858a` |
 | 2 | 2026-11-09 | 默认 | 通过：计划 v1 → 网页端改为 v2；执行只落 `human-edited-p5.txt`，原计划文件未创建，`.qianfan/` 不进 `git status` | `p5-scenario2.json` / `p5-scenario2-plan-v1.png` / `p5-scenario2-final.png`，任务 `070b4ada` |
 | 3 | 2026-11-09 | 默认 | 通过：`sleep 90` 运行中停止（`bash:failed`），同一任务续说后补齐 `stop-end-p5.txt` / `continued-p5.txt` | `p5-scenario3.json` / `p5-scenario3-stopped.png` / `p5-scenario3-resumed.png`，任务 `3b81858a` |
@@ -89,7 +88,7 @@
 | 7 | 2026-11-09 | 默认 | 通过（含遗留）：重启后历史在；停下任务续说 `after-restart-p5.txt`；运行中硬杀后台重启后转 INTERRUPTED，续跑补齐 `orphan2-end-p5.txt` / `resume-after-kill-p5.txt`。**遗留：断点步骤留在 `running`（工具 `skipped`），该轮显示「执行中」**（已由 PR #317 修复；复跑见下组） | `p5-scenario7.json` / `p5-scenario7-resumed.png` / `p5-scenario7-stale-running.png`，任务 `119b8030` |
 | 8 | 2026-11-09 | 默认 | 通过：后台 `sleep 600` 命令立即返回 `BG_PID=119`；停止后 119 与前台 120 两个进程均消失 | `p5-scenario8.json`，任务 `c2db922e` |
 | 9 | 2026-11-09 | 默认 + Exa；MiMo V2.6 Flash（Token Plan） | 通过（MCP 未配置）：子代理 `spawn_subagent` success；Exa `web_search` success；Composer 选 MiMo 完成 `write` + `bash` 真跑；同一任务中途切 MiMo 续说，trace 后两步 `model_profile` 变为 MiMo 条目；`step` 档案上游 400，未作为本轮切换目标；MCP 未配置（`/api/mcp/servers` 为空） | `p5-scenario9-exa-search.json` / `p5-scenario9-exa-search.png` / `p5-scenario9-mimo.json` / `p5-scenario9-mimo-run.png` / `p5-scenario9-mimo-switch.json`，任务 `0055c384` / `693ff155` / `29f82c5f` / `874f0ecd` |
-| 10 | 2026-11-09 | `minimal` → `full`（重启生效） | 通过：minimal 生效面 2 包 7 工具，同题只用 `write` + `bash` 完成；full 恢复 6 包 10 工具，同题完成；页面「当前生效」与 `GET /api/plugins` 的 `active` 一致。保存/重启走等价 `PUT /api/plugins`（设置页分段控件在电脑控制下点击未命中） | `p5-scenario10-minimal.json` / `p5-scenario10-minimal-settings.png` / `p5-scenario10-full.json` / `p5-scenario10-full-run.png`，任务 `690aeace` / `874f0ecd` |
+| 10 | 2026-11-09 | `minimal` → `full`（重启生效） | 通过：minimal 生效面 2 包 7 工具，同题只用 `write` + `bash` 完成；full 恢复 6 包 10 工具，同题完成；页面「当前生效」与 `GET /api/plugins` 的 `active` 一致。保存/重启走等价 `PUT /api/plugins`（设置页分段控件在电脑控制下点击未命中） | `p5-scenario10-minimal.json` / `p5-scenario10-minimal-settings.png` / `p5-scenario10-full.json`，任务 `690aeace` / `874f0ecd` |
 | 1 | 2026-11-09（复跑） | 默认（deepseek-flash，真模型） | 通过：`write` 建 `p5r-scenario1.txt`；`bash(git init && git status)` success；文件在任务目录、`git status` 列为未跟踪；3 步 2 次调用全 done | `p5r-scenario1.json` / `p5r-scenario1.png`，任务 `eb508663` |
 | 2 | 2026-11-09（复跑） | 默认 | 通过：计划 v1 → `PUT /plan` 改为 v2（文件名改 `p5r-human-edited.txt`）；切执行只落该文件；`.qianfan/` 不进 `git status` | `p5r-scenario2.json` / `p5r-scenario2-plan.json` / `p5r-scenario2.png`，任务 `ce09b82a` |
 | 3 | 2026-11-09（复跑） | 默认 | 通过：`sleep 90` 运行中停止（`bash:failed`，`command stopped`）；同一任务续说创建 `p5r-stop-end.txt` | `p5r-scenario3.json` / `p5r-scenario3-stopped.png` / `p5r-scenario3-resumed.png`，任务 `a58207c3` |
@@ -101,7 +100,7 @@
 | 9 | 2026-11-09（复跑） | 默认 + 本地 MCP echo + Exa；MiMo V2.6 Flash | 通过（含 MCP）：`spawn_subagent` success（子任务 `list-files` completed）；`mcp__echo__echo` success；`web_search` success；同一任务中途切 MiMo 后，trace 第 5–6 步 `model_profile=eeda03bb9980`（前三步 deepseek） | `p5r-scenario9.json` / `p5r-scenario9-subagent-mcp-search.png` / `p5r-scenario9-model-switch.json` / `p5r-scenario9-model-switch-trace.json` / `p5r-scenario9-model-switch.png`，任务 `c9184515` / `095fa421` |
 | 10 | 2026-11-09（复跑） | `minimal` → `full`（重启生效） | 通过：minimal 生效面 `files`+`bash`（7 工具），同题只用 `write` 完成；full 恢复 6 包 12 工具（含 MCP），同题完成；设置页「当前生效」与 `GET /api/plugins` 的 `active` 一致；测后删除 `data/plugins.json` 恢复默认 full | `p5r-scenario10-minimal*.json` / `p5r-scenario10-minimal-settings.png` / `p5r-scenario10-full*.json` / `p5r-scenario10-full-settings.png`，任务 `83df90b6` / `2f352d3f` |
 
-> 2026-11-09 复跑在 PR #317 合并后的 master 上进行：网页由本机 Chrome + Playwright CDP 驱动、真模型；场景 9 的 MCP 用仓库内 `backend/tests/mcp_echo_server.py`（`MCP_SERVERS` 仅注入启动进程，不写仓库配置）。场景 4 第一轮模型拒绝执行删除命令、未产生 `skipped`，改用明确的受控测试提示后命中规则，证据取命中轮。已知 SSE 回放竞态仍在：重开已停下任务可能短暂把末步显示为运行中/工具数翻倍，重选任务后恢复（非本轮新增）。
+> 2026-11-09 复跑在 PR #317 合并后的 master 上进行：网页由本机 Chrome + Playwright CDP 驱动、真模型；场景 9 的 MCP 用仓库内 `backend/tests/mcp_echo_server.py`（`MCP_SERVERS` 仅注入启动进程，不写仓库配置）。场景 4 第一轮模型拒绝执行删除命令、未产生 `skipped`，改用明确的受控测试提示后命中规则，证据取命中轮。已知 SSE 回放竞态（重开已停下任务短暂把末步显示为运行中 / 工具数翻倍）已由 PR #318 修复（回放归属 + 终态守卫）；`docs/frontend-design.md` §6 的回放手测清单待真机走查。
 
 > 证据根：2026-10-21 及更早轮次在 `docs/assets/verification/2026-10-21/`；2026-10-22 在 `2026-10-22/`；2026-10-27（新版界面 + B1）在 `docs/assets/verification/2026-10-27/`。JSON 只留任务/步骤/工具状态与脱敏摘录，不含 Key 与完整对话。
 > 场景 6 的 A/B 路径按后端记录的绝对路径核对（Windows 反斜杠），写入位置以文件系统实际落点为准。
@@ -113,7 +112,7 @@
 > B1 轮次的坏 Key 用环境变量注入（`B1_BAD_KEY`）：本机 `~/.qianfan/credentials.json.tmp` 写入被**进程权限边界**拒绝——沙箱外写同一目录成功、目录 ACL 实测正常（owner FullControl），因此这是「受限进程/沙箱」而不是 ACL 损坏（归因已于 #244 更正）。qianfan 侧现在把该失败转成 4xx + 可读原因；这不改变 B1 的失败-续说判据。
 > 场景 6 的 A/B 工作区建在 `.qoder/tmp/qa2026-*`（仓库内、gitignored）；文件落点用文件系统核对——W3 忽略规则下工作区文件面不会列出被 ignore 的路径。
 > 2026-11-09 轮次（真机电脑控制）：启动时若 `NO_PROXY` 含 `[::1]`，httpx 会抛 `InvalidURL: Invalid port: ':1]'` 使后台启动失败；本次只在启动进程内把该项规范为 `::1` 后继续，未改系统或仓库配置。**已由 PR #317 在启动装配处规范化修复（含 `[host]:port` 去端口）**。
-> 硬中断重启：任务转 INTERRUPTED 且可续跑，但断点步骤留在 `running`（其工具为 `skipped`），页面该轮显示「执行中」（`p5-scenario7.json`）；已停下任务重开时短暂「执行中 / 工具数翻倍」来自页面缓存，刷新快照后恢复（`p5-replay-regression.png`）。**2026-11-09 复跑：断点步骤由启动对账 / 终态写入收尾为 `failed`，轮次头按末步显示「已完成」（PR #317）；SSE 回放竞态仍在（重开已停下任务可能短暂显示运行中/工具数翻倍，重选任务后恢复）。**
+> 硬中断重启：任务转 INTERRUPTED 且可续跑，但断点步骤留在 `running`（其工具为 `skipped`），页面该轮显示「执行中」（`p5-scenario7.json`）；已停下任务重开时短暂「执行中 / 工具数翻倍」来自页面缓存，刷新快照后恢复（`p5-replay-regression.png`）。**2026-11-09 复跑：断点步骤由启动对账 / 终态写入收尾为 `failed`，轮次头按末步显示「已完成」（PR #317）；SSE 回放竞态由 PR #318 修复（回放归属 + 终态守卫；重开已停下任务不再翻倍 / 翻回运行中）。**
 > 设置页「能力」区的自定义分段控件在电脑控制下点击未命中（点「测试」会落到相邻「参数」），保存 / 重启改走等价 `PUT /api/plugins`；重启后页面「当前生效」与 `GET /api/plugins` 的 `active` 一致。
-> MiMo 使用 Token Plan 地址 `https://token-plan-cn.xiaomimimo.com/v1`（官方开放平台地址对该订阅 Key 返回 401）；MCP 本机未配置，场景 9 的 MCP 子项记为未运行。
+> MiMo 使用 Token Plan 地址 `https://token-plan-cn.xiaomimimo.com/v1`（官方开放平台地址对该订阅 Key 返回 401）；首轮 MCP 本机未配置（场景 9 该子项记未运行），复跑用仓库内 MCP echo 补齐。
 > 测试工作区在仓库内 `.qoder/tmp/p5-20261109/`（gitignored）；下载核验目录属本机配置，未写入文档。

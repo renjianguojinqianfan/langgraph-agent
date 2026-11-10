@@ -22,28 +22,26 @@ web
 
 - 启动：`qianfan` 单后台 + 浏览器；第二次在别的目录启动只交接给同一后台并定位到该目录。开发时 `python start.py`（后端 `--reload` + Vite 热重载）。
 - 工作区：在哪个目录启动，新任务就在哪个目录读写、跑 bash、加载该目录的 `AGENTS.md` 与 `.agents/skills`；页面 `?dir=` 可指定其他目录。
-- 模型：设置页管理多套「地址 + 模型 + Key」（OpenAI 兼容），Key 存仓库外 `~/.qianfan/credentials.json` 或配置里写的环境变量；预设只有 DeepSeek。
+- 模型：设置页按 Provider 卡片 + 模型目录管理「地址 + 协议 + Key」（OpenAI 兼容 / Anthropic 原生，非流式），Key 存仓库外 `~/.qianfan/credentials.json` 或配置里写的环境变量；预设只有 DeepSeek。
 - 观测：网页端 SSE 实时可视化 + trace 回放 / 导出；运行数据落在 `data/`（任务记录、trace、checkpoint、日志），代码撤销靠 git。
 - 也作为简历项目被讲解：README、ADR 与验证证据是面试素材；需要能 3 分钟讲清项目、画出图拓扑、讲出关键工程故事。
 
 ## Capabilities and Constraints
 
-已确认能力（README「能力」）：文件工具（read / write / edit / ls / glob / grep）、`bash`、`web_search`（duckduckgo / serpapi / exa）、MCP、子代理（explore / execute，工具面只能收窄）、两层 AGENTS.md 注入、工具结果逐出与上下文压缩、工作区文件列表 / 预览 / 下载、SSE + trace、计划文件（任务目录 `.qianfan/plans/<task_id>.md`）、模型配置、页面内切换工作区、历史删除。
+已确认能力（README「能力」）：文件工具（read / write / edit / ls / glob / grep）、`bash`、`web_search`（duckduckgo / serpapi / exa）、MCP、子代理（explore / execute，工具面只能收窄）、两层 AGENTS.md 注入、工具结果逐出与上下文压缩、工作区文件列表 / 预览 / 下载、SSE + trace、计划文件（任务目录 `.qianfan/plans/<task_id>.md`）、模型配置（Provider / 双协议 / 思考参数）、能力包与预设（minimal / research / full）、REPL 终端入口、页面内切换工作区、历史删除。
 
 硬约束（本次确认）：
 
 - 中文界面与中文文档。
 - 仅本机使用：只监听 `127.0.0.1`，一台机器共用一个后台；`auth_enabled` 只减少暴露面，不是权限 / 安全边界；`bash` 拿运行账号权限。
-- 工具面仿 pi：read / write / edit / ls / glob / grep / bash / web_search / MCP / 子代理；不再扩内置工具，新能力优先 MCP 或以后章节的插件。
+- 工具面仿 pi：read / write / edit / ls / glob / grep / bash / web_search / MCP / 子代理；不再扩内置工具，新能力优先 MCP；工具面开关走能力包 / 预设（#67 已交付）。
 - 不做 Docker / 远程访问；当前章不分发。
 - 视觉权威是 `docs/frontend-design.md`；未来视觉与交互工作以它为准，`DESIGN.md` 只作它的机器可读镜像，不是第二套权威。
-- 术语与状态机是契约：任务状态四值 `PENDING / RUNNING / INTERRUPTED / FAILED`，没有 `COMPLETED`；「计划」有两个意思（计划文件 vs 票面计划），见 `GLOSSARY.md`。
+- 术语与状态机是契约：任务状态三值 `RUNNING / INTERRUPTED / FAILED`（`PENDING` 只是创建瞬间），没有 `COMPLETED`；「计划」有两个意思（计划文件 vs 票面计划），见 `GLOSSARY.md`。
 
 明确未定（记录而非发明）：
 
-- 模型配置是否走向 Provider 化 / 多模型目录 / Anthropic 协议（#243 待定）。
-- 插件 + 预设机制（#67，下一章）。
-- 交互式终端入口（#20）。
+- Anthropic 流式输出（当前只做非流式适配器，另开票）。
 - 是否 / 如何分发（当前章不分发，属以后章节的决策）。
 
 ## Brand Commitments
@@ -54,9 +52,9 @@ web
 
 ## Evidence on Hand
 
-- 仓库文档与决策：`README.md`、`docs/architecture.md`（REST / SSE 契约）、`docs/adr/0001`–`0010`、`docs/frontend-design.md`（设计基线）、`docs/manual-verification.md`（9 个真模型场景的结果表）。
-- 真实界面与验收证据：`docs/assets/qianfan-ui.png`；`docs/assets/verification/2026-10-21/`、`2026-10-22/`、`2026-10-27/`（截图 + 脱敏 JSON）。
-- 离线测试与 CI：backend pytest（本机 2026-11-05 实跑 839 passed / 1 skipped）、frontend vitest 165 tests、CI 三个 job 全绿。
+- 仓库文档与决策：`README.md`、`docs/architecture.md`（REST / SSE 契约）、`docs/adr/0001`–`0012`、`docs/frontend-design.md`（设计基线）、`docs/manual-verification.md`（10 个真模型场景的结果表）。
+- 真实界面与验收证据：`docs/assets/qianfan-ui.png`；`docs/assets/verification/2026-10-21/`、`2026-10-22/`、`2026-10-27/`、`2026-11-09/`（截图 + 脱敏 JSON）。
+- 离线测试与 CI：backend pytest 与 frontend vitest 以当前实跑为准（文档不记现役计数）、CI 三个 job 全绿。
 - 不得编造：没有外部用户 / 客户 / 用户证言，没有第三方 benchmark、定价或商业承诺。
 
 ## Product Principles

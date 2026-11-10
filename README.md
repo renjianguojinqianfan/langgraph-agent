@@ -4,7 +4,7 @@
 
 重点是运行时：多轮续说、checkpoint、模式切换、危险动作拦截、工具生态与可观测性，而不是一个 demo 界面。
 
-**离线测试全绿**（零网络、零 Key、MockLLM）· CI 三个 job · 发布前按 [9 个真模型场景](docs/manual-verification.md) 在网页端跑一遍。
+**离线测试全绿**（零网络、零 Key、MockLLM）· CI 三个 job · 发布前按 [10 个真模型场景](docs/manual-verification.md) 在网页端跑一遍。
 
 ![qianfan 任务界面：左侧任务历史、中间对话与 Composer、右侧文件 / 计划 / 事件三页签](docs/assets/qianfan-ui.png)
 
@@ -29,7 +29,7 @@ override 让干净环境装出与 `requirements.txt` 一致的版本。缺 `fron
 ```bash
 python -m venv .venv311
 .venv311\Scripts\activate                        # Git Bash: source .venv311/Scripts/activate
-python start.py --install  # 后端依赖按 CI 同口径装（过滤 mcp 行 + mcp --no-deps）+ 前端 npm install
+python start.py --install  # 后端依赖按 CI 同口径装（过滤 mcp 行 + mcp --no-deps）+ 前端 npm ci
 python start.py            # 虚拟环境请叫 .venv311；start.py 会拦住根目录的 .venv
 ```
 
@@ -118,11 +118,11 @@ agent ──有 tool call──> tool ──> agent
 
 ## 模型
 
-- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页在 P2-3 前仍按扁平档案展示，旧 `/api/models` 接口保留为兼容投影，行为不变。预设只有 **DeepSeek**；协议支持 **OpenAI 兼容** 与 **Anthropic 原生**（非流式）；Anthropic 的「获取可用模型」暂不支持；`thinking` / `reasoning_effort` 可配置（OpenAI 兼容路径经 `extra_body` 透传），但 Anthropic 路径写入即被拒（可读 400，见 [ADR 0011](docs/adr/0011-model-config-two-protocols.md)）。
+- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页已按 Provider 卡片 + 模型目录展示（P2-3），旧 `/api/models` 接口保留为兼容投影。预设只有 **DeepSeek**；协议支持 **OpenAI 兼容** 与 **Anthropic 原生**（非流式）；Anthropic 的「获取可用模型」暂不支持；`thinking` / `reasoning_effort` 可配置（OpenAI 兼容路径经 `extra_body` 透传）；Anthropic 路径只接受 thinking 关闭 / reasoning_effort 为空——开启思考或设置 reasoning_effort 会 400（见 [ADR 0011](docs/adr/0011-model-config-two-protocols.md)）。
 - 旧的 `data/models.json`（扁平 profile）首次启动自动迁移为 Provider + 模型目录，迁移前把原文件备份为 `models.json.bak-v1`（幂等，只备份一次）。
 - Key 两种来源：界面粘贴（存 `~/.qianfan/credentials.json`，仓库外，按 Provider 记）优先；其次配置里写的环境变量名（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）。接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无），不回 Key 本身。
 - 新建任务默认用全局默认，创建前也可先选一套；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。
-- 采样参数挂在模型条目上、Provider 可给默认值：`temperature`（缺省 0.2）、`max_tokens`、`thinking` / `reasoning_effort`（`reasoning_effort` 限 low / medium / high；OpenAI 兼容路径经 `extra_body` 透传；Anthropic 路径不支持、写入即拒）；参数可显式清空回落到 Provider / 缺省。
+- 采样参数挂在模型条目上、Provider 可给默认值：`temperature`（缺省 0.2）、`max_tokens`、`thinking` / `reasoning_effort`（`reasoning_effort` 限 low / medium / high；OpenAI 兼容路径经 `extra_body` 透传；Anthropic 路径开启 thinking 或非空 reasoning_effort 即 400）；参数可显式清空回落到 Provider / 缺省。
 - 粘贴的 Key 是明文落盘，同账号的 bash 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
 - **保存 Key 失败**：Key 文件在仓库外的 `~/.qianfan/`；进程被沙箱/权限边界挡住写该目录时，界面会显示后端返回的原因与下一步（#244）——用普通终端启动 qianfan，或改用该配置的环境变量。
 
@@ -155,7 +155,7 @@ CI 跑后端 lint / 类型 / 测试、前端类型 / 单元测试 / 构建。发
 
 ## 文档
 
-- 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）；[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)（当前一章：最简 agent）；[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)（工作区 / 单后台 / 模型配置）
+- 决策：[ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)（一条 loop + 计划 / 执行两模式）；[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)（当前一章：最简 agent）；[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)（工作区 / 单后台 / 模型配置）；[ADR 0011](docs/adr/0011-model-config-two-protocols.md)（模型配置双协议）；[ADR 0012](docs/adr/0012-plugin-packages-and-presets.md)（能力包与预设）
 - 架构：[docs/architecture.md](docs/architecture.md)（现役；§3.3 REST / §3.4 SSE / §5 共享约定是契约面）；拓扑以 [graph.py](backend/core/agent/graph.py) 为准
 - 切片历史：[docs/archive/pivot-plan-build.md](docs/archive/pivot-plan-build.md)
 - 迁移：[docs/migration-langgraph-1x.md](docs/migration-langgraph-1x.md)

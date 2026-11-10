@@ -1,15 +1,15 @@
 # 系统架构：基于 LangGraph 的自主任务 Agent 平台
 
-> **状态：现役架构文档**（2026-10-23 全量刷新）。旧的 v0.1 原始设计档（2025-08-24）原文保留在 git 历史：`git log --follow docs/architecture.md`。
+> **状态：现役架构文档**（2026-10-23 全量刷新；其后随各片增量更新，最近 2026-11-10 文档对账）。旧的 v0.1 原始设计档（2025-08-24）原文保留在 git 历史：`git log --follow docs/architecture.md`。
 >
-> 本文讲「是什么、怎么连」；**决策理由**在 [`docs/adr/`](adr/)（现役：0001、0002（部分退役）、0008、0009、0010），**能力清单**在 [`README.md`](../README.md)「能力」，**跨任务硬规则**在 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」，**发布前验收**在 [`docs/manual-verification.md`](manual-verification.md)，**安全边界与暴露面**在 [`docs/security.md`](security.md)。
+> 本文讲「是什么、怎么连」；**决策理由**在 [`docs/adr/`](adr/)（现役：0001、0002（部分退役）、0008、0009、0010、0011、0012），**能力清单**在 [`README.md`](../README.md)「能力」，**跨任务硬规则**在 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」，**发布前验收**在 [`docs/manual-verification.md`](manual-verification.md)，**安全边界与暴露面**在 [`docs/security.md`](security.md)。
 >
 > **契约面有三处机械守卫，改之前先读**：
 > - **§3.4 事件表**被 `npm run check:sse`（`frontend/scripts/check-sse-event-registry.mjs`）与 `backend/tests/test_sse_publish_ast.py` 双向解析；`docs/architecture.md` 是 CI `paths` 白名单的**唯一 docs 例外**——改它触发全套 CI（见 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）。
 > - **§3.3 REST** 以 [`backend/api/routes.py`](../backend/api/routes.py) + 运行时 Swagger 为准；本节是人的可读契约。
 > - **拓扑**以 [`backend/core/agent/graph.py`](../backend/core/agent/graph.py) 为准；**数据模型**以 [`backend/api/schemas.py`](../backend/api/schemas.py) 为准；**配置键**以 [`backend/config.py`](../backend/config.py) + [`.env.example`](../.env.example) 为准。
 >
-> 证据锚：`master` = `9c94a90`（2026-10-22）。文中 `file:line` 以该 commit 为准。
+> 证据锚：`master` = `e57ab80`（2026-11-10）。文中 `file:line` 为撰写时快照；代码演进后以符号名 / 文件为准，行号仅供参考。
 
 ---
 
@@ -62,17 +62,22 @@ backend/
 
 frontend/src/
 ├── pages/               TaskView · LoginPage
-├── components/          TaskPanel · AuthGuard · TraceTab
+├── components/          TaskPanel · AuthGuard · ReauthAction · TraceTab
 │   ├── center/          TaskHeader · Composer · Conversation · TurnProcess · UserBubble
 │   │                    DisclosureHead · CompressMarker · StepRow · ToolRow · AnswerSheet
 │   │                    FailureBlock · PlanAnchor · SubagentStrip · SubagentPlate
-│   ├── rail/            TaskRail · RailSearch · TaskRow · RailFooter · group.ts
+│   ├── rail/            TaskRail · RailSearch · TaskRow · RailFooter · WorkspaceDialog · group.ts
 │   ├── dash/            DashTabs · FilePane · FilePreviewTab · FileDownloadLink · PlanPane · EventPane · TraceFace
-│   ├── settings/        SettingsDialog · ModelRow · FormField
+│   │                    fileGroup.ts · planToc.ts
+│   ├── settings/        SettingsDialog · ProviderCard · ProviderDialog · ModelParamsForm · CapabilitiesSection · FormField
 │   └── ui/              Button · Icon · Status · Segmented · Tabs
-├── store/               taskStore · reduceTask · modelStore · authStore
+├── store/               taskStore · reduceTask · modelStore · pluginsStore · authStore
 ├── hooks/               useSSE.ts EventSource 订阅表 EVENT_TYPES（§3.4 的四处之一）· useMediaQuery.ts 断点
-├── lib/                 format · taskState · rounds · markers · markdown · keys · cx · eventLabels.ts · dashTabs · preview
+│                        useComposerSend · useComposerControls · useDrawerFocus
+├── lib/                 format · taskState · rounds · markers · markdown · keys · cx · eventLabels · dashTabs
+│                        breakpoints · drawer · focus · inertLedger · longContent · toolInput · composerState · copy
+│                        failureStates · eventLedger · modelCatalog · modelParams · planVersion · plugins · reasoning
+│                        requestGate · requestPlan · stepSummary · workspaces
 ├── api/client.ts        后端调用
 └── types/index.ts       与 schemas.py 字段对齐；SSEventType 联合
 
@@ -140,7 +145,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 
 **基础路径**：`/api`（`backend/main.py` 用 `include_router(..., prefix="/api")` 挂载）；`/health` 不在前缀下。**内容类型**：`application/json`（例外：`/events` 为 `text/event-stream`，`/trace` 默认 `application/x-ndjson`，`/files/download` 为文件流）。
 
-所有端点除 `POST /api/auth/token` 外都挂 `Depends(verify_token)`；`auth_enabled=false` 时它是 no-op。开启时 **REST 只认 `Authorization: Bearer`**；`?token=` 只允许两个浏览器原生 GET——`GET /api/tasks/{id}/events`（EventSource 不能设 header）与 `GET /api/tasks/{id}/files/download`（`<a href>` 导航不能设 header），其余端点带 `?token=` 也 401（#271 D-46）。`TokenIssuer` 构造 fail-closed（空 / 占位即抛），`main` 仅在 `auth_enabled=true` 时构造、关闭置 None，`cli` 入口复用同一启动守卫（D-45）；`backend.main` import 时给 `uvicorn.access` 装幂等 filter，query 的 `token=...` 输出为 `token=***`（D-47）。
+所有端点除 `POST /api/auth/token` 与 `GET /health`（就绪探针公开）外都挂 `Depends(verify_token)`；`auth_enabled=false` 时它是 no-op。开启时 **REST 只认 `Authorization: Bearer`**；`?token=` 只允许两个浏览器原生 GET——`GET /api/tasks/{id}/events`（EventSource 不能设 header）与 `GET /api/tasks/{id}/files/download`（`<a href>` 导航不能设 header），其余端点带 `?token=` 也 401（#271 D-46）。`TokenIssuer` 构造 fail-closed（空 / 占位即抛），`main` 仅在 `auth_enabled=true` 时构造、关闭置 None，`cli` 入口复用同一启动守卫（D-45）；`backend.main` import 时给 `uvicorn.access` 装幂等 filter，query 的 `token=...` 输出为 `token=***`（D-47）。
 
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 `data` |
 |---|---|---|---|---|
@@ -193,7 +198,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 - 协议（D-35）：Provider 可存 `openai-compatible` / `anthropic`，两种都可创建 / 编辑 / 被任务使用；未知协议 → 400「不支持的协议」。Anthropic 适配器为 **httpx 非流式 `complete()`**（`backend/core/llm/anthropic_native.py`，经统一工厂 `core/llm/factory.py` 分派）；`stream()` 显式报错。**Anthropic 路径暂不支持 `thinking` / `reasoning_effort`**（需要保留 thinking 签名，见 ADR 0011）——**写面在 protocol=anthropic 且有效值为开启 / 非空时直接 400**（不可运行组合不落卡），运行期构造客户端再守一层；显式传 `null` 清空后可切换。发现接口对 anthropic 仍返回 400「协议暂不支持发现」（Anthropic 无标准目录端点）。
 - 采样参数（D-36）：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 可挂在 Provider（默认值）与模型条目（覆盖）；`temperature` 缺省 0.2（不再硬编码在调用点），合法范围按协议（openai-compatible 0–2 / anthropic 0–1）；Anthropic 的 `max_tokens` 必填、缺省 4096，OpenAI 兼容路径不设缺省 `max_tokens`；`thinking` / `reasoning_effort` 在 OpenAI 兼容路径经 `extra_body` 透传**已校验值**（`reasoning_effort` 限 low / medium / high）。参数更新支持显式 `null` 清空（省略 = 不改），清空后回落 Provider 默认 / 客户端缺省。
 - 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) §2）。
-- 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），供 P2-3 前的设置页使用；Provider 卡片走 `/api/providers`。
+- 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），**当前前端已不读**（P2-4b 起设置页 / Composer 只读 `GET /providers` + `GET /providers/{id}/models`）；写路径仍走 `POST/PUT/DELETE /api/models` 系列或 `/api/providers`。
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 
@@ -255,7 +260,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 续跑 | 停止 / 崩溃后 | `POST /api/tasks/{id}/resume`：从最近 durable checkpoint 重建并继续；发布 `task_resumed` |
 | 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），并收尾死进程留下的在途状态：`running` 步骤 → `failed`、`pending` 调用 → `skipped`（含旧启动逻辑只翻状态、不动步骤的 INTERRUPTED / FAILED 记录；任务状态不重写），逐条隔离；消息面悬空 tool call 的清扫仍在 `agent` 节点循环入口（#46），不在启动对账里。`_finalize_terminal` 写记录前也走同一收尾（resume 会原样恢复 checkpoint 的 steps） |
 
-checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py:58-69`），格式戳 v2；v1 旧库启动时拒绝挂载并按迁移文档 §2.4 处置。`data/` 可弃，不做跨大版本快照兼容。
+checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_DURABILITY`），格式戳 v2；v1 旧库启动时拒绝挂载并按迁移文档 §2.4 处置。`data/` 可弃，不做跨大版本快照兼容。
 
 ### 4.3 模式与计划文件
 

@@ -20,6 +20,12 @@ a new real path (``E:\code\demo\new``) still fails:
   (``C:\Program Files\...``) survive the token stopping at the space;
 * a lone ellipsis segment (``C:\...``) — and nothing after it.
 
+Known false positive (#318 re-review): a placeholder immediately followed by a
+single-letter path segment (``<user>/a/b``) restarts the match after the
+placeholder and is flagged. Real scrub output uses multi-letter segments
+(``<user>/Desktop/...``), so this does not fire in practice. The gate is the
+mechanical half of §3; the edge is recorded here rather than loosened.
+
 Two shapes are rejected on sight because they launder a real path behind an
 exemption: any ``..`` segment (``C:\Windows\..\Users\DELL`` — the system root
 before it proves nothing) and a placeholder or ellipsis with a real tail.
@@ -43,8 +49,8 @@ ROOT = Path(__file__).resolve().parent.parent
 EVIDENCE_SUFFIXES = {".json", ".txt"}
 
 #: Documented placeholders (docs/security.md §3). A path segment that is exactly
-#: one of these is documentation, not a machine name; anything else in angle
-#: brackets (``<code>``, ``<workspace>``) is NOT a placeholder.
+#: one of these is documentation, not a machine name; any other angle-bracket
+#: token (``<code>`` and the like) is NOT a placeholder.
 PLACEHOLDERS = (
     "<repo-root>",
     "<workspace>",

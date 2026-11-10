@@ -113,8 +113,9 @@ export const PROTOCOL_ANTHROPIC: ModelProtocol = "anthropic";
 /** D-34/D-35 (re-based on the merged #298 backend): both protocols have an
  * adapter — OpenAI-compatible chat/completions and Anthropic Messages
  * (non-streaming). Two protocol limits remain and are enforced by the service:
- * model discovery supports only OpenAI-compatible, and Anthropic rejects
- * thinking / reasoning_effort parameters at the write face (readable 400).
+ * model discovery supports only OpenAI-compatible, and Anthropic rejects an
+ * enabled thinking / non-empty reasoning_effort at the write face (readable
+ * 400; thinking=false is allowed).
  * Keep this hint in step with backend/core/llm/protocols.py and
  * ModelStore._validate_protocol_params. */
 export const PROTOCOL_OPTIONS: ReadonlyArray<{

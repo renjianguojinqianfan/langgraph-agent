@@ -134,8 +134,9 @@ export type ModelKeySource = "pasted" | "env" | "none";
 /** Provider protocol (D-34/D-35). Both values are implemented as of #298:
  * `openai-compatible` (chat/completions) and `anthropic` (Messages,
  * non-streaming). Two limits remain server-enforced: model discovery supports
- * only OpenAI-compatible, and Anthropic rejects `thinking` /
- * `reasoning_effort` parameters at the write face (readable 400). */
+ * only OpenAI-compatible, and Anthropic rejects an enabled `thinking` /
+ * non-empty `reasoning_effort` at the write face (readable 400;
+ * `thinking=false` is allowed). */
 export type ModelProtocol = "openai-compatible" | "anthropic";
 
 /** Public v1-shaped model profile: the legacy `/api/models` compatibility

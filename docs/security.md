@@ -93,7 +93,7 @@
   （#254 / #271，`TokenIssuer` 构造亦 fail-closed）；② 浏览器原生例外端点只有
   `GET /api/tasks/{id}/events`（EventSource 不能设 header）与
   `GET /api/tasks/{id}/files/download`（`<a href>` 导航不能设 header）接受 `?token=`，
-  其余端点一律只认 `Authorization: Bearer`（带 `?token=` 也是 401，#271 D-46）；
+  其余端点一律只认 `Authorization: Bearer`（带 `?token=` 也是 401，#271 D-46；`GET /health` 公开——就绪探针不认证）；
   ③ uvicorn access log 已装脱敏 filter，query 里的 `token=...` 输出为 `token=***`——
   按参数名解码后判定，URL 编码形态（`%74oken=...`）与大小写变体同样打码，其它 query
   参数与编码逐字节保留（#271 D-47 / 返工 H1）；④ 仍按 `README`「这不是安全边界」理解：

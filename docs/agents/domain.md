@@ -30,7 +30,7 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 > | 0009 | 现役（2026-10-22 已交付） | 最简 agent 一章：pi 式工具面、计划文件、一条命令启动 | 本章退役 0003 / 0004 |
 > | 0010 | 现役（2026-10-22 已交付） | 日常形态：启动目录即工作区、共用后台、模型配置 | 修订 0009 决策 4 / 6 / 7 |
 > | 0011 | 现役（2026-11-07 已交付） | 模型配置双协议：Provider 层 + Anthropic 原生适配器（D-35 / D-36） | 修订 0010 决策 7「只 OpenAI 兼容」 |
-> | 0012 | 现役（2026-11-08 P4 三片已交付） | 插件 + 预设：能力包 / 全局组合与真关（D-53…D-57）；P4-3 已补三预设 × overrides 面快照 + 文件配置关闭面端到端（真机手测归 P5-1） | P4-1 静态 manifest + 装配；P4-2 data/plugins.json / 设置页 / --preset；P4-3 面快照 / 关闭面端到端 / 文档对账 |
+> | 0012 | 现役（2026-11-08 P4 三片已交付） | 插件 + 预设：能力包 / 全局组合与真关（D-53…D-57）；P4-3 已补三预设 × overrides 面快照 + 文件配置关闭面端到端（真机手测 2026-11-09 已完成） | P4-1 静态 manifest + 装配；P4-2 data/plugins.json / 设置页 / --preset；P4-3 面快照 / 关闭面端到端 / 文档对账 |
 >
 > Decision / plan / spec docs always live under `docs/` — never in vendor-specific agent
 > dirs (`.qoder/`, `.trae/`, `.mimosa/`), which are untracked by design. Full rule table:
@@ -49,18 +49,21 @@ Single-context repo (this repo's layout):
 ├── docs/
 │   ├── adr/                           ← decisions (0001 live；0002 部分退役；0003–0007 已退役
 │   │                                     （见文首总表）；0008 single loop + plan/build two modes；
-│   │                                     0009 minimal-agent chapter；0010 daily form)
+│   │                                     0009 minimal-agent chapter；0010 daily form；
+│   │                                     0011 provider 双协议；0012 能力包 / 预设)
 │   ├── specs/                         ← frozen spec / implementation-plan archive
 │   │                                     「冻结」只覆盖**已交付增量**的记录——不改写，现状写进权威段
 │   │                                     （README 能力 / architecture）；**未开工增量**的 spec 是活的设计
 │   │                                     权威，可以也应该改（如前置依赖清掉了就更新）
 │   │                                     frontend-redesign-plan.md ← #54 分片实施计划（F1–F9 + B1）
-│   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain)
+│   ├── agents/                        ← this skill's output (issue-tracker / triage-labels / domain / workflow / verification-notes)
 │   ├── archive/                       ← 过时 / 点-时文档（git mv 保留历史；不作现役权威）
 │   ├── assets/                        ← README 截图等文档资产
 │   ├── architecture.md                ← 现役架构（2026-10-23 全量刷新）；§3.3 REST / §3.4 SSE / §5 共享约定是契约面（§3.4 有 check:sse 守卫）
 │   ├── frontend-design.md             ← 前端设计基线（**已交付**；视觉 / 交互 / 组件规则权威，实施见 `specs/frontend-redesign-plan.md`；读者=改 frontend/src 的 agent）
-│   ├── manual-verification.md         ← 9 个真模型网页验收场景（发布前跑）
+│   ├── manual-verification.md         ← 10 个真模型网页验收场景（发布前跑）
+│   ├── security.md                    ← 安全基线：威胁模型 / 密钥与暴露面 / 危险动作起步集
+│   ├── harness-bash-false-red.md      ← harness 内 MSYS bash 假红判据（换机器 / 换 harness 时读）
 │   ├── capability-registry-rescope.md ← 本章能力包线与切片决策日志（G-1…）
 │   ├── migration-langgraph-1x.md      ← 0.2 → 1.2.x migration, measured
 │   └── incremental-arch-p3-resume.md  ← stop / resume / durability 的说明（§4 已退役；其余以代码为准）
@@ -127,14 +130,14 @@ the same way — surface it, don't silently override.
 | 决策记录（grilling 定居、定位 / 选型结论）| `docs/adr/` | `NNNN-英文-kebab-case.md`（4 位递增编号）|
 | spec / 实施方案 / 任务计划 | `docs/specs/` | `英文-kebab-case.md` |
 | 调研 / 对标 / 路线图 / 迁移评估 | `docs/` 根（过时后移入 `docs/archive/`）| 同上（沿用既有惯例）|
-| 设计基线（目标态 UI / 交互 / 组件规则；未交付） | `docs/` 根（先例：`architecture.md`）| 英文-kebab-case |
+| 设计基线（目标态 UI / 交互 / 组件规则；交付后按实施更新） | `docs/` 根（先例：`architecture.md`、`frontend-design.md`）| 英文-kebab-case |
 | 安全基线（威胁模型 / 密钥与暴露面 / 危险动作规则） | `docs/` 根（先例：`security.md`）| 英文-kebab-case |
 | 验证环境笔记（沙箱判据 / 门禁配方等「怎么跑验证」的知识） | `docs/agents/` | `英文-kebab-case.md`（先例：`verification-notes.md`；判据：下一任在任意 harness 改本仓都要用，故不放用户级）|
 | 过时 / 点-时文档 | `docs/archive/` | 原文件名（`git mv` 保历史；不作现役权威）|
-
-> **spec 例外**：`docs/specs/` 是冻结归档——**退役 spec 不移动**，只在原地加状态头（先例：`p1-b-rollback.md`、`second-tier-ci-guard-and-smoke.md`）；ADR 0010 决策 11 的「过时文档移 archive」不适用于 specs。
 | 技能组配置 | `docs/agents/` | 由 setup 技能生成 |
 | 记忆类（不迁） | 留原地：`.workbuddy/memory/`、teach 的 `MISSION.md`/`NOTES.md`/`RESOURCES.md`/`learning-records/`/`lessons/` | 各家 agent 自己消费 |
+
+> **spec 例外**：`docs/specs/` 是冻结归档——**退役 spec 不移动**，只在原地加状态头（先例：`p1-b-rollback.md`、`second-tier-ci-guard-and-smoke.md`）；ADR 0010 决策 11 的「过时文档移 archive」不适用于 specs。
 
 文件名用英文 kebab-case，内容中文照旧；迁移用 `git mv` 保历史（`git log --follow` 可追），并顺手改掉旧路径引用。每次文档整理后跑 `scripts/check_doc_links.py`（只校验 tracked Markdown 的相对链接；行内代码里的文件名不在校验面）。
 
