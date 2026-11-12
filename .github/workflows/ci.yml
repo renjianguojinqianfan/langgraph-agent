@@ -118,6 +118,7 @@ jobs:
   #   test_bash_tool.py              bash 路径解析 / 命令执行 / 后台进程树（B1 第四个文件）
   #   test_task_delete.py            任务/目录历史删除（只删记录、checkpoint 与 trace；#241）
   #   test_strict_msgpack_guard.py   langgraph 自读开关的离线守卫（子进程探针；#216）
+  #   test_provider_key_isolation.py provider Key 环境变量离线守卫（子进程探针；#319；连跑 3 次稳定后纳入）
   #   test_trace.py                  trace 文件名判据（反斜杠穿越 / 非法 task_id；#254）
   #   test_auth.py                   启动期 auth 守卫（子进程探针 / 导入期拒绝启动；#254）
   #   test_test_isolation.py         conftest 的 os.name==nt 临时根探测（#264 c2/c3；#261 AC1）
@@ -165,6 +166,7 @@ jobs:
           backend/tests/test_test_isolation.py
           backend/tests/test_server_lock.py
           backend/tests/test_repl.py
+          backend/tests/test_provider_key_isolation.py
           -q -rs
 
   # ── 前端：类型检查 + 单元测试 + 生产构建 ─────────────────────────────────

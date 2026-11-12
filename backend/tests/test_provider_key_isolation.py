@@ -9,7 +9,8 @@ own poisoned environment, so it fails on CI too if the guard is removed.
 
 The key list is spelled out here instead of imported from the conftest guard on
 purpose: the test states what the contract is, otherwise it would pass whatever
-the guard happens to clear.
+the guard happens to clear. The after-state must be empty strings, not absent:
+popping would let a local ``.env`` win the Settings lookup.
 """
 
 from __future__ import annotations
@@ -27,8 +28,6 @@ PROVIDER_KEY_ENVS = (
     "DASHSCOPE_API_KEY",
     "EXA_API_KEY",
     "SERPAPI_KEY",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
 )
 
 SENTINEL = "sentinel-provider-key-do-not-use"
@@ -63,8 +62,8 @@ def test_conftest_neutralises_ambient_provider_keys() -> None:
     data = json.loads(proc.stdout.strip().splitlines()[-1])
     # Anti-vacuity: the child really did receive the poisoned environment.
     assert data["before"] == {name: SENTINEL for name in PROVIDER_KEY_ENVS}
-    survived = {name: value for name, value in data["after"].items() if value}
+    survived = {name: value for name, value in data["after"].items() if value != ""}
     assert survived == {}, (
-        "the conftest let these provider keys reach the offline suite: "
+        "conftest must assign '' to these provider keys (not pop or leave them): "
         f"{sorted(survived)}"
     )
