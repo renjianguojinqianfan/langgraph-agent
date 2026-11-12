@@ -150,7 +150,20 @@ atexit.register(shutil.rmtree, _TEST_RUNTIME_ROOT, ignore_errors=True)
 os.environ.setdefault("USE_MOCK_LLM", "true")
 os.environ.setdefault("MOCK_LLM_SCRIPT_PATH", "")  # #108: a local .env script must not steer the suite
 os.environ.setdefault("LLM_BASE_URL", "")  # neutralise .env live endpoint
-os.environ.setdefault("LLM_API_KEY", "")
+# The provider keys this repo/tests actually read: ModelStore's built-in
+# preset (LLM_API_KEY), test_models' provider (DASHSCOPE_API_KEY), and the
+# Settings-backed web search keys (EXA_API_KEY / SERPAPI_KEY). Assign, not
+# setdefault: an exported real key must lose, or tests asserting
+# "key_set is False" / "startup warns when no key" go red locally while CI
+# stays green. Empty string (not pop) also keeps a local .env from winning
+# the Settings lookup; tests that need a key opt in with monkeypatch.setenv.
+for _key_env in (
+    "LLM_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "EXA_API_KEY",
+    "SERPAPI_KEY",
+):
+    os.environ[_key_env] = ""
 os.environ.setdefault("AUTH_ENABLED", "false")
 os.environ.setdefault("MCP_ENABLED", "false")  # P2: no MCP subprocesses by default
 os.environ.setdefault(
