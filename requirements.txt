@@ -52,8 +52,9 @@ langgraph-checkpoint-sqlite==3.1.2
 # with langgraph 1.x's >=1.0 requirement; removing it was a prerequisite of the
 # upgrade).
 # aiosqlite / sqlite-vec / ormsgpack are hard dependencies declared by
-# checkpoint(-sqlite) and arrive with a normal install; only mcp needs
-# --no-deps (see the end of this file).
+# checkpoint(-sqlite), and mcp's transitive deps are declared by mcp: all of them
+# arrive with a normal install. No --no-deps step and no hand-written list here --
+# such a list silently rots (it had already missed two of mcp's deps).
 # Web stack: since starlette 1.3.1 all 2026 same-batch CVEs (including static
 # path CVE-2026-48818, fixed line 1.1.0) are outside the affected range. After
 # this repo moved fastapi 0.162 onto the 1.x line, the SafeStaticFiles
@@ -63,7 +64,16 @@ langgraph-checkpoint-sqlite==3.1.2
 # (installed transitively, not repeated here).
 fastapi>=0.162.0,<0.163.0
 starlette>=1.3.1,<2
-uvicorn[standard]>=0.30.0,<0.31.0
+# uvicorn: the old <0.31 cap was a migration-era freeze, not a proven
+# incompatibility. It contradicted mcp's metadata (uvicorn>=0.31.1), which
+# forced a --no-deps install plus overrides.txt, and made a plain
+# `pip install -r requirements.txt` silently backtrack mcp to 1.12.4.
+# Bounded to one minor on purpose: uvicorn is the process/streaming layer and
+# CI has no real-socket test (TestClient stops at ASGI), so a minor bump goes
+# through a human-evaluated chore. Behaviour has flipped inside minors before:
+# 0.47.0 made the --reload supervisor import the app early (fixed in 0.50.0);
+# 0.43.0 sent http.disconnect on SSE close (reverted in 0.45.0).
+uvicorn[standard]>=0.54.0,<0.55.0
 pydantic>=2.7.0,<3.0.0
 pydantic-settings>=2.3.0,<3.0.0
 openai>=1.30.0,<2.0.0
@@ -73,11 +83,3 @@ httpx>=0.27.0,<0.29.0
 pytest>=8.0.0
 pyyaml>=6.0,<7.0
 mcp>=1.2,<2.0
-# mcp is installed with --no-deps (to stop it from raising uvicorn/starlette);
-# the following are its required runtime transitive dependencies. The mcp root
-# package imports FastMCP at __init__, so sse-starlette/jsonschema must also be
-# listed explicitly.
-httpx-sse>=0.4,<1  # metadata dep of mcp (--no-deps install); ClientSession import chain
-sse-starlette>=3.5,<4  # metadata dep of mcp (--no-deps install); old <2 cap retired with old fastapi/starlette range
-jsonschema>=4.20,<5  # metadata dep of mcp (--no-deps install); FastMCP schema validation
-pywin32>=310; sys_platform == "win32"  # metadata dep of mcp stdio on Windows (--no-deps install)
