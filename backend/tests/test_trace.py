@@ -351,10 +351,11 @@ def test_trace_api_raw_streams_the_stat_time_prefix(trace_client, monkeypatch):
         return result
 
     def _growing_exists(self, *args, **kwargs):
+        result = real_exists(self, *args, **kwargs)
         if self.suffix == ".jsonl":
             with self.open("ab") as handle:
                 handle.write(grown_line)
-        return real_exists(self, *args, **kwargs)
+        return result
 
     monkeypatch.setattr(Path, "stat", _growing_stat)
     monkeypatch.setattr(Path, "exists", _growing_exists)
