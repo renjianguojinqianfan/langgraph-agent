@@ -60,6 +60,15 @@ def test_clean_values_report_no_change():
     assert env["NO_PROXY"] == "localhost,127.0.0.1,::1"
 
 
+def test_malformed_entries_do_not_block_the_valid_ones():
+    """``[]`` is not a host: the empty-bracket entry is dropped, and the valid
+    entries around it are still unwrapped — one malformed entry must not
+    disable the sanitation that keeps the backend startable."""
+    env = {"NO_PROXY": "[], localhost, [::1]:8000"}
+    assert normalize_no_proxy(env) is True
+    assert env["NO_PROXY"] == "localhost,::1"
+
+
 def test_httpx_proxy_patterns_parse_after_normalization(monkeypatch):
     _set_proxy_env(monkeypatch, "[::1],localhost")
     with pytest.raises(httpx.InvalidURL):
