@@ -40,6 +40,10 @@
 `pip check` 唯一告警是 `mcp 1.29.0 要求 uvicorn>=0.31.1，实装 0.30.6` —— **迁移前就存在**，
 是 AGENTS.md「mcp 用 `--no-deps` 装、不升级 uvicorn/starlette」的既定代价，不是本次引入。
 
+> **2026-11-14 复核补注（不改写上文快照）**：uvicorn 已抬到 `>=0.54.0,<0.55`，与 mcp 元数据不再冲突；
+> `--no-deps` 旁路与 `overrides.txt` 均已删除，`pip check` 归零。上文引用的 AGENTS.md「mcp 用 `--no-deps` 装」
+> 一条已随之退役，「唯一告警」也不再成立。现役口径以 `requirements.txt` 与 AGENTS.md「依赖面」为准。
+
 ### 1.1 三行死钉版必须删（不是洁癖）
 
 `langchain` / `langchain-openai` / `langchain-core` 在全仓库 **0 处 import**（`langchain`
