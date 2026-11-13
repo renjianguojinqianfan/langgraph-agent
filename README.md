@@ -15,7 +15,7 @@
 
 ```bash
 cp .env.example .env                             # LLM_API_KEY 走环境变量；或 use_mock_llm=true 离线
-uv tool install -e . --python 3.14                             # 每台机器一次；--python 3.14 显式钉住（uv 默认可能挑更新的 3.15）
+uv tool install -e . --python 3.14                             # 每台机器一次；钉 3.14（3.15 待 wheel，requires-python 已排除）
 cd frontend && npm ci && npm test && npm run build && cd ..  # 前端产物；改前端后重跑
 qianfan                                          # 自动开浏览器；--port / --no-browser 可选
 ```

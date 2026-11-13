@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 name = "qianfan"
 version = "0.1.0"
 description = "LangGraph autonomous task agent (local, single user)"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"  # 3.15 待 wheel（zstandard 等无 cp315）；抬上界走人工评估，同 uvicorn 钉版先例
 dynamic = ["dependencies"]
 
 [project.scripts]
