@@ -29,6 +29,7 @@ harness（dsh / opencode / qoder）在受限模式下会挡住 MSYS 运行时与
 
 - **路径**：worktree 放普通盘符路径；别放 harness 临时区。git-bash 的 `/tmp` ≠ Windows `%TEMP%`，取值用 `cygpath -w /tmp` 或直接在 pwsh 里读 `$env:TEMP`（retro C21/C30 同源坑）。
 - **pre-commit**：entry 用仓库相对 `.venv311`，临时树里找不到 → 临时树自备 `.venv311`（junction 主检出）或回主检出跑门禁；跳过时 `--no-verify` 并在 PR 里记理由。
+- **摘除 junction 共享主检出的临时树（危险动作）**：`git worktree remove` 的递归删除会**穿过 junction 删空主检出的真实目录**（`.venv311` / `frontend/node_modules`）；`cmd /c rmdir` 的退出码**不能当判据**——Git Bash 传参把路径切碎时它静默失败、链接还在（2026-10-27 事故，2026-10-29 复做成功）。安全序列三步，每步可证伪：① 用落盘的 `.ps1`（别在 Git Bash 里内联 PowerShell，`$_` 与反斜杠会被切碎）调 `[System.IO.Directory]::Delete(<junction 路径>)`——它只摘 reparse point、不跟随；② 断言 `Get-ChildItem <trees> -Recurse -Attributes ReparsePoint | Measure-Object` **计数为 0**；③ 才 `git worktree remove --force`。摘前先杀掉用它的进程（vite / uvicorn）；判「链接已摘」只认 `dir /AL` 或 reparse 计数。误删后需重建 `.venv311` 与前端 `node_modules`（`npm ci`）。
 - **ruff**：拒绝在沙箱临时路径建 cache → `--no-cache`。
 - **mypy**：cache 指主检出 → `--cache-dir=<主检出>/.mypy_cache`。
 - **pytest**：tempfile 探测失败 → 回主检出跑，或用 `danger-full-access`。
