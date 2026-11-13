@@ -83,13 +83,16 @@ def test_root_regexes_keep_a_sibling_of_the_root_name():
 
 
 def test_scrub_does_not_whitewash_a_sibling_of_the_roots():
-    """``<repo-root>-old`` / ``<user>-old`` output would fail the machine-path
-    gate (its placeholder list matches whole segments only), so a sibling must
-    never be scrubbed as one of the roots."""
+    """A directory that merely extends a root's name is not that root's
+    content: misattributing it as ``<repo-root>-old`` / ``<user>-old`` would
+    fail the machine-path gate (its placeholder list matches whole segments
+    only). A checkout living under the home directory is legitimately scrubbed
+    by its home prefix first, so only the misattribution markers are pinned
+    here; the mechanism itself is pinned by the regex-level test above."""
     for root in (REPO_ROOT, Path.home()):
         cleaned = export.scrub(str(root) + "-old/keep.txt")
-        assert "<repo-root>" not in cleaned
-        assert "<user>" not in cleaned
+        assert "<repo-root>-old" not in cleaned
+        assert "<user>-old" not in cleaned
 
 
 def test_scrub_placeholders_are_registered_in_the_machine_path_gate():
