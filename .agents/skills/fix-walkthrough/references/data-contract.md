@@ -24,7 +24,7 @@
 {
   "ref": "before",
   "worktree": "<repo>/.qoder/tmp/fix-walkthrough/255/before",
-  "python": "3.11.x",
+  "python": "3.14.x",
   "generated_at": "2026-11-04T00:10:50+00:00",
   "scenarios": [
     {

@@ -29,7 +29,7 @@ git worktree add --detach .qoder/tmp/fix-walkthrough/<slug>/before <before-ref>
 git worktree add --detach .qoder/tmp/fix-walkthrough/<slug>/after  <after-ref>
 ```
 
-两个 worktree 共用主检出的 `.venv311`；`collect.py` 只把它们放到 `sys.path[0]`，不需要在每个 worktree 里再装依赖。
+两个 worktree 共用主检出的 `.venv314`；`collect.py` 只把它们放到 `sys.path[0]`，不需要在每个 worktree 里再装依赖。
 
 ## 2. 纯函数 / 纯逻辑
 

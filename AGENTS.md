@@ -48,32 +48,32 @@
 ## 验证入口与完成证据
 
 ```bash
-# 离线回归（唯一权威）——解释器一律 .venv311；根目录 .venv 是 3.13 且无依赖，不要用
-.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q
+# 离线回归（唯一权威）——解释器一律 .venv314；根目录 .venv 是 3.13 且无依赖，不要用
+.\.venv314\Scripts\python.exe -m pytest backend/tests/ -q
 
 # 例外：harness 里跑离线回归可能整文件假红——MSYS bash 初始化即死，退出码 3221225794、stderr 含
 # `*** fatal error -`。环境问题非代码回退：换仓库外的解释器（pyvenv.cfg 的 home）或回自己终端；
 # 判据与已排除项见 docs/harness-bash-false-red.md。
 
 # Windows 敏感面（与 CI backend-windows-smoke 同清单；改路径 / 进程 / os 分支时跑）
-.\.venv311\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py backend/tests/test_test_isolation.py backend/tests/test_server_lock.py backend/tests/test_repl.py backend/tests/test_provider_key_isolation.py -q -rs
+.\.venv314\Scripts\python.exe -m pytest backend/tests/test_static_guard.py backend/tests/test_static_frontend.py backend/tests/test_gitignore_visibility.py backend/tests/test_workspace_files_api.py backend/tests/test_workspace.py backend/tests/test_p2_mcp.py backend/tests/test_bash_tool.py backend/tests/test_task_delete.py backend/tests/test_strict_msgpack_guard.py backend/tests/test_trace.py backend/tests/test_auth.py backend/tests/test_test_isolation.py backend/tests/test_server_lock.py backend/tests/test_repl.py backend/tests/test_provider_key_isolation.py -q -rs
 
 # 质量门禁（与 CI backend-test 同命令；工具链：pip install -r requirements-dev.txt）
-.\.venv311\Scripts\python.exe -m ruff check backend scripts start.py
-.\.venv311\Scripts\python.exe -m mypy
+.\.venv314\Scripts\python.exe -m ruff check backend scripts start.py
+.\.venv314\Scripts\python.exe -m mypy
 
 # 文档链接（改 docs/ 或根级 md 必跑；只校验 tracked Markdown 的相对链接）
-.\.venv311\Scripts\python.exe scripts\check_doc_links.py
+.\.venv314\Scripts\python.exe scripts\check_doc_links.py
 
 # 文档暴露面（改任何 tracked Markdown（含 docs/、根级 md、.agents/retros/）、docs/ 下验证证据或 lessons/ 必跑；防本机绝对路径回潮，判据见 docs/security.md §3）
-.\.venv311\Scripts\python.exe scripts\check_no_machine_paths.py
+.\.venv314\Scripts\python.exe scripts\check_no_machine_paths.py
 
 # 设计 token 镜像（改 DESIGN.md 或 frontend/src/index.css 必跑；pre-commit 钩子 design-token-mirror 同一条）
-.\.venv311\Scripts\python.exe scripts\check_design_tokens.py
+.\.venv314\Scripts\python.exe scripts\check_design_tokens.py
 
 # 真实模型验证（发布前 / 换模型）：用 qianfan / start.py 启服务，在网页端手动跑一遍（CI 不再跑真模型）
 # 手工 uvicorn backend.main:app 会被启动守卫拒绝（无 QIANFAN_INSTANCE，会绕过单后台/host/Key 守卫，#259）
-.\.venv311\Scripts\python.exe start.py
+.\.venv314\Scripts\python.exe start.py
 
 # 前端（cd frontend，Node 22）；CI 同口径 = npm ci → npm run typecheck → npm test → npm run check:sse → npm run build
 npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.node.json  # 本地快检，双项目 0 错误
@@ -81,7 +81,7 @@ npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面�
 ```
 
 - **触发词指针**：沙箱 / 预演合并 / 临时 worktree 跑门禁 / 真机手测的网页驱动与后台进程取证 → [`docs/agents/verification-notes.md`](docs/agents/verification-notes.md)（渐进披露，不内联；bash 假红专篇见 [`docs/harness-bash-false-red.md`](docs/harness-bash-false-red.md)）。
-- 提交前钩子（[#114]）：`.venv311\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。pre-commit entry 用仓库相对 `.venv311`，无本机绝对路径。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
+- 提交前钩子（[#114]）：`.venv314\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。pre-commit entry 用仓库相对 `.venv314`，无本机绝对路径。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
 - **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单（**机械守卫**：`backend/tests/test_smoke_list_parity.py` 解析两处断言集合相等，且做 **Windows-only 标记扫描**——`backend/tests/test_*.py` 出现 `os.name` / `sys.platform` / `WinDLL` / `taskkill` 必须已在清单，已知例外走显式白名单 + 理由；漂移即红）；**进程树 / 子进程类由 B1（#197）起逐个验证并纳入**（连跑 3 次稳定才入清单）；新增同类文件仍按「一个文件一个 PR + 连跑 3 次观察」纳入，抖先修环境适配、不放宽断言；当前清单以上面那条命令为准。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。
 - 既有测试只增不减、不得跳过或放宽；文档不写现役测试计数（数字必腐，以实跑为准）。

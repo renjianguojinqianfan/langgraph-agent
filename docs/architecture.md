@@ -20,7 +20,7 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 编排 | **LangGraph 1.2.x（StateGraph）** | 唯一一张图：`agent` / `tool` / `finish`；checkpointer 落 sqlite；1.x 迁移实测见 [`migration-langgraph-1x.md`](migration-langgraph-1x.md) |
-| 后端 | Python 3.11 · FastAPI · pydantic-settings | 离线测试零网络零 Key（MockLLM）；类型/质量门禁见 `pyproject.toml` |
+| 后端 | Python 3.14 · FastAPI · pydantic-settings | 离线测试零网络零 Key（MockLLM）；类型/质量门禁见 `pyproject.toml` |
 | 前端 | React 18 · Vite 8 · TypeScript · Tailwind 4 · zustand | 单页应用，`frontend/dist` 由后端同源托管（`qianfan` 命令） |
 | 存储 | sqlite（checkpoint）+ JSON（任务/模型档案）+ JSONL（trace） | `data/` 为运行态、不入库；Key 在仓库外（`~/.qianfan/credentials.json` 或环境变量） |
 | 通信 | REST + **SSE**（单向事件流） | SSE 事件词汇表是本仓最强的机械契约（§3.4） |
@@ -387,7 +387,7 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 ### 6.4 CI 与验证入口
 
 - CI 三个 job（[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）：`backend-test`（ruff + mypy + pytest 离线全量）、`backend-windows-smoke`（Windows 敏感面）、`frontend-build`（`npm ci` → typecheck → `npm test` → `check:sse` → build；job 显示名沿用「Frontend typecheck & build」——分支保护锁定了这个 required check 的字符串）。
-- 本地权威命令：`.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q`、`-m ruff check backend scripts start.py`、`-m mypy`；前端 `npm run typecheck` / `npm run check:sse` / `npm run build`。
+- 本地权威命令：`.\.venv314\Scripts\python.exe -m pytest backend/tests/ -q`、`-m ruff check backend scripts start.py`、`-m mypy`；前端 `npm run typecheck` / `npm run check:sse` / `npm run build`。
 - 文档链接门：`python scripts/check_doc_links.py`（只校验 tracked Markdown 的相对链接）。
 - 发布前 / 换供应商：按 [`docs/manual-verification.md`](manual-verification.md) 的 10 个场景启服务、在网页端手动跑一遍（CI 不跑真模型）。
 
