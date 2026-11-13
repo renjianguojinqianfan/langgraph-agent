@@ -350,19 +350,19 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 | 面 | 现役钉版（详见源文件） |
 |---|---|
 | 存储/编排三包 | `langgraph>=1.2,<1.3` · `langgraph-checkpoint==4.3.0` · `langgraph-checkpoint-sqlite==3.1.2`（三包同钉，抬版须人工评估；理由见 [`requirements.txt`](../requirements.txt) 注释） |
-| Web | `fastapi>=0.162,<0.163` · `starlette>=1.3.1,<2` · `uvicorn[standard]>=0.30,<0.31` · `pydantic>=2.7,<3` · `pydantic-settings>=2.3,<3` |
-| 其他 | `openai>=1.30,<2` · `httpx>=0.27,<0.29` · `duckduckgo-search>=4,<5` · `pyyaml>=6,<7` · `mcp>=1.2,<2`（`--no-deps` 安装 + overrides，防抬 uvicorn/starlette） |
+| Web | `fastapi>=0.162,<0.163` · `starlette>=1.3.1,<2` · `uvicorn[standard]>=0.54.0,<0.55` · `pydantic>=2.7,<3` · `pydantic-settings>=2.3,<3` |
+| 其他 | `openai>=1.30,<2` · `httpx>=0.27,<0.29` · `duckduckgo-search>=4,<5` · `pyyaml>=6,<7` · `mcp>=1.2,<2`（正常安装，传递依赖由 resolver 装齐） |
 | 前端 | React 18 · Vite 8 · TS 5 · Tailwind 4 · zustand 4（`npm ci` 口径） |
 | 质量门禁工具链 | `requirements-dev.txt` 钉 ruff / mypy / pre-commit；配置在 `pyproject.toml` |
 
-`requirements.txt` / `requirements-dev.txt` / `overrides.txt` 的注释**保持纯 ASCII**：Windows 上 pip 按平台 locale 解码依赖文件（中文 Windows = cp936），非 ASCII 注释会在解析前抛 `UnicodeDecodeError`（#259，已实测复现）；依赖版本行零变更。
+`requirements.txt` / `requirements-dev.txt` 的注释**保持纯 ASCII**：Windows 上 pip 按平台 locale 解码依赖文件（中文 Windows = cp936），非 ASCII 注释会在解析前抛 `UnicodeDecodeError`（#259，已实测复现）。
 
 ### 6.2 启动形态
 
 ```bash
-qianfan                       # 日常：uv tool install -e . --overrides overrides.txt，单后台 + 自动开浏览器
+qianfan                       # 日常：uv tool install -e .，单后台 + 自动开浏览器
 qianfan repl                  # 终端：常驻多轮会话（无浏览器 / 无 uvicorn；锁 mode=repl，与上面两者互斥）
-python start.py --install     # 开发：先按 CI 同口径装后端依赖（过滤 mcp 行 + mcp --no-deps）与前端依赖
+python start.py --install     # 开发：先按 CI 同口径装后端依赖（pip install -r requirements.txt）与前端依赖
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
 ```
 

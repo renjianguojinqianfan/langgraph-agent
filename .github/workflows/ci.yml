@@ -12,7 +12,7 @@
 #   frontend-build  npm ci + tsc 类型检查 + 单元测试（vitest）+ SSE 事件词汇表断言（#92）+ vite 生产构建（产物上传为 artifact）
 #
 # 硬约束遵循 AGENTS.md：
-#   - mcp 依赖用 --no-deps 单独安装，避免升级 uvicorn/starlette
+#   - 依赖一条 `pip install -r requirements.txt` 装齐（uvicorn 0.54 线与 mcp 元数据不再冲突）
 #   - 离线测试由 backend/tests/conftest.py 顶部环境变量隔离，无需 .env
 #   - LLM key 只走 secrets 注入，绝不硬编码/打印
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,10 +61,7 @@ jobs:
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
-          # mcp 必须 --no-deps 安装，防止其拉高 uvicorn/starlette 版本（AGENTS.md 硬约束）
-          grep -vE '^mcp' requirements.txt > /tmp/requirements-ci.txt
-          pip install -r /tmp/requirements-ci.txt
-          pip install --no-deps "mcp>=1.2,<2.0"
+          pip install -r requirements.txt
 
       # 质量门禁工具链单独一份 requirements-dev.txt：运行期依赖
       # （requirements.txt）不该为 linter 变大。版本钉死，理由见该文件。
@@ -140,14 +137,11 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
-      # 与 backend-test 的 `grep -vE '^mcp'` 等价，但用 pwsh 原生过滤（Windows 上不依赖
-      # Git Bash）；mcp 仍 --no-deps，防止其元数据把 uvicorn/starlette 拉出本仓区间。
+      # 与 backend-test 同一条命令（uvicorn 0.54 线与 mcp 元数据不再冲突，无需过滤或旁路安装）。
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
-          Get-Content requirements.txt | Where-Object { $_ -notmatch '^mcp' } | Set-Content -Encoding utf8 requirements-ci.txt
-          pip install -r requirements-ci.txt
-          pip install --no-deps "mcp>=1.2,<2.0"
+          pip install -r requirements.txt
 
       - name: Run Windows-sensitive tests
         run: >

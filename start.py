@@ -63,55 +63,25 @@ def _npm_available(*, windows: bool | None = None) -> bool:
     return shutil.which("npm.cmd" if windows else "npm") is not None
 
 
-def _filtered_requirements_text() -> str:
-    """requirements.txt as CI installs it directly (mcp lines filtered out).
-
-    CI (both jobs) installs the equivalent of `grep -vE '^mcp' requirements.txt`
-    and then mcp with `--no-deps`. Keeping the local installer on the same
-    contract is what makes the Windows path work: mcp's metadata demands
-    uvicorn>=0.31.1 while this repo pins uvicorn<0.31.
-    """
-    lines = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    return "\n".join(line for line in lines if not line.startswith("mcp")) + "\n"
-
-
-def _pip_install_commands(filtered_path: str) -> list[list[str]]:
-    """The two CI-equivalent pip steps (exposed for a parser-level test)."""
-    return [
-        [sys.executable, "-m", "pip", "install", "-r", filtered_path],
-        [sys.executable, "-m", "pip", "install", "--no-deps", "mcp>=1.2,<2.0"],
-    ]
+def _pip_install_commands() -> list[list[str]]:
+    """The single CI-equivalent pip step (exposed for a parser-level test)."""
+    return [[sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]]
 
 
 def _install_backend_deps() -> None:
     """Install runtime deps exactly like CI, in a locale-proof way.
 
-    Plain `pip install -r requirements.txt` fails on Chinese Windows before
-    parsing anything: pip decodes requirement files with the platform locale
-    (cp936 -> UnicodeDecodeError, #259), and mcp's metadata conflicts with the
-    pinned uvicorn. The ASCII-only requirements files plus the two CI steps
-    (filter mcp, install, then mcp `--no-deps`) fix both.
+    The requirements files stay ASCII-only: pip decodes them with the platform
+    locale (cp936 on Chinese Windows), so a non-ASCII comment crashes before
+    parsing anything (#259). With uvicorn on the 0.54 line mcp's metadata no
+    longer conflicts, so both CI jobs and this installer are one plain step.
     """
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(
-        "w",
-        suffix="-requirements-ci.txt",
-        delete=False,
-        encoding="utf-8",
-        newline="\n",
-    ) as handle:
-        handle.write(_filtered_requirements_text())
-        filtered = handle.name
-    try:
-        print(
-            "[start] installing backend deps (CI-equivalent: mcp filtered, then --no-deps)...",
-            flush=True,
-        )
-        for command in _pip_install_commands(filtered):
-            subprocess.run(command, cwd=str(ROOT), check=True)
-    finally:
-        Path(filtered).unlink(missing_ok=True)
+    print(
+        "[start] installing backend deps (CI-equivalent: pip install -r requirements.txt)...",
+        flush=True,
+    )
+    for command in _pip_install_commands():
+        subprocess.run(command, cwd=str(ROOT), check=True)
 
 
 def _launcher_env(port: int, *, mock: bool = False, base: dict | None = None) -> dict:

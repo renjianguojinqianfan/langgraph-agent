@@ -3,8 +3,8 @@
 #
 # 打包（ADR 0009 决策 10 / ADR 0010）：`[project.scripts] qianfan` 是本仓唯一的
 # 安装入口。运行期依赖只从 requirements.txt 读（[tool.setuptools.dynamic]），避免
-# 两处版本漂移；mcp 声明 `uvicorn>=0.31.1`，与仓库钉的 `uvicorn<0.31` 冲突，安装
-# 时用仓库根的 overrides.txt 覆盖（确切命令见 README「快速开始」）。
+# 两处版本漂移；uvicorn 抬到 0.54 线后与 mcp 的 `uvicorn>=0.31.1` 元数据不再冲突，
+# 装法就是一条 `uv tool install -e .`（确切命令见 README「快速开始」）。
 #
 # 门禁：ruff 与 mypy 两个闸门。不放 [tool.pytest.ini_options]——离线套件的环境
 # 隔离靠 backend/tests/conftest.py 顶部的环境变量块，不靠 ini（pytest 只在本文件

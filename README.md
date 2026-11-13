@@ -15,13 +15,13 @@
 
 ```bash
 cp .env.example .env                             # LLM_API_KEY 走环境变量；或 use_mock_llm=true 离线
-uv tool install -e . --overrides overrides.txt   # 每台机器一次
+uv tool install -e .                             # 每台机器一次
 cd frontend && npm ci && npm test && npm run build && cd ..  # 前端产物；改前端后重跑
 qianfan                                          # 自动开浏览器；--port / --no-browser 可选
 ```
 
-`overrides.txt` 只做一件事：mcp 声明 `uvicorn>=0.31.1`，而本仓钉 `uvicorn<0.31`；
-override 让干净环境装出与 `requirements.txt` 一致的版本。缺 `frontend/dist` 时
+依赖一条命令装齐：uvicorn 钉在 `>=0.54.0,<0.55`，与 mcp 的 `uvicorn>=0.31.1` 元数据
+不再冲突，所以没有 `--no-deps` 旁路、也没有 override 文件。缺 `frontend/dist` 时
 `qianfan` 会提示先打包；产物比 `frontend/src` 旧时会提示重跑 `npm run build`。
 
 改前端时用开发启动（Vite 热重载，后端 `--reload`）：
@@ -29,13 +29,12 @@ override 让干净环境装出与 `requirements.txt` 一致的版本。缺 `fron
 ```bash
 python -m venv .venv311
 .venv311\Scripts\activate                        # Git Bash: source .venv311/Scripts/activate
-python start.py --install  # 后端依赖按 CI 同口径装（过滤 mcp 行 + mcp --no-deps）+ 前端 npm ci
+python start.py --install  # 后端依赖按 CI 同口径装（pip install -r requirements.txt）+ 前端 npm ci
 python start.py            # 虚拟环境请叫 .venv311；start.py 会拦住根目录的 .venv
 ```
 
-`--install` 与 CI 的两步安装完全同构：`requirements.txt` 过滤掉 `mcp` 行后安装，再
-`pip install --no-deps mcp>=1.2,<2.0`（mcp 元数据要求 uvicorn>=0.31.1，与本仓 uvicorn 钉版
-冲突，直接 `pip install -r requirements.txt` 解不出来）。三个 requirements 文件注释保持
+`--install` 与 CI 两个 job 完全同构：一条 `pip install -r requirements.txt`，mcp 的传递依赖
+由 resolver 装齐（不再过滤 mcp 行、不再 `--no-deps`）。两个 requirements 文件注释保持
 纯 ASCII：Windows 上 pip 按系统 locale（中文 = cp936）解码依赖文件，非 ASCII 会在解析前
 直接 `UnicodeDecodeError`（#259）。`--port 9123` 时 Vite 代理跟随 `PORT`，且 `/health`
 也在代理内（`frontend/vite.config.ts`）。
