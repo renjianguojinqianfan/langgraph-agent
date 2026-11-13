@@ -6,7 +6,7 @@
 #       是 `npm run check:sse` 的权威源，改本表的 PR 会触发全套 CI（#103）。
 # 内容：
 #   （2026-10-14：原 guard-protected-files 守卫已随 ADR 0008 删除——冻结区随确认闸门一并解除）
-#   backend-test    Python 3.11 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
+#   backend-test    Python 3.14 + ruff lint + mypy 类型闸（配置见 pyproject.toml）
 #                   + pytest 离线全量回归（backend/tests/，计数以实跑为准、不写进注释）
 #   backend-windows-smoke  windows-latest，只跑 Windows 敏感面的测试文件（清单见该 job 注释）
 #   frontend-build  npm ci + tsc 类型检查 + 单元测试（vitest）+ SSE 事件词汇表断言（#92）+ vite 生产构建（产物上传为 artifact）
@@ -44,7 +44,8 @@ permissions:
 jobs:
   # ── 后端：离线全量回归 ────────────────────────────────────────────────────
   backend-test:
-    name: Backend tests (Python 3.11)
+    # job 显示名是分支保护的 required check 字符串：改名须同步更新保护规则（#324 已同步）。
+    name: Backend tests (Python 3.14)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -52,7 +53,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -131,7 +132,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             requirements.txt

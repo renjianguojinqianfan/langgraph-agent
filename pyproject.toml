@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 name = "qianfan"
 version = "0.1.0"
 description = "LangGraph autonomous task agent (local, single user)"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dynamic = ["dependencies"]
 
 [project.scripts]
@@ -36,11 +36,11 @@ include = ["backend*"]
 exclude = ["backend.tests*"]
 
 [tool.ruff]
-target-version = "py311"   # 与 .python-version、CI setup-python 一致
+target-version = "py314"   # 与 .python-version、CI setup-python 一致
 line-length = 120          # 只影响 isort 折行判定（E501 未启用，见下）
 extend-exclude = [
     ".venv",
-    ".venv311",  # 本地解释器，不是本仓库代码
+    ".venv314",  # 本地解释器，不是本仓库代码
     "frontend",  # 前端另有闸：CI frontend-build 跑 tsc --noEmit
     "data",      # 运行时产物，不入库
 ]
@@ -77,7 +77,7 @@ select = ["E4", "E7", "E9", "F", "I"]
 known-first-party = ["backend"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 files = ["backend", "start.py"]  # 生产 + 测试 + 根脚本（#261 D-19）全覆盖（spec US11：合入时基线全净）
 ignore_missing_imports = true  # 无 stub 的三方库（mcp / duckduckgo_search 等）不报噪音
 warn_unused_ignores = true     # 防止 `# type: ignore` 沉淀成新的债

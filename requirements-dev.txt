@@ -17,11 +17,11 @@
 # then change this file).
 #
 # Local usage:
-#   .venv311\Scripts\python.exe -m pip install -r requirements-dev.txt
-#   .venv311\Scripts\python.exe -m ruff check backend scripts start.py
-#   .venv311\Scripts\python.exe -m mypy
+#   .venv314\Scripts\python.exe -m pip install -r requirements-dev.txt
+#   .venv314\Scripts\python.exe -m ruff check backend scripts start.py
+#   .venv314\Scripts\python.exe -m mypy
 ruff==0.16.7
 mypy==2.3.1
 pre-commit==4.6.2   # commit-time hook framework: config in .pre-commit-config.yaml (including the
-                    # commit-msg hook); hook content always language: system invoking .venv311,
+                    # commit-msg hook); hook content always language: system invoking .venv314,
                     # with zero second version source

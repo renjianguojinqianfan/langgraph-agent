@@ -236,7 +236,7 @@ def test_gate_is_wired_into_pre_commit_ci_and_agents_md() -> None:
     hooks = [hook for repo in config["repos"] for hook in repo["hooks"]]
     hook = next((item for item in hooks if item["id"] == "design-token-mirror"), None)
     assert hook is not None, "pre-commit 缺 design-token-mirror 钩子（守卫会退化成手动脚本）"
-    assert ".venv311/Scripts/python.exe" in hook["entry"]
+    assert ".venv314/Scripts/python.exe" in hook["entry"]
     assert "scripts/check_design_tokens.py" in hook["entry"]
     assert hook["language"] == "system"
     assert hook["pass_filenames"] is False
@@ -252,9 +252,9 @@ def test_gate_is_wired_into_pre_commit_ci_and_agents_md() -> None:
     )
     assert "scripts/check_design_tokens.py" in commands, "ci.yml backend-test 没跑设计 token 守卫"
 
-    # 锚「验证入口」里的原样命令（反斜杠 + .venv311）：任务路由行那句是正斜杠 `python`，
+    # 锚「验证入口」里的原样命令（反斜杠 + .venv314）：任务路由行那句是正斜杠 `python`，
     # 子串会误命中，删掉验证入口那行测试仍绿——这正是第一版评审抓到的假绿。
     agents_text = AGENTS_MD.read_text(encoding="utf-8")
-    assert ".venv311\\Scripts\\python.exe scripts\\check_design_tokens.py" in agents_text, (
+    assert ".venv314\\Scripts\\python.exe scripts\\check_design_tokens.py" in agents_text, (
         "AGENTS.md「验证入口」没记守卫命令"
     )

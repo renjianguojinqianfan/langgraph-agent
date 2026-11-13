@@ -9,10 +9,10 @@
 #      不是闸门），配了等于把全部存量文件重排成噪声 diff。hook 只跑检查、
 #      不改文件——与 CI 同口径。
 #
-# Python 侧钩子一律 language: system + 仓库相对的 `.venv311` 解释器：配置里零版本号，
+# Python 侧钩子一律 language: system + 仓库相对的 `.venv314` 解释器：配置里零版本号，
 # ruff/mypy 仍只钉在 requirements-dev.txt 一处（该文件「抬版走人评估」红线
 # 不变）；相对 entry 没有「自动回退主检出」这回事——worktree 是干净检出，
-# 需自备 `.venv311`（可 junction 主检出）或回主检出跑门禁，与
+# 需自备 `.venv314`（可 junction 主检出）或回主检出跑门禁，与
 # docs/agents/workflow.md「并行实施」节一致。另三个钩子（check:sse / frontend-tsc /
 # frontend-tsc-config）走 node，
 # 版本由 frontend/package.json 钉——「零第二版本源」的承诺只覆盖 Python 侧。
@@ -32,9 +32,9 @@
 # 技术开口不等于无记录——跳了要在 PR / 提交说明里写清为什么（[OVERRIDE] 文化）。
 #
 # 安装（每台机器一次；default_install_hook_types 已含 commit-msg）：
-#   .venv311\Scripts\python.exe -m pre_commit install
+#   .venv314\Scripts\python.exe -m pre_commit install
 # 手动全量：
-#   .venv311\Scripts\python.exe -m pre_commit run --all-files
+#   .venv314\Scripts\python.exe -m pre_commit run --all-files
 # ─────────────────────────────────────────────────────────────────────────────
 
 default_install_hook_types: [pre-commit, commit-msg]
@@ -44,7 +44,7 @@ repos:
     hooks:
       - id: ruff
         name: ruff check（暂存 .py；与 CI 同命令）
-        entry: .venv311/Scripts/python.exe -m ruff check
+        entry: .venv314/Scripts/python.exe -m ruff check
         language: system
         types_or: [python]
         pass_filenames: true
@@ -52,21 +52,21 @@ repos:
 
       - id: mypy
         name: mypy（暂存触及 backend/ 时全量；files=backend）
-        entry: .venv311/Scripts/python.exe -m mypy
+        entry: .venv314/Scripts/python.exe -m mypy
         language: system
         files: ^backend/
         pass_filenames: false
 
       - id: design-token-mirror
         name: 设计 token 镜像（DESIGN.md frontmatter ↔ index.css @theme；#261）
-        entry: .venv311/Scripts/python.exe scripts/check_design_tokens.py
+        entry: .venv314/Scripts/python.exe scripts/check_design_tokens.py
         language: system
         files: ^(DESIGN\.md|frontend/src/index\.css|scripts/check_design_tokens\.py|backend/tests/test_design_token_mirror\.py)$
         pass_filenames: false
 
       - id: doc-links
         name: 文档链接（tracked Markdown 相对链接；只跑检查不改文件）
-        entry: .venv311/Scripts/python.exe scripts/check_doc_links.py
+        entry: .venv314/Scripts/python.exe scripts/check_doc_links.py
         language: system
         files: ^(docs/.*\.md|[^/]*\.md)$
         pass_filenames: false
@@ -95,7 +95,7 @@ repos:
 
       - id: commit-msg-format
         name: commit-msg 校验（前缀 / 长度阻断 + 票号提醒）
-        entry: .venv311/Scripts/python.exe scripts/validate_commit_msg.py
+        entry: .venv314/Scripts/python.exe scripts/validate_commit_msg.py
         language: system
         stages: [commit-msg]
         pass_filenames: true
