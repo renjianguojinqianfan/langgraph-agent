@@ -47,7 +47,7 @@ git worktree add --detach .qoder/tmp/fix-walkthrough/<slug>/before <before-ref>
 git worktree add --detach .qoder/tmp/fix-walkthrough/<slug>/after  <after-ref>
 ```
 
-解释器用仓库的 `.venv311`；不要用根目录 `.venv`。worktree 里没有 `.env`，`collect.py` 会设置临时数据目录和离线开关。
+解释器用仓库的 `.venv314`；不要用根目录 `.venv`。worktree 里没有 `.env`，`collect.py` 会设置临时数据目录和离线开关。
 
 ### 2. 选最小可观测状态
 
@@ -149,12 +149,12 @@ meta 负责「讲清楚」，场景模块负责「拿数据」：
 ### 5. 采集前后状态
 
 ```bash
-.venv311/Scripts/python.exe .agents/skills/fix-walkthrough/scripts/collect.py \
+.venv314/Scripts/python.exe .agents/skills/fix-walkthrough/scripts/collect.py \
   --worktree .qoder/tmp/fix-walkthrough/<slug>/before \
   --scenario .qoder/tmp/fix-walkthrough/<slug>/scenario.py \
   --out .qoder/tmp/fix-walkthrough/<slug>/before.json --ref before
 
-.venv311/Scripts/python.exe .agents/skills/fix-walkthrough/scripts/collect.py \
+.venv314/Scripts/python.exe .agents/skills/fix-walkthrough/scripts/collect.py \
   --worktree .qoder/tmp/fix-walkthrough/<slug>/after \
   --scenario .qoder/tmp/fix-walkthrough/<slug>/scenario.py \
   --out .qoder/tmp/fix-walkthrough/<slug>/after.json --ref after
@@ -165,7 +165,7 @@ meta 负责「讲清楚」，场景模块负责「拿数据」：
 ### 6. 渲染并自检
 
 ```bash
-.venv311/Scripts/python.exe .agents/skills/fix-walkthrough/scripts/render.py \
+.venv314/Scripts/python.exe .agents/skills/fix-walkthrough/scripts/render.py \
   --before .qoder/tmp/fix-walkthrough/<slug>/before.json \
   --after  .qoder/tmp/fix-walkthrough/<slug>/after.json \
   --meta   .qoder/tmp/fix-walkthrough/<slug>/meta.json \

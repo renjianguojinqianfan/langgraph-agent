@@ -79,7 +79,7 @@ SANCTIONED_FORMS = [
     "/home/<user>/project",
     'setx PRE_COMMIT_HOME "<repo-root>\\..\\.precommit-cache"',
     "| `<repo-root>\\..\\..\\venvtest4`（仓库外、同盘、同上级目录） | 好 |",
-    '& "<repo-root>\\.venv311\\Scripts\\python.exe" -c',
+    '& "<repo-root>\\.venv314\\Scripts\\python.exe" -c',
     "本目录：<tmp>\\qianfan-c7-20261021\\B",
     '"workspace": "<repo-root>\\\\.qoder\\\\tmp\\\\qa2026-a"',
     "pwd -> <repo-root>/data/artifacts",

@@ -15,7 +15,7 @@
 
 ```bash
 cp .env.example .env                             # LLM_API_KEY 走环境变量；或 use_mock_llm=true 离线
-uv tool install -e .                             # 每台机器一次
+uv tool install -e . --python 3.14                             # 每台机器一次；钉 3.14（3.15 待 wheel，requires-python 已排除）
 cd frontend && npm ci && npm test && npm run build && cd ..  # 前端产物；改前端后重跑
 qianfan                                          # 自动开浏览器；--port / --no-browser 可选
 ```
@@ -27,10 +27,10 @@ qianfan                                          # 自动开浏览器；--port /
 改前端时用开发启动（Vite 热重载，后端 `--reload`）：
 
 ```bash
-python -m venv .venv311
-.venv311\Scripts\activate                        # Git Bash: source .venv311/Scripts/activate
+uv venv --python 3.14 --seed .venv314
+.venv314\Scripts\activate                        # Git Bash: source .venv314/Scripts/activate
 python start.py --install  # 后端依赖按 CI 同口径装（pip install -r requirements.txt）+ 前端 npm ci
-python start.py            # 虚拟环境请叫 .venv311；start.py 会拦住根目录的 .venv
+python start.py            # 虚拟环境请叫 .venv314；start.py 会拦住根目录的 .venv
 ```
 
 `--install` 与 CI 两个 job 完全同构：一条 `pip install -r requirements.txt`，mcp 的传递依赖
@@ -141,15 +141,15 @@ agent ──有 tool call──> tool ──> agent
 ## 质量门禁
 
 ```bash
-.\.venv311\Scripts\python.exe -m pip install -r requirements-dev.txt   # ruff / mypy / pre-commit
-.\.venv311\Scripts\python.exe -m pytest backend/tests/ -q
-.\.venv311\Scripts\python.exe -m ruff check backend scripts start.py
-.\.venv311\Scripts\python.exe -m mypy
-.\.venv311\Scripts\python.exe scripts\check_design_tokens.py
+.\.venv314\Scripts\python.exe -m pip install -r requirements-dev.txt   # ruff / mypy / pre-commit
+.\.venv314\Scripts\python.exe -m pytest backend/tests/ -q
+.\.venv314\Scripts\python.exe -m ruff check backend scripts start.py
+.\.venv314\Scripts\python.exe -m mypy
+.\.venv314\Scripts\python.exe scripts\check_design_tokens.py
 cd frontend; npm run typecheck; npm test; npm run check:sse; npm run build
 ```
 
-提交前钩子每台机器装一次：`.\.venv311\Scripts\python.exe -m pre_commit install`。
+提交前钩子每台机器装一次：`.\.venv314\Scripts\python.exe -m pre_commit install`。
 CI 跑后端 lint / 类型 / 测试、前端类型 / 单元测试 / 构建。发布前 / 换供应商：启服务在网页端手动跑一遍（不记模型与时间）。
 
 ## 文档

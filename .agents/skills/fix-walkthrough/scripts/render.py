@@ -19,7 +19,7 @@ All three HTML files embed the same merged bundle and differ only in the
 default view. They use inline CSS/JS and open from ``file://``.
 
 The script is intentionally stdlib-only so it runs inside the repo's
-``.venv311`` without installing anything.
+``.venv314`` without installing anything.
 """
 
 from __future__ import annotations

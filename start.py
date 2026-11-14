@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent
 def _check_interpreter() -> None:
     """Block the known-bad root ``.venv`` (Python 3.13 without dependencies).
 
-    AGENTS.md mandates ``.venv311`` for this project; the root ``.venv`` has no
+    AGENTS.md mandates ``.venv314`` for this project; the root ``.venv`` has no
     dependencies installed and would fail with ImportError. Other interpreters
     (system Python, CI, containers) pass through untouched.
     """
@@ -36,7 +36,7 @@ def _check_interpreter() -> None:
     for parent in exe.parents:
         if parent.name == ".venv" and parent.parent == ROOT:
             print("[start] 错误：当前使用根目录 .venv（Python 3.13，未装依赖），无法运行本项目。", flush=True)
-            print("[start] 请改用 .venv311，例如：.\\.venv311\\Scripts\\python.exe start.py", flush=True)
+            print("[start] 请改用 .venv314，例如：.\\.venv314\\Scripts\\python.exe start.py", flush=True)
             raise SystemExit(1)
 
 
@@ -159,7 +159,7 @@ def main() -> int:
         if not _npm_available():
             print(
                 "[start] 找不到 npm（前端需要 Node.js 22）。请安装 Node 并把 npm 加入 PATH；"
-                "或只跑后端：.\\.venv311\\Scripts\\python.exe start.py --backend-only"
+                "或只跑后端：.\\.venv314\\Scripts\\python.exe start.py --backend-only"
                 "（前端由后端同源托管已构建的 frontend/dist）。",
                 flush=True,
             )

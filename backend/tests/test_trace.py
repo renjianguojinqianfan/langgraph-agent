@@ -328,10 +328,12 @@ def test_trace_prefix_stream_stops_at_the_stat_time_size(tmp_path):
 def test_trace_api_raw_streams_the_stat_time_prefix(trace_client, monkeypatch):
     """#260 rework (MEDIUM-1), route level: growth mid-request cannot overshoot.
 
-    The route stats twice (``exists()`` + the size read) and each stat here
-    appends one more line, simulating a worker that keeps writing while the
-    response is built. The body must carry the append that was on disk when
-    the size was taken, and NOT the one that landed after it.
+    The route calls ``exists()`` then reads the size via ``stat()``; each call
+    here appends one more line, simulating a worker that keeps writing while
+    the response is built. The body must carry the append that was on disk when
+    the size was taken, and NOT the one that landed after it. Both public
+    methods are intercepted because 3.14 pathlib's ``exists()`` no longer routes
+    through ``stat()`` (#324).
     """
     client, settings = trace_client
     tid, trace_file = _finished_task_with_trace(client, settings)
@@ -339,6 +341,7 @@ def test_trace_api_raw_streams_the_stat_time_prefix(trace_client, monkeypatch):
     grown_line = b'{"type": "grown", "data": {}, "ts": 1.0}\n'
 
     real_stat = Path.stat
+    real_exists = Path.exists
 
     def _growing_stat(self, *args, **kwargs):
         result = real_stat(self, *args, **kwargs)
@@ -347,7 +350,15 @@ def test_trace_api_raw_streams_the_stat_time_prefix(trace_client, monkeypatch):
                 handle.write(grown_line)
         return result
 
+    def _growing_exists(self, *args, **kwargs):
+        result = real_exists(self, *args, **kwargs)
+        if result and self.suffix == ".jsonl":
+            with self.open("ab") as handle:
+                handle.write(grown_line)
+        return result
+
     monkeypatch.setattr(Path, "stat", _growing_stat)
+    monkeypatch.setattr(Path, "exists", _growing_exists)
 
     r = client.get(f"/api/tasks/{tid}/trace")
 

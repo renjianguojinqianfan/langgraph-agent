@@ -5,6 +5,7 @@
 > Issue #7 / spec `docs/specs/langgraph-1x-migration.md` 的 Phase 1 评估档。
 > 本文只记**实测结果**与由它推出的决策；未实测的猜测一律标注为推测。
 > 复现环境：Python 3.11.15（`.venv311`），Windows / Ubuntu(CI) 双跑。
+> 〔2026-11-14 补注（#324）：仓库解释器已迁 `.venv314`（Python 3.14）；本文的 `.venv311` / 3.11.15 是 2026-09 迁移时的快照，按「补注不改写」保留。§2 存储守卫与 §5 durability 的现役口径不变。〕
 
 ## 1. 起点
 
