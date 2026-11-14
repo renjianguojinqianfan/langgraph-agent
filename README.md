@@ -27,7 +27,7 @@ qianfan                                          # 自动开浏览器；--port /
 改前端时用开发启动（Vite 热重载，后端 `--reload`）：
 
 ```bash
-uv venv --python 3.14 .venv314
+uv venv --python 3.14 --seed .venv314
 .venv314\Scripts\activate                        # Git Bash: source .venv314/Scripts/activate
 python start.py --install  # 后端依赖按 CI 同口径装（pip install -r requirements.txt）+ 前端 npm ci
 python start.py            # 虚拟环境请叫 .venv314；start.py 会拦住根目录的 .venv
