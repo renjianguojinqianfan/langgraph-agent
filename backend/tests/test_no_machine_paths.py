@@ -23,22 +23,16 @@ the gate command runs.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 
+from backend.tests.conftest import load_script_module
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "check_no_machine_paths.py"
 
-_spec = importlib.util.spec_from_file_location("check_no_machine_paths", SCRIPT)
-assert _spec is not None and _spec.loader is not None
-gate = importlib.util.module_from_spec(_spec)
-# Register before exec: the module's Rule dataclass resolves its own module
-# through sys.modules at class-creation time.
-sys.modules["check_no_machine_paths"] = gate
-_spec.loader.exec_module(gate)
+gate = load_script_module("check_no_machine_paths", SCRIPT)
 
 
 def _violations(line: str) -> list[str]:
