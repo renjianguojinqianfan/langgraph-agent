@@ -30,9 +30,10 @@ from typing import Any
 import pytest
 import yaml
 
+from backend.tests.conftest import load_pre_commit_hook
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "check_design_tokens.py"
-PRE_COMMIT = REPO_ROOT / ".pre-commit-config.yaml"
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGENTS_MD = REPO_ROOT / "AGENTS.md"
 
@@ -232,9 +233,7 @@ def test_missing_theme_block_fails_closed(tmp_path: Path) -> None:
 
 
 def test_gate_is_wired_into_pre_commit_ci_and_agents_md() -> None:
-    config = yaml.safe_load(PRE_COMMIT.read_text(encoding="utf-8"))
-    hooks = [hook for repo in config["repos"] for hook in repo["hooks"]]
-    hook = next((item for item in hooks if item["id"] == "design-token-mirror"), None)
+    hook = load_pre_commit_hook("design-token-mirror")
     assert hook is not None, "pre-commit 缺 design-token-mirror 钩子（守卫会退化成手动脚本）"
     assert ".venv314/Scripts/python.exe" in hook["entry"]
     assert "scripts/check_design_tokens.py" in hook["entry"]

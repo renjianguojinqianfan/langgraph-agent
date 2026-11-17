@@ -56,9 +56,10 @@
   `<git-root>` / `<python-install>` / `<personal-notes>`（后三个为 #262 补：Git 安装根 /
   独立 Python 安装根 / 个人笔记库根；门禁的放行清单与本行逐字一致）。
   `.pre-commit-config.yaml` 等配置用**仓库相对路径**，不写本机绝对路径。
-- **机械门（#262）**：`python scripts/check_no_machine_paths.py`（本地脚本，与
-  `check_doc_links.py` 同先例，未进 CI）扫描全部 tracked Markdown、`docs/` 下验证证据
-  （.json / .txt）与 tracked `lessons/`（含 HTML），命中「绝对路径且机器特有」即红。放行面是
+- **机械门（#262）**：`python scripts/check_no_machine_paths.py` 可独立运行，也由
+  `no-machine-paths` 提交钩子与离线套件调用；扫描全部 tracked Markdown、`docs/` 下验证证据
+  （.json / .txt）、tracked `lessons/`（含 HTML）与 `.pre-commit-config.yaml` 自身，命中
+  「绝对路径且机器特有」即红。放行面是
   **确切清单**而非形态猜测：① 首个占位符之前的机器特有段全是通用根——`C:\Users\<user>` 放行，
   用户名写真实值、占位符只跟在后面的形态照样红（PR #283 返工实证的绕过形态，由
   `backend/tests/test_no_machine_paths.py` 的表驱动红绿矩阵锁定）；`..` 段与「占位符/省略号 +

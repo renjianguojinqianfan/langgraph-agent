@@ -23,11 +23,12 @@ the gate command runs.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
-from backend.tests.conftest import load_script_module
+from backend.tests.conftest import load_pre_commit_hook, load_script_module
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "check_no_machine_paths.py"
@@ -137,11 +138,11 @@ def test_scoped_files_covers_the_documented_surface() -> None:
     """Pin the scan surface's member structure (not the AGENTS.md wording).
 
     Asserts one concrete member of each surface the gate claims — root
-    Markdown, docs Markdown, tracked retros, lessons/, docs evidence — and
-    that code stays out. It deliberately does **not** parse the AGENTS.md
-    trigger line: that is prose, and a prose parser here would be a brittle
-    second source of truth. The gate script is the authority; the AGENTS.md
-    wording is kept in sync by hand (see docs/security.md §3).
+    Markdown, docs Markdown, tracked retros, lessons/, docs evidence, the
+    pre-commit config — and that code stays out. It deliberately does **not**
+    parse the AGENTS.md trigger line: that is prose, and a prose parser here
+    would be a brittle second source of truth. The gate script is the authority;
+    the AGENTS.md wording is kept in sync by hand (see docs/security.md §3).
     """
     files = {path.relative_to(gate.ROOT).as_posix() for path in gate.scoped_files()}
     assert "AGENTS.md" in files, "root Markdown missing from the scan surface"
@@ -149,6 +150,7 @@ def test_scoped_files_covers_the_documented_surface() -> None:
     assert any(f.startswith(".agents/retros/") for f in files), "tracked retros missing"
     assert any(f.startswith("lessons/") for f in files), "lessons missing from the scan surface"
     assert any(f.startswith("docs/assets/verification/") for f in files), "evidence missing"
+    assert ".pre-commit-config.yaml" in files, "pre-commit config missing from the scan surface"
     assert not any(f.startswith("backend/") for f in files), "code must stay out of scope"
 
 
@@ -159,3 +161,27 @@ def test_repo_docs_surface_is_clean() -> None:
     #262 cleanup cannot silently regress on a branch nobody remembered to check.
     """
     assert gate.main() == 0
+
+
+def test_pre_commit_triggers_the_machine_path_gate_for_its_full_surface() -> None:
+    hook = load_pre_commit_hook("no-machine-paths")
+    assert hook is not None, "Register check_no_machine_paths.py as a pre-commit hook"
+    assert hook["entry"] == ".venv314/Scripts/python.exe scripts/check_no_machine_paths.py"
+    assert hook["language"] == "system"
+    assert hook["pass_filenames"] is False
+    pattern = re.compile(hook["files"])
+    scoped = [path.relative_to(REPO_ROOT).as_posix() for path in gate.scoped_files()]
+    scoped.extend([
+        "README.md",
+        "docs/new.md",
+        ".agents/retros/new.md",
+        "docs/assets/new.json",
+        "docs/assets/new.txt",
+        "lessons/new.html",
+        "scripts/check_no_machine_paths.py",
+        "backend/tests/test_no_machine_paths.py",
+    ])
+    missing = [path for path in scoped if pattern.search(path) is None]
+    assert not missing, f"Machine-path hook misses scan inputs: {missing}"
+    for path in ("backend/core/tools/files.py", "frontend/src/main.tsx", "docs/new.csv"):
+        assert pattern.search(path) is None, f"Unrelated file triggers the hook: {path}"

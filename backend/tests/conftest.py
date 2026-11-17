@@ -28,6 +28,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
 
+import yaml
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 #: The data/ surfaces the offline suite is allowed to write (#264 N1). The
@@ -295,6 +297,15 @@ def load_script_module(name: str, path: Path) -> ModuleType:
     finally:
         sys.modules.pop(name, None)
     return module
+
+
+def load_pre_commit_hook(hook_id: str) -> dict[str, Any] | None:
+    """Load one hook from the repository's pre-commit config (test wiring helper)."""
+    config = yaml.safe_load(
+        (_PROJECT_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    )
+    hooks = [hook for repo in config["repos"] for hook in repo["hooks"]]
+    return next((hook for hook in hooks if hook["id"] == hook_id), None)
 
 
 def make_isolated_settings(**overrides):
