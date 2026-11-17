@@ -16,6 +16,7 @@ that exports them cannot make the suite dial out.
 from __future__ import annotations
 
 import atexit
+import importlib.util
 import logging
 import os
 import shutil
@@ -24,6 +25,7 @@ import tempfile
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -277,6 +279,22 @@ def _guard_repo_data_untouched():
     if removed_top:
         problems.append("removed top-level entries: " + ", ".join(removed_top))
     assert not problems, "the test session modified the checkout's data/: " + "; ".join(problems)
+
+
+def load_script_module(name: str, path: Path) -> ModuleType:
+    """Load a ``scripts/`` module by path so tests exercise the exact file the
+    gate command runs. ``sys.modules`` registration is needed only during exec
+    (a dataclass resolves its own module at class-creation time) and is popped
+    afterwards so no global state leaks (#323 review)."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+    return module
 
 
 def make_isolated_settings(**overrides):

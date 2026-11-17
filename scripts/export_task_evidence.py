@@ -44,8 +44,10 @@ KEEP = (
 def _path_regex(path: Path) -> re.Pattern[str]:
     escaped = re.escape(str(path))
     # The record may carry either separator style; match both, case-insensitively.
-    # The trailing lookahead keeps a sibling that merely extends the root name
-    # (``.../<repo-root>-old``) from being whitewashed along with it.
+    # The trailing lookahead keeps a sibling that extends the root name with
+    # word characters or ``-`` (``.../<repo-root>-old``) from being whitewashed
+    # along with it. Dot/space extensions (``.bak``, `` copy``) are out of its
+    # scope (#323 review: semantic misattribution only, not a gate failure).
     return re.compile(
         escaped.replace("\\\\", r"[\\/]") + r"(?![A-Za-z0-9_-])", re.IGNORECASE
     )
