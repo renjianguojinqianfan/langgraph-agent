@@ -7,7 +7,6 @@ two gates from fighting (P5-1 retro #7).
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 
@@ -16,10 +15,7 @@ from backend.tests.conftest import load_script_module
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "export_task_evidence.py"
 
-_spec = importlib.util.spec_from_file_location("export_task_evidence", SCRIPT)
-assert _spec is not None and _spec.loader is not None
-export = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(export)
+export = load_script_module("export_task_evidence", SCRIPT)
 
 
 def test_scrub_replaces_repo_root_and_home():
@@ -104,11 +100,12 @@ def test_scrub_does_not_whitewash_a_sibling_of_the_roots():
 
 
 def test_scrub_placeholders_are_registered_in_the_machine_path_gate():
-    """scrub() is the tool that keeps exported evidence passing
-    ``scripts/check_no_machine_paths.py`` (that gate's own red/green matrix is
-    pinned in ``test_no_machine_paths.py``). The two scripts move together: a
-    placeholder renamed on one side only used to surface as a CI failure on a
-    committed evidence file, so the seam is pinned here."""
+    """scrub() and ``scripts/check_no_machine_paths.py`` must carry the same
+    placeholder vocabulary (the gate's own red/green matrix is pinned in
+    ``test_no_machine_paths.py``). The interlock is presence on both sides,
+    not a CI-red causality: the gate only scans drive / mount / POSIX-home
+    prefixes, so a placeholder missing from one list fails silently on bare
+    placeholder paths (#323 review)."""
     gate = load_script_module(
         "check_no_machine_paths", REPO_ROOT / "scripts" / "check_no_machine_paths.py"
     )
