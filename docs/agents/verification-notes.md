@@ -18,6 +18,7 @@ harness（dsh / opencode / qoder）在受限模式下会挡住 MSYS 运行时与
 - bash 层的完整判据、机理与已排除项见 [`docs/harness-bash-false-red.md`](../harness-bash-false-red.md)（那篇管 bash；临时根层是本篇补的——`conftest.py` 把测试根钉到检出外，沙箱恰好不让建）。
 - **定性协议（探针先行 + 对照实验）**：先在 harness 里跑 bash spawn 探针（`subprocess.run([bash, '-c', 'echo ok'])`，看退出码与 stderr 签名）分清机器问题还是 harness 血统；再跑全量。同一提交在 harness 外（自己终端 / CI）绿、harness 内红 → **红归环境，不归代码**；未做体外对照的红不得写进结论。
 - **处置**：dsh 用 `danger-full-access`（限制不认路径，换解释器位置无用）；opencode / qoder 可换仓库外解释器（限制按路径）。代码侧无需改动。
+- **备用解释器等价性**：先验证 `.pth` 初始化（如 pywin32）及覆盖/清空 `PYTHONPATH` 的真实子进程仍能导入依赖；只把 `site-packages` 加到 `PYTHONPATH` 不等于虚拟环境。需要隔离时可用同版本的仓库外临时 venv，通过 `site.addsitedir` 初始化现有依赖目录；不改产品代码或 MCP 环境白名单来迁就验证器。
 
 ## 2. 四态记录要求
 

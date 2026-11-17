@@ -23,9 +23,11 @@ the gate command runs.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from backend.tests.conftest import load_script_module
 
@@ -159,3 +161,29 @@ def test_repo_docs_surface_is_clean() -> None:
     #262 cleanup cannot silently regress on a branch nobody remembered to check.
     """
     assert gate.main() == 0
+
+
+def test_pre_commit_triggers_the_machine_path_gate_for_its_full_surface() -> None:
+    config = yaml.safe_load((REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooks = [hook for repo in config["repos"] for hook in repo["hooks"]]
+    hook = next((hook for hook in hooks if hook["id"] == "no-machine-paths"), None)
+    assert hook is not None, "Register check_no_machine_paths.py as a pre-commit hook"
+    assert hook["entry"].split()[-1] == "scripts/check_no_machine_paths.py"
+    assert hook["pass_filenames"] is False
+    pattern = re.compile(hook["files"])
+    scoped = [path.relative_to(REPO_ROOT).as_posix() for path in gate.scoped_files()]
+    scoped.extend([
+        "README.md",
+        "docs/new.md",
+        ".agents/retros/new.md",
+        "docs/assets/new.json",
+        "docs/assets/new.txt",
+        "lessons/new.html",
+        "scripts/check_no_machine_paths.py",
+        "backend/tests/test_no_machine_paths.py",
+        ".pre-commit-config.yaml",
+    ])
+    missing = [path for path in scoped if pattern.search(path) is None]
+    assert not missing, f"Machine-path hook misses scan inputs: {missing}"
+    for path in ("backend/core/tools/files.py", "frontend/src/main.tsx", "docs/new.csv"):
+        assert pattern.search(path) is None, f"Unrelated file triggers the hook: {path}"
