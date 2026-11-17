@@ -3,8 +3,9 @@ r"""Fail when a tracked doc / evidence file carries a machine-specific absolute 
 Usage: python scripts/check_no_machine_paths.py
 
 Scope: every tracked Markdown file (same set as ``check_doc_links.py``), the
-tracked ``.json`` / ``.txt`` evidence under ``docs/`` (``docs/assets/verification/``)
-and every tracked file under ``lessons/`` (public HTML lessons included). Code is
+tracked ``.json`` / ``.txt`` evidence under ``docs/`` (``docs/assets/verification/``),
+every tracked file under ``lessons/`` (public HTML lessons included), and
+``.pre-commit-config.yaml`` (the hook that invokes this gate). Code is
 out of scope on purpose: path-boundary tests embed literals such as ``C:\tmp\x``
 as *inputs*, and system references like ``C:\Windows\...`` are legitimate.
 
@@ -157,7 +158,7 @@ RULES = (
 
 
 def scoped_files() -> list[Path]:
-    """Docs surface: tracked Markdown, docs/ evidence, tracked lessons/ files."""
+    """Docs surface: tracked Markdown, docs/ evidence, lessons/, and the hook config."""
     out = subprocess.run(
         ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
     )
@@ -166,8 +167,11 @@ def scoped_files() -> list[Path]:
         if not line:
             continue
         path = Path(line)
-        if path.suffix == ".md" or path.parts[:1] == ("lessons",) or (
-            path.parts[:1] == ("docs",) and path.suffix in EVIDENCE_SUFFIXES
+        if (
+            line == ".pre-commit-config.yaml"
+            or path.suffix == ".md"
+            or path.parts[:1] == ("lessons",)
+            or (path.parts[:1] == ("docs",) and path.suffix in EVIDENCE_SUFFIXES)
         ):
             files.append(ROOT / line)
     return files

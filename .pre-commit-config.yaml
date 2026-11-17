@@ -24,8 +24,8 @@
 #   doc-links ~0.6s（pre-commit 整体约 2.3s）· pytest 全量 93s——pytest 因此
 #   不进钩子，由 CI backend-test 兜底。
 #   no-machine-paths ~1.6s（2026-11-17，--all-files 三次 1.681/1.574/1.563s，含钩子开销）。
-#   docs/ 与根级 Markdown 触发 doc-links；no-machine-paths 另覆盖全部 tracked
-#   Markdown、docs/ 证据与 lessons/。docs/architecture.md 还触发 SSE 检查与 CI。
+#   docs/ 与根级 Markdown 触发 doc-links；no-machine-paths 另扫描全部 tracked
+#   Markdown、docs/ 证据、lessons/ 与 .pre-commit-config.yaml。docs/architecture.md 还触发 SSE 检查与 CI。
 #   CI paths 白名单不因此变化；纯 docs 变更靠提交钩子兜底（#261 D-20）。
 #
 # 逃生门：SKIP=<hook-id> 跳单个钩子；git commit --no-verify 全跳。
