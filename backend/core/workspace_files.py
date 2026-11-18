@@ -74,7 +74,6 @@ def _resolve_candidates(
     if limit == 0:
         return []
     ordered = sorted(candidates)
-    wanted = limit
     # A file link may resolve to a name outside this lexical prefix; only a
     # link-free tree guarantees prefix == sorted resolved output. Links are
     # rare, so the full path stays the fallback.
@@ -84,32 +83,23 @@ def _resolve_candidates(
     seen: set[Path] = set()
     saw_link = False
 
-    def take(index: int) -> int:
-        nonlocal saw_link
-        base = ordered[index]
-        result = _accepted_file(base, root)
+    for candidate in ordered:
+        result = _accepted_file(candidate, root)
         if result is None:
-            return index + 1
+            continue
         path, linked = result
         saw_link = saw_link or linked
         if dedupe and path in seen:
-            return index + 1
+            continue
         if dedupe:
             seen.add(path)
         accepted.append(path)
-        return index + 1
-
-    index = 0
-    while index < len(ordered):
-        index = take(index)
         if limit is not None and len(accepted) >= limit and not saw_link:
             return accepted[:limit]
 
-    if wanted is None:
-        return sorted(accepted)
     if limit is None or saw_link:
-        return sorted(accepted)[:wanted]
-    return accepted[:wanted]
+        return sorted(accepted)[:limit]
+    return accepted
 
 
 def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:
@@ -150,7 +140,6 @@ def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:
         )
         return None
 
-    resolved_root = root.resolve()
     candidates = sorted(
         repo / os.fsdecode(raw) for raw in listed.stdout.split(b"\0") if raw
     )
@@ -164,7 +153,7 @@ def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:
             except OSError:
                 resolved = None
             if resolved is not None and (
-                resolved != resolved_root and resolved_root not in resolved.parents
+                resolved != root and root not in resolved.parents
             ):
                 resolved = None
             parent_cache[parent] = resolved
@@ -183,7 +172,7 @@ def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:
     # link-free candidate set may use the bounded prefix.
     files = _resolve_candidates(
         bases,
-        resolved_root,
+        root,
         None if limit is not None and has_link else limit,
         dedupe=False,
     )
@@ -199,7 +188,6 @@ def _walk_files(root: Path, limit: Optional[int]) -> list[Path]:
     resolved directory reuse it instead of resolving every path again; only a
     file that is itself a link needs a target resolution.
     """
-    root = root.resolve()
     candidates: list[Path] = []
     visited_dirs: set[Path] = set()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
