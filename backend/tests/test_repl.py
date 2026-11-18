@@ -1,128 +1,218 @@
-"""#20 / spec D-48…D-52: thin terminal REPL (offline, fake runtime seams)."""
+"""#332 S6: the terminal as a thin client (fake HTTP/SSE transport).
+
+Every case runs the real ``repl_main`` / ``ReplSession`` / ``ApiClient`` against
+an ``httpx.MockTransport`` that behaves like the backend: it records requests,
+serves an SSE body per subscription and keeps task status. The assertions are
+user-visible (printed lines, exit codes, which requests were sent), so the
+transport can be replaced by a real backend end-to-end without rewriting them.
+"""
 
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Tuple
 
+import httpx
 import pytest
 
-from backend import cli, repl, server_lock
-from backend.api.schemas import TaskStatus
+from backend import cli, repl
 from backend.repl import (
     PROMPT,
     RENDERED_EVENT_TYPES,
-    ReplSession,
     configure_stdio_utf8,
     render_event,
     repl_main,
 )
-from backend.runtime import build_runtime
-from backend.services.event_bus import EventBus
-from backend.services.persistence import PersistenceError
 from backend.tests.conftest import make_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SENTINEL = "repl-secret-sentinel"
 
 
-# ── fakes (runtime / task manager / event bus) ──
-class _FakeTask:
-    def __init__(self, status: TaskStatus) -> None:
-        self.status = status
+# ── a stateful stand-in for the backend (REST + SSE) ──
+class FakeBackend:
+    """Answers like the real API; queued SSE bodies are served in order."""
 
+    def __init__(self, *, auth: bool = False, start_running: bool = False) -> None:
+        self._lock = threading.Lock()
+        self.auth = auth
+        self.start_running = start_running
+        self.auto_park = True
+        self.tasks: Dict[str, Dict[str, Any]] = {}
+        self.status_plans: Dict[str, List[str]] = {}
+        self.streams: List[Dict[str, Any]] = []
+        self.requests: List[Tuple[str, str, Dict[str, Any]]] = []
+        self.stop_requests: List[str] = []
+        self.sent_messages: List[Tuple[str, str]] = []
+        self._counter = 0
+        self._token = "tok-1"
+        #: What ``/api/auth/token`` issues; keep it equal to ``_token`` unless a
+        #: case needs a token that is already stale by the time it is used.
+        self.issued_token = "tok-1"
 
-class _FakeStore:
-    def list_public(self):
-        return {
-            "default": "fake-model",
-            "models": [
-                {"id": "fake-model", "key_set": True, "key_source": "pasted"}
-            ],
+    # ── test controls ──
+    def queue_stream(self, *events: Any) -> None:
+        """Queue one SSE body; ``queue_stream(a, b)`` == ``queue_stream([a, b])``."""
+        self.streams.append({"events": _flat(events), "broken": False})
+
+    def queue_broken_stream(self, *events: Any) -> None:
+        self.streams.append({"events": _flat(events), "broken": True})
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handler)
+
+    def calls(self, method: str, path: str) -> int:
+        return sum(1 for m, p, _ in self.requests if m == method and p == path)
+
+    def add_task(self, *, status: str = "INTERRUPTED", mode: str = "build", title: str = "任务") -> str:
+        task_id = self._new_id()
+        self.tasks[task_id] = {
+            "id": task_id,
+            "status": status,
+            "mode": mode,
+            "title": title,
+            "user_input": title,
+            "workspace": "E:/work",
         }
-
-
-class _FakeTaskManager:
-    def __init__(self, *, status_sequence: Optional[List[TaskStatus]] = None) -> None:
-        self.models = _FakeStore()
-        self.created: List[tuple] = []
-        self.sent: List[tuple] = []
-        self.stopped: List[str] = []
-        self.shutdown_calls = 0
-        self.status = TaskStatus.INTERRUPTED
-        self.status_sequence = list(status_sequence or [])
-        self.send_error: Optional[Exception] = None
-        self.stop_error: Optional[Exception] = None
-        #: When true, a created/sent round stays RUNNING until stop()/sequence.
-        self.stay_running = False
-
-    def create_task(self, title, text, **kwargs):
-        task_id = f"task{len(self.created) + 1:08d}deadbeef"
-        self.created.append((task_id, text))
-        self.status = (
-            TaskStatus.RUNNING if self.stay_running else TaskStatus.INTERRUPTED
-        )
         return task_id
 
-    def get_task(self, task_id):
-        if self.status_sequence:
-            self.status = self.status_sequence.pop(0)
-        return _FakeTask(self.status)
+    def _new_id(self) -> str:
+        self._counter += 1
+        return f"task{self._counter:04d}deadbeef"
 
-    def send_message(self, task_id, text):
-        if self.send_error is not None:
-            raise self.send_error
-        self.sent.append((task_id, text))
-        self.status = (
-            TaskStatus.RUNNING if self.stay_running else TaskStatus.INTERRUPTED
+    # ── transport ──
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        payload: Dict[str, Any] = {}
+        if request.content:
+            try:
+                payload = json.loads(request.content)
+            except ValueError:
+                payload = {}
+        with self._lock:
+            self.requests.append((request.method, path, payload))
+
+        if path == "/api/auth/token":
+            if payload.get("token") != "local-secret":
+                return httpx.Response(401, json={"detail": "invalid token"})
+            return httpx.Response(200, json={"code": 0, "data": {"token": self.issued_token}})
+        if self.auth and request.headers.get("Authorization") != f"Bearer {self._token}":
+            return httpx.Response(401, json={"detail": "invalid token"})
+
+        if request.method == "POST" and path == "/api/tasks":
+            task_id = self._new_id()
+            self.tasks[task_id] = {
+                "id": task_id,
+                "status": "RUNNING" if self.start_running else "INTERRUPTED",
+                "mode": payload.get("mode") or "build",
+                "title": payload.get("input") or "",
+                "user_input": payload.get("input") or "",
+                "workspace": payload.get("workspace") or "",
+            }
+            return _envelope({"task_id": task_id})
+
+        if request.method == "GET" and path == "/api/tasks":
+            tasks = list(self.tasks.values())
+            return _envelope({"tasks": tasks})
+
+        if path.startswith("/api/tasks/"):
+            task_id = path.split("/")[3]
+            task = self.tasks.get(task_id)
+            if task is None:
+                return httpx.Response(404, json={"detail": "task not found"})
+            rest = path[len(f"/api/tasks/{task_id}") :]
+            return self._task_route(request, task, rest, payload)
+
+        return httpx.Response(404, json={"detail": f"no route {path}"})
+
+    def _task_route(
+        self,
+        request: httpx.Request,
+        task: Dict[str, Any],
+        rest: str,
+        payload: Dict[str, Any],
+    ) -> httpx.Response:
+        task_id = str(task["id"])
+        if request.method == "GET" and rest == "":
+            plan = self.status_plans.get(task_id)
+            if plan:
+                task["status"] = plan.pop(0) if len(plan) > 1 else plan[0]
+            return _envelope(dict(task))
+        if request.method == "GET" and rest == "/events":
+            return self._stream_response(request, task)
+        if request.method == "POST" and rest == "/messages":
+            if task["status"] != "INTERRUPTED":
+                return httpx.Response(
+                    409,
+                    json={"detail": "task is RUNNING; only a parked task can continue"},
+                )
+            self.sent_messages.append((task_id, str(payload.get("input") or "")))
+            task["status"] = "RUNNING"
+            return _envelope({"ok": True})
+        if request.method == "POST" and rest == "/stop":
+            self.stop_requests.append(task_id)
+            task["status"] = "INTERRUPTED"
+            self.status_plans.pop(task_id, None)
+            return _envelope({"ok": True, "status": "INTERRUPTED"})
+        if request.method == "POST" and rest == "/resume":
+            if task["status"] != "INTERRUPTED":
+                return httpx.Response(409, json={"detail": "task is not INTERRUPTED"})
+            task["status"] = "RUNNING"
+            return _envelope({"ok": True})
+        if request.method == "PUT" and rest == "/mode":
+            task["mode"] = payload.get("mode")
+            return _envelope({"mode": task["mode"]})
+        if request.method == "PUT" and rest == "/model":
+            task["model"] = payload.get("model")
+            return _envelope({"model": task["model"]})
+        return httpx.Response(404, json={"detail": f"no route {rest}"})
+
+    def _stream_response(self, request: httpx.Request, task: Dict[str, Any]) -> httpx.Response:
+        with self._lock:
+            entry: Dict[str, Any] = (
+                self.streams.pop(0) if self.streams else {"events": [], "broken": False}
+            )
+        frames = [
+            f"event: {event.get('type')}\ndata: {json.dumps(event.get('data') or {})}\n\n"
+            for event in entry["events"]
+        ]
+        if self.auto_park:
+            for event in entry["events"]:
+                if event.get("type") == "task_interrupted":
+                    task["status"] = "INTERRUPTED"
+                elif event.get("type") == "task_failed":
+                    task["status"] = "FAILED"
+
+        def body():
+            for frame in frames:
+                yield frame.encode("utf-8")
+            if entry["broken"]:
+                raise httpx.ReadError("connection dropped", request=request)
+
+        return httpx.Response(
+            200, content=body(), headers={"Content-Type": "text/event-stream"}
         )
-        return {"ok": True}
-
-    def stop(self, task_id):
-        if self.stop_error is not None:
-            raise self.stop_error
-        self.stopped.append(task_id)
-        self.status = TaskStatus.INTERRUPTED
-        return {"ok": True}
-
-    def shutdown(self):
-        self.shutdown_calls += 1
-
-    def redact(self, text: str) -> str:
-        return text.replace(SENTINEL, "[redacted]")
 
 
-class _FakeBus:
-    def __init__(self, history: Optional[List[Dict[str, Any]]] = None) -> None:
-        self.history = list(history or [])
-        self.subscribed: List[tuple] = []
-        self.unsubscribed: List[tuple] = []
-
-    def subscribe(self, task_id, callback):
-        self.subscribed.append((task_id, callback))
-        return list(self.history)
-
-    def unsubscribe(self, task_id, callback):
-        self.unsubscribed.append((task_id, callback))
+def _envelope(data: Dict[str, Any]) -> httpx.Response:
+    return httpx.Response(200, json={"code": 0, "data": data, "message": "ok"})
 
 
-def _fake_runtime(*, history=None, status_sequence=None):
-    tm = _FakeTaskManager(status_sequence=status_sequence)
-    bus = _FakeBus(history)
-    runtime = SimpleNamespace(
-        settings=None,
-        event_bus=bus,
-        persistence=None,
-        task_manager=tm,
-    )
-    return runtime
+def _flat(events: Tuple[Any, ...]) -> List[Dict[str, Any]]:
+    """One event list from ``f(a, b)`` or ``f([a, b])`` in a test call."""
+    if len(events) == 1 and isinstance(events[0], list):
+        return [dict(event) for event in events[0]]
+    return [dict(event) for event in events]
 
 
+# ── harness ──
 def _clock_pair():
     state = {"now": 0.0}
 
@@ -131,104 +221,54 @@ def _clock_pair():
 
     def sleep(seconds: float) -> None:
         state["now"] += seconds
+        time.sleep(0)  # let the SSE reader thread push before the next tick
 
     return clock, sleep
 
 
-def _run(monkeypatch, settings, runtime, lines, **kwargs):
+def _run(
+    monkeypatch,
+    settings,
+    fake: FakeBackend,
+    lines: List[str],
+    **kwargs,
+) -> Tuple[int, List[str]]:
     out: List[str] = []
+    prompts: List[str] = []
     iterator = iter(lines)
+    clock, sleep = _clock_pair()
 
     def input_fn(prompt: str) -> str:
+        prompts.append(prompt)
         return next(iterator)
 
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
     code = repl_main(
         [],
-        runtime_factory=lambda _settings: runtime,
         input_fn=input_fn,
         output=out.append,
-        sleep=kwargs.pop("sleep", lambda seconds: None),
-        clock=kwargs.pop("clock", lambda: 0.0),
+        sleep=kwargs.pop("sleep", sleep),
+        clock=kwargs.pop("clock", clock),
         configure_stdio=False,
+        transport=kwargs.pop("transport", fake.transport()),
+        ensure=kwargs.pop("ensure", lambda _settings, **kw: (0, settings.port)),
         **kwargs,
     )
+    out.extend(f"PROMPT:{prompt}" for prompt in prompts)
     return code, out
 
 
-# ── build_runtime (D-48 seam) ──
-def test_build_runtime_wires_the_same_objects(tmp_path):
-    settings = make_settings(tmp_path)
-    runtime = build_runtime(settings)
-    try:
-        assert runtime.settings is settings
-        assert runtime.task_manager.event_bus is runtime.event_bus
-        assert runtime.task_manager.persistence is runtime.persistence
-        assert runtime.persistence is not None
-        # make_settings roots data_dir at tmp_path; artifacts gets its own dir.
-        assert (tmp_path / "artifacts").is_dir()
-    finally:
-        runtime.task_manager.shutdown()
+def _body(out: List[str]) -> str:
+    return "\n".join(line for line in out if not line.startswith("PROMPT:"))
 
 
-def test_real_runtime_runs_two_mock_tasks_in_one_session(tmp_path, monkeypatch):
-    """Spec Testing seam 2: real build_runtime + TaskManager + EventBus, MockLLM.
-
-    Only input/output/sleep are injected — the runtime, task threads, event bus
-    and persistence are the production objects (tmp DATA_DIR). Two tasks are
-    dispatched in one session; the assertions read the real task records, not a
-    scripted history.
-    """
-    script = tmp_path / "mock-script.json"
-    script.write_text('{"final_answer": "integration-answer"}', encoding="utf-8")
-    settings = make_settings(
-        tmp_path, use_mock_llm=True, mock_llm_script_path=str(script)
-    )
-    runtime = build_runtime(settings)
-    shutdown_calls: List[int] = []
-    real_shutdown = runtime.task_manager.shutdown
-
-    def counted_shutdown() -> None:
-        shutdown_calls.append(1)
-        real_shutdown()
-
-    runtime.task_manager.shutdown = counted_shutdown
-
-    out: List[str] = []
-    prompts: List[str] = []
-    lines = iter(["first task", "/new", "second task", "exit"])
-
-    def input_fn(prompt: str) -> str:
-        prompts.append(prompt)
-        return next(lines)
-
-    monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    code = repl_main(
-        [],
-        runtime_factory=lambda _settings: runtime,
-        input_fn=input_fn,
-        output=out.append,
-        configure_stdio=False,
-    )
-
-    assert code == 0
-    text = "\n".join(out)
-    assert text.count("答: integration-answer") == 2
-    assert sum(line.startswith("● 新任务") for line in out) == 2
-    assert text.count("■ 停下") == 2
-
-    tasks = runtime.task_manager.list_all_tasks()
-    assert len(tasks) == 2
-    # Deterministic terminal state: the round parked, not a timing-dependent
-    # RUNNING leftover.
-    assert all(task.status is TaskStatus.INTERRUPTED for task in tasks)
-
-    # Back at the prompt after each terminal event: base prompt, task prompt,
-    # base prompt (/new), task prompt.
-    assert prompts[0] == PROMPT
-    assert prompts[2] == PROMPT
-    assert sum(prompt.startswith("[") for prompt in prompts) == 2
-    assert shutdown_calls == [1]
+def _final_events(task_id: Any) -> List[Dict[str, Any]]:
+    return [
+        {"type": "task_created", "data": {"task_id": task_id}},
+        {"type": "step_start", "data": {"index": 1, "round": 1}},
+        {"type": "final_answer", "data": {"answer": "done"}},
+        {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+    ]
 
 
 # ── rendering (D-49 / D-50 + safety) ──
@@ -304,146 +344,160 @@ def test_render_event_never_prints_reasoning_or_unredacted_secrets():
     assert SENTINEL not in redacted and "[redacted]" in redacted
 
 
-# ── session loop (D-49) ──
-def _final_events(task_id="t"):
-    return [
-        {"type": "task_created", "data": {"task_id": task_id}},
-        {"type": "step_start", "data": {"index": 1, "round": 1}},
-        {"type": "final_answer", "data": {"answer": "done"}},
-        {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
-    ]
+# ── session loop over REST/SSE ──
+def test_a_task_round_renders_the_stream_and_parks(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
+
+    code, out = _run(monkeypatch, settings, fake, ["first task", "exit"])
+
+    text = _body(out)
+    assert code == 0
+    assert "答: done" in text
+    assert "■ 停下" in text
+    assert text.count("● 新任务") == 1
+    # The create carried this terminal's directory (ADR 0013 decision 2).
+    create = [r for r in fake.requests if r[0] == "POST" and r[1] == "/api/tasks"][0]
+    assert create[2]["workspace"] == os.getcwd()
+    assert create[2]["input"] == "first task"
 
 
 def test_two_tasks_run_in_one_session_with_new(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(history=_final_events())
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
+    fake.queue_stream(*_final_events("task0002deadbeef"))
 
     code, out = _run(
-        monkeypatch,
-        settings,
-        runtime,
-        ["first task", "/new", "second task", "exit"],
+        monkeypatch, settings, fake, ["first task", "/new", "second task", "exit"]
     )
 
+    prompts = [line[7:] for line in out if line.startswith("PROMPT:")]
+    text = _body(out)
     assert code == 0
-    assert [text for _, text in runtime.task_manager.created] == [
-        "first task",
-        "second task",
-    ]
-    assert out.count("答: done") == 2
+    assert text.count("答: done") == 2
+    assert text.count("● 新任务") == 2
     assert any("下一条输入创建新任务" in line for line in out)
-    # L1: the replayed task_created event is the only task-created line per
-    # task (the header and the /new hint also mention 新任务, so match the
-    # rendered line prefix).
-    assert sum(line.startswith("● 新任务") for line in out) == 2
-    assert runtime.task_manager.shutdown_calls == 1
+    # Phases: base prompt, task prompt, base prompt (/new), task prompt.
+    assert prompts[0] == PROMPT
+    assert prompts[2] == PROMPT
+    assert sum(prompt.startswith("[") for prompt in prompts) == 2
 
 
 def test_second_message_continues_the_same_task(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(history=_final_events())
-
-    code, out = _run(monkeypatch, settings, runtime, ["first", "second", "quit"])
-
-    assert code == 0
-    assert len(runtime.task_manager.created) == 1
-    task_id = runtime.task_manager.created[0][0]
-    assert runtime.task_manager.sent == [(task_id, "second")]
-    assert "答: done" in out
-
-
-def test_send_message_conflict_prints_the_reason_and_keeps_the_prompt(
-    tmp_path, monkeypatch
-):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(history=_final_events())
-    runtime.task_manager.send_error = RuntimeError(
-        "task is RUNNING; only a parked task can continue"
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
+    fake.queue_stream(
+        [
+            {"type": "final_answer", "data": {"answer": "again"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
     )
 
-    code, out = _run(monkeypatch, settings, runtime, ["first", "second", "exit"])
+    code, out = _run(monkeypatch, settings, fake, ["first", "second", "quit"])
+
+    assert code == 0
+    assert fake.calls("POST", "/api/tasks") == 1
+    assert len(fake.sent_messages) == 1
+    assert fake.sent_messages[0][1] == "second"
+    assert "答: again" in _body(out)
+
+
+def test_an_admission_409_prints_the_reason_and_keeps_the_prompt(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend(start_running=True)
+    fake.auto_park = False
+    fake.queue_stream(
+        [
+            {"type": "final_answer", "data": {"answer": "done"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
+    )
+
+    code, out = _run(monkeypatch, settings, fake, ["first", "second", "exit"])
 
     assert code == 0
     assert any("✗" in line and "RUNNING" in line for line in out)
+    # No automatic retry of the refused continuation.
+    assert fake.calls("POST", "/api/tasks/task0001deadbeef/messages") == 1
 
 
-def test_stop_is_a_noop_when_the_task_is_parked(tmp_path):
-    runtime = _fake_runtime()
-    out: List[str] = []
-    session = ReplSession(runtime, output=out.append)
-    session.task_id = "task-1"
-    runtime.task_manager.status = TaskStatus.INTERRUPTED
+def test_stop_is_a_noop_when_the_task_is_parked(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
 
-    assert session.stop() is False
-    assert runtime.task_manager.stopped == []
+    code, out = _run(monkeypatch, settings, fake, ["first", "/stop", "exit"])
+
+    assert code == 0
     assert any("没有在跑的任务" in line for line in out)
+    assert fake.stop_requests == []
 
 
-def test_stop_running_task_requests_stop(tmp_path):
-    runtime = _fake_runtime()
-    out: List[str] = []
-    session = ReplSession(runtime, output=out.append)
-    session.task_id = "task-1"
-    runtime.task_manager.status = TaskStatus.RUNNING
+def test_stop_running_task_requests_stop(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend(start_running=True)
+    fake.auto_park = False
+    fake.queue_stream(
+        [
+            {"type": "final_answer", "data": {"answer": "still going"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
+    )
 
-    assert session.stop() is True
-    assert runtime.task_manager.stopped == ["task-1"]
+    code, out = _run(monkeypatch, settings, fake, ["first", "/stop", "exit"])
+
+    assert code == 0
+    assert fake.stop_requests == ["task0001deadbeef"]
     assert any("已请求停止" in line for line in out)
 
 
-def test_ctrl_c_while_waiting_stops_the_task_then_returns_to_prompt(
-    tmp_path, monkeypatch
-):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(history=[])  # no terminal event: status polling path
-    runtime.task_manager.stay_running = True
+def test_ctrl_c_while_waiting_stops_the_task_then_returns_to_prompt(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend(start_running=True)
+    fake.auto_park = False
+    fake.queue_stream()  # no events: the round is still waiting
 
     def sleep(seconds: float) -> None:
-        if not runtime.task_manager.stopped:
-            raise KeyboardInterrupt
-        raise KeyboardInterrupt  # settle must also exit deterministically
+        raise KeyboardInterrupt
 
     code, out = _run(
-        monkeypatch,
-        settings,
-        runtime,
-        ["long task", "exit"],
-        sleep=sleep,
-        clock=_clock_pair()[0],
+        monkeypatch, settings, fake, ["long task", "exit"], sleep=sleep
     )
 
     assert code == 0
-    assert runtime.task_manager.stopped, "Ctrl-C during a round must call stop()"
+    assert fake.stop_requests == ["task0001deadbeef"], "Ctrl-C must stop the task"
     assert any("已请求停止" in line for line in out)
 
 
 def test_ctrl_c_at_the_prompt_exits_cleanly(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime()
-    calls = {"n": 0}
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
 
     def input_fn(prompt: str) -> str:
-        calls["n"] += 1
         raise KeyboardInterrupt
 
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
     out: List[str] = []
     code = repl_main(
         [],
-        runtime_factory=lambda _settings: runtime,
         input_fn=input_fn,
         output=out.append,
         configure_stdio=False,
+        transport=fake.transport(),
+        ensure=lambda _settings, **kw: (0, settings.port),
     )
 
     assert code == 0
     assert any("退出" in line for line in out)
-    assert runtime.task_manager.shutdown_calls == 1
+    assert fake.requests == []
 
 
 def test_eof_exits_cleanly(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime()
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
 
     def input_fn(prompt: str) -> str:
         raise EOFError
@@ -451,185 +505,373 @@ def test_eof_exits_cleanly(tmp_path, monkeypatch):
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
     code = repl_main(
         [],
-        runtime_factory=lambda _settings: runtime,
         input_fn=input_fn,
         output=lambda line: None,
         configure_stdio=False,
+        transport=fake.transport(),
+        ensure=lambda _settings, **kw: (0, settings.port),
     )
 
     assert code == 0
-    assert runtime.task_manager.shutdown_calls == 1
 
 
 def test_terminal_event_finishes_the_round_even_before_status_settles(
     tmp_path, monkeypatch
 ):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(
-        history=_final_events(),
-        status_sequence=[TaskStatus.RUNNING, TaskStatus.INTERRUPTED],
-    )
-    clock, sleep = _clock_pair()
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.auto_park = False
+    fake.status_plans["task0001deadbeef"] = ["RUNNING", "INTERRUPTED"]
+    fake.queue_stream(*_final_events("task0001deadbeef"))
 
-    code, out = _run(
-        monkeypatch,
-        settings,
-        runtime,
-        ["first", "exit"],
-        sleep=sleep,
-        clock=clock,
-    )
+    code, out = _run(monkeypatch, settings, fake, ["first", "exit"])
 
     assert code == 0
     assert any("■ 停下" in line for line in out)
-    assert runtime.task_manager.created
+    assert not any("仍在跑" in line for line in out)
 
 
-def test_status_polling_is_the_fallback_when_events_are_missing(
+def test_status_polling_is_the_fallback_when_events_are_missing(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.auto_park = False
+    fake.status_plans["task0001deadbeef"] = ["RUNNING", "RUNNING", "INTERRUPTED"]
+    fake.queue_stream()  # the stream ends without a single event
+
+    code, out = _run(monkeypatch, settings, fake, ["first", "exit"])
+
+    text = _body(out)
+    assert code == 0
+    assert not any("■ 停下" in line for line in out), "no event was rendered"
+    assert "改为轮询任务状态" in text
+    assert not any("仍在跑" in line for line in out), "the poll saw it park"
+
+
+def test_a_dropped_stream_takes_a_snapshot_and_resumes_without_resending(
     tmp_path, monkeypatch
 ):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(
-        history=[],
-        status_sequence=[TaskStatus.RUNNING, TaskStatus.INTERRUPTED],
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend(start_running=True)
+    fake.queue_broken_stream(
+        {"type": "task_created", "data": {"task_id": "task0001deadbeef"}},
+        {"type": "step_start", "data": {"index": 1}},
     )
-    clock, sleep = _clock_pair()
+    fake.queue_stream(
+        [
+            {"type": "final_answer", "data": {"answer": "after-reconnect"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
+    )
+
+    code, out = _run(monkeypatch, settings, fake, ["first", "exit"])
+
+    text = _body(out)
+    assert code == 0
+    assert "答: after-reconnect" in text
+    assert fake.calls("GET", "/api/tasks/task0001deadbeef/events") == 2
+    # Contract: one create, one snapshot (the status poll) and no replay.
+    assert fake.calls("POST", "/api/tasks") == 1
+    assert fake.calls("POST", "/api/tasks/task0001deadbeef/messages") == 0
+
+
+def test_exiting_the_terminal_stops_nothing_and_leaves_no_record(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, single_backend_guard_enabled=True, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
+
+    code, _out = _run(monkeypatch, settings, fake, ["first", "exit"])
+
+    assert code == 0
+    assert fake.stop_requests == []
+    assert fake.calls("POST", "/api/server/stop") == 0
+    # The client never holds the single-instance record.
+    assert not (tmp_path / "server.json").exists()
+    assert fake.tasks["task0001deadbeef"]["status"] == "INTERRUPTED"
+
+
+# ── commands: /tasks /use /resume /mode /model ──
+def test_tasks_lists_this_directory(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.add_task(status="INTERRUPTED", mode="plan", title="整理计划")
+
+    code, out = _run(monkeypatch, settings, fake, ["/tasks", "exit"])
+
+    text = _body(out)
+    assert code == 0
+    assert "task0001" in text and "整理计划" in text
+    assert fake.calls("GET", "/api/tasks") >= 1
+
+
+def test_use_attaches_to_an_existing_task_by_prefix(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    task_id = fake.add_task(title="已有的任务")
+    fake.queue_stream(
+        [
+            {"type": "final_answer", "data": {"answer": "continued"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
+    )
+
+    code, out = _run(monkeypatch, settings, fake, ["/use task0001", "more", "exit"])
+
+    text = _body(out)
+    assert code == 0
+    assert "已接入 task0001" in text
+    assert fake.sent_messages == [(task_id, "more")]
+    assert "答: continued" in text
+
+
+def test_resume_continues_a_parked_task(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.add_task(status="INTERRUPTED")
+    fake.queue_stream(
+        [
+            {"type": "task_resumed", "data": {"task_id": "task0001deadbeef"}},
+            {"type": "final_answer", "data": {"answer": "resumed"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
+    )
+
+    code, out = _run(monkeypatch, settings, fake, ["/use task0001", "/resume", "exit"])
+
+    text = _body(out)
+    assert code == 0
+    assert "● 续跑" in text
+    assert "答: resumed" in text
+    assert fake.calls("POST", "/api/tasks/task0001deadbeef/resume") == 1
+
+
+def test_mode_and_model_switch_the_current_task(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
 
     code, out = _run(
         monkeypatch,
         settings,
-        runtime,
-        ["first", "exit"],
-        sleep=sleep,
-        clock=clock,
+        fake,
+        ["first", "/mode plan", "/model m-42", "exit"],
+    )
+
+    text = _body(out)
+    assert code == 0
+    assert "● 模式 → plan" in text
+    assert "● 模型 → m-42" in text
+    assert fake.tasks["task0001deadbeef"]["mode"] == "plan"
+    assert fake.tasks["task0001deadbeef"]["model"] == "m-42"
+
+
+def test_an_invalid_mode_is_refused_without_a_request(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
+
+    code, out = _run(monkeypatch, settings, fake, ["first", "/mode turbo", "exit"])
+
+    assert code == 0
+    assert any("用法：/mode" in line for line in out)
+    assert fake.calls("PUT", "/api/tasks/task0001deadbeef/mode") == 0
+
+
+def test_an_unknown_command_is_refused_not_sent_to_the_model(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
+
+    code, out = _run(monkeypatch, settings, fake, ["first", "/mod plan", "exit"])
+
+    assert code == 0
+    assert any("未知命令" in line for line in out)
+    assert fake.calls("POST", "/api/tasks/task0001deadbeef/messages") == 0
+
+
+def test_new_is_refused_while_the_task_is_still_running(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend(start_running=True)
+    fake.auto_park = False
+    fake.queue_stream(
+        [
+            {"type": "final_answer", "data": {"answer": "still going"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
+    )
+    fake.queue_stream(*_final_events("task0002deadbeef"))
+
+    code, out = _run(
+        monkeypatch,
+        settings,
+        fake,
+        ["first", "/new", "/stop", "/new", "second", "exit"],
+    )
+
+    text = _body(out)
+    assert code == 0
+    assert "还在跑" in text, "RUNNING + /new must be refused"
+    assert "仍在跑" in text, "settle timeout must warn"
+    assert fake.calls("POST", "/api/tasks") == 2
+    assert fake.stop_requests == ["task0001deadbeef"]
+
+
+# ── failure classification (auth / unreachable / server errors) ──
+def test_a_401_reports_expiry_and_exits_nonzero(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123, auth_enabled=True, auth_token="local-secret")
+    fake = FakeBackend(auth=True)
+    # Login succeeds but hands out a token the backend already refuses (rotation
+    # on another client): the first task call is a 401.
+    fake.issued_token = "rotated-elsewhere"
+
+    code, out = _run(monkeypatch, settings, fake, ["first", "exit"])
+
+    text = _body(out)
+    assert code == 1
+    assert "认证已过期" in text
+    assert "local-secret" not in text
+    assert "tok-1" not in text
+
+
+def test_login_failure_is_reported_without_the_secret(tmp_path, monkeypatch):
+    settings = make_settings(
+        tmp_path, port=9123, auth_enabled=True, auth_token="wrong-local-secret"
+    )
+    fake = FakeBackend(auth=True)
+
+    code, out = _run(monkeypatch, settings, fake, ["exit"])
+
+    text = _body(out)
+    assert code == 1
+    assert "401" in text
+    assert "wrong-local-secret" not in text
+
+
+def test_an_unreachable_backend_is_reported(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    lines = iter(["first", "exit"])
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+    out: List[str] = []
+    code = repl_main(
+        [],
+        input_fn=lambda prompt: next(lines),
+        output=out.append,
+        configure_stdio=False,
+        transport=httpx.MockTransport(boom),
+        ensure=lambda _settings, **kw: (0, settings.port),
+    )
+
+    assert code == 0  # the prompt survives: the user can fix it and retry
+    assert any("✗" in line and "无法连接后台" in line for line in out)
+
+
+def test_stop_errors_are_printed_not_raised(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend(start_running=True)
+    fake.auto_park = False
+    fake.queue_stream(
+        [
+            {"type": "final_answer", "data": {"answer": "still going"}},
+            {"type": "task_interrupted", "data": {"status": "INTERRUPTED"}},
+        ]
+    )
+    original = fake.handler
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/stop"):
+            return httpx.Response(500, json={"detail": "tasks.json write failed"})
+        return original(request)
+
+    code, out = _run(
+        monkeypatch,
+        settings,
+        fake,
+        ["first", "/stop", "exit"],
+        transport=httpx.MockTransport(flaky),
     )
 
     assert code == 0
-    assert runtime.task_manager.created
-    assert not any("■ 停下" in line for line in out)  # no event was rendered
+    assert any("✗" in line and "write failed" in line for line in out)
 
 
-# ── lock + mutual exclusion (D-48 / requirement 2) ──
-def test_repl_claims_mode_repl_and_releases_on_exit(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
-    runtime = _fake_runtime()
-    seen: List[Any] = []
-    lock_file = server_lock.lock_path(settings)
+def test_send_persistence_error_is_printed(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    fake.queue_stream(*_final_events("task0001deadbeef"))
+    original = fake.handler
 
-    def factory(_settings):
-        seen.append(server_lock.read_lock(lock_file))
-        return runtime
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/messages"):
+            return httpx.Response(500, json={"detail": "tasks.json write failed"})
+        return original(request)
 
-    out: List[str] = []
-    iterator = iter(["exit"])
-
-    def input_fn(prompt: str) -> str:
-        return next(iterator)
-
-    monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    code = repl_main(
-        [],
-        runtime_factory=factory,
-        input_fn=input_fn,
-        output=out.append,
-        configure_stdio=False,
+    code, out = _run(
+        monkeypatch,
+        settings,
+        fake,
+        ["first", "second", "exit"],
+        transport=httpx.MockTransport(flaky),
     )
 
     assert code == 0
-    assert seen and seen[0] is not None and seen[0].mode == "repl"
-    assert seen[0].pid == os.getpid()
-    assert server_lock.read_lock(lock_file) is None
-    assert runtime.task_manager.shutdown_calls == 1
+    assert any("✗" in line and "write failed" in line for line in out)
 
 
-def test_repl_refuses_when_a_web_backend_is_running(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
-    lock_file = server_lock.lock_path(settings)
-    assert server_lock.claim_lock(
-        lock_file,
-        server_lock.ServerLock(
-            pid=os.getpid(),
-            port=settings.port,
-            started_at=server_lock.now_iso(),
-            instance="web",
-            mode="serve",
-        ),
-    )
-    monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    out: List[str] = []
-    called: List[bool] = []
+def test_ensure_failure_returns_nonzero(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
 
-    code = repl_main(
-        [],
-        runtime_factory=lambda _settings: called.append(True) or _fake_runtime(),
-        input_fn=lambda prompt: "exit",
-        output=out.append,
-        configure_stdio=False,
+    code, out = _run(
+        monkeypatch,
+        settings,
+        fake,
+        ["exit"],
+        ensure=lambda _settings, **kw: (1, 0),
     )
 
     assert code == 1
-    assert called == []
-    assert any("关终端会停任务" in line for line in out)
-    assert any("网页后台" in line for line in out)
+    assert fake.requests == []
 
 
-def test_repl_refuses_when_another_repl_is_running(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
-    lock_file = server_lock.lock_path(settings)
-    assert server_lock.claim_lock(
-        lock_file,
-        server_lock.ServerLock(
-            pid=os.getpid(),
-            port=settings.port,
-            started_at=server_lock.now_iso(),
-            instance="other-repl",
-            mode="repl",
-        ),
-    )
-    monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    out: List[str] = []
-
-    code = repl_main(
-        [],
-        runtime_factory=lambda _settings: _fake_runtime(),
-        input_fn=lambda prompt: "exit",
-        output=out.append,
-        configure_stdio=False,
-    )
-
-    assert code == 1
-    assert any("终端会话" in line for line in out)
-
-
-def test_web_launcher_refuses_a_running_repl_without_probing(
-    tmp_path, monkeypatch, capsys
+def test_repl_ensures_the_shared_backend_without_a_browser_or_a_build(
+    tmp_path, monkeypatch
 ):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
-    lock_file = server_lock.lock_path(settings)
-    assert server_lock.claim_lock(
-        lock_file,
-        server_lock.ServerLock(
-            pid=os.getpid(),
-            port=settings.port,
-            started_at=server_lock.now_iso(),
-            instance="repl-1",
-            mode="repl",
-        ),
-    )
-    monkeypatch.setattr(cli, "get_settings", lambda: settings)
-    spawned: List[tuple] = []
+    """`qianfan repl` reuses/spawns the one backend; it never opens the UI.
 
-    code = cli.main(
-        [],
-        spawn=lambda *args: spawned.append(args),
+    ``require_dist=False`` keeps the terminal usable without a frontend build,
+    ``accept_dev=True`` lets it reuse a ``start.py`` backend, and ``browser=None``
+    is "connect only" — the three knobs that make this the terminal, not
+    ``qianfan``.
+    """
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    seen: Dict[str, Any] = {}
+
+    def fake_ensure(settings_arg, **kwargs):
+        seen.update(kwargs)
+        return 0, settings_arg.port
+
+    monkeypatch.setattr(cli, "ensure_backend", fake_ensure)
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+    code = repl_main(
+        ["--preset", "minimal"],
+        input_fn=lambda prompt: "exit",
+        output=lambda line: None,
+        configure_stdio=False,
+        transport=fake.transport(),
     )
 
-    assert code == 2
-    assert spawned == []
-    assert "关终端会停任务" in capsys.readouterr().out
-    # A live record is refused but must not be deleted by the refused launcher.
-    record = server_lock.read_lock(lock_file)
-    assert record is not None and record.instance == "repl-1"
+    assert code == 0
+    assert seen == {
+        "port": 9123,
+        "preset": "minimal",
+        "browser": None,
+        "require_dist": False,
+        "accept_dev": True,
+    }
 
 
 # ── CLI dispatch + encoding + module entry (D-48 / D-51) ──
@@ -638,6 +880,13 @@ def test_qianfan_routes_the_repl_subcommand():
     code = cli.main(["repl", "--flag"], repl=lambda argv: seen.append(argv) or 7)
     assert code == 7
     assert seen == [["--flag"]]
+
+
+def test_qianfan_rejects_an_unknown_preset_before_dispatch():
+    seen: List[List[str]] = []
+    code = cli.main(["repl", "--preset", "nope"], repl=lambda argv: seen.append(argv) or 0)
+    assert code == 1
+    assert seen == []
 
 
 def test_configure_stdio_utf8_reconfigures_gbk_wrapper():
@@ -655,13 +904,11 @@ def test_configure_stdio_utf8_skips_non_reconfigurable_streams():
     configure_stdio_utf8([object()])  # must not raise
 
 
-def test_repl_module_entry_starts_and_exits(tmp_path):
-    """Subprocess smoke (entry wiring + exit code).
+def test_repl_module_entry_exits_with_a_readable_preset_error(tmp_path):
+    """Subprocess smoke (module entry + exit code) without spawning a backend.
 
-    AGENTS.md classifies subprocess/process-tree tests separately ("one file per
-    PR + 3 stable runs" before joining the Windows smoke list); this file is NOT
-    on that list yet — the follow-up is recorded in the PR body, not silently
-    assumed.
+    An invalid ``--preset`` is refused before the ensure step, so this checks
+    the entry wiring (``python -m backend.repl``) and never starts uvicorn.
     """
     env = os.environ.copy()
     env.update(
@@ -675,10 +922,11 @@ def test_repl_module_entry_starts_and_exits(tmp_path):
             "SINGLE_BACKEND_GUARD_ENABLED": "false",
             "HOST": "127.0.0.1",
             "FRONTEND_DIST": "_no_frontend_dist_for_tests",
+            "PLUGINS_PRESET": "full",
         }
     )
     result = subprocess.run(
-        [sys.executable, "-m", "backend.repl"],
+        [sys.executable, "-m", "backend.repl", "--preset", "nope"],
         input="exit\n",
         capture_output=True,
         text=True,
@@ -689,151 +937,6 @@ def test_repl_module_entry_starts_and_exits(tmp_path):
         timeout=180,
     )
     output = result.stdout + result.stderr
-    assert result.returncode == 0, output
-    assert "qianfan 终端会话" in output
-
-
-# ── PR #304 rework: stale lock recovery (M1) ──
-def test_repl_recovers_from_a_dead_lock_record(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
-    lock_file = server_lock.lock_path(settings)
-    assert server_lock.claim_lock(
-        lock_file,
-        server_lock.ServerLock(
-            pid=999_999,
-            port=settings.port,
-            started_at=server_lock.now_iso(),
-            instance="dead",
-            mode="repl",
-        ),
-    )
-    runtime = _fake_runtime()
-    iterator = iter(["exit"])
-    monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    out: List[str] = []
-
-    code = repl_main(
-        [],
-        runtime_factory=lambda _settings: runtime,
-        input_fn=lambda prompt: next(iterator),
-        output=out.append,
-        configure_stdio=False,
-    )
-
-    assert code == 0
-    assert server_lock.read_lock(lock_file) is None
-    assert runtime.task_manager.shutdown_calls == 1
-
-
-def test_repl_recovers_from_a_corrupt_lock_record(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
-    lock_file = server_lock.lock_path(settings)
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text("{not json", encoding="utf-8")
-    runtime = _fake_runtime()
-    iterator = iter(["exit"])
-    monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    out: List[str] = []
-
-    code = repl_main(
-        [],
-        runtime_factory=lambda _settings: runtime,
-        input_fn=lambda prompt: next(iterator),
-        output=out.append,
-        configure_stdio=False,
-    )
-
-    assert code == 0
-    assert server_lock.read_lock(lock_file) is None
-    assert runtime.task_manager.shutdown_calls == 1
-
-
-def test_repl_reports_manual_cleanup_when_claim_races(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
-    lock_file = server_lock.lock_path(settings)
-    monkeypatch.setattr(server_lock, "claim_lock", lambda *args, **kwargs: False)
-    monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    out: List[str] = []
-
-    code = repl_main(
-        [],
-        runtime_factory=lambda _settings: _fake_runtime(),
-        input_fn=lambda prompt: "exit",
-        output=out.append,
-        configure_stdio=False,
-    )
-
-    assert code == 1
-    message = " ".join(out)
-    assert "删除" in message
-    assert str(lock_file) in message
-
-
-# ── PR #304 rework: /new while RUNNING (M2) + replay dedupe (L1/L2) ──
-def test_new_is_refused_while_the_task_is_still_running(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(history=_final_events())
-    runtime.task_manager.stay_running = True
-    clock, sleep = _clock_pair()
-
-    code, out = _run(
-        monkeypatch,
-        settings,
-        runtime,
-        ["first", "/new", "/stop", "/new", "second", "exit"],
-        sleep=sleep,
-        clock=clock,
-    )
-
-    assert code == 0
-    assert any("还在跑" in line for line in out), "RUNNING + /new must be refused"
-    assert any("仍在跑" in line for line in out), "settle timeout must warn"
-    # Refused /new did not create a task; after /stop the next /new works.
-    assert [text for _, text in runtime.task_manager.created] == ["first", "second"]
-    assert runtime.task_manager.stopped
-
-
-def test_real_event_bus_replay_renders_task_created_once(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime()
-    runtime.event_bus = EventBus()
-    task_id = "task00000001deadbeef"
-    runtime.event_bus.publish(task_id, "task_created", {"task_id": task_id})
-
-    code, out = _run(monkeypatch, settings, runtime, ["first", "exit"])
-
-    assert code == 0
-    assert sum(line.startswith("● 新任务") for line in out) == 1
-
-
-# ── PR #304 rework: command errors print, never a bare traceback (L4) ──
-def test_stop_errors_are_printed_not_raised(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(history=_final_events())
-    runtime.task_manager.stay_running = True
-    runtime.task_manager.stop_error = PersistenceError("tasks.json write failed")
-    clock, sleep = _clock_pair()
-
-    code, out = _run(
-        monkeypatch,
-        settings,
-        runtime,
-        ["first", "/stop", "exit"],
-        sleep=sleep,
-        clock=clock,
-    )
-
-    assert code == 0
-    assert any("✗" in line and "write failed" in line for line in out)
-    assert runtime.task_manager.shutdown_calls == 1
-
-
-def test_send_persistence_error_is_printed(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path)
-    runtime = _fake_runtime(history=_final_events())
-    runtime.task_manager.send_error = PersistenceError("tasks.json write failed")
-
-    code, out = _run(monkeypatch, settings, runtime, ["first", "second", "exit"])
-
-    assert code == 0
-    assert any("✗" in line and "write failed" in line for line in out)
+    assert result.returncode == 1, output
+    assert "能力包配置无效" in output
+    assert not (tmp_path / "data" / "server.json").exists()

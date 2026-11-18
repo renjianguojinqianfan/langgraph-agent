@@ -35,7 +35,6 @@ from backend.services.plugins_store import (
 )
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
-from backend.tests.test_repl import _fake_runtime
 
 ALL_PACKAGES = frozenset(
     {"files", "shell", "skills", "web-search", "subagent", "mcp"}
@@ -472,70 +471,68 @@ def test_cli_dispatch_rejects_an_invalid_repl_preset_before_the_seam(
 def test_repl_subparser_receives_preset_and_passes_it_through(
     tmp_path, monkeypatch
 ):
+    """#332 S6: the terminal forwards ``--preset`` to the shared-backend ensure.
+
+    It no longer builds a runtime itself (ADR 0013 decision 2); the preset is
+    what the *backend this run might spawn* has to start with.
+    """
     settings = make_settings(tmp_path)
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
     monkeypatch.setenv(PLUGIN_PRESET_OVERRIDE_ENV, "")
     captured: dict = {}
 
-    def factory(_settings, **kwargs):
+    def ensure(_settings, **kwargs):
         captured.update(kwargs)
-        return _fake_runtime()
+        return 1, 0  # stop before connecting: only the preset plumbing matters
 
+    monkeypatch.setattr(cli, "ensure_backend", ensure)
     code = repl.repl_main(
         ["--preset", "minimal"],
-        runtime_factory=factory,
         input_fn=lambda prompt: "exit",
         output=lambda line: None,
         configure_stdio=False,
     )
-    assert code == 0
-    assert captured == {"preset_override": "minimal"}
+
+    assert code == 1
+    assert captured["preset"] == "minimal"
 
 
-def test_repl_invalid_preset_fails_before_claim(tmp_path, monkeypatch):
-    settings = make_settings(
-        tmp_path, single_backend_guard_enabled=True
-    )
+def test_repl_invalid_preset_fails_before_ensure(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    claimed: List[int] = []
+    ensured: List[int] = []
     monkeypatch.setattr(
-        server_lock, "claim_lock", lambda *args, **kwargs: claimed.append(1) or True
+        cli, "ensure_backend", lambda *args, **kwargs: ensured.append(1) or (0, 0)
     )
-    built: List[int] = []
     out: List[str] = []
     code = repl.repl_main(
         ["--preset", "ultra"],
-        runtime_factory=lambda _settings, **kwargs: built.append(1),
         input_fn=lambda prompt: "exit",
         output=out.append,
         configure_stdio=False,
     )
     assert code == 1
-    assert claimed == []
-    assert built == []
+    assert ensured == [], "a bad preset must fail before anything is spawned"
     assert any("ultra" in line for line in out)
 
 
-def test_repl_invalid_file_fails_before_claim(tmp_path, monkeypatch):
-    settings = make_settings(tmp_path, single_backend_guard_enabled=True)
+def test_repl_invalid_file_fails_before_ensure(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
     path = _write_raw(settings, "{broken")
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    claimed: List[int] = []
+    ensured: List[int] = []
     monkeypatch.setattr(
-        server_lock, "claim_lock", lambda *args, **kwargs: claimed.append(1) or True
+        cli, "ensure_backend", lambda *args, **kwargs: ensured.append(1) or (0, 0)
     )
-    built: List[int] = []
     out: List[str] = []
     code = repl.repl_main(
         [],
-        runtime_factory=lambda _settings, **kwargs: built.append(1),
         input_fn=lambda prompt: "exit",
         output=out.append,
         configure_stdio=False,
     )
     assert code == 1
-    assert claimed == []
-    assert built == []
+    assert ensured == []
     assert any(str(path) in line for line in out)
 
 

@@ -11,7 +11,8 @@ Subcommands:
 * ``qianfan status`` — pid / port / mode / instance / started_at / healthy;
 * ``qianfan stop`` — asks ``POST /api/server/stop`` for the registered instance
   to shut down, then waits for the process to exit;
-* ``qianfan repl`` — the terminal session (unchanged dispatch; S6 reworks it).
+* ``qianfan repl`` — the terminal client: ensures the same backend (no browser)
+  and drives it over REST/SSE only (#332 S6).
 
 Development keeps using ``start.py`` (Vite hot reload); ``qianfan`` never takes
 over a dev backend (``mode=dev``).
@@ -76,13 +77,9 @@ def _stale_build(dist: Path) -> bool:
         return False
 
 
-def _open_browser(url: str) -> None:
-    webbrowser.open(url)
-
-
 def _open_browser_now(url: str) -> None:
-    """Handoff path: the process exits right after ``main()`` returns."""
-    _open_browser(url)
+    """The default browser seam: ``main()`` returns right after opening."""
+    webbrowser.open(url)
 
 
 def _open_when_ready(
@@ -146,19 +143,28 @@ def _open_at(port: int, no_browser: bool, browser: Callable[[str], None]) -> Non
     print(f"[qianfan] 已有后台在 http://{HOST}:{port}/，本目录：{os.getcwd()}")
 
 
-def _handoff(running: server_lock.ServerLock, no_browser: bool, browser: Callable[[str], None]) -> int:
-    if running.mode == "repl":
-        print(
-            "[qianfan] 终端会话（qianfan repl）在跑；请先在该终端输入 exit"
-            " —— 关终端会停任务。"
-        )
-        return 2
-    if running.mode != "serve":
+def _handoff(
+    running: server_lock.ServerLock,
+    no_browser: bool,
+    browser: Optional[Callable[[str], None]],
+    *,
+    accept_dev: bool = False,
+) -> int:
+    """Point the caller at a healthy backend; a refusal changes nothing.
+
+    ``accept_dev`` is for the terminal client: it speaks REST/SSE, so a
+    ``start.py`` backend on its API port is usable. ``qianfan`` keeps refusing
+    it because the API port is not necessarily the dev UI.
+    """
+    if running.mode != "serve" and not accept_dev:
         print(
             "[qianfan] 开发后台（start.py）在跑，qianfan 不接开发后台；"
             "请用 http://127.0.0.1:5173，或先停掉 start.py。"
         )
         return 2
+    if browser is None or no_browser:
+        print(f"[qianfan] 已有后台在 http://{HOST}:{running.port}/，本目录：{os.getcwd()}")
+        return 0
     _open_at(running.port, no_browser, browser)
     return 0
 
@@ -236,7 +242,7 @@ def _child_command(port: int, instance: str) -> list[str]:
 
 
 def _preflight(
-    settings: Any, port: int, preset: Optional[str]
+    settings: Any, port: int, preset: Optional[str], *, require_dist: bool = True
 ) -> Optional[int]:
     """Shared build/port checks for ``ensure`` and ``serve``; exit code or None."""
     if not 1 <= port <= 65535:
@@ -250,6 +256,13 @@ def _preflight(
         print(f"[qianfan] {exc}")
         return 1
 
+    if not require_dist:
+        if not _port_available(port):
+            print(f"[qianfan] 端口 {port} 已被其他程序占用（不是可交接的 qianfan 后台）。")
+            print(f"[qianfan] 换一个端口：qianfan --port {port + 1}")
+            return 1
+        return None
+
     dist: Path = settings.frontend_dist_path
     if not (dist / "index.html").is_file():
         print(f"[qianfan] 找不到前端构建产物：{dist}")
@@ -262,6 +275,96 @@ def _preflight(
         print(f"[qianfan] 换一个端口：qianfan --port {port + 1}")
         return 1
     return None
+
+
+def ensure_backend(
+    settings: Any,
+    *,
+    port: int,
+    preset: Optional[str] = None,
+    probe: Optional[Callable[[int, float], Optional[dict[str, Any]]]] = None,
+    spawn: Optional[Callable[[list[str], dict[str, str], Path], Any]] = None,
+    browser: Optional[Callable[[str], None]] = None,
+    require_dist: bool = True,
+    accept_dev: bool = False,
+) -> tuple[int, int]:
+    """Ensure one shared backend is reachable; returns ``(exit_code, port)``.
+
+    A healthy instance is reused; otherwise this process claims the
+    single-instance record, spawns a detached ``backend.serve`` child and waits
+    for ``/health``. ``exit_code != 0`` means nothing is running for this
+    caller and the reason was already printed.
+
+    Caller-specific knobs: ``browser=None`` connects without opening anything
+    (the terminal client); ``require_dist=False`` skips the built-frontend check
+    for a client that never serves the UI; ``accept_dev=True`` reuses a
+    ``start.py`` backend on its API port.
+    """
+    probe_health = probe or server_lock.probe_health
+    lock_file = server_lock.lock_path(settings)
+
+    running = server_lock.find_running(lock_file, probe=probe_health)
+    if running is not None:
+        if preset:
+            print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
+        code = _handoff(running, browser is None, browser, accept_dev=accept_dev)
+        return code, running.port if code == 0 else 0
+
+    preflight = _preflight(settings, port, preset, require_dist=require_dist)
+    if preflight is not None:
+        return preflight, 0
+
+    instance = server_lock.new_instance()
+    lock = server_lock.ServerLock(
+        pid=os.getpid(), port=port, started_at=server_lock.now_iso(), instance=instance
+    )
+    if not server_lock.claim_lock(lock_file, lock):
+        # Lost a race with another launcher: hand off to the winner.
+        running = server_lock.find_running(lock_file, probe=probe_health)
+        if running is not None:
+            if preset:
+                print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
+            code = _handoff(running, browser is None, browser, accept_dev=accept_dev)
+            return code, running.port if code == 0 else 0
+        print(f"[qianfan] 后台可能正在启动或登记记录损坏（{lock_file}），请稍后再试。")
+        print("[qianfan] 若确认没有进程在跑，可手动删除该文件；qianfan 不会按 pid 杀进程。")
+        return 1, 0
+
+    log_path = _server_log_path(settings)
+    env = _child_env(port, instance, preset)
+    try:
+        child = (spawn or _spawn_detached)(_child_command(port, instance), env, log_path)
+    except OSError as exc:
+        server_lock.release_lock(lock_file, instance)
+        print(f"[qianfan] 后台启动失败（{exc}）；日志：{log_path}")
+        return 1, 0
+
+    url = f"http://{HOST}:{port}/?dir={quote(os.getcwd())}"
+    ready = _open_when_ready(
+        url,
+        port,
+        browser=browser,
+        probe=probe_health,
+        wait=READY_TIMEOUT_SEC,
+        alive=lambda: child.poll() is None,
+    )
+    if not ready:
+        code = child.poll()
+        if code is None:
+            # Still alive but not answering: end the attempt instead of
+            # leaving an unregistered half-started process behind.
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except Exception:  # pragma: no cover - defensive
+                child.kill()
+            print(f"[qianfan] 后台未就绪，已终止本次启动；日志：{log_path}")
+        else:
+            print(f"[qianfan] 后台启动失败（退出码 {code}）；日志：{log_path}")
+        server_lock.release_lock(lock_file, instance)
+        return 1, 0
+    print(f"[qianfan] 后台已就绪（pid={child.pid}）：http://{HOST}:{port}/")
+    return 0, port
 
 
 def _ensure(
@@ -295,78 +398,18 @@ def _ensure(
     )
     args = parser.parse_args(argv)
 
-    browser: Callable[[str], None] = open_browser or _open_browser
-    handoff_browser = open_browser or _open_browser_now
-    probe_health = probe or server_lock.probe_health
-    lock_file = server_lock.lock_path(settings)
-
-    # A live backend hands the browser over; a dev backend / REPL is refused.
-    existing = server_lock.read_lock(lock_file)
-    if existing is not None and existing.mode == "repl" and server_lock.pid_alive(existing.pid):
-        print(
-            "[qianfan] 终端会话（qianfan repl）在跑；请先在该终端输入 exit"
-            " —— 关终端会停任务。"
-        )
-        return 2
-    running = server_lock.find_running(lock_file, probe=probe_health)
-    if running is not None:
-        if args.preset:
-            print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
-        return _handoff(running, args.no_browser, handoff_browser)
-
-    preflight = _preflight(settings, args.port, args.preset)
-    if preflight is not None:
-        return preflight
-
-    instance = server_lock.new_instance()
-    lock = server_lock.ServerLock(
-        pid=os.getpid(), port=args.port, started_at=server_lock.now_iso(), instance=instance
+    browser: Optional[Callable[[str], None]] = None if args.no_browser else (
+        open_browser or _open_browser_now
     )
-    if not server_lock.claim_lock(lock_file, lock):
-        # Lost a race with another launcher: hand off to the winner.
-        running = server_lock.find_running(lock_file, probe=probe_health)
-        if running is not None:
-            if args.preset:
-                print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
-            return _handoff(running, args.no_browser, handoff_browser)
-        print(f"[qianfan] 后台可能正在启动或登记记录损坏（{lock_file}），请稍后再试。")
-        return 1
-
-    log_path = _server_log_path(settings)
-    env = _child_env(args.port, instance, args.preset)
-    try:
-        child = (spawn or _spawn_detached)(_child_command(args.port, instance), env, log_path)
-    except OSError as exc:
-        server_lock.release_lock(lock_file, instance)
-        print(f"[qianfan] 后台启动失败（{exc}）；日志：{log_path}")
-        return 1
-
-    url = f"http://{HOST}:{args.port}/?dir={quote(os.getcwd())}"
-    ready = _open_when_ready(
-        url,
-        args.port,
-        browser=None if args.no_browser else browser,
-        probe=probe_health,
-        wait=READY_TIMEOUT_SEC,
-        alive=lambda: child.poll() is None,
+    code, _port = ensure_backend(
+        settings,
+        port=args.port,
+        preset=args.preset,
+        probe=probe,
+        spawn=spawn,
+        browser=browser,
     )
-    if not ready:
-        code = child.poll()
-        if code is None:
-            # Still alive but not answering: end the attempt instead of
-            # leaving an unregistered half-started process behind.
-            child.terminate()
-            try:
-                child.wait(timeout=5)
-            except Exception:  # pragma: no cover - defensive
-                child.kill()
-            print(f"[qianfan] 后台未就绪，已终止本次启动；日志：{log_path}")
-        else:
-            print(f"[qianfan] 后台启动失败（退出码 {code}）；日志：{log_path}")
-        server_lock.release_lock(lock_file, instance)
-        return 1
-    print(f"[qianfan] 后台已就绪（pid={child.pid}）：http://{HOST}:{args.port}/")
-    return 0
+    return code
 
 
 def _serve_foreground(
@@ -390,13 +433,6 @@ def _serve_foreground(
 
     probe_health = probe or server_lock.probe_health
     lock_file = server_lock.lock_path(settings)
-    existing = server_lock.read_lock(lock_file)
-    if existing is not None and existing.mode == "repl" and server_lock.pid_alive(existing.pid):
-        print(
-            "[qianfan] 终端会话（qianfan repl）在跑；请先在该终端输入 exit"
-            " —— 关终端会停任务。"
-        )
-        return 2
     running = server_lock.find_running(lock_file, probe=probe_health)
     if running is not None:
         print(f"[qianfan] 已有后台在 http://{HOST}:{running.port}/ 运行；serve 不启动第二个。")

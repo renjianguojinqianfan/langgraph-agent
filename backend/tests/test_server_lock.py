@@ -224,31 +224,38 @@ def test_start_refuses_when_a_backend_is_registered(monkeypatch):
     assert start._refuse_if_running(Settings(_env_file=None)) is False
 
 
-def test_start_refuses_a_running_repl_without_probing(tmp_path, monkeypatch, capsys):
-    """D-48 (#20): a live mode=repl record refuses start.py before find_running.
+def test_start_probes_a_live_repl_record_like_any_other_backend(
+    tmp_path, monkeypatch, capsys
+):
+    """#332 S6: the record's mode no longer carries policy.
 
-    The REPL serves no /health, so the 15s boot wait would otherwise block
-    start.py; the record check must answer immediately and never call probe.
+    A pre-S6 terminal left ``mode=repl`` behind. It is not refused by label and
+    not killed: ``start.py`` asks ``/health`` like for any backend, so no
+    answer means "not a live backend" (the claim reports it) and a matching
+    answer means "running" (the handoff message).
     """
     import start
 
     settings = make_settings(tmp_path, single_backend_guard_enabled=True)
     lock_file = server_lock.lock_path(settings)
-    assert server_lock.claim_lock(
-        lock_file,
-        _lock(port=settings.port, instance="repl-live", mode="repl"),
-    )
+    record = _lock(port=settings.port, instance="repl-live", mode="repl")
+    assert server_lock.claim_lock(lock_file, record)
     probed: list = []
 
-    def fake_running_server(_settings):
+    def probe_only(_settings):
         probed.append(True)
         return None
 
-    monkeypatch.setattr(start, "_running_server", fake_running_server)
+    monkeypatch.setattr(start, "_running_server", probe_only)
 
+    assert start._refuse_if_running(settings) is False
+    assert probed == [True], "the label must not short-circuit the health probe"
+    kept = server_lock.read_lock(lock_file)
+    assert kept is not None and kept.instance == "repl-live", "no pid is killed"
+
+    monkeypatch.setattr(start, "_running_server", lambda _settings: record)
     assert start._refuse_if_running(settings) is True
-    assert probed == []
-    assert "关终端会停任务" in capsys.readouterr().out
+    assert "已有后台" in capsys.readouterr().out
 
 
 def test_find_running_clears_a_dead_record(tmp_path):

@@ -478,6 +478,78 @@ def test_open_when_ready_does_not_report_a_browser_failure_as_a_startup_failure(
     assert "打开浏览器失败" in capsys.readouterr().out
 
 
+# ── #332 S6: the shared ensure seam used by `qianfan repl` ────────────────
+def test_ensure_backend_reuses_a_running_backend_without_spawning(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    port = _free_port()
+    server_lock.claim_lock(
+        server_lock.lock_path(settings),
+        server_lock.ServerLock(
+            pid=os.getpid(),
+            port=port,
+            started_at=server_lock.now_iso(),
+            instance="tok",
+            mode="serve",
+        ),
+    )
+    seen: list = []
+    code, live_port = cli.ensure_backend(
+        settings,
+        port=_free_port(),
+        probe=lambda port, timeout: {"instance": "tok"},
+        spawn=_recording_spawn(seen),
+        browser=None,
+        require_dist=False,
+        accept_dev=True,
+    )
+
+    assert (code, live_port) == (0, port)
+    assert seen == []
+    assert f"http://127.0.0.1:{port}/" in capsys.readouterr().out
+
+
+def test_ensure_backend_for_a_terminal_needs_no_frontend_build(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, tmp_path / "missing-dist")
+    seen: list = []
+    code, live_port = cli.ensure_backend(
+        settings,
+        port=_free_port(),
+        probe=lambda port, timeout: {"instance": "child"},
+        spawn=_recording_spawn(seen),
+        browser=None,
+        require_dist=False,
+        accept_dev=True,
+    )
+
+    assert code == 0
+    assert seen and live_port == int(seen[0]["env"]["PORT"])
+
+
+def test_ensure_backend_terminal_accepts_a_dev_backend(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    server_lock.claim_lock(
+        server_lock.lock_path(settings),
+        server_lock.ServerLock(
+            pid=os.getpid(),
+            port=9123,
+            started_at=server_lock.now_iso(),
+            instance="dev",
+            mode="dev",
+        ),
+    )
+    code, live_port = cli.ensure_backend(
+        settings,
+        port=_free_port(),
+        probe=lambda port, timeout: {"instance": "dev"},
+        spawn=_recording_spawn([]),
+        browser=None,
+        require_dist=False,
+        accept_dev=True,
+    )
+
+    assert (code, live_port) == (0, 9123)
+
+
 def test_help_mentions_every_subcommand(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["--help"])
