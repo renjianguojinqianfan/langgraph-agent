@@ -184,6 +184,30 @@ def test_sse_response_emits_replayed_event_frames(client):
     assert joined.startswith("event: ")
 
 
+def test_one_tool_round_emits_the_expected_event_sequence(client):
+    """S0 baseline (#327): the full event order a one-tool round emits today.
+
+    This is the replay sequence the SSE faces consume. Later kernel slices may
+    change it, but only deliberately and with this assertion updated in the
+    same change — not as a side effect of restructuring the loop.
+    """
+    tid = client.post(
+        "/api/tasks", json={"input": "write a file via api"}
+    ).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+
+    types = [e["type"] for e in client.app.state.event_bus.replay(tid)]
+    assert types == [
+        "task_created",
+        "step_start",
+        "tool_call",
+        "tool_result",
+        "step_start",
+        "final_answer",
+        "task_interrupted",
+    ]
+
+
 def test_sse_route_is_registered(client):
     # FastAPI 0.162 keeps included routers nested instead of flattening them
     # into ``app.routes``; the OpenAPI document is the public registration
