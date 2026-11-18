@@ -372,7 +372,7 @@ const _withToken = (url: string): string => {
 // ── C5: task workspace files ──
 // D-31 / #258 AC5: keep the HTTP status so FilePane can name the cause
 // (404 task gone vs 409 workspace gone vs 401 dead token …), like previewFile.
-export const listFiles = (id: string) =>
+export const listFiles = (id: string, signal?: AbortSignal) =>
   reqWithStatus<{ files: WorkspaceFile[]; truncated: boolean }>(
     `/tasks/${encodeURIComponent(id)}/files`,
     (json) => {
@@ -381,7 +381,8 @@ export const listFiles = (id: string) =>
       return data && Array.isArray(data.files)
         ? { files: data.files as WorkspaceFile[], truncated: !!data.truncated }
         : null;
-    }
+    },
+    signal ? { signal } : undefined
   );
 
 export type PreviewResult = StatusResult<FilePreview>;

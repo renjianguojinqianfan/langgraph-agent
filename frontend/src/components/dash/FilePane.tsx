@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listFiles } from "../../api/client";
 import { cx } from "../../lib/cx";
+import { createFilePollLoop } from "../../lib/filePolling";
 import { filesLoadFailure, filesPaneState, filesPaneStatusText } from "../../lib/failureStates";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
@@ -38,40 +39,42 @@ export function FilePane({
   }, [task.id]);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-
-    const load = () =>
-      listFiles(task.id)
-        .then((r) => {
-          if (cancelled) return;
-          if (!r.data) {
-            setNote(filesLoadFailure(r.status, r.detail));
-            return;
-          }
-          setNote(null);
-          setFiles(r.data.files ?? []);
-          setTruncated(!!r.data.truncated);
-        })
-        // `reqWithStatus` never rejects (a transport failure already comes back
-        // as status 0) — kept as defence in depth, not a silent dead path.
-        .catch(() => {
-          if (!cancelled) setNote(filesLoadFailure(0));
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-
     // #230: a closed drawer (narrow screens) must not fetch. Reopening re-runs
     // this effect (visible flips), so the first load happens immediately then.
-    if (visible) load();
-    // Files appear while the task is still running; refresh until it parks.
-    const timer = shouldPollFiles(task.status, visible)
-      ? window.setInterval(load, POLL_MS)
-      : null;
+    if (!visible) return;
+
+    setLoading(true);
+    // #335: poll only after each request settles, so a slow scan cannot stack
+    // requests. `stop()` drops the browser-side response of an in-flight scan
+    // (task switch / hidden / retry) but cannot stop the server-side scan.
+    const controller = new AbortController();
+    const loop = createFilePollLoop({
+      intervalMs: POLL_MS,
+      run: () => listFiles(task.id, controller.signal),
+      shouldContinue: () => shouldPollFiles(task.status, true),
+      apply: (r) => {
+        setLoading(false);
+        if (!r.data) {
+          setNote(filesLoadFailure(r.status, r.detail));
+          return;
+        }
+        setNote(null);
+        setFiles(r.data.files ?? []);
+        setTruncated(!!r.data.truncated);
+      },
+      // `reqWithStatus` never rejects (a transport failure already comes back
+      // as status 0) — kept as defence in depth, not a silent dead path.
+      onError: () => {
+        setLoading(false);
+        setNote(filesLoadFailure(0));
+      },
+    });
+    loop.start();
     return () => {
-      cancelled = true;
-      if (timer !== null) window.clearInterval(timer);
+      // Invalidate first, then cancel the browser request: an abort rejection
+      // must not resurrect an error note for a pane that already moved on.
+      loop.stop();
+      controller.abort();
     };
   }, [task.id, task.status, visible, reloadToken]);
 
