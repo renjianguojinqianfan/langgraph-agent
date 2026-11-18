@@ -565,7 +565,7 @@ def test_pwsh_runs_npm_cmd_when_available(settings):
     npm = shutil.which("npm")
     if npm is None:
         pytest.skip("npm is not installed on this host")
-    res = ShellTool(settings).run(command="npm --version", shell=SHELL_PWSH)
+    res = ShellTool(settings).run(command="npm --version", shell=SHELL_PWSH, timeout=15)
     assert res.success is True, res.error
     assert re.search(r"\d+\.\d+\.\d+", res.data["stdout"])
 
