@@ -1387,7 +1387,7 @@ class TaskManager:
                 )
             active = self._active_states.get(task_id)
             active_round = int(active.get("round_no", 0) or 0) if active else 0
-            active_step = int(active.get("step_index", 0) or 0) if active else None
+            active_step = (int(active.get("step_index", 0) or 0) or None) if active else None
             self.event_bus.publish(
                 task_id,
                 "task_failed",
@@ -1556,7 +1556,7 @@ class TaskManager:
                 # round N+1 would look older than the stream and be discarded
                 # as a replay (S8).
                 active_round = int(st.get("round_no", 0) or 0) if st else 0
-                active_step = int(st.get("step_index", 0) or 0) if st else None
+                active_step = (int(st.get("step_index", 0) or 0) or None) if st else None
                 self.event_bus.publish(
                     task_id,
                     "task_interrupted",

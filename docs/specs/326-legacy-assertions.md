@@ -126,8 +126,8 @@
 | `test_repl.py::test_rendered_event_types_are_the_small_face` | 终端小事件面新增 `llm_call` 一行摘要 + `/trace` 指针；不复制完整 Web 调试界面 | S8 要求终端保留调用概要及查看位置 | 改写；其余渲染 / 不打印 reasoning / 不泄露 secret 断言原样保留 |
 | `test_reasoning.py::test_final_answer_event_carries_optional_redacted_reasoning` 的 `quiet_finals[-1] == {"answer": "ok"}` | `final_answer` 保留「无 reasoning 时省略可选字段」，但事件统一带 `round` / `step` / `plan_version` | S8 的修订元数据是显式扩展；继续断言整份 payload 相等会把新增字段当回归 | 改写：断言 `answer` 与 `reasoning` 缺省，不再锁死整份字典 |
 | `test_sse_publish_ast.py` + `npm run check:sse` 的四处对齐 | **扩展**：新增 `llm_call` 必须同时进发布点、§3.4 表、`useSSE.ts`、`types/index.ts`、`eventLabels.ts` | 事件词汇表四处对齐的机械守卫不变 | 扩展，不替换 |
-| `test_models.py::test_provider_error_key_never_reaches_task_trace_logs_or_sse` | **保留并扩展**：假 Key canary 不得出现在 `llm_call` 的请求/响应/错误/trace/SSE | 观测面新增出口，脱敏矩阵必须覆盖 | 扩展 |
-| `test_qa_trace.py` 的 trace 生命周期/删除断言 | **保留**：`llm_call` 与 step/tool 共用同一生命周期与删除清理 | 不新建平行存储的前提 | 原样保留；S7 增补删除与晚到写入竞态 |
+| `test_models.py::test_provider_error_key_never_reaches_task_trace_logs_or_sse` | **保留**：旧 `_LeakyClient` 直接重写 `complete()`，不进入 S7 记录包装器，因此该用例继续守任务错误/日志/SSE 面 | 保留原覆盖，不把它当成 `llm_call` 记录面的证明 | 原样保留；新增 `test_the_recorded_provider_error_is_redacted_by_the_manager`，让 provider 错误走真实 `LLMClient.complete` → `TraceRecorder` 路径，断言 trace 的 `llm_call` 记录带 `[redacted]` |
+| trace 生命周期/删除断言（`test_qa_trace.py` + `test_llm_trace.py::test_trace_recorder_log_event_follows_the_existing_lifecycle`） | **保留**：`llm_call` 与 step/tool 共用同一生命周期与删除清理 | 不新建平行存储的前提 | 原样保留；S7 的删除与晚到写入竞态覆盖落在 `test_llm_trace.py`，不是 `test_qa_trace.py` |
 
 ### S12 文档收口
 

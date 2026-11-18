@@ -907,7 +907,7 @@ def task_trace(
             status_code=413,
             detail=(
                 f"trace file exceeds the {TRACE_MAX_BYTES} byte limit; "
-                "the raw NDJSON form has no limit"
+                "the unfiltered raw NDJSON form (no query parameters) has no limit"
             ),
         )
     try:

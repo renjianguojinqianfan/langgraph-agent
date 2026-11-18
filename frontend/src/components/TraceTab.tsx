@@ -394,6 +394,11 @@ export function TraceTab({ taskId }: TraceTabProps) {
     };
   }, [taskId]);
 
+  // The list is derived from the replay snapshot already loaded for this
+  // face. A second `?type=llm_call` request would re-read the same full file
+  // just to build the same list; the incremental API is used where it pays —
+  // the per-call detail on expand (`call_id`) and the export stays the
+  // unfiltered raw trace.
   const calls = useMemo(() => collectModelCalls(events), [events]);
 
   const filtered = useMemo(
