@@ -221,10 +221,12 @@ def _spawn_detached(
             close_fds=True,
         )
         if _IS_WINDOWS:
+            # These attributes exist only on Windows; getattr keeps the Linux
+            # type check honest without an ignore/override.
             kwargs["creationflags"] = (
-                subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP
-                | subprocess.CREATE_NO_WINDOW
+                int(getattr(subprocess, "DETACHED_PROCESS", 0))
+                | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                | int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
             )
         else:
             kwargs["start_new_session"] = True
