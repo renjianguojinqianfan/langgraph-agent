@@ -111,6 +111,7 @@ jobs:
   #   test_static_frontend.py        StaticFiles 挂载 e2e（Windows 上 get_path 用 \ 连接）
   #   test_gitignore_visibility.py   Windows-only 反斜杠 glob 用例（Linux 上被 skip）
   #   test_workspace_files_api.py    workspace 文件面（junction 逃逸 / 循环 / 预览截断；B1 首个实验文件）
+  #   test_workspace_files_enumeration.py  有界列表前缀等价（含 Windows 跳过符号链接用例；#336 S10）
   #   test_workspace.py              workspace 归属 / 注入 / 续说 / 子代理继承（B1 第二个文件）
   #   test_p2_mcp.py                 MCP 客户端 / 回声服务器 / 子进程清理（B1 第三个文件）
   #   test_shell_tool.py             shell 选择/发现（pwsh / Git Bash）/ 命令执行 / 后台进程树（B1 第四个文件）
@@ -153,6 +154,7 @@ jobs:
           backend/tests/test_static_frontend.py
           backend/tests/test_gitignore_visibility.py
           backend/tests/test_workspace_files_api.py
+          backend/tests/test_workspace_files_enumeration.py
           backend/tests/test_workspace.py
           backend/tests/test_p2_mcp.py
           backend/tests/test_shell_tool.py

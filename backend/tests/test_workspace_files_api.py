@@ -9,6 +9,7 @@ import subprocess
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.api.routes import FILES_MAX
 from backend.core.llm.client import MockLLMClient
 from backend.main import app
 from backend.tests.conftest import make_manager, make_settings
@@ -74,6 +75,22 @@ def test_list_skips_gitignored_files(tmp_path):
         assert "node_modules/x.js" not in paths
     finally:
         client.__exit__(None, None, None)
+
+
+def test_list_truncates_at_the_cap_in_sorted_order(tmp_path):
+    ws = tmp_path / "many"
+    ws.mkdir()
+    names = [f"f{i:04d}.txt" for i in range(FILES_MAX + 5)]
+    for name in names:
+        (ws / name).write_text("x", encoding="utf-8")
+    client, task_id = _client(tmp_path, ws)
+    try:
+        body = client.get(f"/api/tasks/{task_id}/files").json()["data"]
+    finally:
+        client.__exit__(None, None, None)
+
+    assert body["truncated"] is True
+    assert [entry["path"] for entry in body["files"]] == sorted(names)[:FILES_MAX]
 
 
 def _dir_link(link, target) -> None:

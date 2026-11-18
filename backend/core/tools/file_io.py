@@ -432,10 +432,8 @@ class GlobTool(_SandboxedTool):
                 for p in workspace_files(base):
                     if not _matches_glob(p.relative_to(base), pattern):
                         continue
-                    rp = p.resolve()
-                    if rp != root and root not in rp.parents:
-                        continue  # symlink-escape guard
-                    found.add(rp.relative_to(root).as_posix())
+                    # workspace_files already resolved and escape-filtered it.
+                    found.add(p.relative_to(root).as_posix())
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("glob failed")
             return ToolResult(success=False, error=str(exc))
@@ -520,9 +518,9 @@ class GrepTool(_SandboxedTool):
         try:
             if base.exists():
                 for p in workspace_files(base):
-                    rp = p.resolve()
+                    rp = p  # already resolved and escape-filtered by workspace_files
                     if rp != root and root not in rp.parents:
-                        continue  # symlink-escape guard
+                        continue
                     if name_filter and not fnmatch.fnmatch(rp.name, name_filter):
                         continue
                     try:
