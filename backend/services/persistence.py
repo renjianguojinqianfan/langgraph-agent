@@ -161,15 +161,25 @@ class Persistence:
                 continue
             self._tasks[task.id] = task
 
-    def _dump(self) -> bool:
+    def _dump(self, overrides: Optional[Dict[str, Task]] = None) -> bool:
         # Atomic replace so a crash mid-write can never tear tasks.json.
         # Returns False when the disk was left untouched, so callers whose
         # success promise depends on durability (deletion) can roll back.
+        # ``overrides`` serializes detached candidates without adopting them
+        # into ``_tasks`` yet (#337: the file is written first, memory second).
+        pending = overrides or {}
         tmp_file = self._tasks_file.with_suffix(".json.tmp")
         try:
-            data = [
-                t.model_dump(mode="json") for t in list(self._tasks.values())
-            ]
+            data: list[dict[str, Any]] = []
+            existing: set[str] = set()
+            for task in self._tasks.values():
+                existing.add(task.id)
+                data.append(pending.get(task.id, task).model_dump(mode="json"))
+            data.extend(
+                candidate.model_dump(mode="json")
+                for task_id, candidate in pending.items()
+                if task_id not in existing
+            )
             tmp_file.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -211,6 +221,33 @@ class Persistence:
                 "Task %s was not persisted; tasks.json was left unchanged", task.id
             )
             return False
+
+    def save_tasks(self, tasks: List[Task]) -> bool:
+        """Persist detached candidates with ONE dump, then adopt them.
+
+        Candidates must be copies: live records are not touched until the
+        atomic replace of ``tasks.json`` has succeeded, so a failed dump leaves
+        memory and disk on the last durable state. Zero candidates is a
+        successful no-op and never writes (#337 S11).
+        """
+        if not tasks:
+            return True
+        candidates = {task.id: task for task in tasks}
+        with self._lock:
+            if not self._dump(candidates):
+                logger.error(
+                    "%d task record(s) were not persisted; tasks.json was left unchanged",
+                    len(candidates),
+                )
+                return False
+            for task_id, candidate in candidates.items():
+                live = self._tasks.get(task_id)
+                if live is None:
+                    self._tasks[task_id] = candidate
+                    continue
+                for name in Task.model_fields:
+                    setattr(live, name, getattr(candidate, name))
+            return True
 
     def load_task(self, task_id: str) -> Optional[Task]:
         with self._lock:

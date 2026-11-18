@@ -583,35 +583,48 @@ class TaskManager:
         records an older startup already flipped without touching their steps.
         Statuses outside RUNNING/PENDING are never rewritten.
         """
-        reconciled = 0
+        settled: list[tuple[Task, bool, str, str]] = []
         for task in self.persistence.list_all():
             try:
                 original_status = task.status.value
                 was_live = task.status in (TaskStatus.RUNNING, TaskStatus.PENDING)
-                changed = self._settle_in_flight_steps(task)
+                candidate = task.model_copy(deep=True)
+                changed = self._settle_in_flight_steps(candidate)
                 if was_live:
-                    task.status = TaskStatus.INTERRUPTED
+                    candidate.status = TaskStatus.INTERRUPTED
                     changed = True
                 if not changed:
                     continue
-                task.updated_at = _now()
-                if not self._save_task(task, strict=False):
-                    continue
-                if was_live:
-                    reconciled += 1
-                    logger.warning(
-                        "Orphaned %s task %s reconciled to INTERRUPTED",
-                        original_status,
-                        task.id,
-                    )
-                else:
-                    logger.warning(
-                        "Settled in-flight steps on %s task %s",
-                        original_status,
-                        task.id,
-                    )
+                candidate.updated_at = _now()
+                settled.append((candidate, was_live, original_status, task.id))
             except Exception:  # per-task isolation: one bad record can't stall the sweep
                 logger.exception("Failed to reconcile orphan task %s", task.id)
+
+        if not settled:
+            return
+        if not self.persistence.save_tasks([candidate for candidate, _, _, _ in settled]):
+            logger.error(
+                "Startup reconciliation could not persist %d record(s); "
+                "tasks.json was left unchanged",
+                len(settled),
+            )
+            return
+
+        reconciled = 0
+        for _, was_live, original_status, task_id in settled:
+            if was_live:
+                reconciled += 1
+                logger.warning(
+                    "Orphaned %s task %s reconciled to INTERRUPTED",
+                    original_status,
+                    task_id,
+                )
+            else:
+                logger.warning(
+                    "Settled in-flight steps on %s task %s",
+                    original_status,
+                    task_id,
+                )
         if reconciled:
             logger.info("Startup reconciliation completed: %d task(s).", reconciled)
 
@@ -1713,52 +1726,76 @@ class TaskManager:
         stop, spent budget) is ``INTERRUPTED`` (停下), an error is ``FAILED``.
         A human stop already published ``task_interrupted`` from stop(); every
         other park publishes it here — one event per stop, whichever caused it.
+
+        The record is prepared as a detached candidate and committed through
+        the same one-dump batch path as startup reconciliation (#337). A failed
+        dump leaves the live record and ``tasks.json`` on their previous state;
+        events have still been published (the D-10 trade-off documented on
+        ``_mutate_task``).
         """
+        candidate = task.model_copy(deep=True)
         status = final.get("status") or "FAILED"
-        task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
-        self._settle_in_flight_steps(task)
-        task.plan_version = int(final.get("plan_version", task.plan_version))
-        task.plan_hash = str(final.get("plan_hash", task.plan_hash))
-        task.final_answer = self.redact(final.get("final_answer", "") or "")
-        task.conversation = self._merge_round_turns(
-            task.conversation,
-            self._conversation_from(final.get("messages")),
-            task.final_answer,
+        candidate.steps = [
+            StepRecord(**self._redact_step(s)) for s in final.get("steps", [])
+        ]
+        self._settle_in_flight_steps(candidate)
+        candidate.plan_version = int(
+            final.get("plan_version", candidate.plan_version)
         )
-        task.error = self.redact(final["error"]) if final.get("error") else None
-        task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
-        task.updated_at = _now()
+        candidate.plan_hash = str(final.get("plan_hash", candidate.plan_hash))
+        candidate.final_answer = self.redact(final.get("final_answer", "") or "")
+        candidate.conversation = self._merge_round_turns(
+            candidate.conversation,
+            self._conversation_from(final.get("messages")),
+            candidate.final_answer,
+        )
+        candidate.error = (
+            self.redact(final["error"]) if final.get("error") else None
+        )
+        candidate.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
+        candidate.updated_at = _now()
         # Flip the status last: a poll between assignments must never see
         # "parked" carrying the previous round's steps (the redaction walk
         # above widened that window).
-        task.status = TaskStatus(status)
+        candidate.status = TaskStatus(status)
         if status == "FAILED":
             self.event_bus.publish(
-                task.id,
+                candidate.id,
                 "task_failed",
                 {
-                    "task_id": task.id,
-                    "error": task.error or "unknown error",
+                    "task_id": candidate.id,
+                    "error": candidate.error or "unknown error",
                     **self._task_event_revision(
-                        task, step=int(final.get("step_index", 0) or 0)
+                        candidate, step=int(final.get("step_index", 0) or 0)
                     ),
                 },
             )
-        elif self._claim_interrupt(task.id):
+        elif self._claim_interrupt(candidate.id):
             # Claim-and-publish under one contract, so a stop() racing this
             # finalize cannot also announce the same park.
             self.event_bus.publish(
-                task.id,
+                candidate.id,
                 "task_interrupted",
                 {
-                    "task_id": task.id,
+                    "task_id": candidate.id,
                     "status": status,
                     **self._task_event_revision(
-                        task, step=int(final.get("step_index", 0) or 0)
+                        candidate, step=int(final.get("step_index", 0) or 0)
                     ),
                 },
             )
-        self._save_task(task, strict=False)
+        if not self.persistence.save_tasks([candidate]):
+            logger.error(
+                "could not persist finalized task %s (%s); "
+                "tasks.json was left unchanged",
+                candidate.id,
+                status,
+            )
+            return
+        # Keep the caller's reference live too: save_tasks updates the store's
+        # record, which may be a different object when the task was detached.
+        for name in Task.model_fields:
+            setattr(task, name, getattr(candidate, name))
 
     def _merge_round_turns(
         self, settled: List[ChatTurn], rebuilt: List[ChatTurn], final_answer: str
