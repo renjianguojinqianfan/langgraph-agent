@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import AsyncIterator
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
@@ -48,6 +49,7 @@ from ..services.plugins_store import (
     restart_required,
     save_plugins_config,
 )
+from ..services.server_control import stop_backend
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
 from .schemas import (
@@ -61,6 +63,7 @@ from .schemas import (
     ProviderModelUpdateRequest,
     ProviderUpdateRequest,
     SendMessageRequest,
+    ServerStopRequest,
     TaskModelRequest,
     UpdateModeRequest,
     UpdatePlanRequest,
@@ -1048,3 +1051,39 @@ def put_plugins(
     except PluginsConfigError as exc:  # pragma: no cover - valid file just written
         raise HTTPException(status_code=500, detail=str(exc)) from None
     return _envelope(data=_plugins_data(settings, saved, active))
+
+
+# ── #332 S5: explicit shutdown of the shared backend ──
+@router.post("/server/stop")
+def stop_server(
+    payload: ServerStopRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+):
+    """Stop this backend after settling tasks; refuses a foreign instance.
+
+    The caller must echo the instance id it read from ``data/server.json``.
+    A mismatch is a 409 and changes nothing — the server never kills a pid it
+    was not asked to stop by its own registered client. A completed sequence
+    answers 200 with the report; an incomplete one (a worker outlived the drain
+    window) answers 504, keeps the single-instance record and does not exit.
+    """
+    own = os.environ.get("QIANFAN_INSTANCE", "").strip()
+    asked = payload.instance.strip()
+    if not own or asked != own:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "instance 不匹配：拒绝停止（不会按 pid 杀进程）。"
+                f"请求 instance={asked or '(空)'}，本后台 instance={own or '(未登记)'}"
+            ),
+        )
+    try:
+        report = stop_backend(request.app.state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    body = {"code": 0 if report.complete else 1, "data": report.to_dict()}
+    if report.complete:
+        return _envelope(data=report.to_dict())
+    message = "后台停止未完成：仍有任务 worker 未退出；单实例记录保留，进程继续运行"
+    return JSONResponse(status_code=504, content={**body, "message": message})

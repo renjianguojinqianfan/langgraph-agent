@@ -151,6 +151,58 @@ def test_shutdown_keeps_connection_when_worker_is_alive(tmp_path):
     assert tm._round_models == {}
 
 
+def test_wait_for_idle_returns_true_with_no_workers(tmp_path):
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+
+    assert tm.wait_for_idle(0.01) is True
+
+
+def test_wait_for_idle_returns_false_when_a_worker_outlives_the_timeout(tmp_path):
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    tm._threads["t-live"] = _AliveThread()
+
+    assert tm.wait_for_idle(0.01) is False
+
+
+def test_wait_for_idle_waits_for_a_finishing_worker(tmp_path):
+    import threading
+
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    thread = threading.Thread(target=lambda: None)
+    thread.start()
+    tm._threads["t-finishing"] = thread
+
+    assert tm.wait_for_idle(5.0) is True
+    assert not thread.is_alive()
+
+
+def test_shutdown_returns_true_when_resources_are_released(tmp_path):
+    tm = make_manager(make_settings(tmp_path, checkpoint_enabled=True), MockLLMClient())
+
+    assert tm.shutdown() is True
+
+
+def test_shutdown_returns_true_on_a_repeat_after_a_clean_release(tmp_path):
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    assert tm.shutdown() is True
+
+    assert tm.shutdown() is True
+
+
+def test_shutdown_returns_false_when_a_worker_outlives_the_join(tmp_path):
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    tm._threads["t-live"] = _AliveThread()
+
+    assert tm.shutdown() is False
+
+
+def test_shutdown_returns_false_when_a_step_fails(tmp_path):
+    tm = make_manager(make_settings(tmp_path), MockLLMClient())
+    tm._mcp = _BoomMcp()
+
+    assert tm.shutdown() is False
+
+
 def test_shutdown_clears_secrets_without_a_checkpoint_connection(tmp_path):
     tm = make_manager(make_settings(tmp_path), MockLLMClient())
     tm._known_secrets.add("sk-idle")

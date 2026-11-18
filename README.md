@@ -47,25 +47,13 @@ python start.py            # 虚拟环境请叫 .venv314；start.py 会拦住根
 qianfan repl
 ```
 
-一条命令进入常驻多轮会话：首条输入创建任务，之后继续说话沿同一 `thread_id` 续跑；`/new`
-新任务（仅当当前任务已停下；仍在跑时先 `/stop`）、`/stop` 停止当前任务、`exit` / `quit`
-退出。**Ctrl-C 分两处**：提示符处直接退出；等待任务时先停当前任务、回提示符（不退出）。
-只渲染任务 / 步骤 / 工具 / final answer 与「停下」「出错」两类终态，纯 `print`、不引
-Rich/TUI；**思考块（reasoning）只在网页端显示，终端当前不显示**——不要预期终端出现模型思考过程。
+终端是**共享后台的薄客户端**：确保/连接已经在跑的后台，不打开浏览器、不另起运行时、不持任务锁，只走现有 REST/SSE；首条输入创建任务，之后继续说话沿同一 `task_id` 续跑，和网页看到的是同一个任务。**关闭终端只断连，运行中的任务继续**；停止任务用 `/stop` 或网页上的停止按钮。
 
-- **与网页后台互斥**：终端会话写 `data/server.json`（`mode=repl`），`qianfan` / `python start.py`
-  在它跑着时拒绝启动；反过来网页或开发后台在跑时 `qianfan repl` 也拒绝。锁由 REPL 退出路径的
-  `finally` 释放；关闭终端时**正在跑的任务不是优雅 stop**——进程退出后它不会继续跑，下次启动
-  按孤儿对账归为 INTERRUPTED（停下），可续说 / 续跑；`TaskManager.shutdown()` 只释放后台线程与
-  进程内资源，不是任务停止语义。
-- **启动守卫复用**：与网页入口同一套（`auth_enabled` 校验、回环 host 校验、单实例锁），
-  `auth_enabled=true` 时 REPL 同样先过启动校验，不另开旁路。
-- **编码**：入口把 stdout/stderr `reconfigure(encoding="utf-8", errors="replace")`（有
-  `hasattr` 守卫），Windows GBK 控制台不会因 emoji / CJK 崩溃；重定向到文件同样是 UTF-8。
-- **不重开交互确认闸门**：危险动作仍由设置里的 `policy_rules` 规则表在钩子处**当场拒绝**
-  （ADR 0008 决策 6），终端也不弹 y/n。#20 票面的「y/n 交互确认」与「`--auto-approve` 旁路」
-  二选一已按 spec 作废（2026-10-19 校准：确认闸门已随 ADR 0008 删除，交互式终端有人在场
-  也不重开它）。
+- **会话命令**：`/new` 新任务（仅当当前任务已停下）、`/tasks` 任务列表、`/use <id>` 接入已有任务（前 8 位前缀即可）、`/stop` 停止当前任务、`/resume` 续跑停止 / 失败的任务、`/mode plan|build`、`/model <id>`、`exit` / `quit` 退出。**Ctrl-C 分两处**：提示符处直接退出；等待任务时先停当前任务、回提示符（不退出）。
+- **启动与连接**：先做与网页入口同一套 auth / 回环 host / 插件预设校验，再确保后台可达；已有健康后台直接复用（`--preset` 只影响本次拉起，不改变已跑后台）。后台未启动时由本次运行 detach 拉起并等 `/health` 就绪。目录 B 里敲 `qianfan repl`，新建任务归 B；`/use` 接回的任务仍回到它自己的目录。
+- **断线不重放**：服务不可达、认证过期（401）、后台准入拒绝（409）都打印原因；断线或重连后先同步权威任务快照，**不自动重发**创建 / 续说等可能已成功的修改请求。认证材料只放在 `Authorization` 头与内存，不进 URL、命令行输出或日志。
+- **输出**：只渲染任务 / 步骤 / 工具 / final answer 与「停下」「出错」两类终态，纯 `print`、不引 Rich/TUI；**思考块（reasoning）只在网页端显示，终端当前不显示**。入口把 stdout/stderr `reconfigure(encoding="utf-8", errors="replace")`（有 `hasattr` 守卫），Windows GBK 控制台不会因 emoji / CJK 崩溃。
+- **不重开交互确认闸门**：危险动作仍由设置里的 `policy_rules` 规则表在钩子处**当场拒绝**（ADR 0008 决策 6），终端也不弹 y/n。#20 票面的「y/n 交互确认」与「`--auto-approve` 旁路」二选一已按 spec 作废（2026-10-19 校准：确认闸门已随 ADR 0008 删除，交互式终端有人在场也不重开它）。
 
 ## 核心模型
 
@@ -92,7 +80,7 @@ agent ──有 tool call──> tool ──> agent
 - 这就是在你的项目里直接干活：`shell` 与写工具会改真实文件，**撤销靠 git**；在主目录或盘根启动不拦（见「这不是安全边界」）。
 - MCP 服务仍是整个后台共用一份，工作目录是后台的启动目录，不随任务切换。
 
-**一台机器只共用一个后台**（ADR 0010）：第二次在别的目录敲 `qianfan`，它会把浏览器开到已在跑的后台、定位到当前目录，然后退出，不另起进程（`--port` 只对第一次生效）。关掉启动它的终端 = 所有项目的任务停下，之后可以续说 / 续跑。`start.py` 的开发后台与 `qianfan` 互斥，一个在跑时另一个会拒绝启动；`start.py` 现在**先抢 `data/server.json` 再起 uvicorn**，启动窗口内也不可能出现第二个写者；`--reload` 下锁保持 supervisor pid（reload worker 不接管，避免 reload 间隙锁被当 stale）。**手工 `uvicorn backend.main:app` 一律拒绝**：没有 `QIANFAN_INSTANCE` 实例标识会绕过单后台 / 回环 host / Key 三道守卫，请用 `qianfan`（日常）或 `python start.py`（开发）。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等非回环值在启动期直接拒绝（本章只支持本机访问）；健康探针跟随配置 host（IPv6 自动加方括号），开发态 Vite 代理固定 `127.0.0.1`（只用 IPv4 回环）。
+**一台机器只共用一个后台**（ADR 0010 / 0013）：后台是**独立进程**并持有 `data/server.json` 单实例锁；日常 `qianfan` 发现健康实例就复用、否则 detach 拉起，等 `/health` 就绪后打开浏览器并退出启动器——**关掉启动它的终端不会停后台**。第二次在别的目录敲 `qianfan`，它会把浏览器开到已在跑的后台、定位到当前目录，然后退出，不另起进程（`--port` 只对第一次生效）。停止后台用 `qianfan stop`（请求携带锁文件里的 instance，服务端校验后才优雅收尾；instance 不匹配被拒且不杀进程），状态用 `qianfan status`（pid / port / mode / instance / started_at / healthy，无服务时非 0）。`start.py` 的开发后台仍随开发终端退出，且与 `qianfan` 互斥（启动前先抢 `data/server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**：没有 `QIANFAN_INSTANCE` 会绕过单后台 / 回环 host / Key 三道守卫，请用 `qianfan`（日常）、`qianfan serve`（前台调试）或 `python start.py`（开发）。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等非回环值在启动期直接拒绝（本章只支持本机访问）；健康探针跟随配置 host（IPv6 自动加方括号），开发态 Vite 代理固定 `127.0.0.1`（只用 IPv4 回环）。
 
 ## 能力
 

@@ -172,8 +172,7 @@ def test_cli_refuses_enabled_auth_with_the_placeholder(tmp_path, monkeypatch, ca
 
     code = cli.main(
         [],
-        serve=lambda host, port: served.append(port),
-        when_ready=lambda url, port: None,
+        spawn=lambda *args: served.append(args),
     )
 
     assert code == 1

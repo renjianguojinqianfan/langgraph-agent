@@ -25,7 +25,7 @@
 | 存储 | sqlite（checkpoint）+ JSON（任务/模型档案）+ JSONL（trace） | `data/` 为运行态、不入库；Key 在仓库外（`~/.qianfan/credentials.json` 或环境变量） |
 | 通信 | REST + **SSE**（单向事件流） | SSE 事件词汇表是本仓最强的机械契约（§3.4） |
 
-**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），**终端入口**是 `qianfan repl`（[`backend/repl.py`](../backend/repl.py)：进程内直接复用同一 TaskManager/EventBus，不起 uvicorn，锁 `mode=repl` 与网页 / 开发后台互斥），三者共用 `backend/server_lock.py` 的单实例语义。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；`--reload` 下锁保持 supervisor pid；pid 活但 `/health` 未就绪视为「启动中」而非空闲；**无实例标识的手动 uvicorn 一律拒绝**）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝；`::1` 的健康探针与 `TrustedHost` 用方括号形态）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
+**运行形态**：本机单用户、**一个共享后台进程**。默认只绑定回环地址；后台由 `qianfan` 以 detach 子进程启动并通过 `data/server.json` 持单实例锁（`qianfan serve` 是同一代码路径的前台入口，供内部 / 调试）；日常入口 `qianfan` 确保服务后打开浏览器，开发入口 `python start.py` 仍用 Vite / `--reload`，**终端入口** `qianfan repl` 只是同一后台的薄客户端（[`backend/repl.py`](../backend/repl.py) + [`backend/api_client.py`](../backend/api_client.py)：只走 REST/SSE，不建运行时、不持锁，退出只断连）。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；`--reload` 下锁保持 supervisor pid；pid 活但 `/health` 未就绪视为「启动中」而非空闲；**无实例标识的手动 uvicorn 一律拒绝**）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝；`::1` 的健康探针与 `TrustedHost` 用方括号形态）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
 
 ---
 
@@ -35,12 +35,14 @@
 backend/
 ├── config.py            Settings（pydantic-settings；.env / 环境变量）
 ├── main.py              FastAPI app：/health、/api 路由挂载、静态前端（StaticFiles）、Host 检查、CORS
-├── runtime.py           进程运行时组装（EventBus / Persistence / TaskManager；web lifespan 与 REPL 共用；D-48）
-├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查；`repl` 子命令转终端会话
-├── repl.py              qianfan repl：thin 终端会话（事件入队→主线程渲染、mode=repl 锁；D-48…D-52）
-├── server_lock.py       单实例锁与启动守卫（一台机器只允许一个后台；ensure_single_backend / update_lock_pid）
+├── runtime.py           进程运行时组装（EventBus / Persistence / TaskManager；web lifespan / serve 共用）
+├── cli.py               qianfan 入口：确保共享后台（detach）、自动开浏览器、status / stop / serve / repl
+├── serve.py             uvicorn 前台 / detached 服务入口（同一代码路径；安装停止端点）
+├── api_client.py        REST/SSE 薄客户端（统一信封 / 状态码 / SSE 帧；终端唯一传输面）
+├── repl.py              qianfan repl：共享后台的终端会话（事件入队→主线程渲染；不持锁）
+├── server_lock.py       单实例锁与启动守卫（一台机器只允许一个后台；claim / update_lock_pid / probe）
 ├── api/
-│   ├── routes.py        38 条 REST 路由（§3.3）；统一 {code,data,message} 信封
+│   ├── routes.py        REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
 │   ├── sse.py           SSE 流组装（15s heartbeat）
 ├── core/
@@ -58,6 +60,7 @@ backend/
 │                        persistence.py tasks.json · plan_file.py 计划文件 · trace.py JSONL trace
 │                        model_store.py Provider/模型目录与凭据 · auth.py token 签发/校验
 │                        plugins_store.py data/plugins.json 读/写（atomic）与生效解析
+│                        server_control.py 共享后台优雅停止（拒新运行→停任务→等 worker→释放锁）
 └── utils/               logging.py · sandbox.py（shell 进程组/超时）· winjob.py（Windows Job Object）
 
 frontend/src/
@@ -150,6 +153,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 `data` |
 |---|---|---|---|---|
 | GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
+| POST | `/api/server/stop` | 优雅停止共享后台：只接受锁文件登记的 instance；拒绝新运行 → 停止任务 → 等 worker → 落盘 → 释放锁 | `{instance}`（必填） | `{ok, stopped_tasks, workers_joined, shutdown_complete, lock_released, exit_requested}`；instance 不匹配 / 未登记 → 409（不杀进程）；worker 未退出 → 504（记录保留、进程继续） |
 | POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
 | GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
@@ -355,15 +359,18 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 ### 6.2 启动形态
 
 ```bash
-qianfan                       # 日常：uv tool install -e .，单后台 + 自动开浏览器
-qianfan repl                  # 终端：常驻多轮会话（无浏览器 / 无 uvicorn；锁 mode=repl，与上面两者互斥）
+qianfan                       # 日常：确保共享后台（detach 子进程）+ 自动开浏览器
+qianfan status                # pid / port / mode / instance / started_at / healthy；未运行非 0
+qianfan stop                  # 请求锁文件登记的实例优雅关闭（instance 不匹配被拒）
+qianfan serve                 # 前台服务入口（内部 / 手工调试；同一 serve 代码路径）
+qianfan repl                  # 终端：确保 / 连接共享后台（无浏览器；只走 REST/SSE）
 python start.py --install     # 开发：先按 CI 同口径装后端依赖（pip install -r requirements.txt）与前端依赖
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
 ```
 
-一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
+一台机器**只共用一个后台**，后台是独立进程并持 `data/server.json`：启动器 detach 拉起 `backend.serve`、等 `/health` 就绪后退出，**退出启动终端不停后台**。第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；`qianfan repl` 复用同一后台，关闭终端只断连。`qianfan stop` 校验 instance 后按顺序收尾（拒绝新运行 → 停止任务并解除可取消阻塞 I/O → 等 worker → 落盘 → 释放锁），超时非 0 并报告未完成，不把「已收到请求」写成「已停止」。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `qianfan serve` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
 
-启动装配（`build_runtime`，Web 与 REPL 共用）还会先改写进程 env 的 `NO_PROXY` / `no_proxy`：括号化 IPv6 条目改成裸主机，`[host]:port` 丢掉端口。httpx 把 `NO_PROXY` 拼成代理挂载键时只认裸主机，`[::1]` 会让 OpenAI 客户端在构造时抛 `InvalidURL`；发生改写时打一条 WARNING 日志（#317）。
+后台启动装配（`build_runtime`）与终端 HTTP 客户端构造（`ApiClient`）都会先改写进程 env 的 `NO_PROXY` / `no_proxy`：括号化 IPv6 条目改成裸主机，`[host]:port` 丢掉端口。httpx 把 `NO_PROXY` 拼成代理挂载键时只认裸主机，`[::1]` 会让客户端在构造时抛 `InvalidURL`；后台发生改写时打一条 WARNING 日志（#317），终端侧静默修正后继续连接。
 
 `frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示先构建。
 
@@ -372,6 +379,8 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 | 路径 | 内容 | 备注 |
 |---|---|---|
 | `data/tasks.json` | 任务记录（原子写；字节损坏自动备份后重新开始；**旧格式记录整体拒绝加载且原文不变**，ADR 0013 决策 1） | 唯一任务记录源 |
+| `data/server.json` | 共享后台单实例记录（pid / port / started_at / instance；原子写） | 启动器 / `status` / `stop` 的实例权威 |
+| `data/logs/server.log` | 后台启动期 stdout/stderr 与异常 | 应用日志仍在 `data/logs/agent.log` |
 | `data/models.json` | 模型配置 v2（Provider + 模型目录，**不含 Key**）；v1 明确拒绝、原文不变，不迁移不备份 | 全局默认 / 每任务模型条目 id |
 | `~/.qianfan/credentials.json` | 界面粘贴的 Key | 仓库外；接口只回 `key_set` / `key_source` |
 | `data/traces/<task_id>.jsonl` | 事件 + trace 时间线 | `trace_end` 只在这里 |

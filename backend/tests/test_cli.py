@@ -1,23 +1,25 @@
-"""C4: the ``qianfan`` launcher (ADR 0010).
+"""C4 + #332 S5: the ``qianfan`` launcher.
 
-The launcher is tested at its entry seams: ``serve`` is substituted, and the
-browser side is injected through ``when_ready`` (main) or ``probe`` / ``browser``
-(_open_when_ready), so no port is actually bound and neither uvicorn nor a
-browser is started.
+``qianfan`` (no subcommand) ensures the shared backend: hand off to a healthy
+instance, otherwise claim the record, spawn the detached ``backend.serve``
+child, wait for ``/health`` and open the browser. ``qianfan serve`` is the
+foreground entry. The backend seams (spawn / probe / browser / runner) are
+substituted; the lock file lives in a temporary data directory.
 """
 
 from __future__ import annotations
 
 import os
 import socket
+import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
 
 import pytest
 
-from backend import cli
-from backend.config import Settings
+from backend import cli, server_lock
+from backend.config import Settings, get_settings
 
 
 def _settings(monkeypatch, dist, port=8000):
@@ -38,95 +40,160 @@ def _write_dist(tmp_path):
     return dist
 
 
-def test_missing_dist_prints_build_hint_and_does_not_serve(tmp_path, monkeypatch, capsys):
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+class FakeChild:
+    def __init__(self, *, exit_code=None):
+        self.pid = 424242
+        self._exit_code = exit_code
+        self.terminated = False
+        self.waited = False
+
+    def poll(self):
+        return self._exit_code
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
+
+
+def _recording_spawn(seen: list):
+    def spawn(cmd, env, log_path):
+        seen.append({"cmd": cmd, "env": env, "log_path": log_path})
+        return FakeChild()
+
+    return spawn
+
+
+# ── ensure (default command) ────────────────────────────────────────────────
+def test_missing_dist_prints_build_hint_and_does_not_spawn(tmp_path, monkeypatch, capsys):
     _settings(monkeypatch, tmp_path / "missing")
-    served = []
-    code = cli.main(
-        [],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: None,
-    )
+    seen: list = []
+    code = cli.main([], spawn=_recording_spawn(seen))
 
     out = capsys.readouterr().out
     assert code == 1
     assert "npm run build" in out
-    assert served == []
+    assert seen == []
 
 
-def test_explicit_port_occupancy_is_reported(tmp_path, monkeypatch, capsys):
+def test_explicit_port_occupancy_is_reported_before_spawning(tmp_path, monkeypatch, capsys):
     _settings(monkeypatch, _write_dist(tmp_path))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         probe.listen(1)
         port = probe.getsockname()[1]
-        served = []
-        code = cli.main(
-            ["--port", str(port)],
-            serve=lambda host, port: served.append((host, port)),
-            when_ready=lambda url, port: None,
-        )
+        seen: list = []
+        code = cli.main(["--port", str(port)], spawn=_recording_spawn(seen))
 
     assert code == 1
     assert str(port) in capsys.readouterr().out
-    assert served == []
+    assert seen == []
 
 
-def test_serves_loopback_on_the_requested_port_and_opens_the_browser(tmp_path, monkeypatch):
-    _settings(monkeypatch, _write_dist(tmp_path))
-    served = []
-    opened = []
+def test_ensure_spawns_the_detached_backend_and_opens_the_browser(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    port = _free_port()
+    seen: list = []
+    opened: list[str] = []
     code = cli.main(
-        ["--port", "9123"],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: opened.append(url),
+        ["--port", str(port)],
+        spawn=_recording_spawn(seen),
+        open_browser=opened.append,
+        probe=lambda port, timeout: {"instance": "child"},
     )
 
     assert code == 0
-    assert served == [("127.0.0.1", 9123)]
-    assert opened == [f"http://127.0.0.1:9123/?dir={quote(os.getcwd())}"]
+    assert len(seen) == 1
+    call = seen[0]
+    assert call["cmd"][:4] == [sys.executable, "-m", "backend.serve", "--port"]
+    assert call["cmd"][4] == str(port)
+    assert "--instance" in call["cmd"]
+    instance = call["cmd"][call["cmd"].index("--instance") + 1]
+    assert call["env"]["PORT"] == str(port)
+    assert call["env"]["QIANFAN_INSTANCE"] == instance
+    assert call["log_path"] == Path(settings.data_path) / "logs" / "server.log"
+    record = server_lock.read_lock(server_lock.lock_path(settings))
+    assert record is not None and record.instance == instance and record.port == port
+    assert opened == [f"http://127.0.0.1:{port}/?dir={quote(os.getcwd())}"]
 
 
-def test_no_browser_skips_the_browser(tmp_path, monkeypatch):
-    _settings(monkeypatch, _write_dist(tmp_path))
-    opened = []
+def test_ensure_spawns_before_waiting_and_leaves_the_record_for_the_child(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    port = _free_port()
+    at_spawn: list = []
+    seen: list = []
+
+    def spawn(cmd, env, log_path):
+        at_spawn.append(server_lock.read_lock(server_lock.lock_path(settings)))
+        seen.append(cmd)
+        return FakeChild()
+
     code = cli.main(
-        ["--no-browser"],
-        serve=lambda host, port: None,
-        when_ready=lambda url, port: opened.append(url),
+        ["--port", str(port)],
+        spawn=spawn,
+        open_browser=lambda url: None,
+        probe=lambda port, timeout: {"instance": "child"},
     )
 
     assert code == 0
+    assert at_spawn and at_spawn[0] is not None
+    record = server_lock.read_lock(server_lock.lock_path(settings))
+    assert record is not None and record.instance == at_spawn[0].instance
+    assert record.port == port
+
+
+def test_no_browser_still_waits_for_health(tmp_path, monkeypatch):
+    _settings(monkeypatch, _write_dist(tmp_path))
+    port = _free_port()
+    probes: list = []
+    opened: list = []
+    code = cli.main(
+        ["--port", str(port), "--no-browser"],
+        spawn=_recording_spawn([]),
+        open_browser=opened.append,
+        probe=lambda target, timeout: probes.append(target) or {"instance": "child"},
+    )
+
+    assert code == 0
+    assert probes == [port]
     assert opened == []
 
 
 def test_default_port_comes_from_settings(tmp_path, monkeypatch):
-    _settings(monkeypatch, _write_dist(tmp_path), port=8765)
-    served = []
+    port = _free_port()
+    settings = _settings(monkeypatch, _write_dist(tmp_path), port=port)
+    seen: list = []
     code = cli.main(
         [],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: None,
+        spawn=_recording_spawn(seen),
+        open_browser=lambda url: None,
+        probe=lambda target, timeout: {"instance": "child"},
     )
 
     assert code == 0
-    assert served == [("127.0.0.1", 8765)]
+    assert settings.port == port
+    assert seen[0]["cmd"][4] == str(port)
 
 
-def test_invalid_ports_are_rejected_before_serving(tmp_path, monkeypatch, capsys):
+def test_invalid_ports_are_rejected_before_spawning(tmp_path, monkeypatch, capsys):
     _settings(monkeypatch, _write_dist(tmp_path))
-    served = []
+    seen: list = []
     for port in ("0", "70000"):
-        code = cli.main(
-            ["--port", port],
-            serve=lambda host, port: served.append((host, port)),
-            when_ready=lambda url, port: None,
-        )
+        code = cli.main(["--port", port], spawn=_recording_spawn(seen))
         assert code == 1
         assert port in capsys.readouterr().out
-    assert served == []
+    assert seen == []
 
 
-def test_stale_build_warns_but_still_serves(tmp_path, monkeypatch, capsys):
+def test_stale_build_warns_but_still_spawns(tmp_path, monkeypatch, capsys):
     dist = _write_dist(tmp_path)
     src = tmp_path / "src"
     src.mkdir()
@@ -135,52 +202,211 @@ def test_stale_build_warns_but_still_serves(tmp_path, monkeypatch, capsys):
     os.utime(dist / "index.html", (old, old))
 
     _settings(monkeypatch, dist)
-    served = []
+    seen: list = []
     code = cli.main(
-        [],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: None,
+        ["--port", str(_free_port())],
+        spawn=_recording_spawn(seen),
+        open_browser=lambda url: None,
+        probe=lambda port, timeout: {"instance": "child"},
     )
 
     assert code == 0
     assert "npm run build" in capsys.readouterr().out
-    assert served == [("127.0.0.1", 8000)]
+    assert len(seen) == 1
 
 
-def test_port_env_is_exported_before_the_server_imports_settings(tmp_path, monkeypatch):
-    """``backend.main`` reads PORT at import time, so the launcher must set it first."""
+def test_invalid_preset_is_rejected_before_spawning(tmp_path, monkeypatch, capsys):
     _settings(monkeypatch, _write_dist(tmp_path))
-    seen = []
+    seen: list = []
+    code = cli.main(["--preset", "nope"], spawn=_recording_spawn(seen))
+
+    assert code == 1
+    assert "nope" in capsys.readouterr().out
+    assert seen == []
+
+
+def test_spawn_failure_releases_the_record_and_reports_the_log(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+
+    def boom(cmd, env, log_path):
+        raise OSError("interpreter missing")
+
+    code = cli.main(["--port", str(_free_port())], spawn=boom, open_browser=lambda url: None)
+
+    assert code == 1
+    assert server_lock.read_lock(server_lock.lock_path(settings)) is None
+    out = capsys.readouterr().out
+    assert "启动失败" in out and "server.log" in out
+
+
+def test_child_exit_releases_the_record_and_reports_its_code(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+
+    def spawn(cmd, env, log_path):
+        return FakeChild(exit_code=2)
+
+    code = cli.main(
+        ["--port", str(_free_port())],
+        spawn=spawn,
+        open_browser=lambda url: None,
+        probe=lambda port, timeout: None,
+    )
+
+    assert code == 1
+    assert server_lock.read_lock(server_lock.lock_path(settings)) is None
+    out = capsys.readouterr().out
+    assert "退出码 2" in out and "server.log" in out
+
+
+def test_readiness_timeout_terminates_the_child_and_releases(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    children: list = []
+
+    def spawn(cmd, env, log_path):
+        child = FakeChild()
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(cli, "READY_TIMEOUT_SEC", 0.05)
+    code = cli.main(
+        ["--port", str(_free_port())],
+        spawn=spawn,
+        open_browser=lambda url: None,
+        probe=lambda port, timeout: None,
+    )
+
+    assert code == 1
+    assert children[0].terminated is True
+    assert server_lock.read_lock(server_lock.lock_path(settings)) is None
+    assert "未就绪" in capsys.readouterr().out
+
+
+def test_lost_claim_race_without_a_winner_reports_and_does_not_spawn(tmp_path, monkeypatch, capsys):
+    _settings(monkeypatch, _write_dist(tmp_path))
+    seen: list = []
+    monkeypatch.setattr(server_lock, "claim_lock", lambda *args, **kwargs: False)
+
+    code = cli.main(
+        ["--port", str(_free_port())],
+        spawn=_recording_spawn(seen),
+        open_browser=lambda url: None,
+        probe=lambda port, timeout: None,
+    )
+
+    assert code == 1
+    assert seen == []
+    assert "请稍后再试" in capsys.readouterr().out
+
+
+def test_unwritable_log_directory_is_a_readable_startup_failure(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    Path(settings.data_path).mkdir(parents=True, exist_ok=True)
+    (Path(settings.data_path) / "logs").write_text("not a directory", encoding="utf-8")
+
+    code = cli.main(["--port", str(_free_port())], open_browser=lambda url: None)
+
+    assert code == 1
+    assert server_lock.read_lock(server_lock.lock_path(settings)) is None
+    out = capsys.readouterr().out
+    assert "启动失败" in out and "server.log" in out
+
+
+# ── serve (foreground entry) ────────────────────────────────────────────────
+def test_serve_runs_foreground_and_releases_the_record(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    port = _free_port()
+    seen: list = []
+
+    def fake_serve(host, target_port):
+        record = server_lock.read_lock(server_lock.lock_path(settings))
+        seen.append((host, target_port, record.instance if record else None))
+
+    code = cli.main(["serve", "--port", str(port)], serve=fake_serve)
+
+    assert code == 0
+    assert seen and seen[0][0] == "127.0.0.1" and seen[0][1] == port
+    assert seen[0][2] not in (None, "")
+    assert server_lock.read_lock(server_lock.lock_path(settings)) is None
+
+
+def test_serve_exports_port_before_the_server_imports_settings(tmp_path, monkeypatch):
+    """``backend.main`` reads PORT at import time, so serve must set it first."""
+    _settings(monkeypatch, _write_dist(tmp_path))
+    seen: list = []
 
     def fake_serve(host, port):
-        from backend.config import get_settings
-
         seen.append(get_settings().port)
 
-    monkeypatch.delenv("PORT", raising=False)
-    code = cli.main(
-        ["--port", "9234"],
-        serve=fake_serve,
-        when_ready=lambda url, port: None,
-    )
+    monkeypatch.setenv("PORT", "1")
+    monkeypatch.setenv("QIANFAN_INSTANCE", "old")
+    code = cli.main(["serve", "--port", "9234"], serve=fake_serve)
 
     assert code == 0
     assert seen == [9234]
 
 
-def test_main_delegates_the_browser_open_to_the_ready_watcher(tmp_path, monkeypatch):
-    _settings(monkeypatch, _write_dist(tmp_path))
-    recorded = []
+def test_serve_releases_the_record_when_the_runner_raises(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+
+    def boom(host, port):
+        raise RuntimeError("bind failed")
+
+    with pytest.raises(RuntimeError):
+        cli.main(["serve", "--port", str(_free_port())], serve=boom)
+
+    assert server_lock.read_lock(server_lock.lock_path(settings)) is None
+
+
+def test_serve_refuses_when_a_backend_is_registered(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    lock_file = server_lock.lock_path(settings)
+    assert server_lock.claim_lock(
+        lock_file,
+        server_lock.ServerLock(
+            pid=os.getpid(),
+            port=9123,
+            started_at=server_lock.now_iso(),
+            instance="tok",
+            mode="serve",
+        ),
+    )
+    called: list = []
     code = cli.main(
-        ["--port", "9124"],
-        serve=lambda host, port: None,
-        when_ready=lambda url, port: recorded.append((url, port)),
+        ["serve", "--port", str(_free_port())],
+        serve=lambda host, port: called.append((host, port)),
+        probe=lambda port, timeout: {"instance": "tok"},
     )
 
-    assert code == 0
-    assert recorded == [(f"http://127.0.0.1:9124/?dir={quote(os.getcwd())}", 9124)]
+    assert code == 2
+    assert called == []
+    assert "已有后台" in capsys.readouterr().out
 
 
+def test_serve_missing_dist_and_invalid_port_do_not_claim(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, tmp_path / "missing")
+    called: list = []
+    assert cli.main(["serve"], serve=lambda h, p: called.append((h, p))) == 1
+    assert "npm run build" in capsys.readouterr().out
+    assert cli.main(["serve", "--port", "0"], serve=lambda h, p: called.append((h, p))) == 1
+    assert called == []
+    assert server_lock.read_lock(server_lock.lock_path(settings)) is None
+
+
+def test_serve_port_occupied_is_reported(tmp_path, monkeypatch, capsys):
+    _settings(monkeypatch, _write_dist(tmp_path))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        probe.listen(1)
+        port = probe.getsockname()[1]
+        called: list = []
+        code = cli.main(["serve", "--port", str(port)], serve=lambda h, p: called.append((h, p)))
+
+    assert code == 1
+    assert str(port) in capsys.readouterr().out
+    assert called == []
+
+
+# ── readiness helper ────────────────────────────────────────────────────────
 def test_open_when_ready_waits_for_health_before_opening():
     probes = []
     responses = [None, None, {"status": "ok"}]
@@ -224,12 +450,111 @@ def test_open_when_ready_timeout_prints_url_without_opening(capsys):
     assert "未自动打开浏览器" in out
 
 
-def test_help_mentions_the_repl_subcommand(capsys):
-    """--help must mention qianfan repl (behaviour otherwise unchanged)."""
+def test_open_when_ready_stops_early_when_the_child_is_dead():
+    ok = cli._open_when_ready(
+        "http://127.0.0.1:9123/",
+        9123,
+        browser=None,
+        probe=lambda port, timeout: None,
+        alive=lambda: False,
+        sleep=lambda seconds: None,
+    )
+
+    assert ok is False
+
+
+def test_open_when_ready_does_not_report_a_browser_failure_as_a_startup_failure(capsys):
+    def boom(url):
+        raise RuntimeError("no browser")
+
+    ok = cli._open_when_ready(
+        "http://127.0.0.1:9123/",
+        9123,
+        browser=boom,
+        probe=lambda port, timeout: {"instance": "child"},
+    )
+
+    assert ok is True
+    assert "打开浏览器失败" in capsys.readouterr().out
+
+
+# ── #332 S6: the shared ensure seam used by `qianfan repl` ────────────────
+def test_ensure_backend_reuses_a_running_backend_without_spawning(tmp_path, monkeypatch, capsys):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    port = _free_port()
+    server_lock.claim_lock(
+        server_lock.lock_path(settings),
+        server_lock.ServerLock(
+            pid=os.getpid(),
+            port=port,
+            started_at=server_lock.now_iso(),
+            instance="tok",
+            mode="serve",
+        ),
+    )
+    seen: list = []
+    code, live_port = cli.ensure_backend(
+        settings,
+        port=_free_port(),
+        probe=lambda port, timeout: {"instance": "tok"},
+        spawn=_recording_spawn(seen),
+        browser=None,
+        require_dist=False,
+        accept_dev=True,
+    )
+
+    assert (code, live_port) == (0, port)
+    assert seen == []
+    assert f"http://127.0.0.1:{port}/" in capsys.readouterr().out
+
+
+def test_ensure_backend_for_a_terminal_needs_no_frontend_build(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, tmp_path / "missing-dist")
+    seen: list = []
+    code, live_port = cli.ensure_backend(
+        settings,
+        port=_free_port(),
+        probe=lambda port, timeout: {"instance": "child"},
+        spawn=_recording_spawn(seen),
+        browser=None,
+        require_dist=False,
+        accept_dev=True,
+    )
+
+    assert code == 0
+    assert seen and live_port == int(seen[0]["env"]["PORT"])
+
+
+def test_ensure_backend_terminal_accepts_a_dev_backend(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, _write_dist(tmp_path))
+    server_lock.claim_lock(
+        server_lock.lock_path(settings),
+        server_lock.ServerLock(
+            pid=os.getpid(),
+            port=9123,
+            started_at=server_lock.now_iso(),
+            instance="dev",
+            mode="dev",
+        ),
+    )
+    code, live_port = cli.ensure_backend(
+        settings,
+        port=_free_port(),
+        probe=lambda port, timeout: {"instance": "dev"},
+        spawn=_recording_spawn([]),
+        browser=None,
+        require_dist=False,
+        accept_dev=True,
+    )
+
+    assert (code, live_port) == (0, 9123)
+
+
+def test_help_mentions_every_subcommand(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["--help"])
 
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    assert "repl" in out
-    assert "terminal session" in out
+    for name in ("serve", "status", "stop", "repl"):
+        assert name in out
