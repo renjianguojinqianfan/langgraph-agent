@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from ..core.runtime_context import normalize_workspace
@@ -751,6 +751,32 @@ def _trace_read_failed(task_id: str, exc: OSError) -> HTTPException:
     return HTTPException(status_code=500, detail=_TRACE_READ_ERROR_DETAIL)
 
 
+_TRACE_TYPE_TOKEN = re.compile(r"^[a-z_]+$")
+
+
+def _trace_type_filter(raw: str) -> frozenset[str]:
+    """Parse ``?type=a,b``; an empty/invalid token is a 422 before file I/O."""
+    if not raw:
+        return frozenset()
+    tokens = [token.strip() for token in raw.split(",")]
+    if not tokens or any(not token for token in tokens):
+        raise HTTPException(status_code=422, detail="type must be a comma-separated list")
+    for token in tokens:
+        if not _TRACE_TYPE_TOKEN.fullmatch(token):
+            raise HTTPException(
+                status_code=422, detail=f"invalid trace event type: {token!r}"
+            )
+    return frozenset(tokens)
+
+
+def _trace_matches(event: dict, types: frozenset[str], call_id: str) -> bool:
+    if types and event.get("type") not in types:
+        return False
+    if call_id and str((event.get("data") or {}).get("call_id") or "") != call_id:
+        return False
+    return True
+
+
 def _plan_read_failed(task_id: str, exc: PlanError) -> HTTPException:
     """Log the full cause, answer with the safe detail (#260 rework)."""
     logger.error("plan read failed for task %s: %s", task_id, exc)
@@ -784,6 +810,10 @@ def task_trace(
     task_id: str,
     request: Request,
     format: str = "ndjson",
+    event_type: str = Query("", alias="type"),
+    call_id: str = "",
+    offset: int = 0,
+    limit: int = 0,
     _auth: str = Depends(verify_token),
 ) -> ApiResponse | Response:
     """Return the persisted JSONL trace for a task.
@@ -802,10 +832,17 @@ def task_trace(
     ``{code, data:[Event,...], message}`` and validates every line, so a
     malformed trace is a located 422 instead of a silently shortened list.
 
+    Incremental read (#333 S7): ``type`` (comma-separated event types),
+    ``call_id`` (matches ``data.call_id``), ``offset`` (skip matching records)
+    and ``limit`` (maximum matching records, 0 = all). Any of them switches to
+    the bounded parsing path and keeps the requested representation: matched
+    raw lines for the default NDJSON form, the envelope list for
+    ``format=json``. Invalid syntax is a 422 before any file read.
+
     An illegal ``task_id`` is a 400 before any filesystem access; an unknown
-    task, a task without a trace file, or a disabled trace is a 404; a
-    ``?format=json`` file past :data:`TRACE_MAX_BYTES` is a 413; an unreadable
-    file (either branch) is a logged 500 with a generic detail.
+    task, a task without a trace file, or a disabled trace is a 404; a parsed
+    file past :data:`TRACE_MAX_BYTES` is a 413; an unreadable file (either
+    branch) is a logged 500 with a generic detail.
 
     The real return type is the union below (envelope for ``?format=json``,
     raw NDJSON response otherwise). ``response_model=None`` is stated explicitly
@@ -818,6 +855,12 @@ def task_trace(
     # client error and must not touch the filesystem (#254).
     if not _TASK_ID_RE.fullmatch(task_id):
         raise HTTPException(status_code=400, detail="invalid task_id")
+    types = _trace_type_filter(event_type)
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+    if limit < 0:
+        raise HTTPException(status_code=422, detail="limit must be >= 0")
+    filtered = bool(types) or bool(call_id) or offset > 0 or limit > 0
     if not settings.trace_enabled:
         raise HTTPException(status_code=404, detail="task trace not enabled")
     task = _tm(request).get_task(task_id)
@@ -827,7 +870,7 @@ def task_trace(
     if not trace_file.exists():
         raise HTTPException(status_code=404, detail="task trace not found")
 
-    if format != "json":
+    if format != "json" and not filtered:
         # Stream the stat-time PREFIX (#260 rework): the file keeps growing
         # while the task runs, and a "read to EOF" stream (FileResponse) would
         # send more bytes than the length it declares up front — the client
@@ -874,7 +917,9 @@ def task_trace(
             status_code=422, detail="trace file is not valid UTF-8"
         ) from None
 
-    events = []
+    events: list[dict] = []
+    matched_lines: list[str] = []
+    skipped = 0
     # Split on "\n" only (#260): JSONL's separator is the newline, and the
     # recorder writes with ``ensure_ascii=False``, so U+2028 / U+2029 / NEL
     # stay raw inside a legal line — ``str.splitlines()`` would cut such a
@@ -894,7 +939,19 @@ def task_trace(
             raise _trace_line_error(lineno, "missing object field 'data'")
         if not isinstance(event.get("ts"), (int, float)):
             raise _trace_line_error(lineno, "missing numeric field 'ts'")
+        if filtered and not _trace_matches(event, types, call_id):
+            continue
+        if filtered and skipped < offset:
+            skipped += 1
+            continue
+        if filtered and limit and len(events) >= limit:
+            break
         events.append(event)
+        if filtered:
+            matched_lines.append(line)
+    if filtered and format != "json":
+        body = ("\n".join(matched_lines) + "\n") if matched_lines else ""
+        return Response(content=body.encode("utf-8"), media_type="application/x-ndjson")
     return _envelope(data=events)
 
 

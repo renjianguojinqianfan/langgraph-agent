@@ -391,6 +391,8 @@ def make_agent_host(
         is_stop_flagged=lambda _task_id: False,
         redact=lambda text: text,
         redact_reasoning=lambda text: text,
+        trace_sink=lambda _task_id: None,
+        publish_llm_call=lambda _task_id, _payload: None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)

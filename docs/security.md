@@ -206,3 +206,8 @@
 - 2026-11-07（#243 P2-2 A2）：模型发现接口 `POST /api/providers/{id}/models/discover` 的
   出站面口径列入 §2（只打 Provider 自己配置的 base_url、带其 Key、拒重定向、超时/大小上限、
   错误脱敏、响应不落库）；本机单用户 / 回环部署下**不视为新增 SSRF 面**。
+- 2026-11-18（#333 S7）：模型调用以 `llm_call` 写入同任务 trace（不新增存储/端点）。请求副本
+  去掉认证头与 `api_key` / `token` 等敏感查询参数、对已知 Key 做 `[redacted]`、超过 128 KiB
+  标 `truncated`；响应与错误完整保留，`usage` 只取实际返回值。trace 因此会含提示词、工具输出
+  与模型回复副本（与既有任务内容同级的本机明文，见 §1/§7）；SSE 只发 `call_id` / `status` /
+  摘要 / `(task_id, call_id)` 指针，不广播请求或响应。写入失败不改变模型结果，只记 WARNING。

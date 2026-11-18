@@ -11,7 +11,7 @@ imports the nodes; a nodes -> task_manager import would close that cycle.
 
 from __future__ import annotations
 
-from typing import List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from ...api.schemas import Task
 from ...config import Settings
@@ -36,6 +36,16 @@ class AgentHost(Protocol):
 
     def redact_reasoning(self, text: str) -> str:
         """The redacted, bounded display copy of a reasoning trace."""
+        ...
+
+    def trace_sink(
+        self, task_id: str
+    ) -> Optional[Callable[[str, Dict[str, Any]], bool]]:
+        """Append a log-only model-call record to the task's existing trace."""
+        ...
+
+    def publish_llm_call(self, task_id: str, payload: Dict[str, Any]) -> None:
+        """Publish the lightweight model-call summary on the task's SSE channel."""
         ...
 
 

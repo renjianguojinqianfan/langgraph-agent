@@ -391,6 +391,8 @@ class SubAgentExecutor:
                 # always expose both attributes).
                 packages=self.tm.packages,
                 injection_fragments=self.tm.injection_fragments,
+                trace_source="subagent",
+                trace_owner=parent_id,
             )
             from .graph import build_graph
 

@@ -102,11 +102,11 @@ def test_new_resumed_and_continued_rounds_emit_the_same_sequence(tmp_path: Path)
         _round_types(tm, task_id, marks[0], marks[1]),
         _round_types(tm, task_id, marks[1], marks[2]),
     ]
-    # One answer, no tools: step_start → final_answer → park. All three doors.
+    # One answer, no tools: step_start → llm_call summary → final_answer → park.
     assert rounds == [
-        ["step_start", "final_answer", "task_interrupted"],
-        ["step_start", "final_answer", "task_interrupted"],
-        ["step_start", "final_answer", "task_interrupted"],
+        ["step_start", "llm_call", "final_answer", "task_interrupted"],
+        ["step_start", "llm_call", "final_answer", "task_interrupted"],
+        ["step_start", "llm_call", "final_answer", "task_interrupted"],
     ]
     assert [task.status for task in (first, second, third)] == [TaskStatus.INTERRUPTED] * 3
     assert steps == [1, 2, 3]

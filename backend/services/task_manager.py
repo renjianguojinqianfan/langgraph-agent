@@ -926,6 +926,27 @@ class TaskManager:
                 text = text.replace(secret, "[redacted]")
         return text
 
+    def trace_sink(
+        self, task_id: str
+    ) -> Optional[Callable[[str, Dict[str, Any]], bool]]:
+        """Append a log-only model-call record to this task's existing trace.
+
+        Returns ``None`` when tracing is off; a closed/deleted task makes the
+        callable return ``False`` instead of recreating the file (#333).
+        """
+        if self._trace is None:
+            return None
+        recorder = self._trace
+
+        def _sink(event_type: str, data: Dict[str, Any]) -> bool:
+            return recorder.log_event(task_id, event_type, data)
+
+        return _sink
+
+    def publish_llm_call(self, task_id: str, payload: Dict[str, Any]) -> None:
+        """SSE carries only this lightweight model-call summary (#333)."""
+        self.event_bus.publish(task_id, "llm_call", payload)
+
     def redact_reasoning(self, text: str) -> str:
         """D-38: the copy of a step's reasoning that may leave the graph.
 
@@ -1389,6 +1410,8 @@ class TaskManager:
             reasoning_scope=self.reasoning_scope_for(model_id),
             packages=self.packages,
             injection_fragments=self.injection_fragments,
+            trace_source="main",
+            trace_owner=task.id,
         )
 
     def _prepare_new_round(self, _graph: Any, task: Task) -> AgentState:

@@ -250,7 +250,7 @@ class _RecordingLLM(LLMClient):
         self._responses = list(responses)
         self.requests: List[List[Dict[str, Any]]] = []
 
-    def complete(
+    def _complete(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,

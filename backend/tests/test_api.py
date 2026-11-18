@@ -200,9 +200,11 @@ def test_one_tool_round_emits_the_expected_event_sequence(client):
     assert types == [
         "task_created",
         "step_start",
+        "llm_call",
         "tool_call",
         "tool_result",
         "step_start",
+        "llm_call",
         "final_answer",
         "task_interrupted",
     ]

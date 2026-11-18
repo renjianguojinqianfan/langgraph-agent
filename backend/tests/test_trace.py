@@ -473,6 +473,55 @@ def test_trace_api_missing_returns_404(trace_client):
     assert "trace" in r.json()["detail"].lower()
 
 
+def test_trace_api_filters_by_type_call_id_offset_and_limit(trace_client):
+    client, settings = trace_client
+    tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+    assert _wait_trace_closed(settings.trace_path / f"{tid}.jsonl")
+
+    steps = client.get(f"/api/tasks/{tid}/trace?format=json&type=step_start").json()["data"]
+    assert steps
+    assert {event["type"] for event in steps} == {"step_start"}
+
+    calls = client.get(f"/api/tasks/{tid}/trace?format=json&type=llm_call").json()["data"]
+    assert calls
+    call_ids = {event["data"]["call_id"] for event in calls}
+    first_call = next(iter(call_ids))
+    picked = client.get(
+        f"/api/tasks/{tid}/trace?format=json&type=llm_call&call_id={first_call}"
+    ).json()["data"]
+    assert picked
+    assert {event["data"]["call_id"] for event in picked} == {first_call}
+
+    page = client.get(
+        f"/api/tasks/{tid}/trace?format=json&type=step_start,tool_result&offset=1&limit=1"
+    ).json()["data"]
+    assert len(page) == 1
+
+    raw = client.get(f"/api/tasks/{tid}/trace?type=step_start")
+    assert raw.status_code == 200
+    assert raw.headers["content-type"].startswith("application/x-ndjson")
+    lines = [json.loads(line) for line in raw.text.splitlines() if line.strip()]
+    assert lines and {event["type"] for event in lines} == {"step_start"}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "type=step-start",
+        "type=step_start,",
+        "offset=-1",
+        "limit=-1",
+    ],
+)
+def test_trace_api_filter_validation(trace_client, query):
+    client, _ = trace_client
+    tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+    r = client.get(f"/api/tasks/{tid}/trace?format=json&{query}")
+    assert r.status_code == 422
+
+
 def test_trace_api_rejects_illegal_task_id_before_touching_disk(trace_client, monkeypatch):
     """#254 AC3: ``task_id`` is a filename component, so it is validated first.
 

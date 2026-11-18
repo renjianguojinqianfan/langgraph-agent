@@ -30,6 +30,7 @@ from ..capability_packages import INJECTION_SKILLS
 from ..capability_packages import (
     injection_fragments as resolve_injection_fragments,
 )
+from ..llm.trace import llm_call_scope
 from ..runtime_context import workspace_root
 from ..tools.base import BaseTool, ToolResult
 from . import inject
@@ -129,10 +130,16 @@ class AgentRuntime:
         reasoning_scope: str = "",
         packages: Optional[frozenset[str]] = None,
         injection_fragments: Optional[frozenset[str]] = None,
+        trace_source: str = "main",
+        trace_owner: Optional[str] = None,
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
         self.model_profile = model_profile
+        #: S7: trace attribution for every model call this runtime makes.
+        #: A subagent reports under the parent task with source="subagent".
+        self.trace_source = trace_source
+        self.trace_owner = trace_owner or task_id
         #: D-39: "<provider_id>:<protocol>" of the model this round runs with.
         #: Assistant reasoning is only replayed to the same scope; the value
         #: tags message provenance and never leaves the graph.
@@ -252,19 +259,22 @@ class AgentRuntime:
                 logger.warning("tool-result eviction failed; continuing without it", exc_info=True)
         # Compression summaries use the main model (ADR 0009: no separate
         # summarisation model).
-        compressed, meta = compress_messages(
-            messages,
-            budget=settings.context_token_budget,
-            keep_recent=settings.context_keep_recent,
-            max_messages=settings.context_max_messages,
-            strategy=settings.context_compress_strategy,
-            llm=self.llm if settings.context_compress_strategy == "summarize" else None,
-            summary_max_tokens=settings.context_summary_max_tokens,
-            trace_ref=trace_ref,
-            head_chars=settings.context_evict_head_chars,
-            tail_chars=settings.context_evict_tail_chars,
-            redact=self._redact,
-        )
+        with self._llm_scope("compaction", state):
+            compressed, meta = compress_messages(
+                messages,
+                budget=settings.context_token_budget,
+                keep_recent=settings.context_keep_recent,
+                max_messages=settings.context_max_messages,
+                strategy=settings.context_compress_strategy,
+                llm=self.llm
+                if settings.context_compress_strategy == "summarize"
+                else None,
+                summary_max_tokens=settings.context_summary_max_tokens,
+                trace_ref=trace_ref,
+                head_chars=settings.context_evict_head_chars,
+                tail_chars=settings.context_evict_tail_chars,
+                redact=self._redact,
+            )
         state["context_tokens"] = meta["context_tokens"]
         if meta["compressed"]:
             state["messages"] = compressed
@@ -330,6 +340,20 @@ class AgentRuntime:
     def _redact(self, text: str) -> str:
         """Strip known keys before an error reaches state / SSE / trace."""
         return self.tm.redact(text)
+
+    def _llm_scope(self, source: str, state: AgentState) -> Any:
+        """Attribution for one model call (S7): owner, source, round, step."""
+        return llm_call_scope(
+            owner_task_id=self.trace_owner,
+            source=source,
+            round_no=int(state.get("round_no", 1) or 1),
+            step=int(state.get("step_index", 0) or 0),
+            sink=self.tm.trace_sink(self.trace_owner),
+            publish_summary=lambda payload: self.tm.publish_llm_call(
+                self.trace_owner, payload
+            ),
+            redact=self._redact,
+        )
 
     def _reasoning_for_display(self, text: str) -> str:
         """D-38: redacted + bounded reasoning copy for SSE / persistence.
@@ -534,7 +558,8 @@ class AgentRuntime:
         """One plan-mode LLM call; ``None`` means the error path already settled."""
         messages = self._build_messages(state, system)
         try:
-            return self.llm.complete(messages, tools=schemas)
+            with self._llm_scope(self.trace_source, state):
+                return self.llm.complete(messages, tools=schemas)
         except Exception as exc:
             message = self._redact(str(exc))
             logger.error("agent LLM error (plan mode): %s", message)
@@ -546,10 +571,11 @@ class AgentRuntime:
     def _build_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
         """Build mode: every mounted tool, with the current plan as a brief."""
         try:
-            resp = self.llm.complete(
-                self._build_messages(state, EXECUTOR_SYSTEM),
-                tools=self.tool_schemas,
-            )
+            with self._llm_scope(self.trace_source, state):
+                resp = self.llm.complete(
+                    self._build_messages(state, EXECUTOR_SYSTEM),
+                    tools=self.tool_schemas,
+                )
         except Exception as exc:
             message = self._redact(str(exc))
             logger.error("agent LLM error (build mode): %s", message)

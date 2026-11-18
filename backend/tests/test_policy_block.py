@@ -89,6 +89,12 @@ class _StubTM:
     def redact_reasoning(self, text: str) -> str:
         return text
 
+    def trace_sink(self, task_id: str):
+        return None
+
+    def publish_llm_call(self, task_id: str, payload: Dict[str, Any]) -> None:
+        return None
+
     def add_artifact(self, *args: Any, **kwargs: Any) -> None:
         return None
 

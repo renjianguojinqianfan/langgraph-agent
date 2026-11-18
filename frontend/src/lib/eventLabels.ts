@@ -28,6 +28,7 @@ export const EVENT_LABELS: Record<SseDeliveredType, string> = {
   subtask_start: "子任务开始",
   subtask_result: "子任务结果",
   subtask_failed: "子任务失败",
+  llm_call: "模型调用",
   heartbeat: "心跳",
 };
 

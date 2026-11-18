@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 
 from ...config import Settings
 from ...utils.logging import get_logger
+from ...utils.net import normalize_no_proxy
 from .client import (
     LLMClient,
     LLMResponse,
@@ -20,12 +21,15 @@ from .client import (
     make_mock_client_from_script,
 )
 from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_OPENAI
+from .trace import capture_http_request, capture_http_response
 
 logger = get_logger("llm.openai")
 
 
 class OpenAICompatibleClient(LLMClient):
     """Thin wrapper around the OpenAI SDK configured for any compatible host."""
+
+    protocol = PROTOCOL_OPENAI
 
     def __init__(
         self,
@@ -38,9 +42,15 @@ class OpenAICompatibleClient(LLMClient):
         max_tokens: int | None = None,
         thinking: bool | None = None,
         reasoning_effort: str | None = None,
+        transport: Any = None,
     ) -> None:
+        import httpx
         from openai import OpenAI
 
+        # httpx reads NO_PROXY while a client is constructed; a bracketed IPv6
+        # entry raises InvalidURL before the first request. Production normally
+        # normalizes at runtime startup, but clients are also built directly.
+        normalize_no_proxy()
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
@@ -53,7 +63,20 @@ class OpenAICompatibleClient(LLMClient):
         # Issue #13: the SDK default is 600s, so a single stalled request could
         # eat an entire task budget and surface as "timed out" instead of a
         # fast failure the caller can retry / degrade on.
-        self._client = OpenAI(base_url=base_url, api_key=api_key or "EMPTY", timeout=timeout)
+        http_client = httpx.Client(
+            transport=transport,
+            follow_redirects=False,
+            event_hooks={
+                "request": [capture_http_request],
+                "response": [capture_http_response],
+            },
+        )
+        self._client = OpenAI(
+            base_url=base_url,
+            api_key=api_key or "EMPTY",
+            timeout=timeout,
+            http_client=http_client,
+        )
         logger.info("OpenAICompatibleClient ready: model=%s base_url=%s", model, base_url)
 
     def _sampling_payload(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,17 +108,34 @@ class OpenAICompatibleClient(LLMClient):
             payload["extra_body"] = extra_body
         return payload
 
-    def complete(
+    def _payload(
         self,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> LLMResponse:
+        tools: List[Dict[str, Any]] | None,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"model": self.model, "messages": messages}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         payload.update(self._sampling_payload(kwargs))
+        return payload
+
+    def _request_snapshot(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._payload(messages, tools, kwargs)
+
+    def _complete(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        payload = self._payload(messages, tools, kwargs)
 
         resp = self._client.chat.completions.create(**payload)
         msg = resp.choices[0].message
