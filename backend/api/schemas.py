@@ -169,24 +169,6 @@ class TaskModelRequest(BaseModel):
         return self
 
 
-class ModelCreateRequest(BaseModel):
-    name: str
-    base_url: str
-    model: str
-    api_key_env: str = "LLM_API_KEY"
-
-
-class ModelUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    base_url: Optional[str] = None
-    model: Optional[str] = None
-    api_key_env: Optional[str] = None
-
-
-class ModelKeyRequest(BaseModel):
-    key: str = ""
-
-
 class ProviderCreateRequest(BaseModel):
     """A provider card (D-34). `key` is write-only: no response echoes it.
 

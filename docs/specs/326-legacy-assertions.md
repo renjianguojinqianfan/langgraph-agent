@@ -58,6 +58,8 @@
 | `test_models.py::test_v1_backup_is_a_byte_for_byte_copy` | 旧文件不读不写，拒绝即原文不变 | 字节级备份只对迁移有意义 | 退役 |
 | `test_models.py::test_legacy_projection_carries_effective_sampling_params` | 运行解析返回明确的有效参数；不再维护 `/api/models` 扁平投影 | 旧投影与 Provider/ModelEntry 是两条读路径，参数继承应只有一处权威 | 退役；参数继承覆盖保留在 `test_entry_sampling_params_override_provider_defaults`、`test_sampling_params_are_validated_without_mutating`、`test_sampling_params_can_be_cleared_back_to_the_fallback` |
 | `test_models.py::test_models_api_never_returns_the_key`、`test_model_profile_update_and_delete_endpoints`、`test_models_api_rejects_an_empty_model` | Provider/模型目录 API 是唯一写面与读面；旧扁平 CRUD 删除 | 两条 CRUD 会漂移；前端旧投影无生产消费者 | 改写：同一断言迁到 `/api/providers` + 模型目录测试；「任何响应不回 Key」必须在新面重建 |
+| `test_models.py` 的 profile → provider/model 改名测试（`test_crud_default_and_delete_guard`、`test_delete_revokes_the_pasted_key`、`test_deleted_profile_makes_a_pinned_task_fail_loudly`、`test_deleting_the_rounds_profile_marks_the_task_failed`、`test_profile_edit_and_key_change_replace_the_cached_client`、`test_profile_edit_cannot_reinsert_the_old_cached_client`、`test_profile_validation_rejects_bad_urls_and_env_names`、`test_credentials_write_failure_is_readable_and_keeps_the_profile`） | 同一行为换到 Provider / 模型目录命名与接口 | 旧 profile 词表退役，断言语义保留 | 改名/改写为对应 provider/catalog 测试；不删除覆盖 |
+| `test_providers_api.py::test_legacy_models_projection_and_provider_scoped_key` | Provider Key 由同一 Provider 下条目共享；旧扁平投影删除 | 旧投影是第二读路径 | 改写为 `test_provider_key_is_shared_by_its_entries` |
 | `test_models.py::test_unknown_model_on_task_create_is_rejected` | 保持：任务创建使用未知模型 id → 4xx | 新合同要求明确拒绝，不是兼容 | 保留（可随新解析路径调整错误文案） |
 
 ### S2 任务与 checkpoint 当前合同（#329）

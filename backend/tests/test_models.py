@@ -10,12 +10,15 @@ from dataclasses import asdict
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.core.llm.anthropic_native import AnthropicClient
 from backend.core.llm.client import LLMResponse, MockLLMClient
+from backend.core.llm.openai_compat import OpenAICompatibleClient
 from backend.main import app
 from backend.services.model_store import (
     PROTOCOL_ANTHROPIC,
     CredentialsError,
     ModelStore,
+    UnsupportedModelsFileError,
 )
 from backend.tests.conftest import make_manager, make_settings
 
@@ -27,62 +30,71 @@ def _store(tmp_path, **overrides):
     return ModelStore(settings, home_dir=tmp_path / "home"), settings
 
 
+def _add_provider_and_model(
+    tm, *, provider_id="second", model="m2", base_url="https://example.test/v1"
+):
+    """One catalog entry under its own provider (the only model write face)."""
+    tm.models.add_provider(
+        id=provider_id,
+        name=provider_id.title(),
+        base_url=base_url,
+        api_key_env="SECOND_KEY",
+    )
+    return tm.models.add_model(provider_id, model=model)
+
+
 def test_seeded_from_env_settings(tmp_path):
     store, settings = _store(tmp_path)
     assert store.default_id == "default"
-    profile = store.get("default")
-    assert profile is not None
-    assert profile.model == settings.llm_model
-    assert profile.base_url == "https://api.deepseek.com/v1"  # DeepSeek is the only preset
-    assert profile.preset is True
+    resolved = store.resolve(None)
+    assert resolved is not None
+    assert resolved.model == settings.llm_model
+    assert resolved.base_url == "https://api.deepseek.com/v1"  # DeepSeek is the only preset
+    assert store.get_provider("default").preset is True
     assert (settings.data_path / "models.json").is_file()
 
 
 def test_custom_base_url_is_not_a_preset(tmp_path):
     store, _ = _store(tmp_path, llm_base_url="https://gw.test/v1")
-    assert store.get("default").preset is False
+    assert store.get_provider("default").preset is False
 
 
-def test_crud_default_and_delete_guard(tmp_path):
+def test_catalog_default_and_delete_guard(tmp_path):
     store, _ = _store(tmp_path)
-    second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
-    store.update(second.id, name="Second edited", model="m2b")
-    assert store.get(second.id).name == "Second edited"
+    store.add_provider(id="p2", name="Second", base_url="https://example.test/v1")
+    second = store.add_model("p2", model="m2")
+    store.update_model("p2", second.id, name="Second edited", model="m2b")
+    assert store.get_model(second.id).name == "Second edited"
     store.set_default(second.id)
     assert store.default_id == second.id
-    store.delete(second.id)
+    store.delete_model("p2", second.id)
     assert store.default_id == "default"
-    try:
-        store.delete("default")
-    except ValueError:
-        pass
-    else:  # pragma: no cover
-        raise AssertionError("deleting the last profile must fail")
+    with pytest.raises(ValueError):
+        store.delete_model("default", "default")
 
 
 def test_key_order_is_pasted_then_environment(tmp_path, monkeypatch):
     store, _ = _store(tmp_path)
-    profile = store.get("default")
-    monkeypatch.setenv(profile.api_key_env, "env-key")
-    assert store.key_for(profile.id) == "env-key"
+    provider = store.get_provider("default")
+    monkeypatch.setenv(provider.api_key_env, "env-key")
+    assert store.provider_key_for(provider.id) == "env-key"
 
-    store.set_key(profile.id, SENTINEL)
-    assert store.key_for(profile.id) == SENTINEL
-    assert store.key_set(profile.id) is True
+    store.set_provider_key(provider.id, SENTINEL)
+    assert store.provider_key_for(provider.id) == SENTINEL
 
-    store.set_key(profile.id, "")
-    assert store.key_for(profile.id) == "env-key"
+    store.set_provider_key(provider.id, "")
+    assert store.provider_key_for(provider.id) == "env-key"
 
 
 def test_key_source_is_reported_without_the_key(tmp_path, monkeypatch):
     store, _ = _store(tmp_path)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
-    assert store.key_source("default") == "none"
+    assert store.provider_public("default")["key_source"] == "none"
     monkeypatch.setenv("LLM_API_KEY", "env-key")
-    assert store.key_source("default") == "env"
+    assert store.provider_public("default")["key_source"] == "env"
 
-    store.set_key("default", SENTINEL)
-    entry = store.public_profile("default")
+    store.set_provider_key("default", SENTINEL)
+    entry = store.provider_public("default")
     assert entry["key_source"] == "pasted"
     assert entry["key_set"] is True
     assert SENTINEL not in json.dumps(entry)
@@ -90,10 +102,10 @@ def test_key_source_is_reported_without_the_key(tmp_path, monkeypatch):
 
 def test_update_rejects_without_mutating(tmp_path):
     store, _ = _store(tmp_path)
-    before = asdict(store.get("default"))
+    before = asdict(store.get_provider("default"))
     with pytest.raises(ValueError):
-        store.update("default", base_url="")
-    assert asdict(store.get("default")) == before
+        store.update_provider("default", base_url="")
+    assert asdict(store.get_provider("default")) == before
 
 
 def test_resolve_does_not_fall_back_for_an_explicit_unknown_id(tmp_path):
@@ -102,17 +114,93 @@ def test_resolve_does_not_fall_back_for_an_explicit_unknown_id(tmp_path):
     assert store.resolve(None).id == "default"
 
 
+def test_resolve_returns_the_runtime_model_with_inherited_params(tmp_path):
+    """The resolved model is the one runtime view a call is built from: the
+    entry id plus provider address/protocol and the *effective* D-36 values
+    (entry override else provider default; None = client default)."""
+    store, _ = _store(tmp_path)
+    store.add_provider(
+        id="gw",
+        name="GW",
+        base_url="https://gw.test/v1",
+        api_key_env="GW_KEY",
+        temperature=0.3,
+        max_tokens=1024,
+        thinking=False,
+        reasoning_effort="low",
+    )
+    entry = store.add_model("gw", model="m1", temperature=0.9)
+
+    resolved = store.resolve(entry.id)
+    assert resolved.id == entry.id
+    assert resolved.provider_id == "gw"
+    assert resolved.name == "m1"
+    assert resolved.model == "m1"
+    assert resolved.protocol == "openai-compatible"
+    assert resolved.base_url == "https://gw.test/v1"
+    assert resolved.api_key_env == "GW_KEY"
+    assert resolved.temperature == 0.9  # entry override wins
+    assert resolved.max_tokens == 1024  # provider default inherited
+    assert resolved.thinking is False
+    assert resolved.reasoning_effort == "low"
+
+
+def test_resolved_model_builds_both_protocol_clients(tmp_path, monkeypatch):
+    """One resolution path feeds both adapters: the client built for a task is
+    the resolved protocol/address/model with the inherited parameters."""
+    settings = make_settings(tmp_path, use_mock_llm=False)
+    tm = make_manager(settings, None)
+    monkeypatch.setattr(tm, "_start_run", lambda task_id: None)
+    tm.models.add_provider(
+        id="gw",
+        name="GW",
+        base_url="https://gw.test/v1",
+        api_key_env="GW_KEY",
+        temperature=0.4,
+        max_tokens=512,
+        reasoning_effort="high",
+    )
+    openai_entry = tm.models.add_model("gw", model="m1")
+    tm.models.add_provider(
+        id="claude",
+        name="Claude",
+        protocol=PROTOCOL_ANTHROPIC,
+        base_url="https://api.anthropic.test/v1",
+        api_key_env="CLAUDE_KEY",
+        max_tokens=2048,
+    )
+    anthropic_entry = tm.models.add_model("claude", model="claude-3", temperature=0.5)
+    tm.models.set_provider_key("claude", "sk-claude")
+
+    task_id = tm.create_task("t", "hi", model=openai_entry.id)
+    openai_client = tm.llm_for_task_id(task_id)
+    assert isinstance(openai_client, OpenAICompatibleClient)
+    assert openai_client.base_url == "https://gw.test/v1"
+    assert openai_client.model == "m1"
+    assert openai_client.temperature == 0.4
+    assert openai_client.max_tokens == 512
+    assert openai_client.reasoning_effort == "high"
+
+    tm.set_model(task_id, anthropic_entry.id)
+    anthropic_client = tm.llm_for_task_id(task_id)
+    assert isinstance(anthropic_client, AnthropicClient)
+    assert anthropic_client.base_url == "https://api.anthropic.test/v1"
+    assert anthropic_client.model == "claude-3"
+    assert anthropic_client.temperature == 0.5
+    assert anthropic_client.max_tokens == 2048
+
+
 def test_corrupt_models_json_is_quarantined_not_overwritten(tmp_path):
     store, settings = _store(tmp_path)
     store.data_file.write_text("{not json", encoding="utf-8")
     reloaded = ModelStore(settings, home_dir=tmp_path / "home")
-    assert reloaded.get("default") is not None
+    assert reloaded.get_model("default") is not None
     assert list(settings.data_path.glob("models.json.corrupt-*"))
 
 
 def test_key_never_in_models_json(tmp_path, monkeypatch):
     store, _ = _store(tmp_path)
-    store.set_key("default", SENTINEL)
+    store.set_provider_key("default", SENTINEL)
     assert SENTINEL not in store.data_file.read_text(encoding="utf-8")
     assert SENTINEL in store.credentials_file.read_text(encoding="utf-8")
     assert store.credentials_file.parent.name == ".qianfan"
@@ -146,7 +234,7 @@ def test_task_model_switch_applies_to_the_next_round(tmp_path):
         return _FakeClient(profile, key)
 
     tm = make_manager(settings, None, llm_factory=factory)
-    second = tm.models.add(name="Second", base_url="https://example.test/v1", model="m2")
+    second = _add_provider_and_model(tm)
     task_id = tm.create_task("m", "hi", model=second.id)
     _wait(tm, task_id)
     assert made[-1] == second.id
@@ -210,7 +298,7 @@ def test_subagent_uses_the_parent_round_model(tmp_path):
         return _FakeClient(profile, key)
 
     tm = make_manager(settings, None, llm_factory=factory)
-    second = tm.models.add(name="Second", base_url="https://example.test/v1", model="m2")
+    second = _add_provider_and_model(tm)
     task_id = tm.create_task("m", "hi", model=second.id)
     _wait(tm, task_id)
     parent = tm.get_task(task_id)
@@ -227,13 +315,13 @@ def test_subagent_uses_the_parent_round_model(tmp_path):
     assert made[-1] == second.id  # parent A -> child A, not the switched default
 
 
-def test_profile_edit_and_key_change_replace_the_cached_client(tmp_path):
+def test_provider_edit_and_key_change_replace_the_cached_client(tmp_path):
     settings = make_settings(tmp_path, use_mock_llm=False)
     made = []
 
-    def factory(profile, key):
-        made.append((profile.base_url, key))
-        return _FakeClient(profile, key)
+    def factory(model, key):
+        made.append((model.base_url, key))
+        return _FakeClient(model, key)
 
     tm = make_manager(settings, None, llm_factory=factory)
     task_id = tm.create_task("m", "hi")
@@ -241,24 +329,24 @@ def test_profile_edit_and_key_change_replace_the_cached_client(tmp_path):
     tm.llm_for_task_id(task_id)
     before = len(made)
 
-    tm.update_model_profile("default", base_url="https://new.test/v1")
+    tm.update_provider("default", base_url="https://new.test/v1")
     tm.llm_for_task_id(task_id)
     assert len(made) == before + 1
     assert made[-1][0] == "https://new.test/v1"
 
-    tm.set_model_key("default", "sk-new")
+    tm.update_provider("default", key="sk-new")
     tm.llm_for_task_id(task_id)
     assert made[-1][1] == "sk-new"
 
 
-def test_deleted_profile_makes_a_pinned_task_fail_loudly(tmp_path):
+def test_deleted_model_makes_a_pinned_task_fail_loudly(tmp_path):
     settings = make_settings(tmp_path, use_mock_llm=False)
-    tm = make_manager(settings, None, llm_factory=lambda profile, key: _FakeClient(profile, key))
-    second = tm.models.add(name="Second", base_url="https://example.test/v1", model="m2")
+    tm = make_manager(settings, None, llm_factory=lambda model, key: _FakeClient(model, key))
+    second = _add_provider_and_model(tm)
     task_id = tm.create_task("m", "hi", model=second.id)
     _wait(tm, task_id)
 
-    tm.delete_model_profile(second.id)
+    tm.delete_model_entry("second", second.id)
     with pytest.raises(RuntimeError, match="no longer exists"):
         tm.llm_for_task_id(task_id)
 
@@ -276,7 +364,7 @@ class _LeakyClient:
 def test_provider_error_key_never_reaches_task_trace_logs_or_sse(tmp_path, caplog):
     settings = make_settings(tmp_path, use_mock_llm=False, trace_enabled=True)
     store = ModelStore(settings, home_dir=tmp_path / "home")
-    store.set_key("default", SENTINEL)
+    store.set_provider_key("default", SENTINEL)
     tm = make_manager(
         settings,
         None,
@@ -298,13 +386,13 @@ def test_provider_error_key_never_reaches_task_trace_logs_or_sse(tmp_path, caplo
 
 def test_a_rotated_key_stays_redacted(tmp_path):
     settings = make_settings(tmp_path, use_mock_llm=False)
-    tm = make_manager(settings, None, llm_factory=lambda profile, key: _FakeClient(profile, key))
+    tm = make_manager(settings, None, llm_factory=lambda model, key: _FakeClient(model, key))
     old = "old-key-sentinel"
-    tm.set_model_key("default", old)
+    tm.update_provider("default", key=old)
     tm.llm_for_task_id("no-task")  # a live client now holds the old key
     assert tm.redact(f"bearer {old}") == "bearer [redacted]"
 
-    tm.set_model_key("default", "new-key-sentinel")
+    tm.update_provider("default", key="new-key-sentinel")
 
     assert tm.redact(f"bearer {old}") == "bearer [redacted]"
     assert tm.redact("bearer new-key-sentinel") == "bearer [redacted]"
@@ -325,13 +413,13 @@ def test_redaction_covers_tool_result_dict_keys(tmp_path, monkeypatch):
     assert redacted["ok"] == "value"
 
 
-def test_deleting_the_rounds_profile_marks_the_task_failed(tmp_path, monkeypatch):
+def test_deleting_the_rounds_model_marks_the_task_failed(tmp_path, monkeypatch):
     settings = make_settings(tmp_path, use_mock_llm=False)
-    tm = make_manager(settings, None, llm_factory=lambda profile, key: _FakeClient(profile, key))
-    second = tm.models.add(name="Second", base_url="https://example.test/v1", model="m2")
+    tm = make_manager(settings, None, llm_factory=lambda model, key: _FakeClient(model, key))
+    second = _add_provider_and_model(tm)
     monkeypatch.setattr(tm, "_start_run", lambda task_id: None)
     task_id = tm.create_task("m", "hi", model=second.id)
-    tm.delete_model_profile(second.id)
+    tm.delete_model_entry("second", second.id)
 
     tm.run(task_id)
 
@@ -341,16 +429,16 @@ def test_deleting_the_rounds_profile_marks_the_task_failed(tmp_path, monkeypatch
     assert "no longer exists" in (task.error or "")
 
 
-def test_profile_edit_cannot_reinsert_the_old_cached_client(tmp_path, monkeypatch):
+def test_provider_edit_cannot_reinsert_the_old_cached_client(tmp_path, monkeypatch):
     settings = make_settings(tmp_path, use_mock_llm=False)
     made = []
 
-    def factory(profile, key):
-        made.append(profile.base_url)
-        return _FakeClient(profile, key)
+    def factory(model, key):
+        made.append(model.base_url)
+        return _FakeClient(model, key)
 
     tm = make_manager(settings, None, llm_factory=factory)
-    second = tm.models.add(name="Second", base_url="https://old.test/v1", model="m2")
+    second = _add_provider_and_model(tm, base_url="https://old.test/v1")
     task_id = tm.create_task("m", "hi", model=second.id)
     _wait(tm, task_id)
     tm.llm_for_task_id(task_id)  # cache the old address
@@ -362,18 +450,18 @@ def test_profile_edit_cannot_reinsert_the_old_cached_client(tmp_path, monkeypatc
 
     def slow_resolve(model_id):
         calls["n"] += 1
-        profile = original(model_id)
+        resolved = original(model_id)
         if calls["n"] == 1:
             entered.set()
             assert release.wait(5)
-        return profile
+        return resolved
 
     monkeypatch.setattr(tm.models, "resolve", slow_resolve)
     reader = threading.Thread(target=lambda: tm.llm_for_task_id(task_id))
     reader.start()
     assert entered.wait(5)
     updater = threading.Thread(
-        target=lambda: tm.update_model_profile(second.id, base_url="https://new.test/v1")
+        target=lambda: tm.update_provider("second", base_url="https://new.test/v1")
     )
     updater.start()
     time.sleep(0.2)
@@ -388,8 +476,8 @@ def test_profile_edit_cannot_reinsert_the_old_cached_client(tmp_path, monkeypatc
 
 def test_summarizer_failure_is_redacted(tmp_path, caplog):
     settings = make_settings(tmp_path, use_mock_llm=False)
-    tm = make_manager(settings, None, llm_factory=lambda profile, key: _LeakyClient(key))
-    tm.set_model_key("default", SENTINEL)
+    tm = make_manager(settings, None, llm_factory=lambda model, key: _LeakyClient(key))
+    tm.update_provider("default", key=SENTINEL)
 
     from backend.core.agent.context import compress_messages
 
@@ -414,26 +502,29 @@ def test_summarizer_failure_is_redacted(tmp_path, caplog):
 
 def test_update_clears_preset_when_the_address_changes(tmp_path):
     store, _ = _store(tmp_path)
-    assert store.get("default").preset is True
-    updated = store.update("default", base_url="https://custom.test/v1")
+    assert store.get_provider("default").preset is True
+    updated = store.update_provider("default", base_url="https://custom.test/v1")
     assert updated.preset is False
 
 
-def test_profile_validation_rejects_bad_urls_and_env_names(tmp_path):
+def test_provider_validation_rejects_bad_urls_and_env_names(tmp_path):
     store, _ = _store(tmp_path)
     with pytest.raises(ValueError):
-        store.add(name="x", base_url="ftp://example.test", model="m")
+        store.add_provider(id="x", name="x", base_url="ftp://example.test")
     with pytest.raises(ValueError):
-        store.add(name="x", base_url="https://example.test", model="m", api_key_env="not a name")
+        store.add_provider(
+            id="x", name="x", base_url="https://example.test", api_key_env="not a name"
+        )
     with pytest.raises(ValueError):
-        store.update("default", api_key_env="1INVALID")
+        store.update_provider("default", api_key_env="1INVALID")
 
 
-def test_delete_revokes_the_pasted_key(tmp_path):
+def test_deleting_a_provider_revokes_the_pasted_key(tmp_path):
     store, _ = _store(tmp_path)
-    second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
-    store.set_key(second.id, SENTINEL)
-    store.delete(second.id)
+    store.add_provider(id="second", name="Second", base_url="https://example.test/v1")
+    store.add_model("second", model="m2")
+    store.set_provider_key("second", SENTINEL)
+    store.delete_provider("second")
     assert SENTINEL not in store.credentials_file.read_text(encoding="utf-8")
 
 
@@ -441,12 +532,12 @@ def test_test_model_sends_one_request_through_the_factory(tmp_path):
     settings = make_settings(tmp_path, use_mock_llm=False)
     calls = []
 
-    def factory(profile, key):
-        calls.append((profile.id, key))
-        return _FakeClient(profile, key)
+    def factory(model, key):
+        calls.append((model.id, key))
+        return _FakeClient(model, key)
 
     tm = make_manager(settings, None, llm_factory=factory)
-    tm.set_model_key("default", "sk-test")
+    tm.update_provider("default", key="sk-test")
     assert tm.test_model("default") == {"ok": True}
     assert calls[-1] == ("default", "sk-test")
 
@@ -512,21 +603,35 @@ def _client(tmp_path, monkeypatch):
 def test_models_api_never_returns_the_key(tmp_path):
     client, tm = _client(tmp_path, None)
     try:
-        assert SENTINEL not in client.get("/api/models").text
         created = client.post(
-            "/api/models",
-            json={"name": "Bailian", "base_url": "https://dashscope.test/v1", "model": "qwen"},
+            "/api/providers",
+            json={
+                "id": "bailian",
+                "name": "Bailian",
+                "base_url": "https://dashscope.test/v1",
+                "api_key_env": "DASHSCOPE_API_KEY",
+            },
         )
         assert created.status_code == 200
-        model_id = created.json()["data"]["id"]
-        saved = client.put(f"/api/models/{model_id}/key", json={"key": SENTINEL})
-        assert saved.json()["data"] == {"ok": True, "key_set": True, "key_source": "pasted"}
-        listing = client.get("/api/models")
-        assert SENTINEL not in listing.text
-        entry = next(m for m in listing.json()["data"]["models"] if m["id"] == model_id)
-        assert entry["key_set"] is True
-        assert entry["key_source"] == "pasted"
-        assert "key" not in entry
+        entry = client.post(
+            "/api/providers/bailian/models", json={"model": "qwen"}
+        ).json()["data"]
+        model_id = entry["id"]
+        saved = client.put("/api/providers/bailian", json={"key": SENTINEL})
+        assert saved.status_code == 200
+        assert saved.json()["data"]["key_set"] is True
+        assert saved.json()["data"]["key_source"] == "pasted"
+        assert "key" not in saved.json()["data"]
+        assert SENTINEL not in saved.text
+        card = next(
+            p
+            for p in client.get("/api/providers").json()["data"]["providers"]
+            if p["id"] == "bailian"
+        )
+        assert card["key_set"] is True
+        assert card["key_source"] == "pasted"
+        assert SENTINEL not in client.get("/api/providers").text
+        assert SENTINEL not in client.get("/api/providers/bailian/models").text
 
         task_id = tm.create_task("t", "hi")
         task = client.get(f"/api/tasks/{task_id}")
@@ -534,7 +639,7 @@ def test_models_api_never_returns_the_key(tmp_path):
         assert client.put(f"/api/tasks/{task_id}/model", json={"model": model_id}).status_code == 200
         assert client.put(f"/api/tasks/{task_id}/model", json={"model": "nope"}).status_code == 409
         assert client.post(f"/api/models/{model_id}/default").status_code == 200
-        assert client.get("/api/models").json()["data"]["default"] == model_id
+        assert client.get("/api/providers").json()["data"]["default"] == model_id
         tested = client.post(f"/api/models/{model_id}/test")
         assert tested.status_code == 200
         assert SENTINEL not in tested.text
@@ -542,34 +647,61 @@ def test_models_api_never_returns_the_key(tmp_path):
         client.__exit__(None, None, None)
 
 
-def test_model_profile_update_and_delete_endpoints(tmp_path):
+def test_catalog_entry_update_and_delete_endpoints(tmp_path):
     client, tm = _client(tmp_path, None)
     try:
         created = client.post(
-            "/api/models",
-            json={"name": "Temp", "base_url": "https://example.test/v1", "model": "m1"},
+            "/api/providers",
+            json={"id": "temp", "name": "Temp", "base_url": "https://example.test/v1"},
         )
         assert created.status_code == 200
-        model_id = created.json()["data"]["id"]
+        model_id = client.post(
+            "/api/providers/temp/models", json={"model": "m1"}
+        ).json()["data"]["id"]
 
         updated = client.put(
-            f"/api/models/{model_id}", json={"name": "Renamed", "model": "m2"}
+            f"/api/providers/temp/models/{model_id}",
+            json={"name": "Renamed", "model": "m2"},
         )
         assert updated.status_code == 200
         entry = next(
             m
-            for m in client.get("/api/models").json()["data"]["models"]
+            for m in client.get("/api/providers/temp/models").json()["data"]["models"]
             if m["id"] == model_id
         )
         assert entry["name"] == "Renamed"
         assert entry["model"] == "m2"
 
-        removed = client.delete(f"/api/models/{model_id}")
+        removed = client.delete(f"/api/providers/temp/models/{model_id}")
         assert removed.status_code == 200
         assert all(
             m["id"] != model_id
-            for m in client.get("/api/models").json()["data"]["models"]
+            for m in client.get("/api/providers/temp/models").json()["data"]["models"]
         )
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_legacy_flat_model_surface_is_gone(tmp_path):
+    """ADR 0013 decision 1: the flat `/api/models` read/CRUD face is refused;
+    only the provider/catalog face remains, plus the entry-level default and
+    connection-test actions the settings page actually calls."""
+    client, tm = _client(tmp_path, None)
+    try:
+        assert client.get("/api/models").status_code == 404
+        assert (
+            client.post(
+                "/api/models",
+                json={"name": "x", "base_url": "https://x.test/v1", "model": "m"},
+            ).status_code
+            == 404
+        )
+        assert client.put("/api/models/default", json={"name": "x"}).status_code == 404
+        assert client.delete("/api/models/default").status_code == 404
+        assert client.put("/api/models/default/key", json={"key": "sk"}).status_code == 404
+        # Live actions keyed by the model entry id stay.
+        assert client.post("/api/models/default/default").status_code == 200
+        assert client.post("/api/models/default/test").status_code == 200
     finally:
         client.__exit__(None, None, None)
 
@@ -593,18 +725,19 @@ def _deny_credentials_write(monkeypatch):
     monkeypatch.setattr(model_store_module.os, "open", deny)
 
 
-def test_credentials_write_failure_is_readable_and_keeps_the_profile(
+def test_credentials_write_failure_is_readable_and_keeps_the_provider(
     tmp_path, monkeypatch, caplog
 ):
     store, _ = _store(tmp_path)
-    second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
-    store.set_key(second.id, SENTINEL)
+    store.add_provider(id="second", name="Second", base_url="https://example.test/v1")
+    store.add_model("second", model="m2")
+    store.set_provider_key("second", SENTINEL)
 
     _deny_credentials_write(monkeypatch)
 
     with caplog.at_level("WARNING"):
         with pytest.raises(CredentialsError) as excinfo:
-            store.set_key(second.id, "sk-new")
+            store.set_provider_key("second", "sk-new")
     message = str(excinfo.value)
     assert str(store.credentials_file) in message
     assert "environment variable" in message
@@ -612,36 +745,36 @@ def test_credentials_write_failure_is_readable_and_keeps_the_profile(
     assert "credentials write failed" in caplog.text
     assert str(store.credentials_file) in caplog.text
     # The failed write left the previous pasted key intact.
-    assert store.key_for(second.id) == SENTINEL
+    assert store.provider_key_for("second") == SENTINEL
 
-    # Revoking a key is part of deleting a profile; failing to revoke must not
-    # drop the profile (which would leave an orphaned secret on disk).
+    # Revoking a key is part of deleting a provider; failing to revoke must not
+    # drop the provider (which would leave an orphaned secret on disk).
     with pytest.raises(CredentialsError):
-        store.delete(second.id)
-    assert store.get(second.id) is not None
+        store.delete_provider("second")
+    assert store.get_provider("second") is not None
 
 
 def test_key_write_failure_returns_409_with_reason(tmp_path, monkeypatch):
     client, tm = _client(tmp_path, None)
     try:
         created = client.post(
-            "/api/models",
-            json={"name": "Temp", "base_url": "https://example.test/v1", "model": "m1"},
+            "/api/providers",
+            json={"id": "temp", "name": "Temp", "base_url": "https://example.test/v1"},
         )
-        model_id = created.json()["data"]["id"]
+        assert created.status_code == 200
 
         _deny_credentials_write(monkeypatch)
 
-        response = client.put(f"/api/models/{model_id}/key", json={"key": "sk-test"})
+        response = client.put("/api/providers/temp", json={"key": "sk-test"})
         assert response.status_code == 409
         detail = response.json()["detail"]
         assert str(tm.models.credentials_file) in detail
         assert "environment variable" in detail
-        assert tm.models.get(model_id) is not None
+        assert tm.models.get_provider("temp") is not None
     finally:
         client.__exit__(None, None, None)
 
-# ── #243 P2-2 (D-33): models.json v2 + v1 migration ──
+# ── ADR 0013 decision 1: v1 models.json is refused, never migrated ──
 _V1_PROFILES = [
     {
         "id": "aaaabbbbcccc",
@@ -671,117 +804,33 @@ def _write_v1_models(tmp_path, default="aaaabbbbcccc"):
     return settings, text
 
 
-def test_v1_models_json_migrates_to_providers_and_catalog(tmp_path):
-    settings, original = _write_v1_models(tmp_path)
-    home = tmp_path / "home"
-    credentials = home / ".qianfan" / "credentials.json"
-    credentials.parent.mkdir(parents=True)
-    credentials.write_text(json.dumps({"ddddeeeeffff": SENTINEL}), encoding="utf-8")
-
-    store = ModelStore(settings, home_dir=home)
-
-    raw = json.loads(store.data_file.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 2
-    assert raw["default"] == "aaaabbbbcccc"
-    providers = {provider["id"]: provider for provider in raw["providers"]}
-    assert set(providers) == {"aaaabbbbcccc", "ddddeeeeffff"}
-    assert providers["aaaabbbbcccc"] == {
-        "id": "aaaabbbbcccc",
-        "name": "DeepSeek",
-        "protocol": "openai-compatible",
-        "base_url": "https://api.deepseek.com/v1",
-        "api_key_env": "LLM_API_KEY",
-        "preset": True,
-        # D-36 sampling defaults are absent in a v1 profile: None = not set.
-        "temperature": None,
-        "max_tokens": None,
-        "thinking": None,
-        "reasoning_effort": None,
-    }
-    assert providers["ddddeeeeffff"]["api_key_env"] == "DASHSCOPE_API_KEY"
-    assert providers["ddddeeeeffff"]["preset"] is False
-    entries = {entry["id"]: entry for entry in raw["models"]}
-    assert entries["aaaabbbbcccc"] == {
-        "id": "aaaabbbbcccc",
-        "provider_id": "aaaabbbbcccc",
-        "model": "deepseek-chat",
-        "name": "DeepSeek",
-        "source": "migrated",
-        "temperature": None,
-        "max_tokens": None,
-        "thinking": None,
-        "reasoning_effort": None,
-    }
-    assert entries["ddddeeeeffff"]["provider_id"] == "ddddeeeeffff"
-    assert entries["ddddeeeeffff"]["model"] == "qwen-max"
-
-    # Backup: written before the rewrite, byte-identical to the v1 file.
-    backup = store.data_file.with_name("models.json.bak-v1")
-    assert backup.is_file()
-    assert backup.read_text(encoding="utf-8") == original
-
-    # Task.model / default / credentials keys keep working unchanged.
-    assert store.default_id == "aaaabbbbcccc"
-    assert store.get("aaaabbbbcccc").model == "deepseek-chat"
-    assert store.get("ddddeeeeffff").base_url == "https://dashscope.test/v1"
-    assert store.key_for("ddddeeeeffff") == SENTINEL
-    assert store.key_source("ddddeeeeffff") == "pasted"
-    assert SENTINEL not in store.data_file.read_text(encoding="utf-8")
-    assert json.loads(credentials.read_text(encoding="utf-8")) == {"ddddeeeeffff": SENTINEL}
-
-    # Legacy flat projection keeps the old fields and adds provider_id/protocol.
-    listing = store.list_public()
-    projected = next(m for m in listing["models"] if m["id"] == "ddddeeeeffff")
-    assert projected["provider_id"] == "ddddeeeeffff"
-    assert projected["protocol"] == "openai-compatible"
-    assert projected["base_url"] == "https://dashscope.test/v1"
-    assert projected["model"] == "qwen-max"
-    assert projected["key_set"] is True
-    assert projected["key_source"] == "pasted"
-
-
-def test_v1_migration_is_idempotent_and_backs_up_once(tmp_path):
-    settings, original = _write_v1_models(tmp_path)
-    home = tmp_path / "home"
-    store = ModelStore(settings, home_dir=home)
-    after_first = store.data_file.read_bytes()
-    backups = settings.data_path.glob("models.json.bak-v1")
-    assert [backup.name for backup in backups] == ["models.json.bak-v1"]
-
-    reloaded = ModelStore(settings, home_dir=home)
-
-    # A v2 file is read as-is: no rewrite and no second backup.
-    assert reloaded.data_file.read_bytes() == after_first
-    assert [backup.name for backup in settings.data_path.glob("models.json.bak-v1")] == [
-        "models.json.bak-v1"
-    ]
-    backup = reloaded.data_file.with_name("models.json.bak-v1")
-    assert backup.read_text(encoding="utf-8") == original
-    assert reloaded.list_public()["default"] == "aaaabbbbcccc"
-
-
-def test_existing_v1_backup_is_never_overwritten(tmp_path):
+def test_v1_models_json_is_refused_and_left_byte_for_byte(tmp_path):
     settings, _ = _write_v1_models(tmp_path)
-    backup = settings.data_path / "models.json.bak-v1"
-    backup.write_text("first migration backup", encoding="utf-8")
+    before = (settings.data_path / "models.json").read_bytes()
 
-    store = ModelStore(settings, home_dir=tmp_path / "home")
+    with pytest.raises(UnsupportedModelsFileError) as excinfo:
+        ModelStore(settings, home_dir=tmp_path / "home")
 
-    assert store.default_id == "aaaabbbbcccc"
-    assert backup.read_text(encoding="utf-8") == "first migration backup"
+    message = str(excinfo.value)
+    assert "models.json" in message
+    assert "schema_version" in message
+    # Refusal never rewrites, renames or backs up the unsupported file.
+    assert (settings.data_path / "models.json").read_bytes() == before
+    assert not (settings.data_path / "models.json.bak-v1").exists()
+    assert not list(settings.data_path.glob("models.json.corrupt-*"))
 
 
-def test_v1_default_falls_back_to_the_first_profile_when_unknown(tmp_path):
-    settings, _ = _write_v1_models(tmp_path, default="does-not-exist")
-    store = ModelStore(settings, home_dir=tmp_path / "home")
-    assert store.default_id == "aaaabbbbcccc"
+def test_schema_version_1_is_refused_without_touching_the_file(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    payload = {"schema_version": 1, "default": "aaaabbbbcccc", "models": _V1_PROFILES}
+    original = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    (settings.data_path / "models.json").write_bytes(original)
 
+    with pytest.raises(UnsupportedModelsFileError):
+        ModelStore(settings, home_dir=tmp_path / "home")
 
-def test_migrated_profile_ids_still_pin_tasks(tmp_path):
-    settings, _ = _write_v1_models(tmp_path)
-    tm = make_manager(settings, MockLLMClient(final_answer="ok"))
-    task_id = tm.create_task("m", "hi", model="ddddeeeeffff")
-    assert (tm.get_task(task_id).model or "") == "ddddeeeeffff"
+    assert (settings.data_path / "models.json").read_bytes() == original
 
 
 def test_seeded_models_json_uses_schema_v2(tmp_path):
@@ -805,24 +854,9 @@ def test_bad_v2_file_is_quarantined_and_reseeded(tmp_path):
 
     store = ModelStore(settings, home_dir=tmp_path / "home")
 
-    assert store.get("default") is not None
+    assert store.get_model("default") is not None
     assert list(settings.data_path.glob("models.json.corrupt-*"))
     assert json.loads(store.data_file.read_text(encoding="utf-8"))["schema_version"] == 2
-
-
-def test_v1_backup_is_a_byte_for_byte_copy(tmp_path):
-    settings = make_settings(tmp_path)
-    settings.data_path.mkdir(parents=True, exist_ok=True)
-    payload = {"default": "aaaabbbbcccc", "models": _V1_PROFILES}
-    original = (
-        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8").replace(b"\r\n", b"\n")
-    )
-    (settings.data_path / "models.json").write_bytes(original)
-
-    store = ModelStore(settings, home_dir=tmp_path / "home")
-
-    backup = store.data_file.with_name("models.json.bak-v1")
-    assert backup.read_bytes() == original
 
 
 # ── store-level Provider / catalog CRUD (unwired by A2 yet) ──
@@ -876,7 +910,7 @@ def test_provider_crud_store_level(tmp_path):
     store.set_default(entry.id)
     store.delete_provider("bailian")
     assert store.get_provider("bailian") is None
-    assert store.get(entry.id) is None
+    assert store.get_model(entry.id) is None
     assert store.default_id == "default"
     assert SENTINEL not in store.credentials_file.read_text(encoding="utf-8")
 
@@ -924,54 +958,62 @@ def test_last_model_and_last_provider_are_protected(tmp_path):
 # ── HIGH rework: an empty model must be rejected, not silently dropped ──
 def test_models_with_an_empty_model_are_rejected_without_mutating(tmp_path):
     store, _ = _store(tmp_path)
+    store.add_provider(id="p", name="P", base_url="https://example.test/v1")
     with pytest.raises(ValueError):
-        store.add(name="Blank", base_url="https://example.test/v1", model="")
+        store.add_model("p", model="")
     with pytest.raises(ValueError):
-        store.add(name="Blank", base_url="https://example.test/v1", model="   ")
-    assert [m["id"] for m in store.list_public()["models"]] == ["default"]
+        store.add_model("p", model="   ")
+    assert store.list_models("p") == []
 
-    second = store.add(name="Second", base_url="https://example.test/v1", model=" m2 ")
-    assert store.get(second.id).model == "m2"
-    before = asdict(store.get(second.id))
+    second = store.add_model("p", model=" m2 ")
+    assert store.get_model(second.id).model == "m2"
+    before = asdict(store.get_model(second.id))
     with pytest.raises(ValueError):
-        store.update(second.id, model="")
-    assert asdict(store.get(second.id)) == before
+        store.update_model("p", second.id, model="")
+    assert asdict(store.get_model(second.id)) == before
 
 
 def test_a_valid_model_still_exists_after_a_reload(tmp_path):
     store, settings = _store(tmp_path)
-    second = store.add(name="Second", base_url="https://example.test/v1", model="m2")
+    store.add_provider(id="second", name="Second", base_url="https://example.test/v1")
+    second = store.add_model("second", model="m2")
 
     reloaded = ModelStore(settings, home_dir=tmp_path / "home")
 
-    entry = reloaded.get(second.id)
+    entry = reloaded.get_model(second.id)
     assert entry is not None
     assert entry.model == "m2"
 
 
-def test_models_api_rejects_an_empty_model(tmp_path):
+def test_catalog_api_rejects_an_empty_model(tmp_path):
     client, tm = _client(tmp_path, None)
     try:
-        blank = client.post(
-            "/api/models",
-            json={"name": "Blank", "base_url": "https://example.test/v1", "model": ""},
+        created = client.post(
+            "/api/providers",
+            json={"id": "ok", "name": "Ok", "base_url": "https://example.test/v1"},
         )
+        assert created.status_code == 200
+        blank = client.post("/api/providers/ok/models", json={"model": ""})
         assert blank.status_code == 400
-        valid = client.post(
-            "/api/models",
-            json={"name": "Ok", "base_url": "https://example.test/v1", "model": "m1"},
-        )
+        valid = client.post("/api/providers/ok/models", json={"model": "m1"})
         assert valid.status_code == 200
         model_id = valid.json()["data"]["id"]
-        assert client.put(f"/api/models/{model_id}", json={"model": "  "}).status_code == 400
+        assert (
+            client.put(
+                f"/api/providers/ok/models/{model_id}", json={"model": "  "}
+            ).status_code
+            == 400
+        )
         entry = next(
-            m for m in client.get("/api/models").json()["data"]["models"] if m["id"] == model_id
+            m
+            for m in client.get("/api/providers/ok/models").json()["data"]["models"]
+            if m["id"] == model_id
         )
         assert entry["model"] == "m1"
         # The pre-fix path accepted "" and the next load silently dropped it.
         reloaded = ModelStore(tm.settings, home_dir=tm.settings.data_path / "home")
-        assert reloaded.get(model_id) is not None
-        assert reloaded.get(model_id).model == "m1"
+        assert reloaded.get_model(model_id) is not None
+        assert reloaded.get_model(model_id).model == "m1"
     finally:
         client.__exit__(None, None, None)
 
@@ -1039,7 +1081,7 @@ def test_v2_load_drops_unknown_protocols_and_keeps_anthropic(tmp_path):
     assert set(store.providers) == {"keep", "claude"}
     assert set(store.model_entries) == {"keep", "claude-model"}
     assert store.default_id == "keep"
-    assert store.get("claude-model").protocol == "anthropic"
+    assert store.resolve("claude-model").protocol == "anthropic"
 
 
 def test_v2_file_with_only_unknown_protocols_is_quarantined(tmp_path):
@@ -1070,7 +1112,7 @@ def test_v2_file_with_only_unknown_protocols_is_quarantined(tmp_path):
 
     store = ModelStore(settings, home_dir=tmp_path / "home")
 
-    assert store.get("default") is not None
+    assert store.get_model("default") is not None
     assert list(settings.data_path.glob("models.json.corrupt-*"))
 
 
@@ -1082,33 +1124,10 @@ def test_newer_schema_version_is_moved_aside_not_rewritten(tmp_path):
 
     store = ModelStore(settings, home_dir=tmp_path / "home")
 
-    assert store.get("default") is not None
+    assert store.get_model("default") is not None
     quarantined = list(settings.data_path.glob("models.json.corrupt-*"))
     assert quarantined
     assert quarantined[0].read_text(encoding="utf-8") == future
-
-
-def test_migration_keeps_the_v1_file_when_the_backup_cannot_be_written(
-    tmp_path, monkeypatch
-):
-    settings, _ = _write_v1_models(tmp_path)
-    before = (settings.data_path / "models.json").read_bytes()
-    import pathlib
-
-    def deny(*args, **kwargs):
-        raise PermissionError(13, "Permission denied")
-
-    monkeypatch.setattr(pathlib.Path, "write_bytes", deny)
-
-    store = ModelStore(settings, home_dir=tmp_path / "home")
-
-    # Fail-closed: the migrated view is served from memory ...
-    assert store.default_id == "aaaabbbbcccc"
-    assert store.get("aaaabbbbcccc").model == "deepseek-chat"
-    # ... while the v1 file stays byte-for-byte as it was: no v2 rewrite and
-    # no missing backup to restore from (the next start retries the migration).
-    assert store.data_file.read_bytes() == before
-    assert not store.data_file.with_name("models.json.bak-v1").exists()
 
 
 def test_add_provider_rolls_back_when_the_key_cannot_be_written(tmp_path, monkeypatch):
@@ -1144,42 +1163,6 @@ def test_add_provider_rolls_back_when_the_key_cannot_be_written(tmp_path, monkey
     assert store.provider_public("bailian")["key_set"] is True
 
 
-def test_a_pending_backup_blocks_later_v2_writes_until_it_succeeds(tmp_path, monkeypatch):
-    import pathlib
-
-    settings, _ = _write_v1_models(tmp_path)
-    original = (settings.data_path / "models.json").read_bytes()
-    real_write_bytes = pathlib.Path.write_bytes
-
-    def deny_backup(path, data):
-        if path.name == "models.json.bak-v1":
-            raise PermissionError(13, "Permission denied")
-        return real_write_bytes(path, data)
-
-    monkeypatch.setattr(pathlib.Path, "write_bytes", deny_backup)
-    store = ModelStore(settings, home_dir=tmp_path / "home")
-
-    # Fail-closed at load: the v1 file stays, no backup, no v2 write.
-    assert store.data_file.read_bytes() == original
-    assert not store.data_file.with_name("models.json.bak-v1").exists()
-
-    # A later, unrelated mutation must not quietly write v2 without the backup.
-    with pytest.raises(RuntimeError, match="back up"):
-        store.set_default("ddddeeeeffff")
-    assert store.data_file.read_bytes() == original
-    assert not store.data_file.with_name("models.json.bak-v1").exists()
-
-    # Once the backup path is writable the same mutation retries and succeeds.
-    monkeypatch.setattr(pathlib.Path, "write_bytes", real_write_bytes)
-    store.set_default("ddddeeeeffff")
-
-    backup = store.data_file.with_name("models.json.bak-v1")
-    assert backup.read_bytes() == original
-    raw = json.loads(store.data_file.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 2
-    assert raw["default"] == "ddddeeeeffff"
-
-
 # ── D-36: sampling fields (schema v2 backward compatible) ──
 def test_v2_file_without_sampling_fields_loads_with_none(tmp_path):
     settings = _write_v2_file(
@@ -1209,12 +1192,12 @@ def test_v2_file_without_sampling_fields_loads_with_none(tmp_path):
 
     store = ModelStore(settings, home_dir=tmp_path / "home")
 
-    profile = store.get("keep")
-    assert profile is not None
-    assert profile.temperature is None
-    assert profile.max_tokens is None
-    assert profile.thinking is None
-    assert profile.reasoning_effort is None
+    resolved = store.resolve("keep")
+    assert resolved is not None
+    assert resolved.temperature is None
+    assert resolved.max_tokens is None
+    assert resolved.thinking is None
+    assert resolved.reasoning_effort is None
     provider = store.provider_public("keep")
     assert provider["temperature"] is None
     assert provider["max_tokens"] is None
@@ -1228,7 +1211,7 @@ def test_v2_file_without_sampling_fields_loads_with_none(tmp_path):
     # A later save writes the (still None) fields without breaking the reload.
     store.set_default("keep")
     reloaded = ModelStore(settings, home_dir=tmp_path / "home")
-    assert reloaded.get("keep").temperature is None
+    assert reloaded.resolve("keep").temperature is None
 
 
 def test_entry_sampling_params_override_provider_defaults(tmp_path):
@@ -1243,11 +1226,11 @@ def test_entry_sampling_params_override_provider_defaults(tmp_path):
         reasoning_effort="low",
     )
     inherited = store.add_model("bailian", model="m1")
-    inherited_profile = store.get(inherited.id)
-    assert inherited_profile.temperature == 0.3
-    assert inherited_profile.max_tokens == 1024
-    assert inherited_profile.thinking is False
-    assert inherited_profile.reasoning_effort == "low"
+    inherited_model = store.resolve(inherited.id)
+    assert inherited_model.temperature == 0.3
+    assert inherited_model.max_tokens == 1024
+    assert inherited_model.thinking is False
+    assert inherited_model.reasoning_effort == "low"
 
     overridden = store.add_model(
         "bailian",
@@ -1257,21 +1240,21 @@ def test_entry_sampling_params_override_provider_defaults(tmp_path):
         thinking=True,
         reasoning_effort="high",
     )
-    profile = store.get(overridden.id)
-    assert profile.temperature == 0.9
-    assert profile.max_tokens == 2048
-    assert profile.thinking is True
-    assert profile.reasoning_effort == "high"
+    overridden_model = store.resolve(overridden.id)
+    assert overridden_model.temperature == 0.9
+    assert overridden_model.max_tokens == 2048
+    assert overridden_model.thinking is True
+    assert overridden_model.reasoning_effort == "high"
 
     # Provider default edits do not leak through an entry override.
     store.update_provider("bailian", temperature=0.1)
-    assert store.get(overridden.id).temperature == 0.9
-    assert store.get(inherited.id).temperature == 0.1
+    assert store.resolve(overridden.id).temperature == 0.9
+    assert store.resolve(inherited.id).temperature == 0.1
 
     store.update_model("bailian", overridden.id, temperature=0.5, max_tokens=512)
     reloaded = ModelStore(settings, home_dir=tmp_path / "home")
-    assert reloaded.get(overridden.id).temperature == 0.5
-    assert reloaded.get(overridden.id).max_tokens == 512
+    assert reloaded.resolve(overridden.id).temperature == 0.5
+    assert reloaded.resolve(overridden.id).max_tokens == 512
 
 
 def test_sampling_params_are_validated_without_mutating(tmp_path):
@@ -1297,24 +1280,6 @@ def test_sampling_params_are_validated_without_mutating(tmp_path):
     store.add_model("bailian", model="taken")
     with pytest.raises(ValueError, match="already exists"):
         store.update_model("bailian", entry.id, model="taken")
-
-
-def test_legacy_projection_carries_effective_sampling_params(tmp_path):
-    store, _ = _store(tmp_path)
-    store.add_provider(
-        id="bailian", name="Bailian", base_url="https://dashscope.test/v1", temperature=0.4
-    )
-    entry = store.add_model("bailian", model="m1", max_tokens=77)
-
-    projected = next(
-        m for m in store.list_public()["models"] if m["id"] == entry.id
-    )
-    assert projected["temperature"] == 0.4
-    assert projected["max_tokens"] == 77
-
-    profile = store.public_profile(entry.id)
-    assert profile["temperature"] == 0.4
-    assert profile["max_tokens"] == 77
 
 
 # ── PR #298 返工：写面拒绝不可运行组合 / 参数显式清空 / 温度按协议 ──
@@ -1383,7 +1348,7 @@ def test_sampling_params_can_be_cleared_back_to_the_fallback(tmp_path):
     entry = store.add_model(
         "p1", model="m1", temperature=0.9, max_tokens=2048, thinking=True
     )
-    assert store.get(entry.id).temperature == 0.9
+    assert store.resolve(entry.id).temperature == 0.9
 
     # Explicit None clears an override; omitted fields keep their value.
     cleared = store.update_model(
@@ -1392,10 +1357,10 @@ def test_sampling_params_can_be_cleared_back_to_the_fallback(tmp_path):
     assert cleared.temperature is None
     assert cleared.max_tokens is None
     assert cleared.thinking is None
-    profile = store.get(entry.id)
-    assert profile.temperature == 0.3  # provider fallback
-    assert profile.max_tokens == 1024
-    assert profile.thinking is None  # provider default is not set here
+    resolved = store.resolve(entry.id)
+    assert resolved.temperature == 0.3  # provider fallback
+    assert resolved.max_tokens == 1024
+    assert resolved.thinking is None  # provider default is not set here
 
     kept = store.update_model("p1", entry.id, name="Renamed")
     assert kept.name == "Renamed"
@@ -1403,8 +1368,8 @@ def test_sampling_params_can_be_cleared_back_to_the_fallback(tmp_path):
 
     # Clearing the provider-level value falls back to the client default (None).
     store.update_provider("p1", temperature=None, max_tokens=None)
-    assert store.get(entry.id).temperature is None
-    assert store.get(entry.id).max_tokens is None
+    assert store.resolve(entry.id).temperature is None
+    assert store.resolve(entry.id).max_tokens is None
 
 
 def test_temperature_range_is_protocol_specific(tmp_path):

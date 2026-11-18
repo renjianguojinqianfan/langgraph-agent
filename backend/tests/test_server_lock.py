@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
@@ -837,13 +838,21 @@ def test_mock_mode_never_warns_about_keys(tmp_path, caplog):
 
 
 class _KeySnapshotStore:
-    """Minimal store double: the startup guard only needs list_public()."""
+    """Minimal store double: the startup guard reads the default id, the live
+    entries and each entry's key through the same accessors as the real store."""
 
-    def __init__(self, snapshot: dict) -> None:
-        self._snapshot = snapshot
+    def __init__(self, default_id: str, entries: dict[str, str]) -> None:
+        self.default_id = default_id
+        self._keys = entries
+        self.model_entries = {
+            model_id: SimpleNamespace(id=model_id) for model_id in entries
+        }
 
-    def list_public(self) -> dict:
-        return self._snapshot
+    def get_model(self, model_id: str):
+        return self.model_entries.get(model_id)
+
+    def key_for(self, model_id: str) -> str:
+        return self._keys.get(model_id, "")
 
 
 def test_key_warning_skips_when_default_is_gone_but_another_entry_has_a_key(
@@ -851,12 +860,7 @@ def test_key_warning_skips_when_default_is_gone_but_another_entry_has_a_key(
 ):
     """L1: the old default-None shortcut warned despite a usable key."""
     settings = make_settings(tmp_path, use_mock_llm=False)
-    store = _KeySnapshotStore(
-        {
-            "default": "gone",
-            "models": [{"id": "alt", "key_set": True, "key_source": "pasted"}],
-        }
-    )
+    store = _KeySnapshotStore("gone", {"alt": "sk-alt"})
     with caplog.at_level(logging.WARNING, logger="agent.main"):
         warned = warn_if_no_usable_model_key(settings, store)
     assert warned is False

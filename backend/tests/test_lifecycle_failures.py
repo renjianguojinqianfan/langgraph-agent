@@ -370,9 +370,10 @@ def test_set_model_save_failure_rolls_back(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     _parked_task(settings)
     tm = make_manager(settings, MockLLMClient())
-    target = tm.models.add(
-        name="other", base_url="https://example.invalid/v1", model="other-model"
+    tm.models.add_provider(
+        id="other", name="other", base_url="https://example.invalid/v1"
     )
+    target = tm.models.add_model("other", model="other-model")
     monkeypatch.setattr(tm.persistence, "save_task", lambda task: False)
 
     with pytest.raises(PersistenceError):
