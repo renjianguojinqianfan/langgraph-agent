@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
 from fastapi.testclient import TestClient
@@ -24,7 +23,7 @@ from backend.core.llm.client import MockLLMClient
 from backend.main import app
 from backend.services.event_bus import EventBus
 from backend.services.persistence import Persistence
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_agent_host, make_manager, make_settings
 
 
 def _rt(
@@ -34,16 +33,9 @@ def _rt(
     bus = EventBus()
     events: List[Dict[str, Any]] = []
     bus.subscribe("t1", lambda e: events.append(e))
-    tm = SimpleNamespace(
-        settings=settings,
-        event_bus=bus,
-        add_artifact=lambda *a, **k: None,
-        is_stop_flagged=lambda _tid: False,
-        _active_states={"t1": {}},
-    )
     rt = AgentRuntime(
         "t1",
-        tm,
+        make_agent_host(settings, bus),
         llm=llm if llm is not None else MockLLMClient(final_answer="收尾答案"),
         tools=[],
         tool_schemas=[],

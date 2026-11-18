@@ -24,7 +24,7 @@ from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.prompts import PLANNER_SYSTEM
 from backend.core.agent.state import AgentState
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_settings
+from backend.tests.conftest import make_agent_host, make_settings
 
 TRACE_REF = "/tmp/traces/t1.jsonl"
 
@@ -66,9 +66,7 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
 
 
 def _fake_tm(settings: Settings, bus: EventBus) -> SimpleNamespace:
-    return SimpleNamespace(
-        settings=settings, event_bus=bus, add_artifact=lambda *a, **k: None
-    )
+    return make_agent_host(settings, bus)
 
 
 def _runtime(settings: Settings, bus: EventBus) -> AgentRuntime:

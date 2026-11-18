@@ -35,6 +35,7 @@ from ..runtime_context import (
     reset_runtime_context,
     set_runtime_context,
 )
+from .host import SubAgentHost
 from .state import AgentState
 
 logger = get_logger("agent.subagent")
@@ -187,7 +188,7 @@ class SubTaskResult:
 class SubAgentExecutor:
     """Runs isolated subtasks on a bounded thread pool."""
 
-    def __init__(self, task_manager: Any, settings: Settings) -> None:
+    def __init__(self, task_manager: SubAgentHost, settings: Settings) -> None:
         self.tm = task_manager
         self.settings = settings
         self._pool = ThreadPoolExecutor(
@@ -301,14 +302,17 @@ class SubAgentExecutor:
         """
         if future.cancel():
             return  # never started: nothing is running, nothing to unwind
-        self.tm._stop_flags[spec.subtask_id] = True
+        # The manager owns the authoritative flag; subtasks are not its public
+        # lifecycle records, so they go through the narrow request/clear seam
+        # rather than reaching into ``_stop_flags`` (#330).
+        self.tm.request_stop(spec.subtask_id)
         future.add_done_callback(
-            lambda _f: self.tm._stop_flags.pop(spec.subtask_id, None)
+            lambda _f: self.tm.clear_stop(spec.subtask_id)
         )
 
     def _subtask_tools(self, spec: SubTaskSpec) -> List[Any]:
         """The declared tier of the parent face (see :func:`resolve_tool_face`)."""
-        return resolve_tool_face(self.tm._tools, spec.tier, spec.tools)
+        return resolve_tool_face(self.tm.tool_face, spec.tier, spec.tools)
 
     def _exec_one(
         self, spec: SubTaskSpec, parent_workspace: Optional[Path] = None
@@ -370,8 +374,7 @@ class SubAgentExecutor:
                 llm = self.tm.llm_for_task_id(parent_id)
             # D-39: the child shares the parent round's model, so it also
             # shares that model's reasoning-compatibility scope.
-            scope_for = getattr(self.tm, "reasoning_scope_for", None)
-            reasoning_scope = scope_for(model_profile) if callable(scope_for) else ""
+            reasoning_scope = self.tm.reasoning_scope_for(model_profile)
             runtime = AgentRuntime(
                 task_id=spec.subtask_id,
                 task_manager=self.tm,

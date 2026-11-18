@@ -34,8 +34,7 @@ from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.prompts import EXECUTOR_SYSTEM, PLANNER_SYSTEM
 from backend.core.agent.state import AgentState
 from backend.core.llm.client import LLMResponse
-from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_isolated_settings, make_settings
+from backend.tests.conftest import make_agent_host, make_isolated_settings, make_settings
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -76,9 +75,7 @@ def _desc_of_len(name: str, total: int) -> str:
 
 
 def _fake_tm(settings: Settings) -> SimpleNamespace:
-    return SimpleNamespace(
-        settings=settings, event_bus=EventBus(), add_artifact=lambda *a, **k: None
-    )
+    return make_agent_host(settings)
 
 
 def _runtime(

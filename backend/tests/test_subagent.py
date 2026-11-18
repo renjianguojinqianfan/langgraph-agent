@@ -171,9 +171,9 @@ def test_executor_exposes_only_the_spawn_entry():
     assert public == {"check_face", "run_subtask"}
 
 
-def test_main_graph_has_no_split_node():
+def test_main_graph_has_no_split_node(settings):
     """`subagent_split` must be neither a node nor an endpoint of any edge."""
-    graph = build_graph(_runtime())
+    graph = build_graph(_runtime(settings))
     edges = _declared_edges(graph)
     names = set(graph.get_graph().nodes)
 
