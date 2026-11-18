@@ -55,13 +55,14 @@ class Settings(BaseSettings):
     # Saved config: data/plugins.json (settings page / PUT /api/plugins).
     # This env/field is only the fallback when that file is missing (P4-1
     # compatibility); a CLI --preset wins for one run. full = pre-#67
-    # behaviour; minimal = files+bash; research = files+bash+skills+
+    # behaviour; minimal = files+shell; research = files+shell+skills+
     # web-search+subagent+mcp. Unknown preset / package ids fail startup.
     plugins_preset: str = "full"
 
-    # ── Bash tool ──
-    sandbox_timeout: int = 30  # default wall-clock seconds for one bash command
-    bash_path: str = ""  # explicit bash executable; empty = Git install dir, then PATH
+    # ── Shell tool ──
+    sandbox_timeout: int = 30  # default wall-clock seconds for one shell command
+    bash_path: str = ""  # explicit Git Bash executable; empty = Git install dir, then PATH
+    pwsh_path: str = ""  # explicit PowerShell 7 executable; empty = PATH, then install roots
 
     # ── Web search ──
     search_provider: str = "duckduckgo"  # duckduckgo | serpapi | exa

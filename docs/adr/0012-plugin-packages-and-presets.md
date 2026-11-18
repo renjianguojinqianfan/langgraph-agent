@@ -44,6 +44,12 @@ P4-1 只交付静态声明 + 装配 + 三个预设的真关；`data/plugins.json
    - `subagent` = spawn_subagent（子代理执行器随之启停）；
    - `mcp` = 动态 MCP 工具（连接由该包开启；工具名由服务器决定）。
 
+   > **修订（2026-11-18，[ADR 0013](0013-kernel-simplification.md) 决策 3）**：`bash` 包与工具名改为
+   > `shell`（一个命令工具，显式 `shell` 选择；Windows 默认 PowerShell 7、Git Bash 显式可选、POSIX
+   > 默认 Bash）。包/预设的「真关」语义、装配面与优先级不变；旧 `data/plugins.json` 的 `bash` 包 id
+   > 按 fail-fast 拒绝且不静默映射、不改写文件。`minimal` / `research` / `full` 的成员关系不变
+   > （下文预设行里的 `bash` 同读作 `shell`）。
+
    预设：`minimal` = files + bash；`research` = files + bash + skills +
    web-search + subagent + mcp；`full` = 全部（**默认，与 #67 前行为等价**）。
 4. **真关的定义（D-55）**：包关闭后——不实例化对应工具、不进工具 schema、不进

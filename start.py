@@ -113,24 +113,11 @@ def _running_server(settings):
 
 
 def _refuse_if_running(settings) -> bool:
-    from backend import server_lock
-
-    # D-48 (#20): a terminal REPL holds the lock with mode="repl" but serves no
-    # /health, so find_running would sit out its 15s boot window. Refuse from
-    # the record directly instead.
-    lock_file = server_lock.lock_path(settings)
-    existing = server_lock.read_lock(lock_file)
-    if (
-        existing is not None
-        and existing.mode == "repl"
-        and server_lock.pid_alive(existing.pid)
-    ):
-        print(
-            f"[start] 终端会话（qianfan repl）在运行（pid={existing.pid}）；"
-            "先在该终端 exit —— 关终端会停任务。",
-            flush=True,
-        )
-        return True
+    # The record's mode carries no policy (#332 S6): a healthy registered
+    # backend is one writer, so find_running decides. A pre-S6 terminal left a
+    # record with a live pid but no /health; find_running keeps it (a boot in
+    # progress looks the same), and the claim below then reports it instead of
+    # killing a pid this launcher did not start.
     running = _running_server(settings)
     if running is None:
         return False

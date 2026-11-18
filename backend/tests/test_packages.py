@@ -58,7 +58,6 @@ from backend.core.capability_packages import (
 )
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
-from backend.core.tools.bash import BashTool
 from backend.core.tools.file_io import ReadTool
 from backend.core.tools.registry import (
     _REGISTRY,
@@ -66,6 +65,7 @@ from backend.core.tools.registry import (
     build_tools,
     get_tool,
 )
+from backend.core.tools.shell import ShellTool
 from backend.main import create_app
 from backend.runtime import build_runtime
 from backend.services.event_bus import EventBus
@@ -93,7 +93,7 @@ def _manager(settings: Settings, packages: Any = None) -> TaskManager:
 def test_package_ids_and_tool_ownership_are_static():
     assert [package.id for package in PACKAGES] == [
         "files",
-        "bash",
+        "shell",
         "skills",
         "web-search",
         "subagent",
@@ -101,7 +101,7 @@ def test_package_ids_and_tool_ownership_are_static():
     ]
     assert PACKAGE_IDS == {
         "files",
-        "bash",
+        "shell",
         "skills",
         "web-search",
         "subagent",
@@ -117,6 +117,14 @@ def test_package_ids_and_tool_ownership_are_static():
     assert package_for_tool("not_a_tool") is None
 
 
+def test_the_retired_bash_name_has_no_alias():
+    """ADR 0013: one command tool named ``shell``; no legacy ``bash`` alias."""
+    assert get_tool("shell") is not None
+    assert get_tool("bash") is None
+    assert "bash" not in PACKAGE_BY_ID
+    assert package_for_tool("bash") is None
+
+
 def test_manifest_declares_injection_mcp_and_subagent_face():
     table = {
         package.id: (
@@ -128,7 +136,7 @@ def test_manifest_declares_injection_mcp_and_subagent_face():
     }
     assert table == {
         "files": (False, False, True),
-        "bash": (False, False, False),
+        "shell": (False, False, False),
         "skills": (True, False, True),
         "web-search": (False, False, True),
         "subagent": (False, False, False),
@@ -140,20 +148,20 @@ def test_manifest_declares_injection_mcp_and_subagent_face():
 def test_presets_are_the_declared_combinations_and_full_is_default():
     assert preset_names() == ("minimal", "research", "full")
     assert PRESETS == {
-        "minimal": ("files", "bash"),
+        "minimal": ("files", "shell"),
         "research": (
             "files",
-            "bash",
+            "shell",
             "skills",
             "web-search",
             "subagent",
             "mcp",
         ),
-        "full": ("files", "bash", "skills", "web-search", "subagent", "mcp"),
+        "full": ("files", "shell", "skills", "web-search", "subagent", "mcp"),
     }
     assert DEFAULT_PRESET == "full"
     assert resolve_packages("full") == PACKAGE_IDS
-    assert resolve_packages("minimal") == frozenset({"files", "bash"})
+    assert resolve_packages("minimal") == frozenset({"files", "shell"})
 
 
 def test_empty_preset_is_an_error_not_a_silent_full_fallback():
@@ -181,7 +189,7 @@ def test_package_derived_sets():
         "ls",
         "glob",
         "grep",
-        "bash",
+        "shell",
     }
     assert injection_fragments(minimal) == frozenset()
     assert mcp_package_enabled(minimal) is False
@@ -194,7 +202,7 @@ def test_package_derived_sets():
 
     # Overrides are the shape P4-2 will feed from data/plugins.json.
     trimmed = resolve_packages("full", {"mcp": False, "skills": False})
-    assert trimmed == frozenset({"files", "bash", "web-search", "subagent"})
+    assert trimmed == frozenset({"files", "shell", "web-search", "subagent"})
 
 
 def test_tier_constants_are_untouched():
@@ -221,7 +229,7 @@ def test_tier_constants_are_untouched():
 
 # ── assembly: preset face snapshots (name sets, not counts) ──
 _FACE = {
-    "minimal": {"read", "write", "edit", "ls", "glob", "grep", "bash"},
+    "minimal": {"read", "write", "edit", "ls", "glob", "grep", "shell"},
     "research": {
         "read",
         "write",
@@ -229,7 +237,7 @@ _FACE = {
         "ls",
         "glob",
         "grep",
-        "bash",
+        "shell",
         "load_skill",
         "web_search",
         "spawn_subagent",
@@ -241,7 +249,7 @@ _FACE = {
         "ls",
         "glob",
         "grep",
-        "bash",
+        "shell",
         "load_skill",
         "web_search",
         "spawn_subagent",
@@ -287,7 +295,7 @@ def test_disabled_packages_are_never_instantiated(tmp_path, monkeypatch):
     def _boom(settings):
         raise AssertionError("disabled package tool was constructed")
 
-    class _BoomBash(BashTool):
+    class _BoomShell(ShellTool):
         def __init__(self, settings):
             _boom(settings)
 
@@ -295,22 +303,22 @@ def test_disabled_packages_are_never_instantiated(tmp_path, monkeypatch):
         def __init__(self, settings):
             _boom(settings)
 
-    monkeypatch.setitem(_REGISTRY, "bash", _BoomBash)
+    monkeypatch.setitem(_REGISTRY, "shell", _BoomShell)
     monkeypatch.setitem(_REGISTRY, "read", _BoomRead)
 
     settings = make_settings(tmp_path)
-    # Only the skills package: neither files nor bash may be constructed.
+    # Only the skills package: neither files nor shell may be constructed.
     tm = make_manager(settings, packages=frozenset({"skills"}))
     assert {tool.name for tool in tm._tools} == {"load_skill"}
 
     # The filter layer itself is the no-instantiation contract.
     with pytest.raises(AssertionError, match="disabled package tool"):
-        build_tools(settings, names={"bash"})
+        build_tools(settings, names={"shell"})
 
 
 def test_injected_tool_list_is_filtered_by_package(tmp_path):
     settings = make_settings(tmp_path)
-    tools = [_fake_tool(), BashTool(settings), ReadTool(settings)]
+    tools = [_fake_tool(), ShellTool(settings), ReadTool(settings)]
     tm = TaskManager(
         settings,
         EventBus(),
@@ -319,12 +327,12 @@ def test_injected_tool_list_is_filtered_by_package(tmp_path):
         tools=tools,
         default_workspace=settings.artifacts_path,
         model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
-        packages=frozenset({"bash"}),
+        packages=frozenset({"shell"}),
     )
     try:
         names = {tool.name for tool in tm._tools}
         # Unknown/test-double names pass through; files-package tools do not.
-        assert names == {"fake_echo", "bash"}
+        assert names == {"fake_echo", "shell"}
     finally:
         tm.shutdown()
 
@@ -470,8 +478,7 @@ def test_cli_rejects_unknown_preset_before_serving(tmp_path, monkeypatch, capsys
 
     code = cli.main(
         [],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: None,
+        spawn=lambda *args: served.append(args),
     )
 
     assert code == 1
@@ -493,29 +500,24 @@ def test_cli_repl_dispatch_goes_through_the_preset_guard(tmp_path, monkeypatch, 
     assert "unknown plugins preset" in capsys.readouterr().out
 
 
-def test_repl_rejects_unknown_preset_before_claiming(tmp_path, monkeypatch):
+def test_repl_rejects_unknown_preset_before_starting_the_backend(tmp_path, monkeypatch):
     settings = make_settings(
         tmp_path, plugins_preset="bogus", single_backend_guard_enabled=True
     )
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    claimed: List[int] = []
-    built: List[int] = []
-    monkeypatch.setattr(
-        server_lock, "claim_lock", lambda *args, **kwargs: claimed.append(1) or True
-    )
+    ensured: List[Any] = []
     out: List[str] = []
 
     code = repl.repl_main(
         [],
-        runtime_factory=lambda _settings: built.append(1),
         input_fn=lambda prompt: "exit",
         output=out.append,
         configure_stdio=False,
+        ensure=lambda *args, **kwargs: ensured.append((args, kwargs)) or (0, settings.port),
     )
 
     assert code == 1
-    assert claimed == []
-    assert built == []
+    assert ensured == []
     assert any("unknown plugins preset" in line for line in out)
 
 

@@ -1,6 +1,6 @@
 """Child-process environment helper.
 
-Child processes (the bash tool and every MCP stdio server) run with this
+Child processes (the shell tool and every MCP stdio server) run with this
 process's account privileges — this is not a sandbox (README「这不是安全边界」).
 The allowlists filter what a child *inherits*; they are not a secret boundary —
 files, and on Linux ``/proc/$PPID/environ``, remain readable by the same account.
@@ -49,7 +49,7 @@ def build_child_env(allowlist: frozenset[str] = ENV_ALLOWLIST) -> Dict[str, str]
     """Parent environment filtered down to ``allowlist``.
 
     Matching is case-insensitive so Windows casing (``Path``) still passes.
-    ``PYTHONUNBUFFERED`` is added for every child: the bash tool's output should
+    ``PYTHONUNBUFFERED`` is added for every child: the shell tool's output should
     stream, and MCP stdio children speak JSON-RPC over the pipe.
     """
     env = {

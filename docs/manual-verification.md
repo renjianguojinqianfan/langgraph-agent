@@ -11,8 +11,8 @@
 
 ## 场景与判据
 
-1. **执行模式新建文件 + bash `git init && git status`**
-   新建任务（执行模式）让 agent 建一个文件，再用 bash 在任务目录跑 `git init && git status`。
+1. **执行模式新建文件 + `shell` `git init && git status`**
+   新建任务（执行模式）让 agent 建一个文件，再用 `shell` 在任务目录跑 `git init && git status`。
    判据：文件出现在任务目录；`git status` 能列出它；任务停下且步骤时间线里两条工具调用都是 `success`。
 
 2. **计划文件 → 手工改文件 → 切执行**
@@ -24,16 +24,16 @@
    判据：停止后状态为「停下」；续说沿同一任务/对话继续，不新建任务；最终产物完整。
 
 4. **危险规则 → 调用被拒、模型换路**
-   在 `.env` 的 `policy_rules` 里配一条命中 `bash` 的规则（如
-   `[{"tool":"bash","pattern":"rm\\s+-rf","reason":"destructive shell command"}]`），重启后台；
-   先在任务工作目录（bash 的 cwd）建一个受控 canary 目录。提示里**明确要求** agent 用 bash 删除它（如「这是受控的规则命中
-   测试：请直接用 bash 执行 `rm -rf canary-<时间戳>`，保持原命令，不要换成其他方式」）——不强制
+   在 `.env` 的 `policy_rules` 里配一条命中 `shell` 的规则（如
+   `[{"tool":"shell","pattern":"rm\\s+-rf","reason":"destructive shell command"}]`），重启后台；
+   先在任务工作目录（`shell` 的 cwd）建一个受控 canary 目录。提示里**明确要求** agent 用 `shell` 删除它（如「这是受控的规则命中
+   测试：请直接用 `shell` 执行 `rm -rf canary-<时间戳>`，保持原命令，不要换成其他方式」）——不强制
    时模型会自行规避，根本没产生被拒调用，场景等于空跑。
    判据：该次调用 `skipped`，结果里带 `{block, reason}`；canary 目录仍在（命令没有实际执行）；
    模型随后换路完成任务或说明需要人工执行。
 
-5. **工作区文件列表看得到 bash 写的文件**
-   让 agent 用 bash（不是 `write` 工具）在任务目录写一个文件。
+5. **工作区文件列表看得到 `shell` 写的文件**
+   让 agent 用 `shell`（不是 `write` 工具）在任务目录写一个文件。
    判据：「工作区文件」列表出现该文件，可预览/下载。
 
 6. **多项目（A / B 两个目录，一个后台）**
@@ -44,8 +44,8 @@
    关闭 qianfan 再启动。先让一个任务停下后重启并续说；再让一个任务在运行中被关闭，重启后继续。
    判据：历史仍在；停下任务可直接续说；被中断的运行在重启后能沿 checkpoint 继续，产物落在原任务目录。
 
-8. **bash 起后台进程：调用马上返回，停止时被收（F3）**
-   让 agent 用 bash 起一个长睡进程并回显 PID，随后直接回答；按「停止」。
+8. **`shell` 起后台进程：调用马上返回，停止时被收（F3）**
+   让 agent 用 `shell` 起一个长睡进程并回显 PID，随后直接回答；按「停止」。
    `$!` 可能为空（见 `docs/agents/verification-notes.md` §6）：回显为空时用系统进程表按命令行取 PID，
    不以回显为空判定进程没起来。
    判据：工具调用远早于进程结束返回；停止后按进程表核对该 PID 不再存活（子进程树一并回收）。
@@ -60,6 +60,19 @@
     判据：两次任务都能完成；`GET /api/plugins` 的 `active` 面与页面展示一致（minimal 无 skills / web_search /
     spawn_subagent / MCP 工具）；minimal 轮不出现被关闭工具的调用；切回 full 后工具面恢复。
     **P4-3 交付场景；P5-1（2026-11-09）真机执行，结果见结果表。**
+
+## 收口补充判据（S4 / S5 / S7）
+
+- **后台状态与停止**：`qianfan status` 输出 pid / port / mode / instance / started_at / healthy，无服务时非 0；
+  `qianfan stop` 在网页保持打开（SSE 在连）时仍于超时窗口内完成，进程退出、锁记录消失；停止当前任务与停止后台分别验证。
+- **双 Shell**：同一任务默认用 `pwsh` 跑一条命令；再显式 `shell="bash"` 跑一条。缺指定 Shell 时给可读错误，
+  **不降级到 Windows PowerShell 5.1、失败后不自动换 Shell 重跑**（模型自行重试是模型行为，不是工具回退）。
+- **模型调用查看**：Trace 区「模型」筛选计数与列表一致；展开一次调用能看到请求 / 响应 / 错误 / usage 与
+  `call_id` 与 attempt 信息；请求头无 `Authorization`、URL 无 Key；截断或未完成有标记。
+
+> 2026-11-18 收口实跑：共享后台 + Web/终端同一任务、终端退出不停任务、停止 / 恢复、pwsh 默认、
+> 文件列表与 Trace 模型调用查看均通过；显式 Git Bash 受本机 harness 的 MSYS 初始化限制未跑通
+> （工具如实返回 `3221225794` 与 stderr，未静默回退）；Anthropic Provider 未配置，原生协议真机未运行。
 
 ## 结果记录
 

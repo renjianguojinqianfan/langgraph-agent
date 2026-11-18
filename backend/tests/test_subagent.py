@@ -54,7 +54,7 @@ from backend.tests.test_graph import (
 #: Everything #56 puts out of a subtask's reach by construction: shell access,
 #: MCP tools, and the spawn tool itself (anti-recursion).
 OUT_OF_TIER_NAMES = (
-    "bash",
+    "shell",
     "spawn_subagent",
     "mcp__demo__fetch",
     "mcp__demo__create_issue",
@@ -171,9 +171,9 @@ def test_executor_exposes_only_the_spawn_entry():
     assert public == {"check_face", "run_subtask"}
 
 
-def test_main_graph_has_no_split_node():
+def test_main_graph_has_no_split_node(settings):
     """`subagent_split` must be neither a node nor an endpoint of any edge."""
-    graph = build_graph(_runtime())
+    graph = build_graph(_runtime(settings))
     edges = _declared_edges(graph)
     names = set(graph.get_graph().nodes)
 
@@ -225,7 +225,7 @@ def test_tier_names_rejects_an_unknown_tier():
 
 
 def test_tier_face_names_intersect_with_the_loaded_face():
-    loaded = ["read", "write", "bash", "spawn_subagent"]
+    loaded = ["read", "write", "shell", "spawn_subagent"]
     assert tier_face_names(loaded, EXECUTE_TIER) == ["read", "write"]
     assert tier_face_names(loaded, EXPLORE_TIER) == ["read"]
     assert tier_face_names([], EXECUTE_TIER) == []
@@ -246,9 +246,9 @@ def test_resolve_tool_face_narrows_but_never_widens(tmp_path):
     assert sorted(t.name for t in narrowed) == ["grep", "read"]
 
     with pytest.raises(TierError) as excinfo:
-        resolve_tool_face(tools, EXECUTE_TIER, ["read", "bash"])
+        resolve_tool_face(tools, EXECUTE_TIER, ["read", "shell"])
     message = str(excinfo.value)
-    assert "bash" in message  # the refused name is named, not silently dropped
+    assert "shell" in message  # the refused name is named, not silently dropped
     assert "read" in message  # and the tier members come along, so the model can fix it
 
     with pytest.raises(TierError):
@@ -288,10 +288,10 @@ def test_out_of_tier_refusal_lists_the_loaded_face_too(tmp_path, ghost_tier):
     assert "ghost_tool" in TOOL_TIERS[EXPLORE_TIER] and "ghost_tool" not in names
 
     with pytest.raises(TierError) as excinfo:
-        resolve_tool_face(tm._tools, EXPLORE_TIER, ["read", "bash"])
+        resolve_tool_face(tm._tools, EXPLORE_TIER, ["read", "shell"])
     message = str(excinfo.value)
 
-    assert "bash" in message  # 拒的还是拒，被拒的名照旧在
+    assert "shell" in message  # 拒的还是拒，被拒的名照旧在
     assert "ghost_tool" not in message  # 但清单里没有改投不进去的名字
     assert message.endswith("Loaded: glob, grep, load_skill, ls, read, web_search")
 
@@ -309,25 +309,29 @@ def test_check_face_resolves_without_running_anything(tmp_path):
 
 
 # ── tier reachability, judged on the real face (issue #56 AC) ────────────────
-def test_no_tier_mounts_a_danger_marked_tool(tmp_path):
-    """任何档位都拿不到被标成危险的工具（#56 收窄；#138 之后主图也无闸门了）。"""
-    seen_marked: set = set()
+def test_shell_and_spawn_subagent_are_outside_every_tier(tmp_path):
+    """命令执行与嵌套派发在档位表里就不存在；点名请求也按档外拒绝（#56 / #331）。"""
+    for tier in (EXPLORE_TIER, EXECUTE_TIER):
+        assert "shell" not in TOOL_TIERS[tier]
+        assert "spawn_subagent" not in TOOL_TIERS[tier]
+
     for label, tm, ex in _mounted_managers(tmp_path):
-        marked = {
-            t.name
-            for t in tm._tools
-            if getattr(t, "requires_confirm", False)
-        }
-        assert marked, f"{label} 装载面没有危险标记工具，下面的断言会空转"
-        seen_marked |= marked
         names = [t.name for t in tm._tools]
+        # 非空转前提：两个工具在父装配面上真的存在，只是进不了子任务。
+        assert {"shell", "spawn_subagent"} <= set(names), f"{label} 装配面缺工具"
         for tier in (EXPLORE_TIER, EXECUTE_TIER):
-            face = ex.check_face(_spec(subtask_id=f"{label}:sub:1", tier=tier))
+            face = ex.check_face(_spec(subtask_id=f"{label}:{tier}:1", tier=tier))
             assert face == tier_face_names(names, tier)
-            leaked = set(face) & marked
-            assert not leaked, f"{label}/{tier} 档漏进了危险标记的工具 {sorted(leaked)}"
-    # The dangerous families the issue names are all really present somewhere above.
-    assert {"bash", "spawn_subagent"} <= seen_marked
+            assert not set(face) & {"shell", "spawn_subagent"}
+            with pytest.raises(TierError) as excinfo:
+                ex.check_face(
+                    _spec(
+                        subtask_id=f"{label}:{tier}:req",
+                        tier=tier,
+                        tools=["shell"],
+                    )
+                )
+            assert "shell" in str(excinfo.value)
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):
@@ -383,10 +387,10 @@ def test_run_subtask_refuses_a_bad_request_without_a_single_round(tmp_path):
     ex = SubAgentExecutor(tm, settings)
 
     bad_tier = ex.run_subtask(_spec(subtask_id="bad:sub:1", tier="oracle"))
-    widened = ex.run_subtask(_spec(subtask_id="bad:sub:2", tier=EXECUTE_TIER, tools=["bash"]))
+    widened = ex.run_subtask(_spec(subtask_id="bad:sub:2", tier=EXECUTE_TIER, tools=["shell"]))
 
     assert bad_tier.status == "failed" and "oracle" in bad_tier.error
-    assert widened.status == "failed" and "bash" in widened.error
+    assert widened.status == "failed" and "shell" in widened.error
     assert bad_tier.tool_face == [] and widened.tool_face == []
     assert mock.turns == 0
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
@@ -453,10 +457,10 @@ def test_spawn_subagent_refuses_a_widening_request_before_running(
     assert tm._subagent is not None
     monkeypatch.setattr(tm._subagent, "run_subtask", _recording_run(started))
 
-    res = tool.run(name="widening", instruction="try it", tools=["read", "bash"])
+    res = tool.run(name="widening", instruction="try it", tools=["read", "shell"])
 
     assert res.success is False
-    assert "bash" in (res.error or "") and "read" in (res.error or "")
+    assert "shell" in (res.error or "") and "read" in (res.error or "")
     assert started == []
     assert mock.turns == 0
     assert list(settings.artifacts_path.glob("**/*") if settings.artifacts_path.exists() else []) == []
@@ -690,7 +694,7 @@ class _EscalatingSubtaskMock(MockLLMClient):
                     tool_calls=[
                         {
                             "id": "out1",
-                            "name": "bash",
+                            "name": "shell",
                             "arguments": {
                                 "command": f"echo nope > {self.SIDE_EFFECT}",
                             },
@@ -756,7 +760,7 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(tmp_
     ex = tm._subagent
     assert ex is not None
     face = ex.check_face(_spec(subtask_id=subtask_id, tier=EXECUTE_TIER))
-    for name in ("bash", "spawn_subagent"):
+    for name in ("shell", "spawn_subagent"):
         assert name not in face
         assert name not in mock.offered_to_subtask
     assert set(mock.offered_to_subtask) <= set(TOOL_TIERS[EXECUTE_TIER])
@@ -766,9 +770,9 @@ def test_approved_spawn_cannot_reach_external_writes_and_has_no_side_effect(tmp_
     refused = [
         e["data"]
         for e in sub_events
-        if e["type"] == "tool_result" and e["data"]["tool_name"] == "bash"
+        if e["type"] == "tool_result" and e["data"]["tool_name"] == "shell"
     ]
-    assert {r["tool_name"] for r in refused} == {"bash"}
+    assert {r["tool_name"] for r in refused} == {"shell"}
     assert all(r["status"] == "failed" and "unknown tool" in r["error"] for r in refused)
     assert not (settings.artifacts_path / mock.SIDE_EFFECT).exists()
 

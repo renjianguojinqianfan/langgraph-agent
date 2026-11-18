@@ -4,18 +4,21 @@
 `data/models.json` is at schema version 2: a list of **providers**
 (id / name / protocol / base_url / api_key_env / preset) and a list of **model
 entries** (id / provider_id / model / name / source); `default` names a model
-entry id. A v1 file (a flat `models` list) is migrated in place on first load:
-every profile becomes a same-id provider plus a same-id model entry, so
-`Task.model`, `default` and the credentials keys do not change.
+entry id. That format is the only accepted contract (ADR 0013 decision 1): a
+v1 file (a flat `models` list, or any other schema version below 2) is refused
+with a readable error and left byte-for-byte untouched — no migration, no
+backup chain, no compatibility alias.
+
+The runtime view of one entry is :class:`ResolvedModel` (``ModelStore.resolve``):
+the entry plus its provider, with the D-36 values already inherited (entry
+override else provider default). The current call path, the task-manager client
+cache and the startup key check resolve through it; there is no second flat
+projection.
 
 Pasted keys live in `~/.qianfan/credentials.json` (outside the repo) keyed by
 **provider id**; the environment variable named by the provider is the fallback.
 Neither file is in `Settings` (the settings object is cached at startup).
 No API response ever returns a key: only `key_set` / `key_source`.
-
-The legacy `/api/models` surface keeps working as a flat projection of one
-model entry + its provider (`ModelProfile`), so the pre-P2-3 frontend does not
-change in this PR.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from ..config import Settings
@@ -64,6 +67,16 @@ DISCOVER_MAX_BYTES = 1_000_000
 #: ceiling is the sum of those phases, not a strict total (LOW-A rework: the
 #: earlier "total wall clock" wording overstated it).
 _monotonic = time.monotonic
+
+
+class UnsupportedModelsFileError(RuntimeError):
+    """`models.json` is a format this build does not accept (ADR 0013).
+
+    Raised while loading, before anything is written: v1 (a flat `models` list
+    without a version stamp) and any schema version below 2 are refused with
+    the file path, the expected contract and a next step. The file itself is
+    left byte-for-byte untouched — no migration, rename or backup.
+    """
 
 
 class CredentialsError(RuntimeError):
@@ -173,34 +186,28 @@ class ModelEntry:
     reasoning_effort: Optional[str] = None
 
 
-@dataclass
-class ModelProfile:
-    """v1-compatible flat view of one model entry + its provider.
+@dataclass(frozen=True)
+class ResolvedModel:
+    """The runtime view of one model entry: what a call needs, nothing else.
 
-    Legacy `/api/models` consumers receive this shape (old fields plus
-    `provider_id` / `protocol`), so the pre-P2-3 frontend keeps working.
+    Replaces the old flat `ModelProfile` projection on the call path (ADR 0013
+    decision 1). ``id`` is the model entry id a task pins; the provider fields
+    decide the adapter; the four D-36 values are already inherited (entry
+    override else provider default) and ``None`` means "the client's own
+    default".
     """
 
     id: str
+    provider_id: str
     name: str
-    base_url: str
     model: str
-    api_key_env: str = "LLM_API_KEY"
-    preset: bool = False
-    provider_id: str = ""
-    protocol: str = PROTOCOL_OPENAI
-    #: Effective sampling values (entry override else provider default); None =
-    #: the client's own default (D-36).
+    protocol: str
+    base_url: str
+    api_key_env: str
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     thinking: Optional[bool] = None
     reasoning_effort: Optional[str] = None
-
-    def public(self, key_set: bool, key_source: str = "none") -> Dict[str, Any]:
-        data = asdict(self)
-        data["key_set"] = key_set
-        data["key_source"] = key_source
-        return data
 
 
 class ModelStore:
@@ -211,9 +218,6 @@ class ModelStore:
         self.providers: Dict[str, Provider] = {}
         self.model_entries: Dict[str, ModelEntry] = {}
         self.default_id = DEFAULT_MODEL_ID
-        #: A v1 file was loaded but its backup could not be written (fail-closed
-        #: migration). Every later save retries the backup before writing v2.
-        self._v1_backup_pending = False
         self._load()
 
     # ── seeding / persistence ──
@@ -284,9 +288,15 @@ class ModelStore:
             version = 0
         if version == SCHEMA_VERSION:
             self._load_v2(raw)
-        elif version == 0:
+        elif version < SCHEMA_VERSION:
             # v1 had no version stamp at all: a `models` list of flat profiles.
-            self._migrate_v1(raw)
+            # ADR 0013 decision 1: refuse it readably and leave the bytes alone.
+            raise UnsupportedModelsFileError(
+                f"{self.data_file} 是旧版 models.json（schema_version={version}）；"
+                f"本版本只接受 schema_version {SCHEMA_VERSION}"
+                "（Provider + 模型目录）。文件保持原样未改动："
+                "请先备份并删除该文件后，在设置页重新添加 Provider 与模型。"
+            )
         else:
             # A newer build wrote this file. Treat it like any unreadable state
             # file: move it aside, never rewrite it in place, and say why.
@@ -362,148 +372,7 @@ class ModelStore:
         default = str(raw.get("default") or "")
         self.default_id = default if default in entries else next(iter(entries))
 
-    def _migrate_v1(self, raw: Dict[str, Any]) -> None:
-        """v1 flat profiles -> same-id provider + same-id model entry (D-33).
-
-        `Task.model` / `default` / credentials keys keep working because the
-        ids are reused verbatim. The original file is copied to
-        `models.json.bak-v1` once (an existing backup is never overwritten);
-        the second load sees `schema_version: 2` and writes nothing.
-        """
-        providers: Dict[str, Provider] = {}
-        entries: Dict[str, ModelEntry] = {}
-        for item in raw.get("models", []):
-            if not isinstance(item, dict):
-                continue
-            try:
-                profile = ModelProfile(
-                    id=str(item["id"]),
-                    name=str(item.get("name") or item["id"]),
-                    base_url=str(item.get("base_url") or ""),
-                    model=str(item.get("model") or ""),
-                    api_key_env=str(item.get("api_key_env") or "LLM_API_KEY"),
-                    preset=bool(item.get("preset")),
-                )
-            except (KeyError, TypeError):
-                continue
-            if not (profile.id and profile.base_url and profile.model):
-                continue
-            providers[profile.id] = Provider(
-                id=profile.id,
-                name=profile.name,
-                protocol=PROTOCOL_OPENAI,
-                base_url=profile.base_url,
-                api_key_env=profile.api_key_env,
-                preset=profile.preset,
-            )
-            entries[profile.id] = ModelEntry(
-                id=profile.id,
-                provider_id=profile.id,
-                model=profile.model,
-                name=profile.name,
-                source="migrated",
-            )
-        if not entries:
-            self._quarantine(self.data_file)
-            self._seed()
-            return
-        self.providers = providers
-        self.model_entries = entries
-        default = str(raw.get("default") or "")
-        self.default_id = default if default in entries else next(iter(entries))
-        if not self._write_migrated_v2():
-            # The v1 file stays on disk; a later save must retry the backup
-            # before it is allowed to write v2 (otherwise the rollback promise
-            # silently lapses on the first unrelated mutation).
-            self._v1_backup_pending = True
-            return
-        logger.info(
-            "migrated %d model profile(s) to schema v%d (backup: %s)",
-            len(entries),
-            SCHEMA_VERSION,
-            self.data_file.with_name(f"{self.data_file.name}.bak-v1").name,
-        )
-
-    def _write_migrated_v2(self) -> bool:
-        """Rewrite the v1 file as v2 only after a backup exists (fail-closed).
-
-        If the original bytes cannot be read or the backup cannot be written,
-        the v1 file stays byte-for-byte as it was and only the in-memory view
-        is v2: this process still serves the migrated view, and the next start
-        retries the migration. Writing v2 without a backup would turn the
-        "restore from models.json.bak-v1" rollback promise into a lie.
-        """
-        try:
-            # Bytes, not text: the backup is a byte-for-byte copy of the v1
-            # file (a text round-trip would rewrite line endings on Windows).
-            original = self.data_file.read_bytes()
-        except OSError as exc:
-            logger.error(
-                "cannot read %s before migrating (%s); keeping the v1 file as-is "
-                "and serving the migrated view from memory",
-                self.data_file,
-                exc,
-            )
-            return False
-        if not self._backup_v1(original):
-            logger.error(
-                "cannot back up %s before migrating; keeping the v1 file as-is "
-                "and serving the migrated view from memory (the next start retries)",
-                self.data_file,
-            )
-            return False
-        self._save()
-        return True
-
-    def _backup_v1(self, original: bytes) -> bool:
-        backup = self.data_file.with_name(f"{self.data_file.name}.bak-v1")
-        if backup.exists():
-            # Only the first migration writes a backup: a later restore + reload
-            # must not clobber the snapshot taken before the first rewrite.
-            return True
-        try:
-            backup.write_bytes(original)
-        except OSError as exc:
-            logger.warning(
-                "could not back up %s to %s before migrating: %s",
-                self.data_file.name,
-                backup.name,
-                exc,
-            )
-            return False
-        return True
-
-    def _retry_pending_v1_backup(self) -> None:
-        """Refuse to write v2 while the failed v1 backup is still missing.
-
-        The migration can fail closed (backup unwritable) while the process
-        keeps serving the migrated view from memory. A later, unrelated save
-        must not quietly write v2 to disk without the backup: retry the backup
-        first; if it still fails, raise a readable error and leave the v1 file
-        untouched. The next save (or the next start) retries again.
-        """
-        if not self._v1_backup_pending:
-            return
-        try:
-            original = self.data_file.read_bytes()
-        except OSError as exc:
-            raise RuntimeError(
-                f"cannot read {self.data_file} to back it up before writing "
-                f"models.json v2: {exc}. The v1 file was left unchanged; retry "
-                "once the file is readable."
-            ) from exc
-        if not self._backup_v1(original):
-            raise RuntimeError(
-                f"cannot back up {self.data_file} to "
-                f"{self.data_file.name}.bak-v1 before writing models.json v2. "
-                "The v1 file was left unchanged: fix write access to "
-                f"{self.data_file.parent} and retry (the next save or restart "
-                "retries the backup)."
-            )
-        self._v1_backup_pending = False
-
     def _save(self) -> None:
-        self._retry_pending_v1_backup()
         self.data_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": SCHEMA_VERSION,
@@ -515,62 +384,58 @@ class ModelStore:
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, self.data_file)
 
-    # ── projections (legacy /api/models) ──
-    def _profile(self, entry: ModelEntry) -> ModelProfile:
-        provider = self.providers[entry.provider_id]
-        return ModelProfile(
-            id=entry.id,
-            name=entry.name,
-            base_url=provider.base_url,
-            model=entry.model,
-            api_key_env=provider.api_key_env,
-            preset=provider.preset,
-            provider_id=provider.id,
-            protocol=provider.protocol,
-            # D-36 precedence: the entry overrides the provider default; a
-            # still-None value is the client's documented default (temperature
-            # 0.2 / Anthropic max_tokens 4096 / nothing sent for thinking).
-            temperature=(
+    # ── model entries ──
+    def get_model(self, model_id: str) -> Optional[ModelEntry]:
+        return self.model_entries.get(model_id)
+
+    @staticmethod
+    def _effective_params(provider: Provider, entry: ModelEntry) -> Dict[str, Any]:
+        """D-36 precedence: the entry overrides the provider default; a
+        still-None value is the client's documented default (temperature 0.2 /
+        Anthropic max_tokens 4096 / nothing sent for thinking)."""
+        return {
+            "temperature": (
                 entry.temperature
                 if entry.temperature is not None
                 else provider.temperature
             ),
-            max_tokens=(
+            "max_tokens": (
                 entry.max_tokens if entry.max_tokens is not None else provider.max_tokens
             ),
-            thinking=entry.thinking if entry.thinking is not None else provider.thinking,
-            reasoning_effort=(
+            "thinking": (
+                entry.thinking if entry.thinking is not None else provider.thinking
+            ),
+            "reasoning_effort": (
                 entry.reasoning_effort
                 if entry.reasoning_effort is not None
                 else provider.reasoning_effort
             ),
-        )
+        }
 
-    # ── model entries (legacy accessors) ──
-    def get(self, model_id: str) -> Optional[ModelProfile]:
-        entry = self.model_entries.get(model_id)
-        return self._profile(entry) if entry is not None else None
+    def resolve(self, model_id: Optional[str]) -> Optional[ResolvedModel]:
+        """The one runtime view a model call is built from (ADR 0013).
 
-    def get_model(self, model_id: str) -> Optional[ModelEntry]:
-        return self.model_entries.get(model_id)
-
-    def resolve(self, model_id: Optional[str]) -> Optional[ModelProfile]:
-        """An explicit id must exist; only an empty id means "the default".
-
+        An explicit id must exist; only an empty id means "the default".
         Falling back to the default for a deleted id would silently send the
-        task's content to another provider, so that case stays `None` and the
+        task's content to another provider, so that case stays ``None`` and the
         caller fails loudly.
         """
-        if model_id:
-            return self.get(model_id)
-        return self.get(self.default_id)
-
-    def public_profile(self, model_id: str) -> Dict[str, Any]:
-        entry = self.model_entries.get(model_id)
+        entry = self.model_entries.get(model_id or self.default_id)
         if entry is None:
-            raise KeyError(model_id)
-        key, source = self._key_state(model_id)
-        return self._profile(entry).public(bool(key), source)
+            return None
+        provider = self.providers.get(entry.provider_id)
+        if provider is None:  # pragma: no cover - load() drops orphan entries
+            return None
+        return ResolvedModel(
+            id=entry.id,
+            provider_id=provider.id,
+            name=entry.name,
+            model=entry.model,
+            protocol=provider.protocol,
+            base_url=provider.base_url,
+            api_key_env=provider.api_key_env,
+            **self._effective_params(provider, entry),
+        )
 
     def model_public(self, model_id: str) -> Dict[str, Any]:
         """One model entry as stored (id / provider_id / model / name / source)."""
@@ -578,14 +443,6 @@ class ModelStore:
         if entry is None:
             raise KeyError(model_id)
         return asdict(entry)
-
-    def list_public(self) -> Dict[str, Any]:
-        pasted = self._credentials()
-        entries = []
-        for entry in self.model_entries.values():
-            key, source = self._key_state(entry.id, pasted=pasted)
-            entries.append(self._profile(entry).public(bool(key), source))
-        return {"default": self.default_id, "models": entries}
 
     # ── validation ──
     @staticmethod
@@ -684,171 +541,31 @@ class ModelStore:
         for entry in self.model_entries.values():
             if entry.provider_id != provider.id:
                 continue
-            temperature = (
-                entry.temperature
-                if entry.temperature is not None
-                else provider.temperature
-            )
-            max_tokens = (
-                entry.max_tokens
-                if entry.max_tokens is not None
-                else provider.max_tokens
-            )
-            thinking = (
-                entry.thinking if entry.thinking is not None else provider.thinking
-            )
-            reasoning_effort = (
-                entry.reasoning_effort
-                if entry.reasoning_effort is not None
-                else provider.reasoning_effort
-            )
-            self._validate_model_params(
-                protocol=provider.protocol,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                thinking=thinking,
-                reasoning_effort=reasoning_effort,
-            )
+            params = self._effective_params(provider, entry)
+            self._validate_model_params(protocol=provider.protocol, **params)
             self._validate_protocol_params(
                 protocol=provider.protocol,
-                thinking=thinking,
-                reasoning_effort=reasoning_effort,
+                thinking=params["thinking"],
+                reasoning_effort=params["reasoning_effort"],
             )
 
     @staticmethod
     def _require_model_name(model: Any) -> str:
         """Trimmed non-empty model name.
 
-        v1's validator rejected an empty model; keeping the check in one helper
-        covers the legacy profile paths and the v2 catalog paths alike. An
-        empty value would be accepted, then dropped by the next load, and the
-        entry would silently disappear from disk with the next save.
+        An empty value would be accepted, then dropped by the next load, and
+        the entry would silently disappear from disk with the next save.
         """
         cleaned = str(model or "").strip()
         if not cleaned:
             raise ValueError("model is required")
         return cleaned
 
-    @staticmethod
-    def _slugify_provider_id(name: str, taken: Iterable[str]) -> str:
-        """A valid provider id derived from a display name (legacy POST path)."""
-        slug = re.sub(r"[^a-z0-9_-]+", "-", (name or "").strip().lower()).strip("-_")
-        if not slug:
-            slug = "provider"
-        elif not slug[0].isalpha():
-            slug = f"p-{slug}"
-        slug = slug[:48].rstrip("-_") or "provider"
-        taken_set = set(taken)
-        candidate = slug
-        suffix = 2
-        while candidate in taken_set:
-            candidate = f"{slug}-{suffix}"
-            suffix += 1
-        return candidate
-
     def _new_entry_id(self) -> str:
         candidate = uuid.uuid4().hex[:12]
         while candidate in self.model_entries:
             candidate = uuid.uuid4().hex[:12]
         return candidate
-
-    # ── legacy profile CRUD (POST/PUT/DELETE /api/models) ──
-    def add(
-        self, *, name: str, base_url: str, model: str, api_key_env: str = "LLM_API_KEY"
-    ) -> ModelProfile:
-        """Create a v1-shaped profile as a 1:1 provider + model entry.
-
-        The provider id is derived from the display name (valid per D-34) and
-        reused as the model entry id, which keeps legacy PUT/DELETE/key paths
-        keyed by the same id.
-        """
-        display = name.strip() or "自定义"
-        base_url = base_url.strip()
-        model = self._require_model_name(model)
-        api_key_env = (api_key_env or "LLM_API_KEY").strip()
-        self._validate_provider_fields(
-            base_url=base_url, api_key_env=api_key_env, protocol=PROTOCOL_OPENAI
-        )
-        provider_id = self._slugify_provider_id(
-            display, set(self.providers) | set(self.model_entries)
-        )
-        provider = Provider(
-            id=provider_id,
-            name=display,
-            protocol=PROTOCOL_OPENAI,
-            base_url=base_url,
-            api_key_env=api_key_env,
-            preset=False,
-        )
-        entry = ModelEntry(
-            id=provider_id,
-            provider_id=provider_id,
-            model=model,
-            name=display,
-            source="manual",
-        )
-        self.providers[provider.id] = provider
-        self.model_entries[entry.id] = entry
-        self._save()
-        return self._profile(entry)
-
-    def update(self, model_id: str, **fields: Any) -> ModelProfile:
-        entry = self.model_entries.get(model_id)
-        if entry is None:
-            raise KeyError(model_id)
-        provider = self.providers[entry.provider_id]
-        cleaned = {
-            key: str(fields[key]).strip()
-            for key in ("name", "base_url", "model", "api_key_env")
-            if fields.get(key) is not None
-        }
-        base_url = cleaned.get("base_url", provider.base_url)
-        candidate_provider = replace(
-            provider,
-            name=cleaned.get("name", provider.name),
-            base_url=base_url,
-            api_key_env=cleaned.get("api_key_env", provider.api_key_env),
-            # Editing the address turns a built-in preset into a custom provider.
-            preset=provider.preset if base_url == provider.base_url else False,
-        )
-        self._validate_provider_fields(
-            base_url=candidate_provider.base_url,
-            api_key_env=candidate_provider.api_key_env,
-            protocol=candidate_provider.protocol,
-        )
-        candidate_entry = replace(
-            entry,
-            name=cleaned.get("name", entry.name),
-            model=self._require_model_name(cleaned.get("model", entry.model)),
-        )
-        self.providers[provider.id] = candidate_provider
-        self.model_entries[entry.id] = candidate_entry
-        self._save()
-        return self._profile(candidate_entry)
-
-    def delete(self, model_id: str) -> None:
-        entry = self.model_entries.get(model_id)
-        if entry is None:
-            raise KeyError(model_id)
-        if len(self.model_entries) == 1:
-            raise ValueError("cannot delete the last model profile")
-        provider = self.providers[entry.provider_id]
-        siblings = [
-            other
-            for other in self.model_entries.values()
-            if other.provider_id == provider.id and other.id != entry.id
-        ]
-        if not siblings:
-            # Revoke the pasted key BEFORE dropping the provider: if the
-            # credential file is not writable, raising here keeps the provider
-            # (and its key reference) intact instead of leaving an orphaned
-            # secret on disk.
-            self._revoke_provider_key(provider.id)
-            del self.providers[provider.id]
-        del self.model_entries[entry.id]
-        if self.default_id == entry.id:
-            self.default_id = next(iter(self.model_entries))
-        self._save()
 
     def set_default(self, model_id: str) -> None:
         if model_id not in self.model_entries:
@@ -1294,14 +1011,6 @@ class ModelStore:
             data.pop(provider_id, None)
         self._save_credentials(data)
 
-    def set_key(self, model_id: str, key: str) -> None:
-        """Legacy write: the key belongs to the entry's provider (same id after
-        v1 migration, shared by every entry under a v2 provider)."""
-        entry = self.model_entries.get(model_id)
-        if entry is None:
-            raise KeyError(model_id)
-        self.set_provider_key(entry.provider_id, key)
-
     def provider_key_for(self, provider_id: str) -> str:
         provider = self.providers.get(provider_id)
         if provider is None:
@@ -1321,22 +1030,12 @@ class ModelStore:
         env_key = os.environ.get(provider.api_key_env, "")
         return env_key, ("env" if env_key else "none")
 
-    def _key_state(
-        self, model_id: str, *, pasted: Optional[Dict[str, str]] = None
-    ) -> tuple[str, str]:
+    def key_for(self, model_id: str) -> str:
+        """The key an entry would call with: its provider's pasted/env key."""
         entry = self.model_entries.get(model_id)
         if entry is None:
-            return "", "none"
-        return self._provider_key_state(entry.provider_id, pasted=pasted)
-
-    def key_for(self, model_id: str) -> str:
-        return self._key_state(model_id)[0]
-
-    def key_source(self, model_id: str) -> str:
-        return self._key_state(model_id)[1]
-
-    def key_set(self, model_id: str) -> bool:
-        return bool(self.key_for(model_id))
+            return ""
+        return self._provider_key_state(entry.provider_id)[0]
 
     def secret_values(self) -> set[str]:
         """Every live key, for redacting text before it is logged or stored."""

@@ -110,7 +110,7 @@ SYSTEM_AND_PROSE = [
     "%TEMP%\\opencode\\venvtest",
     "页签 `role=tablist/tab/tabpanel` + `aria-controls` + ←/→/Home/End。",
     "- [r/LangChain](https://reddit.com/r/LangChain)",
-    '`{"tool":"bash","pattern":"rm\\\\s+-rf","reason":"x"}`',
+    '`{"tool":"shell","pattern":"rm\\\\s+-rf","reason":"x"}`',
 ]
 
 

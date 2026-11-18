@@ -47,25 +47,13 @@ python start.py            # 虚拟环境请叫 .venv314；start.py 会拦住根
 qianfan repl
 ```
 
-一条命令进入常驻多轮会话：首条输入创建任务，之后继续说话沿同一 `thread_id` 续跑；`/new`
-新任务（仅当当前任务已停下；仍在跑时先 `/stop`）、`/stop` 停止当前任务、`exit` / `quit`
-退出。**Ctrl-C 分两处**：提示符处直接退出；等待任务时先停当前任务、回提示符（不退出）。
-只渲染任务 / 步骤 / 工具 / final answer 与「停下」「出错」两类终态，纯 `print`、不引
-Rich/TUI；**思考块（reasoning）只在网页端显示，终端当前不显示**——不要预期终端出现模型思考过程。
+终端是**共享后台的薄客户端**：确保/连接已经在跑的后台，不打开浏览器、不另起运行时、不持任务锁，只走现有 REST/SSE；首条输入创建任务，之后继续说话沿同一 `task_id` 续跑，和网页看到的是同一个任务。**关闭终端只断连，运行中的任务继续**；停止任务用 `/stop` 或网页上的停止按钮。
 
-- **与网页后台互斥**：终端会话写 `data/server.json`（`mode=repl`），`qianfan` / `python start.py`
-  在它跑着时拒绝启动；反过来网页或开发后台在跑时 `qianfan repl` 也拒绝。锁由 REPL 退出路径的
-  `finally` 释放；关闭终端时**正在跑的任务不是优雅 stop**——进程退出后它不会继续跑，下次启动
-  按孤儿对账归为 INTERRUPTED（停下），可续说 / 续跑；`TaskManager.shutdown()` 只释放后台线程与
-  进程内资源，不是任务停止语义。
-- **启动守卫复用**：与网页入口同一套（`auth_enabled` 校验、回环 host 校验、单实例锁），
-  `auth_enabled=true` 时 REPL 同样先过启动校验，不另开旁路。
-- **编码**：入口把 stdout/stderr `reconfigure(encoding="utf-8", errors="replace")`（有
-  `hasattr` 守卫），Windows GBK 控制台不会因 emoji / CJK 崩溃；重定向到文件同样是 UTF-8。
-- **不重开交互确认闸门**：危险动作仍由设置里的 `policy_rules` 规则表在钩子处**当场拒绝**
-  （ADR 0008 决策 6），终端也不弹 y/n。#20 票面的「y/n 交互确认」与「`--auto-approve` 旁路」
-  二选一已按 spec 作废（2026-10-19 校准：确认闸门已随 ADR 0008 删除，交互式终端有人在场
-  也不重开它）。
+- **会话命令**：`/new` 新任务（仅当当前任务已停下）、`/tasks` 任务列表、`/use <id>` 接入已有任务（前 8 位前缀即可）、`/stop` 停止当前任务、`/resume` 续跑停止 / 失败的任务、`/mode plan|build`、`/model <id>`、`exit` / `quit` 退出。**Ctrl-C 分两处**：提示符处直接退出；等待任务时先停当前任务、回提示符（不退出）。
+- **启动与连接**：先做与网页入口同一套 auth / 回环 host / 插件预设校验，再确保后台可达；已有健康后台直接复用（`--preset` 只影响本次拉起，不改变已跑后台）。后台未启动时由本次运行 detach 拉起并等 `/health` 就绪。`start.py` 起的开发后台也可直接连接；它的锁与退出仍由开发终端管理。目录 B 里敲 `qianfan repl`，新建任务归 B；`/use` 接回的任务仍回到它自己的目录。
+- **断线不重放**：服务不可达、认证过期（401）、后台准入拒绝（409）都打印原因；断线或重连后先同步权威任务快照，**不自动重发**创建 / 续说等可能已成功的修改请求。认证材料只放在 `Authorization` 头与内存，不进 URL、命令行输出或日志。
+- **输出**：只渲染任务 / 步骤 / 工具 / final answer 与「停下」「出错」两类终态，纯 `print`、不引 Rich/TUI；**思考块（reasoning）只在网页端显示，终端当前不显示**。入口把 stdout/stderr `reconfigure(encoding="utf-8", errors="replace")`（有 `hasattr` 守卫），Windows GBK 控制台不会因 emoji / CJK 崩溃。
+- **不重开交互确认闸门**：危险动作仍由设置里的 `policy_rules` 规则表在钩子处**当场拒绝**（ADR 0008 决策 6），终端也不弹 y/n。#20 票面的「y/n 交互确认」与「`--auto-approve` 旁路」二选一已按 spec 作废（2026-10-19 校准：确认闸门已随 ADR 0008 删除，交互式终端有人在场也不重开它）。
 
 ## 核心模型
 
@@ -85,22 +73,22 @@ agent ──有 tool call──> tool ──> agent
 
 ## 工作区
 
-- 在哪个目录敲 `qianfan`，新任务就在哪个目录读写、跑 bash、加载那里的 `AGENTS.md` 与 `.agents/skills`；页面地址带 `?dir=` 时以它为准（ADR 0010）。
+- 在哪个目录敲 `qianfan`，新任务就在哪个目录读写、执行命令、加载那里的 `AGENTS.md` 与 `.agents/skills`；页面地址带 `?dir=` 时以它为准（ADR 0010）。
 - 历史列表默认只显示当前目录，可切「全部」；任务头标出目录。续说回到任务自己的目录；目录被删后只剩记录，续说返回 409。
 - 历史可逐条或按目录删除（#241）：只删 `tasks.json` 记录、checkpoint 与 trace，**不动工作区文件**；这些任务名下的后台进程会一并终止，运行中的任务会被拒绝（409）。
 - 页面内可切换工作区（#242）：左栏底部显示当前目录，点开输入一个已存在的本地目录或选最近目录；只切换历史与新建任务的落点，不重启后台，`?dir=` 深链保持。
-- 这就是在你的项目里直接干活：bash 与写工具会改真实文件，**撤销靠 git**；在主目录或盘根启动不拦（见「这不是安全边界」）。
+- 这就是在你的项目里直接干活：`shell` 与写工具会改真实文件，**撤销靠 git**；在主目录或盘根启动不拦（见「这不是安全边界」）。
 - MCP 服务仍是整个后台共用一份，工作目录是后台的启动目录，不随任务切换。
 
-**一台机器只共用一个后台**（ADR 0010）：第二次在别的目录敲 `qianfan`，它会把浏览器开到已在跑的后台、定位到当前目录，然后退出，不另起进程（`--port` 只对第一次生效）。关掉启动它的终端 = 所有项目的任务停下，之后可以续说 / 续跑。`start.py` 的开发后台与 `qianfan` 互斥，一个在跑时另一个会拒绝启动；`start.py` 现在**先抢 `data/server.json` 再起 uvicorn**，启动窗口内也不可能出现第二个写者；`--reload` 下锁保持 supervisor pid（reload worker 不接管，避免 reload 间隙锁被当 stale）。**手工 `uvicorn backend.main:app` 一律拒绝**：没有 `QIANFAN_INSTANCE` 实例标识会绕过单后台 / 回环 host / Key 三道守卫，请用 `qianfan`（日常）或 `python start.py`（开发）。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等非回环值在启动期直接拒绝（本章只支持本机访问）；健康探针跟随配置 host（IPv6 自动加方括号），开发态 Vite 代理固定 `127.0.0.1`（只用 IPv4 回环）。
+**一台机器只共用一个后台**（ADR 0010 / 0013）：后台是**独立进程**并持有 `data/server.json` 单实例锁；日常 `qianfan` 发现健康实例就复用、否则 detach 拉起，等 `/health` 就绪后打开浏览器并退出启动器——**关掉启动它的终端不会停后台**。第二次在别的目录敲 `qianfan`，它会把浏览器开到已在跑的后台、定位到当前目录，然后退出，不另起进程（`--port` 只对第一次生效）。停止后台用 `qianfan stop`（请求携带锁文件里的 instance，服务端校验后才优雅收尾；instance 不匹配被拒且不杀进程），状态用 `qianfan status`（pid / port / mode / instance / started_at / healthy，无服务时非 0）。`start.py` 起的开发后台没有可编程退出钩子，`qianfan stop` 会明确拒绝（409），请在它的终端 Ctrl-C；开发后台仍随开发终端退出，且与 `qianfan` 互斥（启动前先抢 `data/server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**：没有 `QIANFAN_INSTANCE` 会绕过单后台 / 回环 host / Key 三道守卫，请用 `qianfan`（日常）、`qianfan serve`（前台调试）或 `python start.py`（开发）。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等非回环值在启动期直接拒绝（本章只支持本机访问）；健康探针跟随配置 host（IPv6 自动加方括号），开发态 Vite 代理固定 `127.0.0.1`（只用 IPv4 回环）。
 
 ## 能力
 
-- **工具**：沙箱文件读写（`read` / `write` / `edit` / `ls` / `glob` / `grep`）、`bash`（工作区根、环境白名单、可配超时、停止收进程树含调用返回后的后台进程）、`web_search`（搜索源 `duckduckgo` / `serpapi` / `exa`；国内网络下 duckduckgo 可能不可达，设 `search_provider=exa` 并导出 `EXA_API_KEY`）、MCP（子进程只继承白名单环境变量：**环境变量里的** LLM / 云 Key 不会被继承；文件仍可读，见「这不是安全边界」；额外变量用 `mcp_servers[].env` 显式声明）。
+- **工具**：沙箱文件读写（`read` / `write` / `edit` / `ls` / `glob` / `grep`）、`shell`（PowerShell 7 / Git Bash 二选一：Windows 默认 `pwsh`，`shell="bash"` 走 Git Bash；工作区根、环境白名单、可配超时、停止收进程树含调用返回后的后台进程）、`web_search`（搜索源 `duckduckgo` / `serpapi` / `exa`；国内网络下 duckduckgo 可能不可达，设 `search_provider=exa` 并导出 `EXA_API_KEY`）、MCP（子进程只继承白名单环境变量：**环境变量里的** LLM / 云 Key 不会被继承；文件仍可读，见「这不是安全边界」；额外变量用 `mcp_servers[].env` 显式声明）。
 - **子 agent**：`spawn_subagent` 单入口，`explore` / `execute` 两档，工具面只能收窄。
-- **能力包与预设（#67，ADR 0012）**：工具面与注入面按能力包声明（`files` / `bash` /
-  `skills` / `web-search` / `subagent` / `mcp`），全局预设三档：`minimal`（files+bash）、
-  `research`（files+bash+skills+web-search+subagent+mcp，当前与 full 同一面）、`full`（全部，
+- **能力包与预设（#67，ADR 0012）**：工具面与注入面按能力包声明（`files` / `shell` /
+  `skills` / `web-search` / `subagent` / `mcp`），全局预设三档：`minimal`（files+shell）、
+  `research`（files+shell+skills+web-search+subagent+mcp，当前与 full 同一面）、`full`（全部，
   **默认 = 原行为**）。保存的配置在 `data/plugins.json`：`{preset, overrides}`，overrides 叠在
   preset 上（true 强制开 / false 强制关），由设置页「能力」区或 `PUT /api/plugins` 写入，
   **重启后台生效**。一次性覆盖用 `qianfan --preset <id>`（网页后台）或
@@ -112,17 +100,17 @@ agent ──有 tool call──> tool ──> agent
   （文件仍是权威配置，不允许静默绕过；先删除或修好文件）。
 - **失败回传**：工具调用只执行一次（不自动重试、不熔断）；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩。
-- **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（bash 写的也在），文本预览、流式下载；**列表只是可见性过滤，preview / download 仍可点名被忽略的文件**；撤销靠 git。
-- **观测**：SSE 事件流 + JSONL trace，前端可回放 / 导出。
+- **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（`shell` 写的也在），文本预览、流式下载；**列表只是可见性过滤，preview / download 仍可点名被忽略的文件**；撤销靠 git。
+- **观测**：SSE 事件流 + JSONL trace；主任务 / 子代理 / 压缩的模型调用按 HTTP 尝试写入同一 trace（脱敏请求、完整响应 / 错误、实际 usage，未返回则未知），SSE 只带轻量摘要与读取指针；前端 Trace 区可按模型调用展开读取请求 / 响应 / 错误并标记截断或未完成，也可回放 / 导出完整 trace；终端只打印一行调用摘要与 `/trace` 查看指针。
 
 ## 模型
 
-- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页已按 Provider 卡片 + 模型目录展示（P2-3），旧 `/api/models` 接口保留为兼容投影。预设只有 **DeepSeek**；协议支持 **OpenAI 兼容** 与 **Anthropic 原生**（非流式）；Anthropic 的「获取可用模型」暂不支持；`thinking` / `reasoning_effort` 可配置（OpenAI 兼容路径经 `extra_body` 透传）；Anthropic 路径只接受 thinking 关闭 / reasoning_effort 为空——开启思考或设置 reasoning_effort 会 400（见 [ADR 0011](docs/adr/0011-model-config-two-protocols.md)）。
-- 旧的 `data/models.json`（扁平 profile）首次启动自动迁移为 Provider + 模型目录，迁移前把原文件备份为 `models.json.bak-v1`（幂等，只备份一次）。
+- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页按 Provider 卡片 + 模型目录展示（P2-3）；旧扁平 `/api/models` 投影与 CRUD 已移除（ADR 0013），设置页只读 `GET /api/providers` + `/api/providers/{id}/models`。预设只有 **DeepSeek**；协议支持 **OpenAI 兼容** 与 **Anthropic 原生**（非流式）；Anthropic 的「获取可用模型」暂不支持；`thinking` / `reasoning_effort` 可配置（OpenAI 兼容路径经 `extra_body` 透传）；Anthropic 路径只接受 thinking 关闭 / reasoning_effort 为空——开启思考或设置 reasoning_effort 会 400（见 [ADR 0011](docs/adr/0011-model-config-two-protocols.md)）。
+- 旧格式 `data/models.json`（无 `schema_version` 的扁平 profile）不再迁移：加载时明确拒绝且原文件字节不变；请在设置页重新添加 Provider 与模型。坏文件 / 未来版本仍按 quarantine + seed 处理。
 - Key 两种来源：界面粘贴（存 `~/.qianfan/credentials.json`，仓库外，按 Provider 记）优先；其次配置里写的环境变量名（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）。接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无），不回 Key 本身。
 - 新建任务默认用全局默认，创建前也可先选一套；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。
 - 采样参数挂在模型条目上、Provider 可给默认值：`temperature`（缺省 0.2）、`max_tokens`、`thinking` / `reasoning_effort`（`reasoning_effort` 限 low / medium / high；OpenAI 兼容路径经 `extra_body` 透传；Anthropic 路径开启 thinking 或非空 reasoning_effort 即 400）；参数可显式清空回落到 Provider / 缺省。
-- 粘贴的 Key 是明文落盘，同账号的 bash 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
+- 粘贴的 Key 是明文落盘，同账号的 `shell` 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
 - **保存 Key 失败**：Key 文件在仓库外的 `~/.qianfan/`；进程被沙箱/权限边界挡住写该目录时，界面会显示后端返回的原因与下一步（#244）——用普通终端启动 qianfan，或改用该配置的环境变量。
 
 ## 这不是安全边界
@@ -131,7 +119,7 @@ agent ──有 tool call──> tool ──> agent
 但这些都是**减少暴露面**，不是沙箱：
 
 - **默认没有登录**：同一台机器上的其他进程 / 用户可以直接驱动 API；`auth_enabled` 只挡无凭据的访问，不是权限边界。远程访问不在本章范围。`auth_enabled=true` 时 token 为空 / 占位会拒绝启动（issuer 本身也 fail-closed），启动日志会明示认证状态；开启后 REST 只认 `Authorization: Bearer`，`?token=` 只给 SSE 与文件下载两个浏览器原生入口，access log 里的 query token 已打码（#271）。
-- `bash` 拿到的是**运行账号的权限**：工作目录只是起点，`data/`（含 trace / checkpoint）、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
+- `shell` 拿到的是**运行账号的权限**：工作目录只是起点，`data/`（含 trace / checkpoint）、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
 - 子进程只继承白名单环境变量；这挡的是「继承」，不是读文件（Linux 下 `/proc/$PPID/environ` 不在本章形态内）。
 - **停止 / 超时**回收本次调用建立的进程组（POSIX）或 Job Object（Windows），包括调用已返回、任务随后被停止时的后台进程；用 `setsid` 等自行脱离的进程不受管。
 - **只限时**（默认 30s，1–600s）并截断输出尾部（每流 30KB）；没有 CPU / 内存 / 磁盘 / 进程数上限。

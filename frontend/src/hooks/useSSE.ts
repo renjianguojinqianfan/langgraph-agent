@@ -24,6 +24,7 @@ const EVENT_TYPES: SSEventType[] = [
   "subtask_start", // #70-A: 子任务派生（父频道）
   "subtask_result", // #70-A: 子任务回传（父频道）
   "subtask_failed", // #70-A: 子任务失败（父频道）
+  "llm_call", // S7: 模型调用轻量摘要（完整请求/响应只进 trace）
   "heartbeat",
 ];
 

@@ -473,6 +473,107 @@ def test_trace_api_missing_returns_404(trace_client):
     assert "trace" in r.json()["detail"].lower()
 
 
+def test_trace_api_filters_by_type_call_id_offset_and_limit(trace_client):
+    client, settings = trace_client
+    tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+    assert _wait_trace_closed(settings.trace_path / f"{tid}.jsonl")
+
+    steps = client.get(f"/api/tasks/{tid}/trace?format=json&type=step_start").json()["data"]
+    assert steps
+    assert {event["type"] for event in steps} == {"step_start"}
+
+    calls = client.get(f"/api/tasks/{tid}/trace?format=json&type=llm_call").json()["data"]
+    assert calls
+    call_ids = {event["data"]["call_id"] for event in calls}
+    first_call = next(iter(call_ids))
+    picked = client.get(
+        f"/api/tasks/{tid}/trace?format=json&type=llm_call&call_id={first_call}"
+    ).json()["data"]
+    assert picked
+    assert {event["data"]["call_id"] for event in picked} == {first_call}
+
+    page = client.get(
+        f"/api/tasks/{tid}/trace?format=json&type=step_start,tool_result&offset=1&limit=1"
+    ).json()["data"]
+    assert len(page) == 1
+
+    raw = client.get(f"/api/tasks/{tid}/trace?type=step_start")
+    assert raw.status_code == 200
+    assert raw.headers["content-type"].startswith("application/x-ndjson")
+    lines = [json.loads(line) for line in raw.text.splitlines() if line.strip()]
+    assert lines and {event["type"] for event in lines} == {"step_start"}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "type=step-start",
+        "type=step_start,",
+        "offset=-1",
+        "limit=-1",
+    ],
+)
+def test_trace_api_filter_validation(trace_client, query):
+    client, _ = trace_client
+    tid = client.post("/api/tasks", json={"input": "write a file"}).json()["data"]["task_id"]
+    assert _wait_done(client, tid) == "INTERRUPTED"
+    r = client.get(f"/api/tasks/{tid}/trace?format=json&{query}")
+    assert r.status_code == 422
+
+
+def test_trace_api_filtered_reads_keep_raw_ndjson_and_share_404_413(
+    trace_client, monkeypatch
+):
+    """S8 (#334): the incremental read is a view over the same file.
+
+    ``type`` / ``call_id`` / ``offset`` / ``limit`` keep the requested
+    representation (matched raw lines for NDJSON), an unknown task is still a
+    404, and the parsing branch still enforces the existing size cap (413).
+    No call-record endpoint is introduced.
+    """
+    client, settings = trace_client
+    tid, _trace_file = _finished_task_with_trace(client, settings)
+
+    calls = client.get(
+        f"/api/tasks/{tid}/trace?type=llm_call&limit=1"
+    )
+    assert calls.status_code == 200
+    assert calls.headers["content-type"].startswith("application/x-ndjson")
+    lines = [json.loads(line) for line in calls.text.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert lines[0]["type"] == "llm_call"
+    call_id = lines[0]["data"]["call_id"]
+
+    picked = client.get(
+        f"/api/tasks/{tid}/trace?type=llm_call&call_id={call_id}&limit=1"
+    )
+    assert picked.status_code == 200
+    picked_lines = [
+        json.loads(line) for line in picked.text.splitlines() if line.strip()
+    ]
+    assert len(picked_lines) == 1
+    assert picked_lines[0]["data"]["call_id"] == call_id
+
+    unknown_call = client.get(
+        f"/api/tasks/{tid}/trace?type=llm_call&call_id=does-not-exist"
+    )
+    assert unknown_call.status_code == 200
+    assert unknown_call.content == b""
+
+    missing = client.get(
+        "/api/tasks/does_not_exist/trace?type=llm_call&limit=1"
+    )
+    assert missing.status_code == 404
+
+    monkeypatch.setattr(routes, "TRACE_MAX_BYTES", 16)
+    capped = client.get(
+        f"/api/tasks/{tid}/trace?format=json&type=llm_call&limit=1"
+    )
+    assert capped.status_code == 413
+    assert "byte limit" in capped.json()["detail"]
+
+
 def test_trace_api_rejects_illegal_task_id_before_touching_disk(trace_client, monkeypatch):
     """#254 AC3: ``task_id`` is a filename component, so it is validated first.
 

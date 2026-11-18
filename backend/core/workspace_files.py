@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from stat import S_ISLNK, S_ISREG
 from typing import Optional
 
 from ..utils.logging import get_logger
@@ -29,7 +30,80 @@ logger = get_logger("workspace.files")
 GIT_TIMEOUT_SEC = 5.0
 
 
-def _git_files(root: Path) -> Optional[list[Path]]:
+def _accepted_file(base: Path, root: Path) -> Optional[tuple[Path, bool]]:
+    """One directory entry -> (resolved file, was-a-link) or None.
+
+    A regular entry is its own resolved path: callers pass an already-resolved
+    parent, so the per-file ``Path.resolve()`` (the dominant cost on Windows)
+    is only needed when the entry itself is a symlink. A link must still land
+    inside ``root`` and be a regular file (the old full-resolve semantics).
+    """
+    try:
+        mode = base.lstat().st_mode
+    except OSError:
+        return None
+    if S_ISREG(mode):
+        return base, False
+    if not S_ISLNK(mode):
+        return None
+    try:
+        target = base.resolve()
+    except OSError:
+        return None
+    if target != root and root not in target.parents:
+        return None
+    try:
+        if not target.is_file():
+            return None
+    except OSError:
+        return None
+    return target, True
+
+
+def _resolve_candidates(
+    candidates: list[Path], root: Path, limit: Optional[int], *, dedupe: bool
+) -> list[Path]:
+    """Resolve entries in sorted order, stopping after ``limit`` only when safe.
+
+    Without links, the sorted lexical candidates are already the sorted
+    resolved output, so a bounded listing can stop early. If a file link shows
+    up, finish the walk and sort the resolved paths — stopping there could
+    change the prefix. Git callers pass ``limit=None`` themselves when a
+    linked parent is present (and slice afterwards).
+    """
+    if limit == 0:
+        return []
+    ordered = sorted(candidates)
+    wanted = limit
+    # A file link may resolve to a name outside this lexical prefix; only a
+    # link-free tree guarantees prefix == sorted resolved output. Links are
+    # rare, so the full path stays the fallback.
+    if limit is not None and any(os.path.islink(candidate) for candidate in ordered):
+        limit = None
+    accepted: list[Path] = []
+    seen: set[Path] = set()
+    saw_link = False
+
+    for candidate in ordered:
+        result = _accepted_file(candidate, root)
+        if result is None:
+            continue
+        path, linked = result
+        saw_link = saw_link or linked
+        if dedupe and path in seen:
+            continue
+        if dedupe:
+            seen.add(path)
+        accepted.append(path)
+        if limit is not None and len(accepted) >= limit and not saw_link:
+            return accepted[:limit]
+
+    if wanted is None:
+        return sorted(accepted)
+    return sorted(accepted)[:wanted]
+
+
+def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:
     """Files from git's own view, or None when this is not a usable repo."""
     git = shutil.which("git")
     if git is None:
@@ -67,30 +141,55 @@ def _git_files(root: Path) -> Optional[list[Path]]:
         )
         return None
 
-    resolved_root = root.resolve()
-    files: list[Path] = []
-    for raw in listed.stdout.split(b"\0"):
-        if not raw:
+    candidates = sorted(
+        repo / os.fsdecode(raw) for raw in listed.stdout.split(b"\0") if raw
+    )
+    parent_cache: dict[Path, Optional[Path]] = {}
+
+    def resolved_parent(candidate: Path) -> Optional[Path]:
+        parent = candidate.parent
+        if parent not in parent_cache:
+            try:
+                resolved: Optional[Path] = parent.resolve()
+            except OSError:
+                resolved = None
+            if resolved is not None and (
+                resolved != root and root not in resolved.parents
+            ):
+                resolved = None
+            parent_cache[parent] = resolved
+        return parent_cache[parent]
+
+    bases: list[Path] = []
+    has_link = False
+    for candidate in candidates:
+        parent = resolved_parent(candidate)
+        if parent is None:
             continue
-        path = (repo / os.fsdecode(raw)).resolve()
-        if path != resolved_root and resolved_root not in path.parents:
-            continue
-        if path.is_file():
-            files.append(path)
-    return files
+        if os.path.normcase(str(parent)) != os.path.normcase(str(candidate.parent)):
+            has_link = True
+        bases.append(parent / candidate.name)
+    # A linked parent can move a path outside its lexical position, so only a
+    # link-free candidate set may use the bounded prefix.
+    files = _resolve_candidates(
+        bases,
+        root,
+        None if limit is not None and has_link else limit,
+        dedupe=False,
+    )
+    return files if limit is None else files[:limit]
 
 
-def _walk_files(root: Path) -> list[Path]:
+def _walk_files(root: Path, limit: Optional[int]) -> list[Path]:
     """Regular files under ``root``; never through a link that leaves it.
 
     ``os.walk`` follows Windows junctions even with ``followlinks=False``, so
     every directory is resolved before descending and cut when it is outside
-    the root; visited real paths stop junction/symlink cycles. Files are
-    resolved too (a link may point outside) and must be regular.
+    the root; visited real paths stop junction/symlink cycles. Files under a
+    resolved directory reuse it instead of resolving every path again; only a
+    file that is itself a link needs a target resolution.
     """
-    root = root.resolve()
-    files: list[Path] = []
-    seen_files: set[Path] = set()
+    candidates: list[Path] = []
     visited_dirs: set[Path] = set()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
         try:
@@ -117,26 +216,24 @@ def _walk_files(root: Path) -> list[Path]:
         dirnames[:] = kept
 
         for name in filenames:
-            try:
-                candidate = (Path(dirpath) / name).resolve()
-            except OSError:
-                continue
-            if candidate != root and root not in candidate.parents:
-                continue
-            if not candidate.is_file() or candidate in seen_files:
-                continue
-            seen_files.add(candidate)
-            files.append(candidate)
-    return files
+            candidates.append(current / name)
+    return _resolve_candidates(candidates, root, limit, dedupe=True)
 
 
-def workspace_files(root: Path) -> list[Path]:
-    """Every regular file under ``root`` glob/grep should consider."""
+def workspace_files(root: Path, limit: Optional[int] = None) -> list[Path]:
+    """Every regular file under ``root`` glob/grep should consider.
+
+    ``limit`` is for the bounded list route: the result is the prefix of the
+    unlimited sorted list (never an arbitrary enumeration-order stop). Glob and
+    grep call without it and still see every file.
+    """
+    if limit == 0:
+        return []
     resolved = root.resolve()
-    git_files = _git_files(resolved)
+    git_files = _git_files(resolved, limit)
     if git_files is not None:
-        return sorted(git_files)
-    return sorted(_walk_files(resolved))
+        return git_files
+    return _walk_files(resolved, limit)
 
 
 def resolve_in_workspace(root: Path, rel: str) -> Optional[Path]:

@@ -111,9 +111,10 @@ jobs:
   #   test_static_frontend.py        StaticFiles 挂载 e2e（Windows 上 get_path 用 \ 连接）
   #   test_gitignore_visibility.py   Windows-only 反斜杠 glob 用例（Linux 上被 skip）
   #   test_workspace_files_api.py    workspace 文件面（junction 逃逸 / 循环 / 预览截断；B1 首个实验文件）
+  #   test_workspace_files_enumeration.py  有界列表前缀等价（含 Windows 跳过符号链接用例；#336 S10）
   #   test_workspace.py              workspace 归属 / 注入 / 续说 / 子代理继承（B1 第二个文件）
   #   test_p2_mcp.py                 MCP 客户端 / 回声服务器 / 子进程清理（B1 第三个文件）
-  #   test_bash_tool.py              bash 路径解析 / 命令执行 / 后台进程树（B1 第四个文件）
+  #   test_shell_tool.py             shell 选择/发现（pwsh / Git Bash）/ 命令执行 / 后台进程树（B1 第四个文件）
   #   test_task_delete.py            任务/目录历史删除（只删记录、checkpoint 与 trace；#241）
   #   test_strict_msgpack_guard.py   langgraph 自读开关的离线守卫（子进程探针；#216）
   #   test_trace.py                  trace 文件名判据（反斜杠穿越 / 非法 task_id；#254）
@@ -121,6 +122,8 @@ jobs:
   #   test_test_isolation.py         conftest 的 os.name==nt 临时根探测（#264 c2/c3；#261 AC1）
   #   test_server_lock.py            单实例锁 / 浏览器交接 / 真子进程退出取证（#261 AC1/D-13）
   #   test_repl.py                   REPL 会话 / 锁互斥 / 编码 / 子进程 smoke（#20；连跑 3 次稳定后纳入）
+  #   test_cli_detach.py             detach 启动 flags / 日志目录（Windows 进程模型；#332）
+  #   test_shared_backend_e2e.py     共享后台真进程 e2e（并发冷启 / status / stop / 重启；#332）
   #   test_provider_key_isolation.py provider Key 环境变量离线守卫（子进程探针；#319；连跑 3 次稳定后纳入）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
@@ -151,9 +154,10 @@ jobs:
           backend/tests/test_static_frontend.py
           backend/tests/test_gitignore_visibility.py
           backend/tests/test_workspace_files_api.py
+          backend/tests/test_workspace_files_enumeration.py
           backend/tests/test_workspace.py
           backend/tests/test_p2_mcp.py
-          backend/tests/test_bash_tool.py
+          backend/tests/test_shell_tool.py
           backend/tests/test_task_delete.py
           backend/tests/test_strict_msgpack_guard.py
           backend/tests/test_trace.py
@@ -161,6 +165,8 @@ jobs:
           backend/tests/test_test_isolation.py
           backend/tests/test_server_lock.py
           backend/tests/test_repl.py
+          backend/tests/test_cli_detach.py
+          backend/tests/test_shared_backend_e2e.py
           backend/tests/test_provider_key_isolation.py
           -q -rs
 

@@ -29,7 +29,7 @@ from typing import Any, Dict, List
 import pytest
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from backend.api.schemas import Task, TaskStatus
+from backend.api.schemas import ChatTurn, Task, TaskStatus
 from backend.core.agent.state import AgentState
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.base import BaseTool, ToolResult
@@ -94,7 +94,6 @@ def _full_state() -> AgentState:
         "_last_action": "tool_done",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
 
 
@@ -402,6 +401,8 @@ def _interrupted_task(settings, task_id: str) -> None:
             id=task_id,
             title=f"interrupted {task_id}",
             user_input="demo input",
+            workspace=str(settings.artifacts_path),
+            conversation=[ChatTurn(role="user", content="demo input")],
             status=TaskStatus.INTERRUPTED,
             created_at=now,
             updated_at=now,
@@ -556,7 +557,6 @@ class _StoreProbeTool(BaseTool):
     name = "store_probe"
     description = "probe the checkpoint store from inside a running graph"
     args_schema: Dict[str, Any] = {"type": "object", "properties": {}}
-    requires_confirm = False
 
     def __init__(self, db_path: Path) -> None:
         super().__init__(None)

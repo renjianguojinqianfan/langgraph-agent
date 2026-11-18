@@ -12,7 +12,7 @@ harness（dsh / opencode / qoder）在受限模式下会挡住 MSYS 运行时与
 
 | 层 | 签名 | 影响面 |
 |---|---|---|
-| bash 假红 | 退出码 `3221225794` + stderr `*** fatal error - couldn't create signal pipe, Win32 error 5` | `test_bash_tool.py` 整文件 + 依赖 bash 的 e2e |
+| bash 假红 | 退出码 `3221225794` + stderr `*** fatal error - couldn't create signal pipe, Win32 error 5` | `test_shell_tool.py` 整文件 + 依赖 bash 的 e2e |
 | 临时根被拒 | `PermissionError: [WinError 5]`，路径形如 `%TEMP%\<harness>-*\qianfan-tests-*\data` | 几乎所有用 `tmp_path` / 模块级 `TestClient` lifespan 的用例（2026-11-02 dsh 默认沙箱实测 **562 个 error**） |
 
 - bash 层的完整判据、机理与已排除项见 [`docs/harness-bash-false-red.md`](../harness-bash-false-red.md)（那篇管 bash；临时根层是本篇补的——`conftest.py` 把测试根钉到检出外，沙箱恰好不让建）。
@@ -71,6 +71,6 @@ playwright-core，**一条命令跑一个动作**：
    跑完 `process.exit(0)`。长驻脚本在 harness 里容易被信号打断；失败就重连再跑下一步。
 4. 留证用 `page.screenshot({path})`；判据做元素级断言（状态 / 文本 / 计数），不要整图像素 diff。
 
-**后台 PID 取证**：应用内 bash 工具里的 `$!` 可能为空（`start` / 子 shell 的作业表不保证），
+**后台 PID 取证**：应用内 `shell` 工具跑 bash 时 `$!` 可能为空（`start` / 子 shell 的作业表不保证），
 不能拿「回显为空」判定进程没起来。用系统进程表核对（`tasklist /FI "PID eq <pid>"` 或 Win32
 进程查询），停止后再查一次确认消失；证据里记 PID 与两次查询结果。

@@ -9,10 +9,11 @@ used in compatibility mode.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, List
 
 from ...config import Settings
 from ...utils.logging import get_logger
+from ...utils.net import normalize_no_proxy
 from .client import (
     LLMClient,
     LLMResponse,
@@ -20,12 +21,15 @@ from .client import (
     make_mock_client_from_script,
 )
 from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_OPENAI
+from .trace import capture_http_request, capture_http_response
 
 logger = get_logger("llm.openai")
 
 
 class OpenAICompatibleClient(LLMClient):
     """Thin wrapper around the OpenAI SDK configured for any compatible host."""
+
+    protocol = PROTOCOL_OPENAI
 
     def __init__(
         self,
@@ -38,9 +42,15 @@ class OpenAICompatibleClient(LLMClient):
         max_tokens: int | None = None,
         thinking: bool | None = None,
         reasoning_effort: str | None = None,
+        transport: Any = None,
     ) -> None:
+        import httpx
         from openai import OpenAI
 
+        # httpx reads NO_PROXY while a client is constructed; a bracketed IPv6
+        # entry raises InvalidURL before the first request. Production normally
+        # normalizes at runtime startup, but clients are also built directly.
+        normalize_no_proxy()
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
@@ -53,7 +63,20 @@ class OpenAICompatibleClient(LLMClient):
         # Issue #13: the SDK default is 600s, so a single stalled request could
         # eat an entire task budget and surface as "timed out" instead of a
         # fast failure the caller can retry / degrade on.
-        self._client = OpenAI(base_url=base_url, api_key=api_key or "EMPTY", timeout=timeout)
+        http_client = httpx.Client(
+            transport=transport,
+            follow_redirects=False,
+            event_hooks={
+                "request": [capture_http_request],
+                "response": [capture_http_response],
+            },
+        )
+        self._client = OpenAI(
+            base_url=base_url,
+            api_key=api_key or "EMPTY",
+            timeout=timeout,
+            http_client=http_client,
+        )
         logger.info("OpenAICompatibleClient ready: model=%s base_url=%s", model, base_url)
 
     def _sampling_payload(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,17 +108,34 @@ class OpenAICompatibleClient(LLMClient):
             payload["extra_body"] = extra_body
         return payload
 
-    def complete(
+    def _payload(
         self,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> LLMResponse:
+        tools: List[Dict[str, Any]] | None,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"model": self.model, "messages": messages}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         payload.update(self._sampling_payload(kwargs))
+        return payload
+
+    def _request_snapshot(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._payload(messages, tools, kwargs)
+
+    def _complete(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        payload = self._payload(messages, tools, kwargs)
 
         resp = self._client.chat.completions.create(**payload)
         msg = resp.choices[0].message
@@ -105,6 +145,11 @@ class OpenAICompatibleClient(LLMClient):
                 try:
                     args = json.loads(tc.function.arguments or "{}")
                 except json.JSONDecodeError:
+                    args = {}
+                # ADR 0013 decision 1: the record contract stores an object,
+                # so a non-object JSON payload (array / scalar) is folded here,
+                # at the write face — never wrapped when the record is read.
+                if not isinstance(args, dict):
                     args = {}
                 tool_calls.append(
                     {"id": tc.id, "name": tc.function.name, "arguments": args}
@@ -118,47 +163,6 @@ class OpenAICompatibleClient(LLMClient):
             reasoning_content=getattr(msg, "reasoning_content", None) or "",
             raw=resp.model_dump() if hasattr(resp, "model_dump") else {},
         )
-
-    def stream(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Iterator[LLMResponse]:
-        payload: Dict[str, Any] = {"model": self.model, "messages": messages, "stream": True}
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-        payload.update(self._sampling_payload(kwargs))
-
-        stream = self._client.chat.completions.create(**payload)
-        # D-38: streaming reasoning is collected instead of silently dropped.
-        # Each yielded response carries that chunk's delta (a consumer
-        # accumulates by joining `reasoning_content`), and a chunk that only
-        # carries reasoning is still yielded so none of it is lost. The graph
-        # does not consume this stream yet — the UI face is P2-4b.
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            content = getattr(delta, "content", "") or ""
-            reasoning = getattr(delta, "reasoning_content", "") or ""
-            tool_calls: List[Dict[str, Any]] = []
-            if getattr(delta, "tool_calls", None):
-                for tc in delta.tool_calls:
-                    tool_calls.append(
-                        {
-                            "id": getattr(tc, "id", "") or "",
-                            "name": getattr(getattr(tc, "function", None), "name", "") or "",
-                            "arguments": {},
-                        }
-                    )
-            if content or tool_calls or reasoning:
-                yield LLMResponse(
-                    content=content,
-                    tool_calls=tool_calls,
-                    reasoning_content=reasoning,
-                )
 
 
 # M1 / ADR 0010: DeepSeek is the only built-in preset. Other OpenAI-compatible

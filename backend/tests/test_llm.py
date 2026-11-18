@@ -18,6 +18,7 @@ import pytest
 
 from backend.config import Settings
 from backend.core.agent.nodes import AgentRuntime
+from backend.core.agent.prompts import EXECUTOR_SYSTEM, PLANNER_MARKER
 from backend.core.agent.state import AgentState
 from backend.core.llm.anthropic_native import AnthropicClient
 from backend.core.llm.client import (
@@ -32,7 +33,7 @@ from backend.core.llm.openai_compat import (
     create_llm_client,
 )
 from backend.core.llm.protocols import PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI
-from backend.services.event_bus import EventBus
+from backend.tests.conftest import make_agent_host
 
 
 # ── LLMResponse ──
@@ -51,20 +52,40 @@ def test_llm_response_carries_tool_calls_and_raw():
 
 
 # ── MockLLMClient behaviour ──
-def test_mock_planner_returns_plan_as_json():
-    """A planner call (no tools) returns the plan as a JSON array of steps."""
-    mock = MockLLMClient(plan=["step A", "step B"], tool_calls=[], final_answer="done")
-    resp = mock.complete(messages=[{"role": "user", "content": "go"}], tools=None)
+def _system(content_marker: str) -> List[Dict[str, Any]]:
+    return [{"role": "system", "content": content_marker}]
+
+
+def test_mock_plan_mode_returns_the_plan_block_even_with_no_tools():
+    """S3 (#330): the plan marker, not the empty tool face, selects plan mode.
+
+    ``plan`` mode can mount an empty explore face; that must still yield the
+    plan block. The retired rule returned it on ``not tools`` alone, which also
+    turned an empty-face *build* round into a plan (#326 legacy assertions S3).
+    """
+    mock = MockLLMClient(plan=["step A", "step B"], final_answer="done")
+    resp = mock.complete(messages=_system(PLANNER_MARKER), tools=[])
     assert resp.tool_calls == []  # planner phase never emits tool calls
-    parsed = json.loads(resp.content)
-    assert parsed == ["step A", "step B"]
+    assert "<qianfan-plan>" in resp.content
+    assert "1. step A" in resp.content
+    assert "2. step B" in resp.content
+
+
+def test_mock_build_mode_with_no_tools_returns_the_final_answer():
+    """An empty build face is a final answer, never the old plan JSON."""
+    mock = MockLLMClient(plan=["step A"], final_answer="done")
+    resp = mock.complete(messages=_system(EXECUTOR_SYSTEM), tools=[])
+    assert resp.tool_calls == []
+    assert resp.content == "done"
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(resp.content)
 
 
 def test_mock_executor_emits_scripted_tool_calls_then_final_answer():
     """Executor calls return one scripted tool call per turn, then final_answer."""
     tool_calls = [
         {"id": "c1", "name": "write", "arguments": {"path": "a.txt"}},
-        {"id": "c2", "name": "bash", "arguments": {"command": "echo 1"}},
+        {"id": "c2", "name": "shell", "arguments": {"command": "echo 1"}},
     ]
     mock = MockLLMClient(plan=["p"], tool_calls=tool_calls, final_answer="all done")
 
@@ -73,7 +94,7 @@ def test_mock_executor_emits_scripted_tool_calls_then_final_answer():
     r3 = mock.complete([], tools=[{"type": "function"}])
 
     assert r1.tool_calls[0]["name"] == "write"
-    assert r2.tool_calls[0]["name"] == "bash"
+    assert r2.tool_calls[0]["name"] == "shell"
     assert r3.tool_calls == []            # script exhausted
     assert r3.content == "all done"       # now a final answer
 
@@ -86,21 +107,24 @@ def test_mock_resets_executor_turn_counter():
     assert mock.complete([], tools=[{}]).tool_calls[0]["id"] == "c1"  # back to start
 
 
-def test_mock_stream_yields_single_completion():
-    # With tools provided the mock is in *executor* mode; once the scripted
-    # tool-call list is exhausted it returns the final answer. (tools=None would
-    # be interpreted as the *planner* phase and return the plan JSON instead.)
-    mock = MockLLMClient(plan=["p"], tool_calls=[], final_answer="streamed")
-    chunks = list(mock.stream([], tools=[{"type": "function"}]))
-    assert len(chunks) == 1
-    assert chunks[0].content == "streamed"
-
-
 def test_make_default_mock_client_is_runnable():
     mock = make_default_mock_client()
     assert isinstance(mock, MockLLMClient)
     assert any(tc["name"] == "web_search" for tc in mock.tool_calls)
     assert any(tc["name"] == "write" for tc in mock.tool_calls)
+
+
+# ── retired reserved interface (#330) ──
+def test_llm_client_has_no_reserved_stream_interface():
+    """The ``stream()`` reservation had no runtime consumer; SSE is unaffected.
+
+    Re-adding it needs a real consumer first — the seat is gone on the ABC and
+    on every implementation, so a new provider cannot silently satisfy an
+    unused contract.
+    """
+    assert not hasattr(LLMClient, "stream")
+    for client_cls in (MockLLMClient, OpenAICompatibleClient, AnthropicClient):
+        assert not hasattr(client_cls, "stream"), client_cls.__name__
 
 
 # ── create_llm_client factory ──
@@ -151,7 +175,7 @@ def test_factory_reads_mock_llm_script_path(tmp_path):
             "tool_calls": [
                 {
                     "id": "call_exec",
-                    "name": "bash",
+                    "name": "shell",
                     "arguments": {"command": "echo probe"},
                 }
             ],
@@ -163,7 +187,7 @@ def test_factory_reads_mock_llm_script_path(tmp_path):
     assert isinstance(client, MockLLMClient)
     assert client.plan == ["Run a probe command"]
     assert client.final_answer == "mock confirm demo finished."
-    assert [tc["name"] for tc in client.tool_calls] == ["bash"]
+    assert [tc["name"] for tc in client.tool_calls] == ["shell"]
     assert client.tool_calls[0]["arguments"] == {"command": "echo probe"}
 
 
@@ -226,7 +250,7 @@ class _RecordingLLM(LLMClient):
         self._responses = list(responses)
         self.requests: List[List[Dict[str, Any]]] = []
 
-    def complete(
+    def _complete(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
@@ -235,21 +259,12 @@ class _RecordingLLM(LLMClient):
         self.requests.append([dict(m) for m in messages])
         return self._responses.pop(0)
 
-    def stream(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ):
-        yield self.complete(messages, tools, **kwargs)
-
 
 def _runtime(settings: Settings, llm: LLMClient) -> AgentRuntime:
     """A runtime whose executor can be driven directly (no tools)."""
-    tm = SimpleNamespace(settings=settings, event_bus=EventBus(), add_artifact=lambda *a: None)
     return AgentRuntime(
         task_id="t45",
-        task_manager=tm,
+        task_manager=make_agent_host(settings),
         llm=llm,
         tools=[],
         tool_schemas=[],
@@ -568,10 +583,17 @@ def test_anthropic_client_refuses_thinking_and_reasoning_effort():
             reasoning_effort="high",
             transport=transport,
         )
-    with pytest.raises(NotImplementedError, match="非流式"):
-        AnthropicClient(
-            "https://api.anthropic.com", "sk", "claude-3", 5, transport=transport
-        ).stream([{"role": "user", "content": "hi"}])
+    # #330 retired the reserved stream seat: ``complete`` is the adapter's only
+    # path, and it still runs (the thinking refusals above stay the guard).
+    captured: List[Dict[str, Any]] = []
+    answered = AnthropicClient(
+        "https://api.anthropic.com",
+        "sk",
+        "claude-3",
+        5,
+        transport=_anthropic_capture(captured),
+    ).complete([{"role": "user", "content": "hi"}])
+    assert answered.content == "hello"
 
 
 def test_anthropic_client_requires_a_key():
@@ -736,57 +758,6 @@ def test_openai_client_forwards_d36_params_through_extra_body(monkeypatch):
         reasoning_effort="low",
     )
     assert captured[-1]["extra_body"] == {"thinking": False, "reasoning_effort": "low"}
-
-
-# ── #267 D-38：流式 reasoning 不再被丢弃 ──
-def test_openai_compat_stream_collects_reasoning_deltas(monkeypatch):
-    import openai
-
-    chunks = [
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="", tool_calls=None, reasoning_content="想 "
-                    )
-                )
-            ]
-        ),
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="", tool_calls=None, reasoning_content="一下"
-                    )
-                )
-            ]
-        ),
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="答", tool_calls=None, reasoning_content=None
-                    )
-                )
-            ]
-        ),
-    ]
-
-    def _fake_openai(**kwargs):
-        return SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(create=lambda **kw: iter(chunks))
-            )
-        )
-
-    monkeypatch.setattr(openai, "OpenAI", _fake_openai)
-    client = OpenAICompatibleClient("https://gw.test/v1", "sk-test", "m", timeout=5)
-
-    responses = list(client.stream([{"role": "user", "content": "hi"}]))
-
-    # Reasoning-only chunks are still yielded (no silent drop).
-    assert "".join(r.reasoning_content for r in responses) == "想 一下"
-    assert "".join(r.content for r in responses) == "答"
 
 
 # ── PR #298 返工：thinking=False / max_tokens=None / 连续同角色消息 ──

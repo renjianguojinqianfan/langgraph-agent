@@ -247,7 +247,7 @@ def _mcp_agent_state() -> dict:
         "status": "RUNNING", "stop_requested": False,
         "final_answer": "", "error": "",
         "_last_action": "", "_current_tool_calls": [],
-        "subtasks": [], "_is_subtask": False,
+        "subtasks": [],
     }
 
 
@@ -259,7 +259,6 @@ def test_agent_read_tool_executes_directly(tmp_path, mcp_managers):
     tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
         input_schema={}, manager=mgr, settings=s,
-        annotations={"readOnlyHint": True},
     )
 
     from backend.core.agent.nodes import AgentRuntime
@@ -272,6 +271,21 @@ def test_agent_read_tool_executes_directly(tmp_path, mcp_managers):
     class _FakeTM:
         settings = s
         event_bus = bus
+
+        def is_stop_flagged(self, task_id):
+            return False
+
+        def redact(self, text):
+            return text
+
+        def redact_reasoning(self, text):
+            return text
+
+        def trace_sink(self, task_id):
+            return None
+
+        def publish_llm_call(self, task_id, payload):
+            return None
 
         def add_artifact(self, *a, **kw):
             return None

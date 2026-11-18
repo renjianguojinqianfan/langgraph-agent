@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
@@ -59,8 +60,6 @@ def test_second_launch_hands_off_and_opens_the_current_directory(tmp_path, monke
     opened: list[str] = []
     code = cli.main(
         [],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: None,
         open_browser=opened.append,
         probe=lambda port, timeout: {"instance": "tok"},
     )
@@ -78,8 +77,6 @@ def test_handoff_with_no_browser_does_not_open(tmp_path, monkeypatch):
 
     code = cli.main(
         ["--no-browser"],
-        serve=lambda host, port: None,
-        when_ready=lambda url, port: None,
         open_browser=opened.append,
         probe=lambda port, timeout: {"instance": "tok"},
     )
@@ -100,10 +97,8 @@ def test_stale_pid_is_taken_over(tmp_path, monkeypatch):
         served.append((host, port, seen.instance if seen else None))
 
     code = cli.main(
-        ["--port", "9130"],
+        ["serve", "--port", "9130"],
         serve=fake_serve,
-        when_ready=lambda url, port: None,
-        open_browser=lambda url: None,
         probe=lambda port, timeout: None,
     )
 
@@ -120,10 +115,8 @@ def test_pid_reuse_with_a_mismatched_identity_is_taken_over(tmp_path, monkeypatc
 
     served: list = []
     code = cli.main(
-        [],
+        ["serve"],
         serve=lambda host, port: served.append(port),
-        when_ready=lambda url, port: None,
-        open_browser=lambda url: None,
         probe=lambda port, timeout: {"instance": "someone-else"},
     )
 
@@ -137,17 +130,21 @@ def test_port_occupied_by_a_non_qianfan_program_is_an_error(tmp_path, monkeypatc
         probe.bind(("127.0.0.1", 0))
         probe.listen(1)
         port = probe.getsockname()[1]
-        served: list = []
+        spawned: list = []
+
+        def no_spawn(cmd, env, log_path):
+            spawned.append(cmd)
+            raise AssertionError("a taken port must not spawn a backend")
+
         code = cli.main(
             ["--port", str(port)],
-            serve=lambda host, port: served.append(port),
-            when_ready=lambda url, port: None,
+            spawn=no_spawn,
             open_browser=lambda url: None,
-            probe=lambda port, timeout: None,
+            probe=lambda target, timeout: None,
         )
 
     assert code == 1
-    assert served == []
+    assert spawned == []
 
 
 def test_claim_lock_is_exclusive(tmp_path):
@@ -227,31 +224,38 @@ def test_start_refuses_when_a_backend_is_registered(monkeypatch):
     assert start._refuse_if_running(Settings(_env_file=None)) is False
 
 
-def test_start_refuses_a_running_repl_without_probing(tmp_path, monkeypatch, capsys):
-    """D-48 (#20): a live mode=repl record refuses start.py before find_running.
+def test_start_probes_a_live_repl_record_like_any_other_backend(
+    tmp_path, monkeypatch, capsys
+):
+    """#332 S6: the record's mode no longer carries policy.
 
-    The REPL serves no /health, so the 15s boot wait would otherwise block
-    start.py; the record check must answer immediately and never call probe.
+    A pre-S6 terminal left ``mode=repl`` behind. It is not refused by label and
+    not killed: ``start.py`` asks ``/health`` like for any backend, so no
+    answer means "not a live backend" (the claim reports it) and a matching
+    answer means "running" (the handoff message).
     """
     import start
 
     settings = make_settings(tmp_path, single_backend_guard_enabled=True)
     lock_file = server_lock.lock_path(settings)
-    assert server_lock.claim_lock(
-        lock_file,
-        _lock(port=settings.port, instance="repl-live", mode="repl"),
-    )
+    record = _lock(port=settings.port, instance="repl-live", mode="repl")
+    assert server_lock.claim_lock(lock_file, record)
     probed: list = []
 
-    def fake_running_server(_settings):
+    def probe_only(_settings):
         probed.append(True)
         return None
 
-    monkeypatch.setattr(start, "_running_server", fake_running_server)
+    monkeypatch.setattr(start, "_running_server", probe_only)
 
+    assert start._refuse_if_running(settings) is False
+    assert probed == [True], "the label must not short-circuit the health probe"
+    kept = server_lock.read_lock(lock_file)
+    assert kept is not None and kept.instance == "repl-live", "no pid is killed"
+
+    monkeypatch.setattr(start, "_running_server", lambda _settings: record)
     assert start._refuse_if_running(settings) is True
-    assert probed == []
-    assert "关终端会停任务" in capsys.readouterr().out
+    assert "已有后台" in capsys.readouterr().out
 
 
 def test_find_running_clears_a_dead_record(tmp_path):
@@ -300,8 +304,6 @@ def test_qianfan_refuses_to_hand_off_to_the_dev_backend(tmp_path, monkeypatch):
     opened: list = []
     code = cli.main(
         [],
-        serve=lambda host, port: served.append(port),
-        when_ready=lambda url, port: None,
         open_browser=opened.append,
         probe=lambda port, timeout: {"instance": "dev"},
     )
@@ -837,13 +839,21 @@ def test_mock_mode_never_warns_about_keys(tmp_path, caplog):
 
 
 class _KeySnapshotStore:
-    """Minimal store double: the startup guard only needs list_public()."""
+    """Minimal store double: the startup guard reads the default id, the live
+    entries and each entry's key through the same accessors as the real store."""
 
-    def __init__(self, snapshot: dict) -> None:
-        self._snapshot = snapshot
+    def __init__(self, default_id: str, entries: dict[str, str]) -> None:
+        self.default_id = default_id
+        self._keys = entries
+        self.model_entries = {
+            model_id: SimpleNamespace(id=model_id) for model_id in entries
+        }
 
-    def list_public(self) -> dict:
-        return self._snapshot
+    def get_model(self, model_id: str):
+        return self.model_entries.get(model_id)
+
+    def key_for(self, model_id: str) -> str:
+        return self._keys.get(model_id, "")
 
 
 def test_key_warning_skips_when_default_is_gone_but_another_entry_has_a_key(
@@ -851,12 +861,7 @@ def test_key_warning_skips_when_default_is_gone_but_another_entry_has_a_key(
 ):
     """L1: the old default-None shortcut warned despite a usable key."""
     settings = make_settings(tmp_path, use_mock_llm=False)
-    store = _KeySnapshotStore(
-        {
-            "default": "gone",
-            "models": [{"id": "alt", "key_set": True, "key_source": "pasted"}],
-        }
-    )
+    store = _KeySnapshotStore("gone", {"alt": "sk-alt"})
     with caplog.at_level(logging.WARNING, logger="agent.main"):
         warned = warn_if_no_usable_model_key(settings, store)
     assert warned is False

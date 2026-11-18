@@ -25,7 +25,7 @@
 | 存储 | sqlite（checkpoint）+ JSON（任务/模型档案）+ JSONL（trace） | `data/` 为运行态、不入库；Key 在仓库外（`~/.qianfan/credentials.json` 或环境变量） |
 | 通信 | REST + **SSE**（单向事件流） | SSE 事件词汇表是本仓最强的机械契约（§3.4） |
 
-**运行形态**：本机单用户、单进程。默认只绑定回环地址；日常入口是 `qianfan` 控制台命令（`pyproject.toml` 的 `[project.scripts]`，实现在 [`backend/cli.py`](../backend/cli.py)），开发入口是 `python start.py`（只用于改前端时热重载），**终端入口**是 `qianfan repl`（[`backend/repl.py`](../backend/repl.py)：进程内直接复用同一 TaskManager/EventBus，不起 uvicorn，锁 `mode=repl` 与网页 / 开发后台互斥），三者共用 `backend/server_lock.py` 的单实例语义。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；`--reload` 下锁保持 supervisor pid；pid 活但 `/health` 未就绪视为「启动中」而非空闲；**无实例标识的手动 uvicorn 一律拒绝**）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝；`::1` 的健康探针与 `TrustedHost` 用方括号形态）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
+**运行形态**：本机单用户、**一个共享后台进程**。默认只绑定回环地址；后台由 `qianfan` 以 detach 子进程启动并通过 `data/server.json` 持单实例锁（`qianfan serve` 是同一代码路径的前台入口，供内部 / 调试）；日常入口 `qianfan` 确保服务后打开浏览器，开发入口 `python start.py` 仍用 Vite / `--reload`，**终端入口** `qianfan repl` 只是同一后台的薄客户端（[`backend/repl.py`](../backend/repl.py) + [`backend/api_client.py`](../backend/api_client.py)：只走 REST/SSE，不建运行时、不持锁，退出只断连）。启动期三道守卫（#259）：**单后台**（`server.json` + `QIANFAN_INSTANCE` 认自己；`--reload` 下锁保持 supervisor pid；pid 活但 `/health` 未就绪视为「启动中」而非空闲；**无实例标识的手动 uvicorn 一律拒绝**）、**回环 host**（非 `127.0.0.1` / `localhost` / `::1` 直接拒绝；`::1` 的健康探针与 `TrustedHost` 用方括号形态）、**Key 姿态**（仅当默认模型与全部条目都没有可用 Key 时告警一次，指向设置页 / 环境变量）。
 
 ---
 
@@ -35,12 +35,14 @@
 backend/
 ├── config.py            Settings（pydantic-settings；.env / 环境变量）
 ├── main.py              FastAPI app：/health、/api 路由挂载、静态前端（StaticFiles）、Host 检查、CORS
-├── runtime.py           进程运行时组装（EventBus / Persistence / TaskManager；web lifespan 与 REPL 共用；D-48）
-├── cli.py               qianfan 入口：单后台、自动开浏览器、前端构建新鲜度检查；`repl` 子命令转终端会话
-├── repl.py              qianfan repl：thin 终端会话（事件入队→主线程渲染、mode=repl 锁；D-48…D-52）
-├── server_lock.py       单实例锁与启动守卫（一台机器只允许一个后台；ensure_single_backend / update_lock_pid）
+├── runtime.py           进程运行时组装（EventBus / Persistence / TaskManager；web lifespan / serve 共用）
+├── cli.py               qianfan 入口：确保共享后台（detach）、自动开浏览器、status / stop / serve / repl
+├── serve.py             uvicorn 前台 / detached 服务入口（同一代码路径；安装停止端点）
+├── api_client.py        REST/SSE 薄客户端（统一信封 / 状态码 / SSE 帧；终端唯一传输面）
+├── repl.py              qianfan repl：共享后台的终端会话（事件入队→主线程渲染；不持锁）
+├── server_lock.py       单实例锁与启动守卫（一台机器只允许一个后台；claim / update_lock_pid / probe）
 ├── api/
-│   ├── routes.py        38 条 REST 路由（§3.3）；统一 {code,data,message} 信封
+│   ├── routes.py        REST 路由（§3.3）；统一 {code,data,message} 信封
 │   ├── schemas.py       Pydantic 模型：API 与持久化的单一来源（§3.1）
 │   ├── sse.py           SSE 流组装（15s heartbeat）
 ├── core/
@@ -50,15 +52,16 @@ backend/
 │   ├── llm/             client.py（LLMClient 抽象 + MockLLMClient）· protocols.py 协议词汇
 │   │                    factory.py 单一分派 · openai_compat.py · anthropic_native.py
 │   ├── tools/           base.py 契约 · registry.py @register · file_io.py（read/write/edit/ls/glob/grep）
-│   │                    bash.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
+│   │                    shell.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
 │   ├── mcp/             MCP 客户端（stdio 现役；http 预留）
-│   ├── workspace_files.py  工作区文件可见性过滤（W3）
+│   ├── workspace_files.py  工作区文件可见性过滤与有界枚举（W3 / #336）
 │   └── capability_packages.py 能力包 / 预设静态声明与真关装配清单（#67 P4；ADR 0012）
 ├── services/            task_manager.py 生命周期/worker/续说/续跑/事件 · event_bus.py
 │                        persistence.py tasks.json · plan_file.py 计划文件 · trace.py JSONL trace
 │                        model_store.py Provider/模型目录与凭据 · auth.py token 签发/校验
 │                        plugins_store.py data/plugins.json 读/写（atomic）与生效解析
-└── utils/               logging.py · sandbox.py（bash 进程组/超时）· winjob.py（Windows Job Object）
+│                        server_control.py 共享后台优雅停止（拒新运行→停任务→等 worker→释放锁）
+└── utils/               logging.py · sandbox.py（shell 进程组/超时）· winjob.py（Windows Job Object）
 
 frontend/src/
 ├── pages/               TaskView · LoginPage
@@ -90,7 +93,7 @@ data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>
 |---|---|---|
 | `TaskManager` | 任务生命周期：创建 / worker 执行 / 停止 / 续说 / 续跑 / 崩溃对账 / 事件发布；权威停止信号 `_stop_flags` | [`backend/services/task_manager.py`](../backend/services/task_manager.py) |
 | `EventBus` | 进程内 SSE 事件广播；前端按 task 订阅 | [`backend/services/event_bus.py`](../backend/services/event_bus.py) |
-| `Persistence` | `tasks.json` 原子落盘 + 损坏备份；API 与磁盘的唯一桥 | [`backend/services/persistence.py`](../backend/services/persistence.py) |
+| `Persistence` | `tasks.json` 原子落盘 + 损坏备份；API 与磁盘的唯一桥；启动对账与终态收尾共用候选批（一次 dump，失败不落地，#337） | [`backend/services/persistence.py`](../backend/services/persistence.py) |
 | checkpointer | `SqliteSaver`，`thread_id == task_id`；`durability="sync"`；格式戳 v2，v1 旧库启动时拒绝挂载 | [`backend/services/task_manager.py`](../backend/services/task_manager.py) |
 | `plan_file` | 计划文件唯一来源在任务目录 `.qianfan/plans/<task_id>.md`；版本与 hash | [`backend/services/plan_file.py`](../backend/services/plan_file.py) |
 | `TraceRecorder` | 订阅事件直写 JSONL（含唯一只进文件的 `trace_end`）；前端回放/导出 | [`backend/services/trace.py`](../backend/services/trace.py) |
@@ -107,13 +110,13 @@ data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>
 
 | 模型 | 字段要点 |
 |---|---|
-| `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；旧记录里的 `COMPLETED` 在加载时映射成 `INTERRUPTED` |
+| `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；带 `COMPLETED` 的旧记录不做状态映射，按旧格式拒绝加载（ADR 0013 决策 1） |
 | `TaskMode` | `plan` \| `build`（黏性任务开关，默认 `build`） |
-| `ToolCallRecord` | `id` / `tool_name` / `input`（读入边界归一化：非 dict——旧 list / 标量 / provider 返回的非对象 JSON——包成 `{"value": ...}`，#255；派发读 `state["_current_tool_calls"]`，工具参数不被改写）/ `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
-| `StepRecord` | `index` / `round`（1 起的对话轮次，`0` = #265 前的旧记录）/ `thought` / `reasoning`（D-38：脱敏 + 单步 ≤8000 字符后落库；原始 trace 只留在 checkpoint 的 `messages` 里供下一轮协议回传）/ `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
+| `ToolCallRecord` | `id` / `tool_name` / `input`（**只存对象**：Provider 适配器在写面把非对象 JSON 折成 `{}`；读面不再包 `{"value": ...}`，非对象输入属旧格式、拒绝加载，ADR 0013 决策 1）/ `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
+| `StepRecord` | `index` / `round`（**必填**，1 起的对话轮次；缺省或 `0` 属 #265 前的旧记录，拒绝加载）/ `thought` / `reasoning`（D-38：脱敏 + 单步 ≤8000 字符后落库；原始 trace 只留在 checkpoint 的 `messages` 里供下一轮协议回传）/ `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
 | `SubTask` | `subtask_id` / `name` / `status`（`pending \| running \| completed \| failed`）/ `summary` / `artifacts[]` / `error`。`artifacts` 是**现役字段**（子任务回传用，父任务无产物账本） |
 | `ChatTurn` | `role`（user \| assistant）/ `content`；只存人读的对话，工具流量在 `Task.steps` |
-| `Task` | `id` / `title` / `user_input` / `workspace`（绝对路径，规范化后比较）/ `model`（档案 id，空 = 全局默认）/ `status` / `mode` / `steps[]` / `plan_version` / `plan_hash` / `conversation[]` / `final_answer` / `error` / `created_at` / `updated_at` / `subtasks[]` |
+| `Task` | `id` / `title` / `user_input` / `workspace`（**必填**，绝对路径，规范化后比较；旧记录不回填 `data/artifacts`）/ `model`（档案 id，空 = 全局默认）/ `status` / `mode` / `steps[]` / `plan_version` / `plan_hash` / `conversation[]`（**必填**，从用户第一轮开始；旧记录的"读取时重建"删除）/ `final_answer` / `error` / `created_at` / `updated_at` / `subtasks[]` |
 | `McpServerInfo` | `name` / `transport` / `status` / `tools_count` / `error` |
 | `ApiResponse` | 统一信封 `{code, data, message}`（例外见 §3.5） |
 
@@ -133,7 +136,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 - **步数预算按轮计**：`round_steps` 只数本轮 `agent` 调用，不封顶任务总寿命（`max_steps` 默认 15）。
 - 子任务复用同一拓扑，在独立 `thread_id` 上跑，工作区继承父任务。
 
-**AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`round_no` / `step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks` / `_is_subtask`）。
+**AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`round_no` / `step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks`）。
 
 **D-39（reasoning 跨模型兼容）**：`state.messages` 里的 assistant 消息可带内部标记 `_reasoning_from = "<provider_id>:<protocol>"`（原始 `reasoning_content` 仍原样保留供下一轮协议回传）。请求构建时 `_build_messages` 在**副本**上删掉该标记，并在「来源 scope ≠ 当前模型 scope」时一并删 `reasoning_content`；同 provider 且同 protocol 保留。该标记永不出现在出站请求 / SSE / trace / `tasks.json`。升级前无标记的旧 checkpoint 消息按原样保留（已知边界，不做一次性迁移）。
 
@@ -150,6 +153,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 `data` |
 |---|---|---|---|---|
 | GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
+| POST | `/api/server/stop` | 优雅停止共享后台：只接受锁文件登记的 instance；拒绝新运行 → 停止任务 → 等 worker → 落盘 → 请求 uvicorn 退出；锁由 `serve.run` 在 uvicorn 返回后释放（旧进程未放端口前不允许新启动器接管） | `{instance}`（必填） | `{ok, stopped_tasks, workers_joined, shutdown_complete, exit_requested}`；instance 不匹配 / 未登记 / start.py 起的开发后台（无退出钩子）→ 409（不杀进程、不改状态）；worker 未退出 → 504（记录保留、进程继续） |
 | POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
 | GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
@@ -164,16 +168,11 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/api/tasks/{id}/plan` | 计划文件原文与版本 | — | `{text, version}`；任务不存在 → 404；计划文件读失败 → 409（detail 通用文案，全因只进服务端日志）——IO / 锁（`PlanIOError`，瞬时）在 worker 种子与轮内刷新处**容忍**：保住本轮计划 + warn，请求路径预检仍 409 可重试；内容损坏（`PlanError`，非 UTF-8）**严格**：轮判 FAILED |
 | PUT | `/api/tasks/{id}/plan` | 写回计划文件（仅停下 / 失败时） | `{text}` | `{ok, version}`；其他状态 → 409 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks/{id}/events` | **SSE 流式事件**（§3.4）；auth 开启时可用 `?token=`（浏览器例外端点） | — | `text/event-stream` |
-| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json` | 默认 raw NDJSON：**stat 时前缀快照**流式返回（`StreamingResponse`，64KiB 分块、chunked 不声明长度）——任务跑着时 trace 仍在增长，流只发响应开始 `stat` 看到的那个 size 的字节，**无大小上限**、服务端零缓冲；文件被替换 / 截断则提前收尾，增长与缩短两个方向都不违约（语义 = 「raw = 请求时刻的前缀快照」，不是「当前整个文件」）；畸形行原样带出（回放面按设计跳过、导出身份依赖字节）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**（每行须为 JSON 对象且含 string `type` / object `data` / numeric `ts`；按 `\n` 切分）——**413 / 422 只属这个分支**（唯一有界读取，cap+1 字节）：超 `TRACE_MAX_BYTES`（8 MiB）→ 413（`detail` 明示 raw 形式无上限）；畸形行 → 422（`detail` 带行号）；非 UTF-8 → 422（文件级解码失败，无行号可给）。**探测时**读取失败（锁 / 权限）→ 500 通用 detail，全因只进服务端日志——raw 在探测**之后**失败（文件于探测与出流之间被删 / 被锁）= 响应中断、客户端拿到坏 body（服务端有日志），**不是**干净的 500：探测只缩窄窗口、不消除竞态；非法 `task_id` → 400（触碰文件系统之前），trace 关闭（`trace_enabled=false`）/ 任务不存在 / 无 trace → 404 |
-| GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
+| GET | `/api/tasks/{id}/trace` | 持久化 trace | `?format=ndjson\|json`；可选 `type=<逗号分隔>` / `call_id` / `offset` / `limit`（#333 S7 读取参数，#334 S8 Web 模型调用列表/详情使用；任一过滤参数切换到有界解析并按匹配记录分页，默认行为不变，完整导出仍走无参默认） | **无过滤参数**的默认 raw NDJSON：**stat 时前缀快照**流式返回（`StreamingResponse`，64KiB 分块、chunked 不声明长度）——任务跑着时 trace 仍在增长，流只发响应开始 `stat` 看到的那个 size 的字节，**无大小上限**、服务端零缓冲；文件被替换 / 截断则提前收尾，增长与缩短两个方向都不违约（语义 = 「raw = 请求时刻的前缀快照」，不是「当前整个文件」）；畸形行原样带出（回放面按设计跳过、导出身份依赖字节）；`?format=json` 走信封 `{data:[Event...]}` 并**逐行校验**（每行须为 JSON 对象且含 string `type` / object `data` / numeric `ts`；按 `\n` 切分）；**任一过滤参数**也走同一有界解析分支（cap+1 字节，按匹配记录分页），只是表示形式仍为 NDJSON。**413 / 422 属于有界解析分支**（`format=json` 或带过滤参数）：超 `TRACE_MAX_BYTES`（8 MiB）→ 413（`detail` 明示去掉查询参数的无过滤 raw NDJSON 无上限）；畸形行 → 422（`detail` 带行号）；非 UTF-8 → 422（文件级解码失败，无行号可给）。**探测时**读取失败（锁 / 权限）→ 500 通用 detail，全因只进服务端日志——raw 在探测**之后**失败（文件于探测与出流之间被删 / 被锁）= 响应中断、客户端拿到坏 body（服务端有日志），**不是**干净的 500：探测只缩窄窗口、不消除竞态；非法 `task_id` → 400（触碰文件系统之前），trace 关闭（`trace_enabled=false`）/ 任务不存在 / 无 trace → 404。过滤参数：`offset` / `limit` 按**匹配记录**计；非法类型 token、空 token、负 offset / limit → 422 |
+| GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条；有界枚举，限额不改变排序） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（最多返回前 200 KB，`truncated` 标记） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400；文件不存在 → 404；工作区不存在 → 409。404 的 `detail` 是 `task not found` 或 `file not found`，前端据此区分任务与文件消失（`frontend/src/lib/preview.ts`） |
 | GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件；auth 开启时可用 `?token=`（`<a href>` 例外端点） | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
-| GET | `/api/models` | 模型目录的扁平兼容投影（旧字段 + `provider_id` / `protocol`，不含 Key） | — | `[public profile...]` |
-| POST | `/api/models` | 新建兼容档案（1:1 建 Provider + 模型条目，id 由名称派生） | `{name, base_url, model, api_key_env?}` | public profile；非法 → 400 |
-| PUT | `/api/models/{id}` | 更新兼容档案（名称/模型改条目，地址/环境变量名改其 Provider） | `{name?, base_url?, model?, api_key_env?}` | public profile；404/400 |
-| DELETE | `/api/models/{id}` | 删除模型条目（其 Provider 无其它条目时一并删除并撤销 Key） | — | `{ok}`；404/409 |
 | POST | `/api/models/{id}/default` | 设为全局默认模型条目 | — | `{ok, default}`；404 |
-| PUT | `/api/models/{id}/key` | 写入粘贴的 Key（只写；写到该条目所属 Provider） | `{key}` | `{ok, key_set, key_source}`；404/409 |
 | POST | `/api/models/{id}/test` | 测试该条目所属 Provider + 模型连通性 | — | 测试结果；404 |
 | GET | `/api/providers` | Provider 卡片列表 + 全局默认模型条目 id | — | `{providers: [...], default}`；只回 `key_set` / `key_source` |
 | POST | `/api/providers` | 新建 Provider（**id 必填**且须匹配 `^[a-z][a-z0-9_-]*$`；`key` 只写） | `{id, name?, protocol?, base_url, api_key_env?, key?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | public provider（含 D-36 默认值）；重复 id / 非法协议或参数 → 400 |
@@ -194,11 +193,11 @@ START → agent ──有 tool call──→ tool ──→ agent
 **模型配置 v2（D-33 / D-34 / D-35 / D-36）**
 
 - 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset, temperature?, max_tokens?, thinking?, reasoning_effort?}], models: [{id, provider_id, model, name, source, temperature?, max_tokens?, thinking?, reasoning_effort?}]}`（`?` = D-36 可选参数，缺省不写；旧文件缺这些键 = None）。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
-- 迁移：v1（无 `schema_version` 的扁平 `models` 列表）首次加载迁移为同 id 的 Provider（`protocol: openai-compatible`，base_url / api_key_env / preset 原样）+ 同 id 模型条目（model / name，`source: migrated`）；`Task.model` / `default` / credentials 键不变；迁移前把**原始字节**复制为 `models.json.bak-v1`（仅首次，已有备份不覆盖），二次加载不改文件、不再备份；坏文件 / 未来 schema 版本 quarantine + seed。
-- 协议（D-35）：Provider 可存 `openai-compatible` / `anthropic`，两种都可创建 / 编辑 / 被任务使用；未知协议 → 400「不支持的协议」。Anthropic 适配器为 **httpx 非流式 `complete()`**（`backend/core/llm/anthropic_native.py`，经统一工厂 `core/llm/factory.py` 分派）；`stream()` 显式报错。**Anthropic 路径暂不支持 `thinking` / `reasoning_effort`**（需要保留 thinking 签名，见 ADR 0011）——**写面在 protocol=anthropic 且有效值为开启 / 非空时直接 400**（不可运行组合不落卡），运行期构造客户端再守一层；显式传 `null` 清空后可切换。发现接口对 anthropic 仍返回 400「协议暂不支持发现」（Anthropic 无标准目录端点）。
+- 旧格式：v1（无 `schema_version` 的扁平 `models` 列表）不再迁移；加载时明确拒绝且原文件字节不变，不生成 `models.json.bak-v1`。坏文件 / 未来 schema 版本仍 quarantine + seed。
+- 协议（D-35）：Provider 可存 `openai-compatible` / `anthropic`，两种都可创建 / 编辑 / 被任务使用；未知协议 → 400「不支持的协议」。Anthropic 适配器为 **httpx 非流式 `complete()`**（`backend/core/llm/anthropic_native.py`，经统一工厂 `core/llm/factory.py` 分派）；无 `stream()` 预留接口（#330 已删除，SSE 不受影响）。**Anthropic 路径暂不支持 `thinking` / `reasoning_effort`**（需要保留 thinking 签名，见 ADR 0011）——**写面在 protocol=anthropic 且有效值为开启 / 非空时直接 400**（不可运行组合不落卡），运行期构造客户端再守一层；显式传 `null` 清空后可切换。发现接口对 anthropic 仍返回 400「协议暂不支持发现」（Anthropic 无标准目录端点）。
 - 采样参数（D-36）：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 可挂在 Provider（默认值）与模型条目（覆盖）；`temperature` 缺省 0.2（不再硬编码在调用点），合法范围按协议（openai-compatible 0–2 / anthropic 0–1）；Anthropic 的 `max_tokens` 必填、缺省 4096，OpenAI 兼容路径不设缺省 `max_tokens`；`thinking` / `reasoning_effort` 在 OpenAI 兼容路径经 `extra_body` 透传**已校验值**（`reasoning_effort` 限 low / medium / high）。参数更新支持显式 `null` 清空（省略 = 不改），清空后回落 Provider 默认 / 客户端缺省。
 - 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) §2）。
-- 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），**当前前端已不读**（P2-4b 起设置页 / Composer 只读 `GET /providers` + `GET /providers/{id}/models`）；写路径仍走 `POST/PUT/DELETE /api/models` 系列或 `/api/providers`。
+- 旧扁平 `/api/models` 投影与 CRUD 已移除（ADR 0013）：设置页 / Composer 只读 `GET /api/providers` + `GET /api/providers/{id}/models`；写路径走 `/api/providers` 系列。仅保留 `POST /api/models/{id}/default` 与 `POST /api/models/{id}/test` 两个条目动作。
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 
@@ -209,6 +208,8 @@ START → agent ──有 tool call──→ tool ──→ agent
 > **唯一不对称**：`trace_end` 只写 trace JSONL、不经 EventBus——进 `SSEventType` 联合、不进 `EVENT_TYPES` 订阅表。
 > 子智能体快照仍以 REST 的 `Task.subtasks` 为准；F7 起前端 reducer 同时消费父频道的 `subtask_*` 三条事件做实时态（`SubagentStrip`），两者只影响子智能体条，不进对话/步骤语义。`subtask_*` 三条只发在**父频道**，子任务自己的频道不带。
 > **投递语义**（#260 起为「有界窗口 + 丢最旧 + 丢件必留日志」）：单个发布者内的事件按发布顺序推送；跨发布者（worker 线程与 `stop()` 的 HTTP 线程）不保证顺序。每任务回放缓冲（`deque(maxlen=DEFAULT_BUFFER_SIZE)`）与每连接出站队列（`asyncio.Queue(maxsize=SSE_QUEUE_MAX)`，派生自同一常量故两闸不可能漂移）都有界——积压超窗时丢**最旧**的已入队事件、流保持近实时；丢件不静默：首丢 WARNING（`sse outbox for task X overflowed (cap N); dropping oldest queued events`），流关闭时若有丢弃再 WARNING 汇总（`sse stream for task X closed after dropping N event(s)`）。**恢复边界**：重连最多补回 bus 缓冲里最近的 ≤1000 条；已从出站队列与缓冲同时逐出的事件按设计不可恢复——替代方案（无界增长）正是该边界要消除的东西。订阅即快照的原子性未变：`EventBus.subscribe` 在同一把锁里登记订阅并取回放快照，晚订阅者先收到缓冲区回放、再继续实时流（`backend/api/sse.py` 把 worker 线程的发布经 `call_soon_threadsafe` 投回事件循环）——这个**回放→实时交接**仍不丢不重；改变的是积压超过窗口之后的语义。15s 心跳不变。
+
+**模型调用记录（#333 S7）**：完整记录只进同任务 trace，不广播。`LLMClient.complete` 在调用点声明的不可变作用域（owner / `main`｜`subagent`｜`compaction` / round / step）下建立一个 `call_id`；两个适配器在真实 httpx request/response hook 上按 SDK 实际尝试记 `attempt=1..N`（不发请求的 Mock 明确标 `protocol=mock`）。每个 attempt 先追加一条 `pending=true` 的 `aborted` 占位（请求已离开进程、尚无响应），结束再追加同 `(call_id, attempt)` 的最终记录；读取方以最后一条为准，因此进程被杀时占位即「未完成/中断」证据，不补造响应。字段：`call_id`、`attempt`、`owner_task_id`、`source`、`round`、`step`、`model`、`protocol`、`started_at`、`ended_at`、`status`、`request`、`response`、`error`、`truncated`、`usage`、`pending`。请求副本脱敏且超过 128KiB 时截断并标 `truncated`；响应/错误完整保留；`usage` 只取实际返回，未知即 `null`。SSE 的 `llm_call` 仅含摘要与 `(task_id, call_id)` 指针。写入复用 `TraceRecorder` 的同一打开文件句柄（`log_event`），任务关闭/删除后的晚到写入返回失败且不重建文件。
 
 `GET /api/tasks/{id}/events` 推送 `event: <type>\ndata: <json>\n\n`：
 
@@ -227,7 +228,10 @@ START → agent ──有 tool call──→ tool ──→ agent
 | `subtask_start` | `{subtask_id, name, status, parent_task_id}` | 子任务已派生（#70 裁定 A 恢复；只发在父频道） |
 | `subtask_result` | `{subtask_id, name, status, summary, artifacts}` | 子任务 `completed` 的折叠回传（#70 裁定 A；父频道）。`artifacts` 是现役字段 |
 | `subtask_failed` | `{subtask_id, name, error}` | 子任务超时 / worker 崩溃 / 折回 `failed`（#70 裁定 A；父频道，与一条失败的 `tool_result` 并存、父任务不死） |
+| `llm_call` | `{call_id, status, summary, task_id, attempts, round, step, plan_version}` | 模型调用的**轻量摘要**（#333 S7）：只用于时间线关联；完整脱敏请求/响应/错误按 attempt 写在同任务 trace 的 `llm_call` 记录里，不经此频道。`status` = `ok` / `error` / `aborted`。修订字段随全部事件统一发布（见下段）。 |
 | `heartbeat` | `{}` | 保活（每 15s） |
+
+**事件修订元数据（#334 S8）**：运行期事件带显式修订，Web 合并据此判新旧，**不再用步骤数组长度当版本号**。`task_created` / `task_resumed` / `task_interrupted` / `task_failed` 带 `round` 与 `plan_version`；发布时知道步号的任务级事件（如运行中 `stop()`、终态收尾）也带 `step`。`step_start` / `tool_call` / `tool_result` / `context_compressed` / `tool_result_evicted` / `final_answer` / `llm_call` 都带 `step`（累计步号）。`round` 与 `StepRecord.round` 同源（#265）；`plan_version` 是该事件产生时的计划版本。缺失这些字段的旧 trace 行 / 旧事件按 S8 之前的规则处理（同轮终态守卫、调用归属），不会因缺省被判旧。`subtask_*` 只动子任务条，不带修订。
 
 ### 3.5 错误口径与响应信封
 
@@ -258,7 +262,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 停止 | 用户按停 | `TaskManager.stop()` 翻 `_stop_flags` 与 state、发布 `task_interrupted`；worker 在节点入口检测后收口，状态 `INTERRUPTED` |
 | 续说 | 停下后发消息 | `POST /api/tasks/{id}/messages`：同一 `thread_id` / checkpoint 继续同一段对话（多轮入口） |
 | 续跑 | 停止 / 崩溃后 | `POST /api/tasks/{id}/resume`：从最近 durable checkpoint 重建并继续；发布 `task_resumed` |
-| 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），并收尾死进程留下的在途状态：`running` 步骤 → `failed`、`pending` 调用 → `skipped`（含旧启动逻辑只翻状态、不动步骤的 INTERRUPTED / FAILED 记录；任务状态不重写），逐条隔离；消息面悬空 tool call 的清扫仍在 `agent` 节点循环入口（#46），不在启动对账里。`_finalize_terminal` 写记录前也走同一收尾（resume 会原样恢复 checkpoint 的 steps） |
+| 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），并收尾死进程留下的在途状态：`running` 步骤 → `failed`、`pending` 调用 → `skipped`（含旧启动逻辑只翻状态、不动步骤的 INTERRUPTED / FAILED 记录；任务状态不重写），逐条隔离（候选准备失败只跳过该条）；N 条待收尾候选整批一次 dump，零变更不写，写失败时内存与会话文件都停在旧状态（#337）。消息面悬空 tool call 的清扫仍在 `agent` 节点循环入口（#46），不在启动对账里。`_finalize_terminal` 写记录前也走同一收尾与同一批量提交路径（resume 会原样恢复 checkpoint 的 steps） |
 
 checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_DURABILITY`），格式戳 v2；v1 旧库启动时拒绝挂载并按迁移文档 §2.4 处置。`data/` 可弃，不做跨大版本快照兼容。
 
@@ -281,7 +285,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 ### 4.5 工具执行与危险动作
 
 - **能力包 / 预设**（#67，ADR 0012）：`backend/core/capability_packages.py` 静态声明六个包
-  （`files` / `bash` / `skills` / `web-search` / `subagent` / `mcp`：工具名集合 + 注入片段 +
+  （`files` / `shell` / `skills` / `web-search` / `subagent` / `mcp`：工具名集合 + 注入片段 +
   是否连 MCP + 是否影响子代理面）与三预设（`minimal` / `research` / `full`，默认 `full` =
   #67 前行为；`research` 当前与 `full` 同一面）。`TaskManager` 启动期解析包清单后按名单装配
   工具面与注入片段。**真关**：禁用包不实例化、不进 schema / dispatch、不加注入片段、不连 MCP。
@@ -320,8 +324,9 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 ### 4.8 工作区与文件接口
 
 - 任务拥有一个目录：`Task.workspace`（绝对路径；创建时规范化 `~` / 相对路径 / `..` / 符号链接，比较用 `workspace_key`）。日常入口 `qianfan` 的启动目录就是新任务的工作区（ADR 0010 决策 1/2）。
-- 文件工具与工作区文件接口的路径**限定在任务目录**；`bash` 不受围栏——工作目录只是起点（见 §7）。
+- 文件工具与工作区文件接口的路径**限定在任务目录**；`shell` 不受围栏——工作目录只是起点（见 §7）。
 - 文件列表按 `.gitignore` 类规则做**可见性过滤**，不是安全边界：点名 `preview` / `download` 仍可达工作区内的任意文件。
+- 列表限额只约束**返回条数**，不是扫描限额：有界枚举返回全量排序的前缀（第 2000 名之后不会再被任意截停）；`glob` / `grep` 仍是全量搜索。普通文件复用已解析目录、只在条目本身是链接时解析目标；含链接的树回退全量解析以保住排序（#336 S10）。
 - `artifacts_path`（`data/artifacts`）只作**无任务时的 fallback**（注入块发现、子任务无父工作区等场景），不是现役产物账本。
 
 ---
@@ -332,12 +337,12 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 
 1. **配置管理**：所有配置经 [`backend/config.py`](../backend/config.py) 的 `Settings`（pydantic-settings）从 `.env` / 环境变量读取；业务代码用 `get_settings()` 单例，**禁止**硬编码 Key/路径。例外：`ModelStore` 自带 `data/models.json`（Provider + 模型目录）与仓库外 `~/.qianfan/credentials.json`（Key 只在那里，按 Provider id 取）。
 2. **LLM 接入**：业务只依赖 `LLMClient` 抽象；`LLMResponse{content, tool_calls, raw, reasoning_content}`。现役真实实现 = `OpenAICompatibleClient`（OpenAI 兼容）+ `AnthropicClient`（Anthropic Messages API，httpx 非流式 `complete()`），另有离线 `MockLLMClient`；协议分派收敛在 `core/llm/factory.py` 一处（Settings 种子路径与任务路径共用）。**选哪套模型不再是硬编码分支**：由 `ModelStore` 的 Provider + 模型条目（`data/models.json` v2）+ 任务 `Task.model` / 全局默认决定；预设只有 DeepSeek，其余用自定义 `base_url`；协议与 D-36 参数随 Provider / 条目持久化（ADR 0011）。
-3. **工具接口**：`name / description / args_schema(JSON Schema) / requires_confirm / registers_artifact / run(**kwargs) -> ToolResult`。`run` 不得抛未捕获异常（内核兜底）；新工具 `@register` 即被自动发现。**现状**：`requires_confirm` 是确认闸门退役后的**兼容字段，已无消费者**；`registers_artifact` 只剩子任务产物收集在用；MCP 工具不经 `@register`，由 `task_manager` 追加。
+3. **工具接口**：`name / description / args_schema(JSON Schema) / registers_artifact / run(**kwargs) -> ToolResult`。`run` 不得抛未捕获异常（内核兜底）；新工具 `@register` 即被自动发现。**现状**：确认闸门退役后遗留的 `requires_confirm` 字段与 MCP `danger_signal` 分类已随 #331 删除（调用只由 `policy_rules` 判定）；`registers_artifact` 只剩子任务产物收集在用；MCP 工具不经 `@register`，由 `task_manager` 追加。
 4. **事件/消息协议**：后端 → 前端只经 SSE（§3.4）；`data` 字段名与后端模型一致；`frontend/src/types/index.ts` 与 `schemas.py` 字段对齐（单一来源 `schemas.py`）。字段级无机械守卫，只有事件**类型名**有。
 5. **错误口径**：见 §3.5（失败两个面 + 规则拒绝第三形状 + 只执行一次）。
 6. **停止信号**：权威信号是 `TaskManager` 级的 `_stop_flags`（带 checkpointer 时 state 是每 superstep 副本，不可靠）；`stop()` 同时翻 state 与 flag，**`task_interrupted` 由 `TaskManager` 发布**（节点从不发布它）。
 7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里一个钩子；命中当场拒、不弹框、不进图重入（ADR 0008 决策 6）。
-8. **路径安全**：`read/write/edit/ls/glob/grep` 与工作区文件接口限定在当前任务目录；`bash` 不受此围栏；文件列表是可见性过滤，不是安全边界（`bash` 拿运行账号权限）。
+8. **路径安全**：`read/write/edit/ls/glob/grep` 与工作区文件接口限定在当前任务目录；`shell` 不受此围栏；文件列表是可见性过滤，不是安全边界（`shell` 拿运行账号权限）。
 9. **停下判定**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 停成 `INTERRUPTED`；错误 → `FAILED`；**没有 `COMPLETED` 终态**。
 10. **日志**：统一经 [`backend/utils/logging.py`](../backend/utils/logging.py)，结构化输出到控制台 + `data_dir/logs/`；不打印明文 Key。
 
@@ -360,15 +365,18 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 ### 6.2 启动形态
 
 ```bash
-qianfan                       # 日常：uv tool install -e .，单后台 + 自动开浏览器
-qianfan repl                  # 终端：常驻多轮会话（无浏览器 / 无 uvicorn；锁 mode=repl，与上面两者互斥）
+qianfan                       # 日常：确保共享后台（detach 子进程）+ 自动开浏览器
+qianfan status                # pid / port / mode / instance / started_at / healthy；未运行非 0
+qianfan stop                  # 请求锁文件登记的实例优雅关闭（instance 不匹配被拒）
+qianfan serve                 # 前台服务入口（内部 / 手工调试；同一 serve 代码路径）
+qianfan repl                  # 终端：确保 / 连接共享后台（无浏览器；只走 REST/SSE）
 python start.py --install     # 开发：先按 CI 同口径装后端依赖（pip install -r requirements.txt）与前端依赖
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
 ```
 
-一台机器**只共用一个后台**：第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；关掉启动终端 = 所有任务停下（可续说/续跑）。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
+一台机器**只共用一个后台**，后台是独立进程并持 `data/server.json`：启动器 detach 拉起 `backend.serve`、等 `/health` 就绪后退出，**退出启动终端不停后台**。第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；`qianfan repl` 复用同一后台（也接受 `start.py` 的开发后台，但不接管其锁或停止它），关闭终端只断连。`qianfan stop` 校验 instance 后按顺序收尾（拒绝新运行 → 停止任务并解除可取消阻塞 I/O → 等 worker → 落盘 → 请求 uvicorn 退出；锁在 uvicorn 返回后由 `serve.run` 释放），超时非 0 并报告未完成，不把「已收到请求」写成「已停止」；收尾期间 503 门仍放行 `/health`、`/api/server/stop` 与 `/api/auth/token`（认证开启时重试要重新登录）。`start.py` 起的开发后台没有可编程退出钩子，端点直接 409 拒绝（不触碰任务、不释放锁），请在开发终端 Ctrl-C。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `qianfan serve` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
 
-启动装配（`build_runtime`，Web 与 REPL 共用）还会先改写进程 env 的 `NO_PROXY` / `no_proxy`：括号化 IPv6 条目改成裸主机，`[host]:port` 丢掉端口。httpx 把 `NO_PROXY` 拼成代理挂载键时只认裸主机，`[::1]` 会让 OpenAI 客户端在构造时抛 `InvalidURL`；发生改写时打一条 WARNING 日志（#317）。
+后台启动装配（`build_runtime`）与终端 HTTP 客户端构造（`ApiClient`）都会先改写进程 env 的 `NO_PROXY` / `no_proxy`：括号化 IPv6 条目改成裸主机，`[host]:port` 丢掉端口。httpx 把 `NO_PROXY` 拼成代理挂载键时只认裸主机，`[::1]` 会让客户端在构造时抛 `InvalidURL`；后台发生改写时打一条 WARNING 日志（#317），终端侧静默修正后继续连接。
 
 `frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示先构建。
 
@@ -376,8 +384,10 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 
 | 路径 | 内容 | 备注 |
 |---|---|---|
-| `data/tasks.json` | 任务记录（原子写，损坏自动备份） | 唯一任务记录源 |
-| `data/models.json` | 模型配置 v2（Provider + 模型目录，**不含 Key**）；v1 首次加载自动迁移并备份 `models.json.bak-v1` | 全局默认 / 每任务模型条目 id |
+| `data/tasks.json` | 任务记录（原子写；启动对账/终态收尾按候选批量一次提交；字节损坏自动备份后重新开始；**旧格式记录整体拒绝加载且原文不变**，ADR 0013 决策 1） | 唯一任务记录源 |
+| `data/server.json` | 共享后台单实例记录（pid / port / started_at / instance；原子写） | 启动器 / `status` / `stop` 的实例权威 |
+| `data/logs/server.log` | 后台启动期 stdout/stderr 与异常 | 应用日志仍在 `data/logs/agent.log` |
+| `data/models.json` | 模型配置 v2（Provider + 模型目录，**不含 Key**）；v1 明确拒绝、原文不变，不迁移不备份 | 全局默认 / 每任务模型条目 id |
 | `~/.qianfan/credentials.json` | 界面粘贴的 Key | 仓库外；接口只回 `key_set` / `key_source` |
 | `data/traces/<task_id>.jsonl` | 事件 + trace 时间线 | `trace_end` 只在这里 |
 | `data/checkpoints/checkpoints.sqlite` | LangGraph checkpoint | 格式戳 v2；v1 拒绝挂载 |
@@ -398,10 +408,10 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 `qianfan` 只监听回环、Host 检查只认 `127.0.0.1` / `localhost`（挡 DNS 重绑定）、CORS 只放行自身来源——这些是**减少暴露面**，不是沙箱。完整口径与审计证据见 [`README.md`](../README.md)「这不是安全边界」与 [`security-audit-2026-10-19-bash.md`](archive/security-audit-2026-10-19-bash.md)。
 
 - **默认没有登录**：同机其他进程/用户可直接驱动 API；`auth_enabled` 只挡无凭据访问，不是权限边界。远程访问不在本章范围。
-- **`bash` 拿运行账号权限**：工作目录只是起点，`data/`、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
+- **`shell` 拿运行账号权限**：工作目录只是起点，`data/`、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
 - **子进程只继承白名单环境变量**（挡「继承」，不挡读文件）；停止 / 超时回收本次调用建立的进程组 / Job Object，自行 `setsid` 脱离的进程不受管。
 - **只限时**（默认 30s，1–600s）+ 截断输出尾部；**没有** CPU / 内存 / 磁盘 / 进程数上限。
-- `policy_rules` 空表 = 不拦；它拦的是「工具调用入参」，不是 bash 内部行为。
+- `policy_rules` 空表 = 不拦；它拦的是「工具调用入参」，不是 `shell` 内部行为。
 - 需要真隔离就放进容器或虚拟机（本章不提供 Docker 启动方式；C4 已删 `Dockerfile` 与 `docker-compose.yml`）。
 - 完整暴露面、密钥面与已知 CVE 缓解见 [`docs/security.md`](security.md) §1/§2/§6/§7；本节只保留架构视角，不复述细节。
 

@@ -16,22 +16,22 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, List, cast
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.schemas import ChatTurn, Task, TaskStatus
+from backend.api.schemas import ChatTurn, Task, TaskMode, TaskStatus
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.agent.subagent import EXPLORE_TIER, tier_face_names
 from backend.core.llm.client import LLMResponse, MockLLMClient
+from backend.core.runtime_context import normalize_workspace
 from backend.core.tools.registry import build_tools
 from backend.main import app
 from backend.services.event_bus import EventBus
-from backend.services.persistence import Persistence
-from backend.tests.conftest import make_manager, make_settings
+from backend.services.persistence import Persistence, UnsupportedTasksFileError
+from backend.tests.conftest import make_agent_host, make_manager, make_settings
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -50,16 +50,9 @@ class _RecordingLLM(MockLLMClient):
 
 
 def _runtime(settings, llm, tools) -> AgentRuntime:
-    tm = SimpleNamespace(
-        settings=settings,
-        event_bus=EventBus(),
-        add_artifact=lambda *a, **k: None,
-        is_stop_flagged=lambda _tid: False,
-        _active_states={},
-    )
     return AgentRuntime(
         "t1",
-        tm,
+        make_agent_host(settings),
         llm=llm,
         tools=tools,
         tool_schemas=[t.to_openai_schema() for t in tools],
@@ -85,7 +78,6 @@ def _state(**kw: Any) -> AgentState:
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     base.update(kw)
     # Partial/extra keys by design: these tests drive one or two nodes.
@@ -124,6 +116,26 @@ class _LoopingLLM(MockLLMClient):
 
 
 # ── mode -> tool face ───────────────────────────────────────────────────────
+def test_an_empty_face_follows_the_mode_not_the_tool_count(tmp_path: Path) -> None:
+    """#330: an empty face is legal in both modes and must not flip the mode.
+
+    The mock used to read "no tools" as "planner", so a build round with a
+    disabled face returned a plan block. The mode is what decides.
+    """
+    settings = make_settings(tmp_path)
+    plan_rt = _runtime(settings, MockLLMClient(plan=["step"]), [])
+    plan_state = _state(mode="plan")
+    plan_rt.agent(plan_state)
+    assert "step" in plan_state["plan_text"]
+
+    build_rt = _runtime(
+        settings, MockLLMClient(plan=["step"], final_answer="built"), []
+    )
+    build_state = _state(mode="build")
+    build_rt.agent(build_state)
+    assert build_state["final_answer"] == "built"
+
+
 def test_plan_mode_advertises_only_the_explore_tier(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     tools = build_tools(settings)
@@ -134,7 +146,7 @@ def test_plan_mode_advertises_only_the_explore_tier(tmp_path: Path) -> None:
     expected = tier_face_names([t.name for t in tools], EXPLORE_TIER)
     assert mock.offered[-1] == sorted(expected)
     assert "write" not in mock.offered[-1]
-    assert "bash" not in mock.offered[-1]  # C3: shell access stays out of plan mode
+    assert "shell" not in mock.offered[-1]  # C3: shell access stays out of plan mode
     assert "spawn_subagent" not in mock.offered[-1]
 
     rt.agent(_state(mode="build"))
@@ -170,7 +182,63 @@ def test_plan_mode_refuses_to_dispatch_a_tool_outside_its_face(tmp_path: Path) -
     assert not (Path(settings.artifacts_path) / "should_not_exist.txt").exists()
 
 
+def test_plan_mode_refuses_the_shell_tool(tmp_path: Path) -> None:
+    """ADR 0013: the command tool cannot be used to bypass the read-only face."""
+    settings = make_settings(tmp_path)
+    tools = build_tools(settings)
+    rt = _runtime(settings, MockLLMClient(final_answer="done"), tools)
+    state = _state(
+        mode="plan",
+        steps=[{"index": 1, "thought": "", "status": "running", "tool_calls": []}],
+        _current_tool_calls=[
+            {
+                "id": "c1",
+                "tool_name": "shell",
+                "input": {"command": "echo x > escaped.txt"},
+                "output": None,
+                "status": "pending",
+                "error": "",
+            }
+        ],
+    )
+
+    rt.tool_node(state)
+
+    rec = state["_current_tool_calls"][0]
+    assert rec["status"] == "failed"
+    assert "not available in plan mode" in rec["error"]
+    assert "shell" in rec["error"]
+    assert not (Path(settings.artifacts_path) / "escaped.txt").exists()
+
+
 # ── a round ends = no tool call; the task can continue ──────────────────────
+def test_a_new_task_is_persisted_with_the_full_current_contract(
+    tmp_path: Path,
+) -> None:
+    """ADR 0013 decision 1: a new record writes every current field at once —
+    no later backfill fills in the workspace or the conversation ledger."""
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="answer one"))
+
+    task_id = tm.create_task(title="chat", user_input="hello")
+    created = tm.get_task(task_id)
+    assert created is not None
+    assert created.workspace == normalize_workspace(settings.artifacts_path)
+    assert created.model
+    assert created.mode == TaskMode.BUILD
+    assert created.conversation == [ChatTurn(role="user", content="hello")]
+
+    parked = _wait_parked(tm, task_id)
+    assert [s.round for s in parked.steps] == [1]
+    raw = json.loads((settings.data_path / "tasks.json").read_text(encoding="utf-8"))[0]
+    assert raw["workspace"] == created.workspace
+    assert raw["conversation"] == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "answer one"},
+    ]
+    assert all(step["round"] == 1 for step in raw["steps"])
+
+
 def test_a_round_without_tool_calls_parks_and_the_next_message_continues(
     tmp_path: Path,
 ) -> None:
@@ -257,6 +325,26 @@ def test_compression_does_not_shrink_the_round_ledger(tmp_path: Path) -> None:
     ]
     task.conversation.append(ChatTurn(role="user", content="third question"))
     assert tm._round_number(task) == 3
+
+
+def test_a_record_without_a_user_turn_still_starts_at_round_one(
+    tmp_path: Path,
+) -> None:
+    """A hand-edited current-format record must not stamp round 0.
+
+    ``Task`` requires a non-empty ledger but not a user-first one. Step rows
+    demand a 1-based round on load, so returning 0 here would write records
+    this process itself could not read back.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="orphan",
+        workspace=str(settings.artifacts_path),
+        conversation=[ChatTurn(role="assistant", content="only a stray answer")],
+    )
+
+    assert tm._round_number(task) == 1
 
 
 def test_plan_rounds_append_their_notes_instead_of_overwriting(
@@ -788,16 +876,19 @@ def test_rest_message_is_refused_while_running(tmp_path: Path) -> None:
 def test_completed_is_not_a_live_status(tmp_path: Path) -> None:
     assert "COMPLETED" not in TaskStatus.__members__
 
-    # Pre-S5 records still load, mapped to the one "停下" (ADR 0008 decision 5).
+    # ADR 0013 decision 1: a pre-S5 record is not mapped into the current
+    # status; the file is refused readably and keeps its bytes.
     settings = make_settings(tmp_path)
-    (tmp_path / "tasks.json").write_text(
-        json.dumps([{"id": "legacy", "status": "COMPLETED", "user_input": "old"}]),
-        encoding="utf-8",
-    )
-    rebuilt = Persistence(settings)
-    loaded = rebuilt.load_task("legacy")
-    assert loaded is not None
-    assert loaded.status == TaskStatus.INTERRUPTED
+    original = json.dumps(
+        [{"id": "legacy", "status": "COMPLETED", "user_input": "old"}]
+    ).encode("utf-8")
+    (tmp_path / "tasks.json").write_bytes(original)
+
+    with pytest.raises(UnsupportedTasksFileError) as excinfo:
+        Persistence(settings)
+
+    assert "COMPLETED" in str(excinfo.value)
+    assert (tmp_path / "tasks.json").read_bytes() == original
 
 
 # ── #255: finish only settles the step this round created ───────────────────
@@ -875,15 +966,15 @@ def test_finish_marks_the_running_step_failed_on_error(tmp_path: Path) -> None:
     assert out["steps"][0]["status"] == "failed"
 
 
-def test_finish_leaves_a_legacy_step_without_round_alone(tmp_path: Path) -> None:
-    """legacy step 无 ``round``（=0）视为不属于本轮：保守地不改。"""
+def test_finish_settles_a_current_rounds_running_step(tmp_path: Path) -> None:
+    """A step of the round being parked is settled; ``round`` is mandatory."""
     rt = _runtime(make_settings(tmp_path), MockLLMClient(), [])
     state = _finish_state(
         round_no=1,
         stop_requested=True,
-        steps=[{"index": 1, "status": "running", "tool_calls": []}],
+        steps=[{"index": 1, "round": 1, "status": "running", "tool_calls": []}],
     )
 
     out = rt.finish(state)
 
-    assert out["steps"][0]["status"] == "running"
+    assert out["steps"][0]["status"] == "failed"

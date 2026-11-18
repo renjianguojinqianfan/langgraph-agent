@@ -53,13 +53,13 @@ from ..core.runtime_context import (
     workspace_key,
 )
 from ..core.tools.base import BaseTool
-from ..core.tools.bash import BashTool
 from ..core.tools.registry import build_tools
+from ..core.tools.shell import ShellTool
 from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from . import plan_file
 from .event_bus import EventBus
-from .model_store import IMPLEMENTED_PROTOCOLS, PROTOCOL_OPENAI, ModelStore
+from .model_store import IMPLEMENTED_PROTOCOLS, ModelStore, ResolvedModel
 from .persistence import Persistence, PersistenceError
 from .plugins_store import EffectivePluginsConfig, resolve_effective_plugins
 from .trace import TraceRecorder
@@ -224,7 +224,7 @@ class TaskManager:
         #: Keys a live/cached client may still hold after a rotation. Memory
         #: only: the point is redaction, not a second credentials store.
         self._known_secrets: set[str] = set()
-        #: The (profile, client) a round is pinned to; subagents inherit it.
+        #: The (model entry id, client) a round is pinned to; subagents inherit it.
         self._round_models: Dict[str, tuple[str, LLMClient]] = {}
         # D-53/D-56 (#67): global capability-package combination, resolved once
         # at manager construction. Precedence: explicit `packages` (test seam) >
@@ -583,35 +583,48 @@ class TaskManager:
         records an older startup already flipped without touching their steps.
         Statuses outside RUNNING/PENDING are never rewritten.
         """
-        reconciled = 0
+        settled: list[tuple[Task, bool, str, str]] = []
         for task in self.persistence.list_all():
             try:
                 original_status = task.status.value
                 was_live = task.status in (TaskStatus.RUNNING, TaskStatus.PENDING)
-                changed = self._settle_in_flight_steps(task)
+                candidate = task.model_copy(deep=True)
+                changed = self._settle_in_flight_steps(candidate)
                 if was_live:
-                    task.status = TaskStatus.INTERRUPTED
+                    candidate.status = TaskStatus.INTERRUPTED
                     changed = True
                 if not changed:
                     continue
-                task.updated_at = _now()
-                if not self._save_task(task, strict=False):
-                    continue
-                if was_live:
-                    reconciled += 1
-                    logger.warning(
-                        "Orphaned %s task %s reconciled to INTERRUPTED",
-                        original_status,
-                        task.id,
-                    )
-                else:
-                    logger.warning(
-                        "Settled in-flight steps on %s task %s",
-                        original_status,
-                        task.id,
-                    )
+                candidate.updated_at = _now()
+                settled.append((candidate, was_live, original_status, task.id))
             except Exception:  # per-task isolation: one bad record can't stall the sweep
                 logger.exception("Failed to reconcile orphan task %s", task.id)
+
+        if not settled:
+            return
+        if not self.persistence.save_tasks([candidate for candidate, _, _, _ in settled]):
+            logger.error(
+                "Startup reconciliation could not persist %d record(s); "
+                "tasks.json was left unchanged",
+                len(settled),
+            )
+            return
+
+        reconciled = 0
+        for _, was_live, original_status, task_id in settled:
+            if was_live:
+                reconciled += 1
+                logger.warning(
+                    "Orphaned %s task %s reconciled to INTERRUPTED",
+                    original_status,
+                    task_id,
+                )
+            else:
+                logger.warning(
+                    "Settled in-flight steps on %s task %s",
+                    original_status,
+                    task_id,
+                )
         if reconciled:
             logger.info("Startup reconciliation completed: %d task(s).", reconciled)
 
@@ -642,11 +655,11 @@ class TaskManager:
 
     # ── P1 wiring of runtime-injected tools ──
     def _wire_injected_tools(self) -> None:
-        """Give stateful tools their service references (subagent, bash stop)."""
+        """Give stateful tools their service references (subagent, shell stop)."""
         for t in self._tools:
             if isinstance(t, SpawnSubagentTool):
                 t.executor = self._subagent
-            elif isinstance(t, BashTool):
+            elif isinstance(t, ShellTool):
                 # Nodes are synchronous: a stop clicked while a command is
                 # running is only observable from inside the tool. The flag
                 # stays authoritative (is_stop_flagged), and the run loop polls
@@ -704,9 +717,6 @@ class TaskManager:
                 input_schema=item.get("input_schema") or {},
                 manager=manager,
                 settings=settings,
-                # #57: the server's own danger report; a missing key here would
-                # silently turn every tool into "unknown" (= always ask).
-                annotations=item.get("annotations") or {},
             )
             if tool.name in existing:
                 logger.warning(
@@ -738,8 +748,39 @@ class TaskManager:
         logger.info("shutdown: %s done", label)
         return True
 
-    def shutdown(self) -> None:
+    def wait_for_idle(self, timeout: float = 5.0) -> bool:
+        """Wait up to ``timeout`` for every task worker to finish.
+
+        True means no worker thread is still alive (the caller's own thread is
+        never counted). Used by the shared-backend stop path (#332): tasks are
+        asked to stop first, then the control plane waits here before the
+        terminal records and the checkpoint connection are touched.
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        current = threading.current_thread()
+        while True:
+            alive = [
+                th
+                for th in list(getattr(self, "_threads", {}).values())
+                if th is not current and th.is_alive()
+            ]
+            if not alive:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            for th in alive:
+                th.join(timeout=remaining)
+
+    def shutdown(self) -> bool:
         """Release process-level resources (MCP child processes).
+
+        Returns True when every resource was released (including a repeat call
+        after a clean shutdown); False when a worker outlived the join or a
+        release step failed — the same condition the "incomplete" /
+        "finished with errors" log lines name. Callers that only log ignore the
+        value; the stop endpoint (#332) uses it to avoid reporting a partial
+        shutdown as complete.
 
         Idempotent: calling it multiple times, or constructing a new
         :class:`TaskManager` over an old one, never leaks connections.
@@ -755,7 +796,7 @@ class TaskManager:
         """
         if getattr(self, "_shutdown_complete", False):
             logger.info("shutdown: already complete; nothing to release")
-            return
+            return True
         logger.info("shutdown: begin")
         failed = False
         mcp = getattr(self, "_mcp", None)
@@ -796,7 +837,7 @@ class TaskManager:
                 "writing. Process exit will close it.",
                 alive,
             )
-            return
+            return False
         logger.info("shutdown: all worker threads joined")
         conn = getattr(self, "_checkpoint_conn", None)
         if conn is not None:
@@ -811,9 +852,10 @@ class TaskManager:
             # often transient (a locked store closes on the next try), and
             # latching here would turn every later call into a silent no-op
             # that claims "already complete".
-        else:
-            logger.info("shutdown: complete")
-            self._shutdown_complete = True
+            return False
+        logger.info("shutdown: complete")
+        self._shutdown_complete = True
+        return True
 
     # ── creation / query ──
     @staticmethod
@@ -821,8 +863,8 @@ class TaskManager:
         if not Path(task.workspace).is_dir():
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
-    def _build_llm(self, profile: Any, key: str) -> LLMClient:
-        """Build one client for a resolved model entry, dispatching on protocol.
+    def _build_llm(self, model: ResolvedModel, key: str) -> LLMClient:
+        """Build one client for a resolved model, dispatching on protocol.
 
         D-35: ``openai-compatible`` and ``anthropic`` both go through the one
         factory; the D-36 params resolved by ``ModelStore`` (entry overrides
@@ -830,53 +872,52 @@ class TaskManager:
         """
         if key:
             self._known_secrets.add(key)
-        protocol = getattr(profile, "protocol", PROTOCOL_OPENAI) or PROTOCOL_OPENAI
-        if protocol not in IMPLEMENTED_PROTOCOLS:
-            raise RuntimeError(f"model protocol {protocol!r} is not supported")
+        if model.protocol not in IMPLEMENTED_PROTOCOLS:
+            raise RuntimeError(f"model protocol {model.protocol!r} is not supported")
         if self._llm_factory is not None:
-            return self._llm_factory(profile, key)
+            return self._llm_factory(model, key)
         return build_llm_client(
-            protocol=protocol,
-            base_url=profile.base_url,
-            model=profile.model,
+            protocol=model.protocol,
+            base_url=model.base_url,
+            model=model.model,
             key=key,
             timeout=self.settings.llm_request_timeout_sec,
-            temperature=getattr(profile, "temperature", None),
-            max_tokens=getattr(profile, "max_tokens", None),
-            thinking=getattr(profile, "thinking", None),
-            reasoning_effort=getattr(profile, "reasoning_effort", None),
+            temperature=model.temperature,
+            max_tokens=model.max_tokens,
+            thinking=model.thinking,
+            reasoning_effort=model.reasoning_effort,
         )
 
     def _llm_for(self, task: Optional[Task]) -> LLMClient:
-        """The task's model client, cached per profile (ADR 0010 decision 7)."""
+        """The task's model client, cached per model entry (ADR 0010 decision 7)."""
         if self._injected_llm is not None:
             return self._injected_llm
         if self.settings.use_mock_llm:
             return self._llm
         requested = task.model if task is not None else ""
         # Resolve, read the key, check the cache and build under one lock: a
-        # concurrent profile edit invalidates the cache before this method can
-        # insert a client built from the pre-edit profile.
+        # concurrent provider/model edit invalidates the cache before this
+        # method can insert a client built from the pre-edit resolution.
         with self._lock:
-            profile = self.models.resolve(requested)
-            if profile is None:
-                # A pinned profile that no longer exists must not silently
+            model = self.models.resolve(requested)
+            if model is None:
+                # A pinned model that no longer exists must not silently
                 # reroute the conversation to another provider.
                 raise RuntimeError(
-                    f"model profile {requested!r} no longer exists; switch the task's model"
+                    f"model {requested!r} no longer exists; switch the task's model"
                 )
-            client = self._llm_clients.get(profile.id)
+            client = self._llm_clients.get(model.id)
             if client is None:
-                client = self._build_llm(profile, self.models.key_for(profile.id))
-                self._llm_clients[profile.id] = client
+                client = self._build_llm(model, self.models.key_for(model.id))
+                self._llm_clients[model.id] = client
         return client
 
     def _pin_round_model(self, task: Task) -> LLMClient:
         """Fix this round's client; a subagent must not re-read the task record."""
         llm = self._llm_for(task)
-        profile_id = self.model_id_for(task)
+        model_id = self.model_id_for(task)
         with self._lock:
-            self._round_models[task.id] = (profile_id, llm)
+            self._round_models[task.id] = (model_id, llm)
         return llm
 
     def round_llm_for(self, task_id: str) -> Optional[tuple[str, LLMClient]]:
@@ -887,7 +928,7 @@ class TaskManager:
         return self._llm_for(self.persistence.load_task(task_id))
 
     def model_id_for(self, task: Optional[Task]) -> str:
-        """The profile id a task runs with; empty task -> the global default."""
+        """The model entry id a task runs with; empty task -> the global default."""
         return (task.model if task is not None else "") or self.models.default_id
 
     def redact(self, text: str) -> str:
@@ -897,6 +938,27 @@ class TaskManager:
             if secret:
                 text = text.replace(secret, "[redacted]")
         return text
+
+    def trace_sink(
+        self, task_id: str
+    ) -> Optional[Callable[[str, Dict[str, Any]], bool]]:
+        """Append a log-only model-call record to this task's existing trace.
+
+        Returns ``None`` when tracing is off; a closed/deleted task makes the
+        callable return ``False`` instead of recreating the file (#333).
+        """
+        if self._trace is None:
+            return None
+        recorder = self._trace
+
+        def _sink(event_type: str, data: Dict[str, Any]) -> bool:
+            return recorder.log_event(task_id, event_type, data)
+
+        return _sink
+
+    def publish_llm_call(self, task_id: str, payload: Dict[str, Any]) -> None:
+        """SSE carries only this lightweight model-call summary (#333)."""
+        self.event_bus.publish(task_id, "llm_call", payload)
 
     def redact_reasoning(self, text: str) -> str:
         """D-38: the copy of a step's reasoning that may leave the graph.
@@ -918,14 +980,17 @@ class TaskManager:
         building a request. Unknown model -> empty (tests / legacy fakes keep
         history untouched).
         """
-        profile = self.models.get(model_id or "")
-        if profile is None:
+        entry = self.models.get_model(model_id or "")
+        if entry is None:
             return ""
-        return f"{profile.provider_id}:{profile.protocol}"
+        provider = self.models.get_provider(entry.provider_id)
+        if provider is None:  # pragma: no cover - load() drops orphan entries
+            return ""
+        return f"{provider.id}:{provider.protocol}"
 
     def set_model(self, task_id: str, model_id: str) -> Dict[str, Any]:
         """Switch a task's model; the next message uses it."""
-        if self.models.get(model_id) is None:
+        if self.models.get_model(model_id) is None:
             raise RuntimeError(f"unknown model {model_id!r}")
         with self._lock:
             task = self.persistence.load_task(task_id)
@@ -969,44 +1034,15 @@ class TaskManager:
                 "task": task.model_dump(mode="json"),
             }
 
-    # Model mutations go through the manager so the client cache cannot keep
-    # serving an old address / key. A provider edit or a key rotation can affect
-    # every model entry under that provider, so the whole cache is dropped
-    # (clients are cheap to rebuild; a stale credential is not).
-    def add_model_profile(self, **fields: Any) -> Any:
-        with self._lock:
-            return self.models.add(**fields)
-
-    def set_default_model_profile(self, model_id: str) -> None:
+    def set_default_model(self, model_id: str) -> None:
         with self._lock:
             self.models.set_default(model_id)
 
-    def update_model_profile(self, model_id: str, **fields: Any) -> Any:
-        with self._lock:
-            old_key = self.models.key_for(model_id)
-            profile = self.models.update(model_id, **fields)
-            self._llm_clients.clear()
-            if old_key:
-                self._known_secrets.add(old_key)
-        return profile
-
-    def delete_model_profile(self, model_id: str) -> None:
-        with self._lock:
-            old_key = self.models.key_for(model_id)
-            self.models.delete(model_id)
-            self._llm_clients.clear()
-            if old_key:
-                self._known_secrets.add(old_key)
-
-    def set_model_key(self, model_id: str, key: str) -> None:
-        with self._lock:
-            old_key = self.models.key_for(model_id)
-            self.models.set_key(model_id, key)
-            self._llm_clients.clear()
-            if old_key:
-                self._known_secrets.add(old_key)
-
-    # Provider / catalog mutations (D-34): same cache rule as above.
+    # Provider / catalog mutations (D-34): model mutations go through the
+    # manager so the client cache cannot keep serving an old address / key. A
+    # provider edit or a key rotation can affect every model entry under that
+    # provider, so the whole cache is dropped (clients are cheap to rebuild; a
+    # stale credential is not).
     def add_provider(self, **fields: Any) -> Dict[str, Any]:
         with self._lock:
             provider = self.models.add_provider(**fields)
@@ -1067,16 +1103,16 @@ class TaskManager:
 
     def test_model(self, model_id: str) -> Dict[str, Any]:
         """Send one minimal request; the key never appears in the answer."""
-        profile = self.models.get(model_id)
-        if profile is None:
+        model = self.models.resolve(model_id)
+        if model is None:
             raise KeyError(model_id)
         if self.settings.use_mock_llm:
             return {"ok": True, "note": "mock mode"}
-        key = self.models.key_for(model_id)
+        key = self.models.key_for(model.id)
         if not key:
             return {"ok": False, "error": "key not set"}
         try:
-            self._build_llm(profile, key).complete(
+            self._build_llm(model, key).complete(
                 [{"role": "user", "content": "ping"}], max_tokens=1
             )
             return {"ok": True}
@@ -1136,13 +1172,13 @@ class TaskManager:
 
         ``mode`` is the sticky task switch; default is build (decision 3).
         ``workspace`` is the page-supplied directory; absent -> the launch dir.
-        ``model`` is a profile id; absent -> the global default.
+        ``model`` is a model entry id; absent -> the global default.
         """
         chosen = normalize_workspace(workspace or self._default_workspace)
         if not Path(chosen).is_dir():
             raise ValueError(f"workspace does not exist: {chosen}")
         model_id = model or self.models.default_id
-        if self.models.get(model_id) is None:
+        if self.models.get_model(model_id) is None:
             raise ValueError(f"unknown model: {model_id}")
         task_id = uuid.uuid4().hex
         now = _now()
@@ -1166,7 +1202,12 @@ class TaskManager:
         self.event_bus.publish(
             task_id,
             "task_created",
-            {"task_id": task_id, "title": task.title, "status": task.status.value},
+            {
+                "task_id": task_id,
+                "title": task.title,
+                "status": task.status.value,
+                **self._task_event_revision(task, round_no=1, step=0),
+            },
         )
         self._start_run(task_id)
         return task_id
@@ -1273,85 +1314,105 @@ class TaskManager:
         t.start()
 
     def run(self, task_id: str) -> None:
-        # P1-B / ADR 0010: this worker thread is bound to the task and its
-        # workspace; tools read both from the runtime context.
-        task = self.persistence.load_task(task_id)
-        if task is None:
-            logger.warning("run: unknown task %s", task_id)
-            return
-        tokens = set_runtime_context(task_id, Path(task.workspace))
-
-        self._mutate_task(
-            task,
-            changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
-            strict=False,
+        """One round for a freshly created task (#330 shared core)."""
+        self._execute_round(
+            task_id,
+            self._prepare_new_round,
+            entry="run",
+            require_running=False,
+            flip_running=True,
         )
 
+    def _execute_round(
+        self,
+        task_id: str,
+        prepare: Callable[[Any, Task], AgentState],
+        *,
+        entry: str,
+        require_running: bool,
+        flip_running: bool,
+    ) -> None:
+        """Assemble once, invoke once, settle once — the one round runner.
+
+        New / resumed / continued rounds differ only in *admission* (request
+        side) and in how the starting state is prepared; everything from
+        runtime assembly to the ``finally`` teardown lives here so the three
+        paths cannot drift apart (#330).
+
+        ``prepare`` runs inside the try, after the runtime context is seated
+        and the record is optionally flipped to RUNNING: a checkpoint restore
+        needs the compiled graph, and a failure there must still settle the
+        record and tear down this worker's references.
+        """
+        # P1-B / ADR 0010: this worker thread is bound to the task and its
+        # workspace; tools read both from the runtime context.
+        tokens: Optional[Any] = None
         try:
-            # The directory may have disappeared while the task was queued.
-            # Fail before any file tool can recreate its root.
-            self._require_workspace(task)
-            # A fresh task has no plan file yet, so the lenient path is nearly
-            # unreachable here — but a lock must never fail the round (#260).
-            seeded = self._seed_plan_lenient(task) or {
-                "plan_text": "",
-                "plan_version": 0,
-                "plan_hash": "",
-            }
-            state: AgentState = {
-                "task_id": task_id,
-                "mode": task.mode.value,
-                "messages": [{"role": "user", "content": task.user_input}],
-                "plan_text": seeded["plan_text"],
-                "plan_version": seeded["plan_version"],
-                "plan_hash": seeded["plan_hash"],
-                "steps": [],
-                "status": "RUNNING",
-                "stop_requested": False,
-                "step_index": 0,
-                "round_steps": 0,
-                "final_answer": "",
-                "error": "",
-                "_last_action": "",
-                "_current_tool_calls": [],
-                "subtasks": [],
-                "_is_subtask": False,
-            }
+            current = self.persistence.load_task(task_id)
+            if current is None:
+                logger.warning("%s: unknown task %s", entry, task_id)
+                return
+            if require_running and current.status != TaskStatus.RUNNING:
+                # A stop() (or a newer state) won the race before this worker
+                # got here; yield to it rather than run a round it refused.
+                logger.info(
+                    "%s of %s superseded by newer state; aborting.",
+                    entry.capitalize(),
+                    task_id,
+                )
+                return
+            tokens = set_runtime_context(task_id, Path(current.workspace))
+            if flip_running:
+                # Flip only now that this worker owns the task: the context is
+                # seated first, so a failure here cannot leak a contextvar set.
+                self._mutate_task(
+                    current,
+                    changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
+                    strict=False,
+                )
+            graph = build_graph(
+                self._build_runtime(current), checkpointer=self._checkpointer
+            )
+            state = prepare(graph, current)
             self._active_states[task_id] = state
 
-            runtime = AgentRuntime(
-                task_id=task_id,
-                task_manager=self,
-                llm=self._pin_round_model(task),
-                tools=self._tools,
-                tool_schemas=self._tool_schemas,
-                max_steps=self.settings.max_steps,
-                model_profile=self.model_id_for(task),
-                reasoning_scope=self.reasoning_scope_for(self.model_id_for(task)),
-                packages=self.packages,
-                injection_fragments=self.injection_fragments,
-            )
-            graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
                 state, self._thread_config(task_id), **self._invoke_kwargs()
             )
 
-            task = self.persistence.load_task(task_id) or task
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} vanished during {entry}")
             self._finalize_terminal(task, final)
         except Exception as exc:  # pragma: no cover - defensive
-            error = self.redact(str(exc))
-            logger.error("run() crashed for task %s: %s", task_id, error)
-            self._mutate_task(
-                task,
-                changes={
-                    "status": TaskStatus.FAILED,
-                    "error": error,
-                    "updated_at": _now(),
-                },
-                strict=False,
-            )
+            message = self.redact(str(exc))
+            logger.error("%s crashed for task %s: %s", entry, task_id, message)
+            task = self.persistence.load_task(task_id)
+            if task is not None:
+                self._mutate_task(
+                    task,
+                    changes={
+                        "status": TaskStatus.FAILED,
+                        "error": message,
+                        "updated_at": _now(),
+                    },
+                    strict=False,
+                )
+            active = self._active_states.get(task_id)
+            active_round = int(active.get("round_no", 0) or 0) if active else 0
+            active_step = (int(active.get("step_index", 0) or 0) or None) if active else None
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": error}
+                task_id,
+                "task_failed",
+                {
+                    "task_id": task_id,
+                    "error": message,
+                    **self._task_event_revision(
+                        task,
+                        round_no=active_round or None,
+                        step=active_step,
+                    ),
+                },
             )
         finally:
             self._active_states.pop(task_id, None)
@@ -1359,18 +1420,114 @@ class TaskManager:
             self._stop_flags.pop(task_id, None)
             self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
-            reset_runtime_context(tokens)
-            # P0 item 4: always close the trace (success / failure / interrupt)
-            # so the JSONL terminates with a trace_end line.
+            if tokens is not None:
+                reset_runtime_context(tokens)
+            # P0 item 4: always close the trace (success / failure / interrupt /
+            # superseded) so the JSONL terminates with a trace_end line.
             if self._trace is not None:
                 self._trace.close(task_id)
 
+    def _build_runtime(self, task: Task) -> AgentRuntime:
+        """The per-round runtime; the three entries share this assembly."""
+        model_id = self.model_id_for(task)
+        return AgentRuntime(
+            task_id=task.id,
+            task_manager=self,
+            llm=self._pin_round_model(task),
+            tools=self._tools,
+            tool_schemas=self._tool_schemas,
+            max_steps=self.settings.max_steps,
+            model_profile=model_id,
+            reasoning_scope=self.reasoning_scope_for(model_id),
+            packages=self.packages,
+            injection_fragments=self.injection_fragments,
+            trace_source="main",
+            trace_owner=task.id,
+        )
+
+    def _prepare_new_round(self, _graph: Any, task: Task) -> AgentState:
+        """A fresh task starts from zero channels; the plan file seeds the plan."""
+        # The directory may have disappeared while the task was queued.
+        # Fail before any file tool can recreate its root.
+        self._require_workspace(task)
+        # A fresh task has no plan file yet, so the lenient path is nearly
+        # unreachable here — but a lock must never fail the round (#260).
+        seeded = self._seed_plan_lenient(task) or {
+            "plan_text": "",
+            "plan_version": 0,
+            "plan_hash": "",
+        }
+        return {
+            "task_id": task.id,
+            "mode": task.mode.value,
+            "messages": [{"role": "user", "content": task.user_input}],
+            "plan_text": seeded["plan_text"],
+            "plan_version": seeded["plan_version"],
+            "plan_hash": seeded["plan_hash"],
+            "steps": [],
+            "status": "RUNNING",
+            "stop_requested": False,
+            "round_no": self._round_number(task),
+            "step_index": 0,
+            "round_steps": 0,
+            "final_answer": "",
+            "error": "",
+            "_last_action": "",
+            "_current_tool_calls": [],
+            "subtasks": [],
+        }
+
+    def _prepare_restored_round(
+        self, graph: Any, task: Task, *, user_text: Optional[str] = None
+    ) -> AgentState:
+        """Seed a resumed / continued round from the durable checkpoint.
+
+        The previous run ended at END, so this invoke starts a fresh pass from
+        START over the restored channels — the conversation keeps growing
+        instead of being replayed or reset. Reset *control* flags only; plan /
+        steps survive.
+        """
+        # Bounded re-read (Issue #23): resume() already proved a durable
+        # checkpoint exists, but under load the freshly mounted store can
+        # expose the tuple a beat before its channel values are readable.
+        # Retrying the read keeps a legitimately-admitted resume from
+        # spuriously FAILEDing; reject semantics are untouched.
+        values = self._read_restorable_state(graph, task.id)
+        # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
+        # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
+        restored = cast(AgentState, values)
+        if user_text is not None:
+            restored.setdefault("messages", []).append(
+                {"role": "user", "content": user_text}
+            )
+        # The plan file is the source of truth; seed it over the checkpoint.
+        # Lenient (#260): a transient lock keeps the checkpoint's plan
+        # instead of failing the round.
+        seeded = self._seed_plan_lenient(task)
+        if seeded is not None:
+            restored["plan_text"] = seeded["plan_text"]
+            restored["plan_version"] = max(
+                seeded["plan_version"], int(restored.get("plan_version", 0))
+            )
+            restored["plan_hash"] = seeded["plan_hash"]
+        restored["mode"] = task.mode.value
+        restored["status"] = "RUNNING"
+        restored["stop_requested"] = False
+        restored["_current_tool_calls"] = []
+        restored["_last_action"] = ""
+        restored["final_answer"] = ""
+        restored["error"] = ""
+        # Budget is per round; step_index stays cumulative for record ids.
+        restored["round_steps"] = 0
+        restored["round_no"] = self._round_number(task)
+        return restored
+
     # ── control ──
     def kill_background(self, task_id: str) -> int:
-        """Reap bash background trees owned by ``task_id`` (S1 / #148 F3)."""
+        """Reap shell background trees owned by ``task_id`` (S1 / #148 F3)."""
         killed = 0
         for tool in self._tools:
-            if isinstance(tool, BashTool):
+            if isinstance(tool, ShellTool):
                 killed += tool.kill_background(task_id)
         return killed
 
@@ -1406,10 +1563,25 @@ class TaskManager:
             # Claim the announcement before publishing: _finalize_terminal will
             # see the claim and stay quiet, so a human stop is one event, not two.
             if self._claim_interrupt(task_id):
+                # The persisted record may still carry the previous round's
+                # steps (steps are saved at park time); the live state owns
+                # the round the stop actually ends. Without it a stop during
+                # round N+1 would look older than the stream and be discarded
+                # as a replay (S8).
+                active_round = int(st.get("round_no", 0) or 0) if st else 0
+                active_step = (int(st.get("step_index", 0) or 0) or None) if st else None
                 self.event_bus.publish(
                     task_id,
                     "task_interrupted",
-                    {"task_id": task_id, "status": TaskStatus.INTERRUPTED.value},
+                    {
+                        "task_id": task_id,
+                        "status": TaskStatus.INTERRUPTED.value,
+                        **self._task_event_revision(
+                            task,
+                            round_no=active_round or None,
+                            step=active_step,
+                        ),
+                    },
                 )
             return {"ok": True, "status": TaskStatus.INTERRUPTED.value}
         return {"ok": True, "status": task.status.value if task else "UNKNOWN"}
@@ -1433,6 +1605,25 @@ class TaskManager:
         teardown; a sub-agent's is popped by the executor's done callback
         (Issue #71), since a subtask never enters ``_active_states``."""
         return self._stop_flags.get(task_id, False)
+
+    # ── #330: the host surface the agent nodes / subtask executor use ──
+    def request_stop(self, task_id: str) -> None:
+        """Set the stop flag for a run that has no teardown of its own.
+
+        Only a subtask uses this: ``stop()`` parks a task *record*, while a
+        subtask is not a record — the executor sets the flag and clears it from
+        the future's done callback (Issue #71).
+        """
+        self._stop_flags[task_id] = True
+
+    def clear_stop(self, task_id: str) -> None:
+        """Drop a flag set by :meth:`request_stop` (unconditional pop)."""
+        self._stop_flags.pop(task_id, None)
+
+    @property
+    def tool_face(self) -> List[BaseTool]:
+        """The mounted tool instances; a subtask narrows this by tier."""
+        return self._tools
 
     # ── spec Issue #4: checkpoint-backed resume ──
     def _invoke_kwargs(self) -> Dict[str, Any]:
@@ -1535,43 +1726,75 @@ class TaskManager:
         stop, spent budget) is ``INTERRUPTED`` (停下), an error is ``FAILED``.
         A human stop already published ``task_interrupted`` from stop(); every
         other park publishes it here — one event per stop, whichever caused it.
+
+        The record is prepared as a detached candidate and committed through
+        the same one-dump batch path as startup reconciliation (#337). A failed
+        dump leaves the live record and ``tasks.json`` on their previous state;
+        events have still been published (the D-10 trade-off documented on
+        ``_mutate_task``).
         """
+        candidate = task.model_copy(deep=True)
         status = final.get("status") or "FAILED"
-        task.steps = [StepRecord(**self._redact_step(s)) for s in final.get("steps", [])]
-        self._settle_in_flight_steps(task)
-        task.plan_version = int(final.get("plan_version", task.plan_version))
-        task.plan_hash = str(final.get("plan_hash", task.plan_hash))
-        task.final_answer = self.redact(final.get("final_answer", "") or "")
-        rebuilt = self._conversation_from(final.get("messages"))
-        if task.conversation:
-            task.conversation = self._merge_round_turns(
-                task.conversation, rebuilt, task.final_answer
-            )
-        else:
-            # Legacy records predate the persisted conversation; rebuild once.
-            task.conversation = rebuilt
-        task.error = self.redact(final["error"]) if final.get("error") else None
-        task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
-        task.updated_at = _now()
+        candidate.steps = [
+            StepRecord(**self._redact_step(s)) for s in final.get("steps", [])
+        ]
+        self._settle_in_flight_steps(candidate)
+        candidate.plan_version = int(
+            final.get("plan_version", candidate.plan_version)
+        )
+        candidate.plan_hash = str(final.get("plan_hash", candidate.plan_hash))
+        candidate.final_answer = self.redact(final.get("final_answer", "") or "")
+        candidate.conversation = self._merge_round_turns(
+            candidate.conversation,
+            self._conversation_from(final.get("messages")),
+            candidate.final_answer,
+        )
+        candidate.error = (
+            self.redact(final["error"]) if final.get("error") else None
+        )
+        candidate.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
+        candidate.updated_at = _now()
         # Flip the status last: a poll between assignments must never see
         # "parked" carrying the previous round's steps (the redaction walk
         # above widened that window).
-        task.status = TaskStatus(status)
+        candidate.status = TaskStatus(status)
         if status == "FAILED":
             self.event_bus.publish(
-                task.id,
+                candidate.id,
                 "task_failed",
-                {"task_id": task.id, "error": task.error or "unknown error"},
+                {
+                    "task_id": candidate.id,
+                    "error": candidate.error or "unknown error",
+                    **self._task_event_revision(
+                        candidate, step=int(final.get("step_index", 0) or 0)
+                    ),
+                },
             )
-        elif self._claim_interrupt(task.id):
+        elif self._claim_interrupt(candidate.id):
             # Claim-and-publish under one contract, so a stop() racing this
             # finalize cannot also announce the same park.
             self.event_bus.publish(
-                task.id,
+                candidate.id,
                 "task_interrupted",
-                {"task_id": task.id, "status": status},
+                {
+                    "task_id": candidate.id,
+                    "status": status,
+                    **self._task_event_revision(
+                        candidate, step=int(final.get("step_index", 0) or 0)
+                    ),
+                },
             )
-        self._save_task(task, strict=False)
+        if not self.persistence.save_tasks([candidate]):
+            logger.error(
+                "could not persist finalized task %s (%s); "
+                "tasks.json was left unchanged",
+                candidate.id,
+                status,
+            )
+            return
+        # Keep the caller's reference live too: save_tasks updates the store's
+        # record, which may be a different object when the task was detached.
+        task.adopt(candidate)
 
     def _merge_round_turns(
         self, settled: List[ChatTurn], rebuilt: List[ChatTurn], final_answer: str
@@ -1615,12 +1838,44 @@ class TaskManager:
         return [*kept, ChatTurn(role="assistant", content=final_answer)]
 
     @staticmethod
+    def _task_event_revision(
+        task: Optional[Task],
+        *,
+        round_no: Optional[int] = None,
+        step: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Revision stamp for a task-level event (S8 / #334).
+
+        Task-level events carry the highest round the record has reached (or
+        the round about to start for a resume) plus the plan version. When the
+        publisher knows the live step index it includes `step` too — the state
+        can be ahead of the persisted record while a round is in flight, and
+        the web store must be able to tell that park from an older replay.
+        """
+        if task is None:
+            return {}
+        if round_no is None:
+            rounds = [record.round for record in task.steps]
+            round_no = max(rounds) if rounds else 1
+        if step is None and task.steps:
+            step = max(record.index for record in task.steps)
+        revision: Dict[str, Any] = {
+            "round": round_no,
+            "plan_version": task.plan_version,
+        }
+        if step is not None:
+            revision["step"] = step
+        return revision
+
+    @staticmethod
     def _round_number(task: Task) -> int:
         """1-based conversation round for the run about to start (#265).
 
-        One user turn opens one round. Counting the persisted turns (rather than
-        a checkpoint-only counter) keeps pre-#265 checkpoints attributable: the
-        next round is still the next user turn, even when old steps carry 0.
+        One user turn opens one round — counting the persisted turns is the one
+        definition every entry point uses (first run, resume, continuation).
+        Every record the app writes opens with its user turn; the floor keeps a
+        hand-edited record (non-empty ledger without one) from stamping round 0,
+        which the step validator would refuse on the next load.
         ``_merge_round_turns`` never replaces settled turns, so compression
         cannot shrink the ledger beneath the counter.
         """
@@ -1707,7 +1962,13 @@ class TaskManager:
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
-                {"task_id": task_id, "status": TaskStatus.RUNNING.value},
+                {
+                    "task_id": task_id,
+                    "status": TaskStatus.RUNNING.value,
+                    **self._task_event_revision(
+                        task, round_no=self._round_number(task)
+                    ),
+                },
             )
 
         t = threading.Thread(target=self._resume_run, args=(task_id,), daemon=True)
@@ -1750,99 +2011,14 @@ class TaskManager:
         raise RuntimeError(f"empty checkpoint state for task {task_id}")
 
     def _resume_run(self, task_id: str) -> None:
-        tokens = None
-        try:
-            # A stop() between our RUNNING flip and this point would otherwise
-            # be swallowed by the restored control flags below — re-check the
-            # persisted status and yield to the (newer) interrupt instead.
-            current = self.persistence.load_task(task_id)
-            if current is None or current.status != TaskStatus.RUNNING:
-                logger.info("Resume of %s superseded by newer state; aborting.", task_id)
-                return
-            tokens = set_runtime_context(task_id, Path(current.workspace))
-
-            runtime = AgentRuntime(
-                task_id=task_id,
-                task_manager=self,
-                llm=self._pin_round_model(current),
-                tools=self._tools,
-                tool_schemas=self._tool_schemas,
-                max_steps=self.settings.max_steps,
-                model_profile=self.model_id_for(current),
-                reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
-                packages=self.packages,
-                injection_fragments=self.injection_fragments,
-            )
-            graph = build_graph(runtime, checkpointer=self._checkpointer)
-
-            # Bounded re-read (Issue #23): resume() already proved a durable
-            # checkpoint exists, but under load the freshly mounted store can
-            # expose the tuple a beat before its channel values are readable.
-            # Retrying the read keeps a legitimately-admitted resume from
-            # spuriously FAILEDing; reject semantics are untouched.
-            values = self._read_restorable_state(graph, task_id)
-            # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
-            # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
-            restored = cast(AgentState, values)
-            # Reset *control* flags only; plan / steps survive.
-            # Since #139 one invoke is one round: the per-round budget restarts
-            # and the stale answer/error must not leak into this round's finish.
-            # The plan file is the source of truth; seed it over the checkpoint.
-            # Lenient (#260): a transient lock keeps the checkpoint's plan
-            # instead of failing the round.
-            seeded = self._seed_plan_lenient(current)
-            if seeded is not None:
-                restored["plan_text"] = seeded["plan_text"]
-                restored["plan_version"] = max(
-                    seeded["plan_version"], int(restored.get("plan_version", 0))
-                )
-                restored["plan_hash"] = seeded["plan_hash"]
-            restored["status"] = "RUNNING"
-            restored["stop_requested"] = False
-            restored["_current_tool_calls"] = []
-            restored["_last_action"] = ""
-            restored["final_answer"] = ""
-            restored["error"] = ""
-            restored["round_steps"] = 0
-            restored["round_no"] = self._round_number(current)
-            restored["mode"] = current.mode.value
-            self._active_states[task_id] = restored
-
-            final = graph.invoke(
-                restored, self._thread_config(task_id), **self._invoke_kwargs()
-            )
-
-            task = self.persistence.load_task(task_id)
-            if task is None:
-                raise RuntimeError(f"task {task_id} vanished during resume")
-            self._finalize_terminal(task, final)
-        except Exception as exc:
-            message = self.redact(str(exc))
-            logger.error("resume() crashed for task %s: %s", task_id, message)
-            task = self.persistence.load_task(task_id)
-            if task is not None:
-                self._mutate_task(
-                    task,
-                    changes={
-                        "status": TaskStatus.FAILED,
-                        "error": message,
-                        "updated_at": _now(),
-                    },
-                    strict=False,
-                )
-            self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": message}
-            )
-        finally:
-            self._active_states.pop(task_id, None)
-            self._threads.pop(task_id, None)
-            self._stop_flags.pop(task_id, None)
-            self._round_models.pop(task_id, None)
-            self._interrupt_announced.discard(task_id)
-            if tokens is not None:
-                reset_runtime_context(tokens)
-            if self._trace is not None:
-                self._trace.close(task_id)
+        """One round restored from the checkpoint (#330 shared core)."""
+        self._execute_round(
+            task_id,
+            self._prepare_restored_round,
+            entry="resume",
+            require_running=True,
+            flip_running=False,
+        )
 
     # ── #139: multi-turn continuation (one task = one conversation) ──
     def send_message(self, task_id: str, text: str) -> Dict[str, Any]:
@@ -2001,7 +2177,13 @@ class TaskManager:
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
-                {"task_id": task_id, "status": TaskStatus.RUNNING.value},
+                {
+                    "task_id": task_id,
+                    "status": TaskStatus.RUNNING.value,
+                    **self._task_event_revision(
+                        task, round_no=self._round_number(task)
+                    ),
+                },
             )
             snapshot = task.model_dump(mode="json")
 
@@ -2015,92 +2197,15 @@ class TaskManager:
         return {"ok": True, "status": TaskStatus.RUNNING.value, "task": snapshot}
 
     def _continue_run(self, task_id: str, user_text: Optional[str]) -> None:
-        """Run one more round on an existing conversation."""
-        tokens = None
-        try:
-            current = self.persistence.load_task(task_id)
-            if current is None or current.status != TaskStatus.RUNNING:
-                logger.info("Continuation of %s superseded by newer state; aborting.", task_id)
-                return
-            tokens = set_runtime_context(task_id, Path(current.workspace))
+        """One more round on an existing conversation (#330 shared core)."""
 
-            runtime = AgentRuntime(
-                task_id=task_id,
-                task_manager=self,
-                llm=self._pin_round_model(current),
-                tools=self._tools,
-                tool_schemas=self._tool_schemas,
-                max_steps=self.settings.max_steps,
-                model_profile=self.model_id_for(current),
-                reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
-                packages=self.packages,
-                injection_fragments=self.injection_fragments,
-            )
-            graph = build_graph(runtime, checkpointer=self._checkpointer)
+        def prepare(graph: Any, task: Task) -> AgentState:
+            return self._prepare_restored_round(graph, task, user_text=user_text)
 
-            # The previous run ended at END, so this invoke starts a fresh pass
-            # from START over the restored channels — the conversation keeps
-            # growing instead of being replayed or reset.
-            values = self._read_restorable_state(graph, task_id)
-            restored = cast(AgentState, values)
-            if user_text is not None:
-                restored.setdefault("messages", []).append(
-                    {"role": "user", "content": user_text}
-                )
-            # The plan file is the source of truth; seed it over the checkpoint.
-            # Lenient (#260): a transient lock keeps the checkpoint's plan
-            # instead of failing the round.
-            seeded = self._seed_plan_lenient(current)
-            if seeded is not None:
-                restored["plan_text"] = seeded["plan_text"]
-                restored["plan_version"] = max(
-                    seeded["plan_version"], int(restored.get("plan_version", 0))
-                )
-                restored["plan_hash"] = seeded["plan_hash"]
-            restored["mode"] = current.mode.value
-            restored["status"] = "RUNNING"
-            restored["stop_requested"] = False
-            restored["_current_tool_calls"] = []
-            restored["_last_action"] = ""
-            restored["final_answer"] = ""
-            restored["error"] = ""
-            # Budget is per round; step_index stays cumulative for record ids.
-            restored["round_steps"] = 0
-            restored["round_no"] = self._round_number(current)
-            self._active_states[task_id] = restored
-
-            final = graph.invoke(
-                restored, self._thread_config(task_id), **self._invoke_kwargs()
-            )
-
-            task = self.persistence.load_task(task_id)
-            if task is None:
-                raise RuntimeError(f"task {task_id} vanished during continuation")
-            self._finalize_terminal(task, final)
-        except Exception as exc:
-            message = self.redact(str(exc))
-            logger.error("continuation crashed for task %s: %s", task_id, message)
-            task = self.persistence.load_task(task_id)
-            if task is not None:
-                self._mutate_task(
-                    task,
-                    changes={
-                        "status": TaskStatus.FAILED,
-                        "error": message,
-                        "updated_at": _now(),
-                    },
-                    strict=False,
-                )
-            self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": message}
-            )
-        finally:
-            self._active_states.pop(task_id, None)
-            self._threads.pop(task_id, None)
-            self._stop_flags.pop(task_id, None)
-            self._round_models.pop(task_id, None)
-            self._interrupt_announced.discard(task_id)
-            if tokens is not None:
-                reset_runtime_context(tokens)
-            if self._trace is not None:
-                self._trace.close(task_id)
+        self._execute_round(
+            task_id,
+            prepare,
+            entry="continuation",
+            require_running=True,
+            flip_running=False,
+        )

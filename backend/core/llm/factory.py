@@ -62,6 +62,7 @@ def build_llm_client(
             max_tokens=max_tokens,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
+            transport=transport,
         )
     raise ValueError(
         f"不支持的协议：{protocol!r}；可选：{', '.join(SUPPORTED_PROTOCOLS)}"

@@ -23,7 +23,7 @@ describe("stepSummary (#287 重复回答修复)", () => {
   });
 
   it("无 thought → 工具名 join('、')", () => {
-    expect(stepSummary(step("", ["read_file", "bash"]))).toBe("read_file、bash");
+    expect(stepSummary(step("", ["read_file", "shell"]))).toBe("read_file、shell");
   });
 
   it("空 thought 且无工具 → 「步骤」", () => {

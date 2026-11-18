@@ -2,14 +2,12 @@ import { describe, expect, it } from "vitest";
 import type {
   DiscoverCandidate,
   ModelEntry,
-  ModelProfile,
   Provider,
 } from "../types";
 import {
   customModelError,
   discoveryBlockedReason,
   discoveryFailureNote,
-  entriesFromProfiles,
   entryProviderId,
   findEntryByModel,
   firstFormError,
@@ -81,42 +79,6 @@ const values = (overrides: Partial<ProviderFormValues> = {}): ProviderFormValues
   base_url: "https://api.example.com/v1",
   api_key_env: "MY_API_KEY",
   ...overrides,
-});
-
-describe("entriesFromProfiles (legacy /api/models compat projection)", () => {
-  it("keeps the entry half and its provider id", () => {
-    const profile: ModelProfile = {
-      id: "e1",
-      name: "Chat",
-      base_url: "https://api.example.com/v1",
-      model: "chat-1",
-      api_key_env: "K",
-      preset: false,
-      key_set: true,
-      key_source: "pasted",
-      provider_id: "p1",
-      protocol: PROTOCOL_OPENAI,
-    };
-    expect(entriesFromProfiles([profile])).toEqual([
-      { id: "e1", provider_id: "p1", model: "chat-1", name: "Chat" },
-    ]);
-  });
-
-  it("falls back to the entry id when a pre-v2 row has no provider_id", () => {
-    const profile = {
-      id: "legacy",
-      name: "旧配置",
-      base_url: "https://x/v1",
-      model: "m",
-      api_key_env: "K",
-      preset: false,
-      key_set: false,
-      key_source: "none",
-      provider_id: "",
-      protocol: PROTOCOL_OPENAI,
-    } as ModelProfile;
-    expect(entriesFromProfiles([profile])[0].provider_id).toBe("legacy");
-  });
 });
 
 describe("groupByProvider / selectGroups", () => {

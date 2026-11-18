@@ -149,7 +149,7 @@ def test_every_smoke_list_entry_exists_on_disk() -> None:
 # 现状锚：这 6 个既有 marker 文件都已在清单里（自测③逐个验它们确实带标记）。
 _EXPECTED_MARKER_FILES = frozenset(
     {
-        "backend/tests/test_bash_tool.py",
+        "backend/tests/test_shell_tool.py",
         "backend/tests/test_gitignore_visibility.py",
         "backend/tests/test_p2_mcp.py",
         "backend/tests/test_static_guard.py",

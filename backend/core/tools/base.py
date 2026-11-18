@@ -1,10 +1,10 @@
 """Base tool contract.
 
 Every tool exposes ``name`` / ``description`` / ``args_schema`` (a JSON Schema
-fragment for the function-calling interface) / ``requires_confirm`` /
-``registers_artifact`` and implements :meth:`run`. Tools must return a
-:class:`ToolResult` and never raise an uncaught exception into the kernel — the
-kernel also wraps ``run`` in a try/except as a final safety net.
+fragment for the function-calling interface) / ``registers_artifact`` and
+implements :meth:`run`. Tools must return a :class:`ToolResult` and never raise
+an uncaught exception into the kernel — the kernel also wraps ``run`` in a
+try/except as a final safety net.
 """
 
 from __future__ import annotations
@@ -32,13 +32,12 @@ class BaseTool(ABC):
     name: str = ""
     description: str = ""
     args_schema: Dict[str, Any] = field(default_factory=dict)  # JSON Schema (parameters)
-    requires_confirm: bool = False
     # Whether a write by this tool is collected into ``SubTaskResult.artifacts``
     # (issue #72: product = what the task wrote). Collection needs both halves:
     # the class declares True *and* the result advertises the written file under
     # ``data["path"]`` as a real file. Read-only tools keep this False even when
     # their result carries a ``path`` (``read`` does). A tool that writes files
-    # without advertising one under ``path`` (``bash``) stays False too — it has
+    # without advertising one under ``path`` (``shell``) stays False too — it has
     # no single deliverable to collect. The parent task's artifact ledger is
     # retired (C5 #160); only the sub-agent result consumes this flag now.
     registers_artifact: bool = False
@@ -63,4 +62,4 @@ class BaseTool(ABC):
         }
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"<{self.__class__.__name__} name={self.name!r} confirm={self.requires_confirm}>"
+        return f"<{self.__class__.__name__} name={self.name!r}>"

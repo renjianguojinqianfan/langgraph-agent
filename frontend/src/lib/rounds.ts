@@ -2,31 +2,25 @@ import type { ChatTurn, StepRecord } from "../types";
 
 export interface Round {
   /** 1-based conversation round, matching the backend's user-turn count. Used
-   * to attribute steps (#265); never rendered. 0 = leading assistant-only block. */
+   * to attribute steps (#265); never rendered. */
   index: number;
-  user: ChatTurn | null;
+  user: ChatTurn;
   answers: ChatTurn[];
 }
 
 /**
- * Split the flat conversation into rounds at each user turn. Assistant turns
- * before the first user turn stay in a leading round without a user bubble;
- * that block is index 0 so it does not shift the backend's round numbers.
+ * Split the flat conversation into rounds at each user turn. The backend's
+ * current contract opens every ledger with the user's first turn (ADR 0013
+ * decision 1), so rounds are exactly the user turns and their following
+ * assistant answers.
  */
 export function splitRounds(conversation: ChatTurn[]): Round[] {
   const rounds: Round[] = [];
-  let userRounds = 0;
   for (const turn of conversation) {
-    const current = rounds[rounds.length - 1];
-    if (turn.role === "user" || !current) {
-      if (turn.role === "user") userRounds += 1;
-      rounds.push({
-        index: turn.role === "user" ? userRounds : 0,
-        user: turn.role === "user" ? turn : null,
-        answers: turn.role === "user" ? [] : [turn],
-      });
+    if (turn.role === "user") {
+      rounds.push({ index: rounds.length + 1, user: turn, answers: [] });
     } else {
-      current.answers.push(turn);
+      rounds[rounds.length - 1]?.answers.push(turn);
     }
   }
   return rounds;
@@ -44,24 +38,14 @@ export type TurnVerdict = "failed" | "running" | "done";
  * after a hard kill carries the dead attempt as a failed step, while the
  * answer that followed is what the round delivered. `live` keeps 执行中 while
  * the round is still running even if its last persisted step already closed.
- * The `some(running)` fallback only covers records written before startup
- * settlement existed; a live round never leaves an earlier step running.
+ * A live round never leaves an earlier step running (startup settlement closes
+ * stale steps), so the last step is the only verdict source.
  */
 export function turnVerdict(steps: StepRecord[], live: boolean): TurnVerdict {
   const last = steps[steps.length - 1];
   if (last?.status === "failed") return "failed";
   if (live || last?.status === "running") return "running";
-  if (steps.some((step) => step.status === "running")) return "running";
   return "done";
-}
-
-/**
- * Steps persisted before #265 (no round). They are rendered once as a legacy
- * block instead of being guessed into the last round — that guess caused the
- * cross-round leak this field exists to remove.
- */
-export function legacySteps(steps: StepRecord[]): StepRecord[] {
-  return steps.filter((step) => step.round == null || step.round === 0);
 }
 
 /**

@@ -6,7 +6,7 @@ that escape the root, and non-existent files are rejected. Successful writes
 return the absolute path (the workspace file list picks it up).
 
 Each capability is its own ``BaseTool`` so the function schema and the
-per-tool confirm policy stay focused:
+per-tool argument contract stay focused:
 
 * :class:`ReadTool` (``read``, line pagination + line numbers),
 * :class:`WriteTool` (``write``, whole-file create/overwrite),
@@ -28,8 +28,9 @@ from functools import lru_cache
 from pathlib import Path, PurePath
 from typing import Any
 
+from ...config import Settings
 from ...utils.logging import get_logger
-from ..runtime_context import get_current_workspace, workspace_root
+from ..runtime_context import workspace_root
 from ..workspace_files import resolve_in_workspace, workspace_files
 from .base import BaseTool, ToolResult
 from .registry import register
@@ -94,19 +95,25 @@ def _matches_glob(rel: Path, pattern: str) -> bool:
 class _SandboxedTool(BaseTool):
     """Base for the discrete file tools.
 
-    Confines every path to the task workspace (runtime context, falling back to
-    ``Settings.artifacts_path``). Local FS operations are deterministic and need
-    no human confirmation (workspace-confined file writes are not on the
-    AGENTS.md danger list).
+    Confines every path to the task workspace (the seated runtime context, or
+    ``Settings.artifacts_path`` outside a run). The workspace root is an
+    explicit dependency: constructing a file tool without ``Settings`` is an
+    error rather than a silent trip to a process-wide ``data/artifacts``
+    (#331). Local FS operations are deterministic; workspace-confined file
+    writes are not on the AGENTS.md danger list.
     """
 
-    requires_confirm = False
+    def __init__(self, settings: Settings | None = None) -> None:
+        if settings is None:
+            raise ValueError(
+                "file tools require an explicit Settings for the workspace "
+                "root; construct them through build_tools(settings)"
+            )
+        super().__init__(settings)
+        self._workspace_settings: Settings = settings
 
     def _workspace(self) -> Path:
-        if self.settings is not None:
-            return workspace_root(self.settings)
-        current = get_current_workspace()
-        return current if current is not None else Path("data/artifacts")
+        return workspace_root(self._workspace_settings)
 
     def _root_resolved(self) -> Path:
         root = self._workspace().resolve()
@@ -425,10 +432,8 @@ class GlobTool(_SandboxedTool):
                 for p in workspace_files(base):
                     if not _matches_glob(p.relative_to(base), pattern):
                         continue
-                    rp = p.resolve()
-                    if rp != root and root not in rp.parents:
-                        continue  # symlink-escape guard
-                    found.add(rp.relative_to(root).as_posix())
+                    # workspace_files already resolved and escape-filtered it.
+                    found.add(p.relative_to(root).as_posix())
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("glob failed")
             return ToolResult(success=False, error=str(exc))
@@ -513,9 +518,9 @@ class GrepTool(_SandboxedTool):
         try:
             if base.exists():
                 for p in workspace_files(base):
-                    rp = p.resolve()
+                    rp = p  # already resolved and escape-filtered by workspace_files
                     if rp != root and root not in rp.parents:
-                        continue  # symlink-escape guard
+                        continue
                     if name_filter and not fnmatch.fnmatch(rp.name, name_filter):
                         continue
                     try:

@@ -34,9 +34,9 @@ export interface ToolCallRecord {
 
 export interface StepRecord {
   index: number;
-  /** 1-based conversation round this step belongs to (#265). Absent/0 on
-   * records persisted before the field existed; those render as a legacy block. */
-  round?: number;
+  /** 1-based conversation round this step belongs to (#265). Required: the
+   * backend refuses a record without it (ADR 0013 decision 1). */
+  round: number;
   thought: string;
   tool_calls: ToolCallRecord[];
   status: string; // pending | running | done | failed
@@ -138,27 +138,6 @@ export type ModelKeySource = "pasted" | "env" | "none";
  * non-empty `reasoning_effort` at the write face (readable 400;
  * `thinking=false` is allowed). */
 export type ModelProtocol = "openai-compatible" | "anthropic";
-
-/** Public v1-shaped model profile: the legacy `/api/models` compatibility
- * projection (old fields + `provider_id` / `protocol`); keys never travel. */
-export interface ModelProfile {
-  id: string;
-  name: string;
-  base_url: string;
-  model: string;
-  api_key_env: string;
-  preset: boolean;
-  key_set: boolean;
-  key_source: ModelKeySource;
-  /** #243 P2-2: the provider this entry belongs to (v2 projection). */
-  provider_id: string;
-  protocol: ModelProtocol;
-}
-
-export interface ModelsData {
-  default: string;
-  models: ModelProfile[];
-}
 
 export type ReasoningEffort = "low" | "medium" | "high";
 
@@ -313,6 +292,7 @@ export type SSEventType =
   | "subtask_start" // #70-A: {subtask_id, name, status, parent_task_id}（父频道）
   | "subtask_result" // #70-A: {subtask_id, name, status, summary, artifacts}（父频道）
   | "subtask_failed" // #70-A: {subtask_id, name, error}（父频道）
+  | "llm_call" // S7: {call_id, status, summary, task_id, attempts}（轻量摘要）
   | "trace_end" // 仅 trace 回放面（见上方说明）
   | "heartbeat";
 

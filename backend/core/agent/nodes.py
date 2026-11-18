@@ -23,7 +23,6 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from ...config import get_settings
 from ...services import plan_file
 from ...services.plan_file import extract_plan, plan_hash, write_plan
 from ...utils.logging import get_logger
@@ -31,10 +30,12 @@ from ..capability_packages import INJECTION_SKILLS
 from ..capability_packages import (
     injection_fragments as resolve_injection_fragments,
 )
+from ..llm.trace import llm_call_scope
 from ..runtime_context import workspace_root
 from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
+from .host import AgentHost
 from .policy import DangerPolicy
 from .prompts import EXECUTOR_SYSTEM, planner_system
 from .state import AgentState
@@ -119,7 +120,7 @@ class AgentRuntime:
     def __init__(
         self,
         task_id: str,
-        task_manager: Any,
+        task_manager: AgentHost,
         llm: Any,
         tools: List[BaseTool],
         tool_schemas: List[Dict[str, Any]],
@@ -129,10 +130,16 @@ class AgentRuntime:
         reasoning_scope: str = "",
         packages: Optional[frozenset[str]] = None,
         injection_fragments: Optional[frozenset[str]] = None,
+        trace_source: str = "main",
+        trace_owner: Optional[str] = None,
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
         self.model_profile = model_profile
+        #: S7: trace attribution for every model call this runtime makes.
+        #: A subagent reports under the parent task with source="subagent".
+        self.trace_source = trace_source
+        self.trace_owner = trace_owner or task_id
         #: D-39: "<provider_id>:<protocol>" of the model this round runs with.
         #: Assistant reasoning is only replayed to the same scope; the value
         #: tags message provenance and never leaves the graph.
@@ -156,7 +163,7 @@ class AgentRuntime:
         # P1-A′: discover + merge once per task (task-level cache); mid-task edits
         # to AGENTS.md intentionally do not take effect. Subtask graphs share this
         # __init__, so they receive the same block with no extra code.
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        settings = self.tm.settings
         # S2 (#136): the danger rule table is compiled once per task, same snapshot
         # discipline as the injection block below — mid-task edits take effect on
         # the NEXT task. An empty table compiles to zero rules and `check` always
@@ -176,17 +183,36 @@ class AgentRuntime:
         # context (neither tool call nor delegation).
         self._planner_system: str = planner_system(
             packages,
-            subagent_enabled=getattr(settings, "subagent_enabled", True),
+            subagent_enabled=settings.subagent_enabled,
         )
         self._inject_block: str = (
             inject.build_inject_block(settings, include_skills=include_skills)
-            if getattr(settings, "context_inject_enabled", True)
+            if settings.context_inject_enabled
             else ""
         )
 
     # ── helpers ──
-    def _publish(self, event_type: str, data: Dict[str, Any]) -> None:
-        self.tm.event_bus.publish(self.task_id, event_type, data)
+    @staticmethod
+    def _revision(state: AgentState) -> Dict[str, Any]:
+        """The explicit revision S8 stamps on every runtime event."""
+        return {
+            "round": int(state.get("round_no", 1) or 1),
+            "step": int(state.get("step_index", 0) or 0),
+            "plan_version": int(state.get("plan_version", 0) or 0),
+        }
+
+    def _publish(
+        self, event_type: str, data: Dict[str, Any], state: AgentState
+    ) -> None:
+        """Publish one runtime event stamped with its explicit revision.
+
+        S8 (#334): clients decide whether an event is newer from
+        ``(round, step, plan_version)``; a step-array length is not a sequence.
+        State is required so no call site can forget the stamp.
+        """
+        self.tm.event_bus.publish(
+            self.task_id, event_type, {**data, **self._revision(state)}
+        )
 
     def _stopped(self, state: AgentState) -> bool:
         """Authoritative stop check (Issue #4).
@@ -199,9 +225,7 @@ class AgentRuntime:
         """
         if state.get("stop_requested"):
             return True
-        tm = getattr(self, "tm", None)
-        checker = getattr(tm, "is_stop_flagged", None)  # test fakes may not ship it
-        if callable(checker) and any(checker(watched) for watched in self._stop_watch_ids):
+        if any(self.tm.is_stop_flagged(watched) for watched in self._stop_watch_ids):
             state["stop_requested"] = True
             return True
         return False
@@ -221,7 +245,7 @@ class AgentRuntime:
         (C6) and is outside the compression input, so compression cannot drop
         it; when the version changes, exactly one gray note records it.
         """
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        settings = self.tm.settings
         # The previous call's injected plan is stale input for eviction,
         # compression and the summarizer; the current file is appended below.
         messages = plan_file.strip_plan_messages(state.get("messages", []) or [])
@@ -249,24 +273,28 @@ class AgentRuntime:
                         self._publish(
                             "tool_result_evicted",
                             {"step_index": state.get("step_index", 0), **ev},
+                            state,
                         )
             except Exception:  # pragma: no cover - defensive
                 logger.warning("tool-result eviction failed; continuing without it", exc_info=True)
         # Compression summaries use the main model (ADR 0009: no separate
         # summarisation model).
-        compressed, meta = compress_messages(
-            messages,
-            budget=settings.context_token_budget,
-            keep_recent=settings.context_keep_recent,
-            max_messages=settings.context_max_messages,
-            strategy=settings.context_compress_strategy,
-            llm=self.llm if settings.context_compress_strategy == "summarize" else None,
-            summary_max_tokens=settings.context_summary_max_tokens,
-            trace_ref=trace_ref,
-            head_chars=settings.context_evict_head_chars,
-            tail_chars=settings.context_evict_tail_chars,
-            redact=self._redact,
-        )
+        with self._llm_scope("compaction", state):
+            compressed, meta = compress_messages(
+                messages,
+                budget=settings.context_token_budget,
+                keep_recent=settings.context_keep_recent,
+                max_messages=settings.context_max_messages,
+                strategy=settings.context_compress_strategy,
+                llm=self.llm
+                if settings.context_compress_strategy == "summarize"
+                else None,
+                summary_max_tokens=settings.context_summary_max_tokens,
+                trace_ref=trace_ref,
+                head_chars=settings.context_evict_head_chars,
+                tail_chars=settings.context_evict_tail_chars,
+                redact=self._redact,
+            )
         state["context_tokens"] = meta["context_tokens"]
         if meta["compressed"]:
             state["messages"] = compressed
@@ -284,6 +312,7 @@ class AgentRuntime:
                         "model": getattr(self.llm, "model", ""),
                         "model_profile": self.model_profile,
                     },
+                    state,
                 )
             except Exception:  # pragma: no cover - event is optional
                 logger.warning("failed to publish context_compressed event", exc_info=True)
@@ -331,23 +360,33 @@ class AgentRuntime:
 
     def _redact(self, text: str) -> str:
         """Strip known keys before an error reaches state / SSE / trace."""
-        redact = getattr(getattr(self, "tm", None), "redact", None)
-        return redact(text) if callable(redact) else text
+        return self.tm.redact(text)
+
+    def _llm_scope(self, source: str, state: AgentState) -> Any:
+        """Attribution for one model call (S7): owner, source, round, step."""
+        revision = self._revision(state)
+        return llm_call_scope(
+            owner_task_id=self.trace_owner,
+            source=source,
+            round_no=int(revision["round"]),
+            step=int(revision["step"]),
+            sink=self.tm.trace_sink(self.trace_owner),
+            # S8: the summary is a live event like any other; it carries the
+            # same revision fields as every other runtime event.
+            publish_summary=lambda payload: self.tm.publish_llm_call(
+                self.trace_owner, {**payload, **revision}
+            ),
+            redact=self._redact,
+        )
 
     def _reasoning_for_display(self, text: str) -> str:
         """D-38: redacted + bounded reasoning copy for SSE / persistence.
 
-        The real manager owns the single truncation seam; the fallback keeps
-        test fakes (which have no redact_reasoning) working.
+        The host owns the single truncation seam (TaskManager.redact_reasoning).
         """
         if not text:
             return ""
-        redact_reasoning = getattr(
-            getattr(self, "tm", None), "redact_reasoning", None
-        )
-        if callable(redact_reasoning):
-            return redact_reasoning(text)
-        return self._redact(text)
+        return self.tm.redact_reasoning(text)
 
     def _stamp_reasoning(self, turn: Dict[str, Any], reasoning: str) -> None:
         """Attach raw reasoning for protocol replay + its D-39 provenance.
@@ -469,6 +508,7 @@ class AgentRuntime:
                 "model": getattr(self.llm, "model", ""),
                 "model_profile": self.model_profile,
             },
+            state,
         )
 
         if mode == PLAN_MODE:
@@ -529,7 +569,9 @@ class AgentRuntime:
         step["thought"] = answer
         step["reasoning"] = resp.reasoning_content or ""
         self._publish(
-            "final_answer", self._final_answer_payload(answer, resp.reasoning_content)
+            "final_answer",
+            self._final_answer_payload(answer, resp.reasoning_content),
+            state,
         )
         state["_last_action"] = "final_answer"
         return state
@@ -543,7 +585,8 @@ class AgentRuntime:
         """One plan-mode LLM call; ``None`` means the error path already settled."""
         messages = self._build_messages(state, system)
         try:
-            return self.llm.complete(messages, tools=schemas)
+            with self._llm_scope(self.trace_source, state):
+                return self.llm.complete(messages, tools=schemas)
         except Exception as exc:
             message = self._redact(str(exc))
             logger.error("agent LLM error (plan mode): %s", message)
@@ -555,10 +598,11 @@ class AgentRuntime:
     def _build_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
         """Build mode: every mounted tool, with the current plan as a brief."""
         try:
-            resp = self.llm.complete(
-                self._build_messages(state, EXECUTOR_SYSTEM),
-                tools=self.tool_schemas,
-            )
+            with self._llm_scope(self.trace_source, state):
+                resp = self.llm.complete(
+                    self._build_messages(state, EXECUTOR_SYSTEM),
+                    tools=self.tool_schemas,
+                )
         except Exception as exc:
             message = self._redact(str(exc))
             logger.error("agent LLM error (build mode): %s", message)
@@ -582,7 +626,9 @@ class AgentRuntime:
         step["thought"] = answer
         step["reasoning"] = resp.reasoning_content or ""
         self._publish(
-            "final_answer", self._final_answer_payload(answer, resp.reasoning_content)
+            "final_answer",
+            self._final_answer_payload(answer, resp.reasoning_content),
+            state,
         )
         state["_last_action"] = "final_answer"
         return state
@@ -646,11 +692,11 @@ class AgentRuntime:
         state.setdefault("messages", []).append(assistant_turn)
         for rec in tcs:
             step["tool_calls"].append(rec)
-            self._publish("tool_call", self._public_record(rec))
+            self._publish("tool_call", self._public_record(rec), state)
             if rec["status"] == "skipped":
                 # S2 (#136): a policy refusal is delivered here, at the point of
                 # decision, and never handed to the tool node.
-                self._publish("tool_result", rec)
+                self._publish("tool_result", rec, state)
                 self._feed_blocked(state, rec)
 
         state["_last_action"] = "tool_call"
@@ -762,7 +808,7 @@ class AgentRuntime:
                 else:
                     rec["error"] = f"unknown tool: {rec['tool_name']}"
                 rec["input"] = self._redact_value(rec.get("input"))
-                self._publish("tool_result", rec)
+                self._publish("tool_result", rec, state)
                 self._feed_tool_failure(state, rec)
                 continue
 
@@ -779,7 +825,7 @@ class AgentRuntime:
             rec["status"] = "success" if result.success else "failed"
             rec["output"] = self._redact_value(result.data)
             rec["error"] = self._redact(result.error or "")
-            self._publish("tool_result", rec)
+            self._publish("tool_result", rec, state)
 
             # Feed the tool result back into the conversation: the payload
             # verbatim on success, the reason on failure (#95 — a bare ``null``
@@ -882,7 +928,7 @@ class AgentRuntime:
         steps = state.get("steps") or []
         if steps:
             last = steps[-1]
-            same_round = last.get("round", 0) == int(state.get("round_no", 1) or 1)
+            same_round = last.get("round") == int(state.get("round_no", 1) or 1)
             if same_round and last.get("status") == "running":
                 answered = bool(state.get("final_answer")) and not state.get("error")
                 last["status"] = "done" if answered else "failed"

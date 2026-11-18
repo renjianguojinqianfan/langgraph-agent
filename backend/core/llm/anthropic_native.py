@@ -6,7 +6,7 @@ module translates it to the Anthropic Messages API content blocks and back:
 text / tool_use / tool_result out, text / tool_use / thinking in.
 
 Scope of this slice (D-35):
-* only **non-streaming** ``complete()``; ``stream()`` raises a readable error;
+* only ``complete()`` — the reserved ``stream()`` seat was retired in #330;
 * ``thinking`` / ``reasoning_effort`` are **refused at build time** — the
   tool loop needs the previous turn's thinking block *with its signature*,
   which the OpenAI-shaped history cannot preserve (ADR 0011);
@@ -19,10 +19,11 @@ callers go through :func:`backend.core.llm.factory.build_llm_client`.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, List
 
 from .client import LLMClient, LLMResponse
-from .protocols import DEFAULT_TEMPERATURE
+from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_ANTHROPIC
+from .trace import capture_http_request, capture_http_response
 
 ANTHROPIC_VERSION = "2023-06-01"
 #: Messages API requires max_tokens; 4096 keeps a normal non-streaming answer
@@ -32,6 +33,8 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
 
 class AnthropicClient(LLMClient):
     """Non-streaming Anthropic Messages client over httpx."""
+
+    protocol = PROTOCOL_ANTHROPIC
 
     def __init__(
         self,
@@ -86,7 +89,15 @@ class AnthropicClient(LLMClient):
             return f"{self.base_url}/messages"
         return f"{self.base_url}/v1/messages"
 
-    def complete(
+    def _request_snapshot(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._build_payload(messages, tools, kwargs)
+
+    def _complete(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
@@ -105,6 +116,10 @@ class AnthropicClient(LLMClient):
                 timeout=self.timeout,
                 transport=self._transport,
                 follow_redirects=False,
+                event_hooks={
+                    "request": [capture_http_request],
+                    "response": [capture_http_response],
+                },
             ) as client:
                 response = client.post(self._messages_url(), json=payload, headers=headers)
         except httpx.TimeoutException as exc:
@@ -123,16 +138,6 @@ class AnthropicClient(LLMClient):
         except ValueError as exc:
             raise RuntimeError("Anthropic 返回的不是合法 JSON。") from exc
         return self._parse_response(data)
-
-    def stream(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Iterator[LLMResponse]:
-        raise NotImplementedError(
-            "Anthropic 适配器本章只支持非流式 complete()（D-35）"
-        )
 
     # ── request mapping ──
     def _build_payload(

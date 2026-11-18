@@ -25,7 +25,7 @@ import tempfile
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, Optional
 
 import yaml
@@ -373,6 +373,31 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
     return make_isolated_settings(**base)
 
 
+def make_agent_host(
+    settings: Settings,
+    event_bus: Any = None,
+    **overrides: Any,
+) -> SimpleNamespace:
+    """A minimal :class:`~backend.core.agent.host.AgentHost` double (#330).
+
+    Node-level tests drive one or two nodes directly, but the nodes read the
+    host through a Protocol with no ``getattr`` fallback — so the double must
+    provide the same members production does. Overrides let a test record
+    events on its own bus or assert a redaction call.
+    """
+    base: dict[str, Any] = dict(
+        settings=settings,
+        event_bus=event_bus if event_bus is not None else EventBus(),
+        is_stop_flagged=lambda _task_id: False,
+        redact=lambda text: text,
+        redact_reasoning=lambda text: text,
+        trace_sink=lambda _task_id: None,
+        publish_llm_call=lambda _task_id, _payload: None,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
 def make_manager(
     settings: Settings,
     mock: MockLLMClient | None = None,
@@ -389,6 +414,12 @@ def make_manager(
     releases its process-level resources (MCP children, checkpoint sqlite
     connection) even when a test forgets to call ``shutdown()``.
     """
+    # Mirror build_runtime(): production sanitizes NO_PROXY before the first
+    # env-reading HTTP client exists. Tests that build a real client through
+    # this seam must not inherit a harness proxy list that httpx cannot parse.
+    from backend.utils.net import normalize_no_proxy
+
+    normalize_no_proxy()
     eb = event_bus or EventBus()
     persistence = persistence or Persistence(settings)
     # packages=<set> exercises the capability-package assembler: the manager

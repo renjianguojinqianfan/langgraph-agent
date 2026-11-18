@@ -12,9 +12,9 @@ from __future__ import annotations
 # below. Their order is dictated by the ruff isort gate (pyproject.toml) and
 # deliberately carries no grouping narrative.
 from .base import BaseTool, ToolResult
-from .bash import BashTool
 from .file_io import EditTool, GlobTool, GrepTool, LsTool, ReadTool, WriteTool
 from .registry import build_tools, get_tool, list_tools, register
+from .shell import ShellTool
 from .skill_tool import LoadSkillTool
 from .subagent_tool import SpawnSubagentTool
 from .web_search import WebSearchTool
@@ -33,7 +33,7 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "LsTool",
-    "BashTool",
+    "ShellTool",
     "SpawnSubagentTool",
     "LoadSkillTool",
 ]

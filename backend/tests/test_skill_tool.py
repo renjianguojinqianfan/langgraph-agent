@@ -306,9 +306,15 @@ def test_registered_in_build_tools(settings: Settings) -> None:
     assert "load_skill" in names
 
 
-def test_policy_flags(settings: Settings) -> None:
+def test_no_confirm_metadata(settings: Settings) -> None:
+    """#331 retired the inert confirmation field; the schema never exposed it."""
     tool = LoadSkillTool(settings)
-    assert tool.requires_confirm is False
+    assert not hasattr(tool, "requires_confirm")
+    assert set(tool.to_openai_schema()["function"]) == {
+        "name",
+        "description",
+        "parameters",
+    }
 
 
 def test_openai_schema_required_name(settings: Settings) -> None:

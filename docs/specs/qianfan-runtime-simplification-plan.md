@@ -1,7 +1,7 @@
 # qianfan 内核简化、共享交互与调用观测实施计划
 
-> 状态：**目标已由本次 grilling 确认；实施尚未授权**。本文只提出工程切片、接口约束和验收要求，不代表相关功能已经实现。
-> 源码基线：`bd1151afe3459bd3e1b1f63ebccd6ebcbe799c41`。依据：[历史与维护成本审计](../history-and-maintainability-audit-2026-11.md)及后续用户裁定。审计、证据、预防规则与本文按作者 2026-11-17 的授权分批提交、推送并开 PR #339；本文仍不授权代码实施、合并、清空数据或修改用户级配置。
+> 状态：**目标已由本次 grilling 确认；作者 2026-11-18 已授权 S0–S12 按 B 模型实施**（单集成分支 + 单 PR）。本文提出工程切片、接口约束和验收要求；实施进度以子票、集成分支与 PR 为准，不以本文代替完成证据。
+> 源码基线：`bd1151afe3459bd3e1b1f63ebccd6ebcbe799c41`。依据：[历史与维护成本审计](../history-and-maintainability-audit-2026-11.md)及后续用户裁定。审计、证据、预防规则与本文按作者 2026-11-17 的授权分批提交、推送并开 PR #339；本文仍不授权合并、清空数据或修改用户级配置。
 > 发布模型：作者 2026-11-18 裁定 S0–S12 采用**单集成分支 + 单 PR**（`spec/326-kernel-simplification`），覆盖原「一个切片一个分支、一个 PR」；每片仍有独立提交、验收与报告，`S5`+`S6` 仍是一个原子交付单元。
 
 ## 1. 已确认的目标与边界
@@ -33,7 +33,7 @@
 | Provider 的最后请求组装与原始响应在适配器内 | [openai_compat.py:88–120](../../backend/core/llm/openai_compat.py#L88)、[anthropic_native.py:89–125](../../backend/core/llm/anthropic_native.py#L89) | 从最终 Provider 请求取证，不能从 Task/对话列表事后重建 |
 | `LLMResponse.raw` 已承接 Provider 原始响应，usage 可能已在其中 | [client.py:26–37](../../backend/core/llm/client.py#L26)、[anthropic_native.py:379](../../backend/core/llm/anthropic_native.py#L379) | 不宣称 usage 已丢失；提取实际返回值，未返回就标未知 |
 | OpenAI 构造未指定 `max_retries`；本机安装 SDK 默认值为 2 | [openai_compat.py:56](../../backend/core/llm/openai_compat.py#L56)、[依赖约束](../../requirements.txt) | 没有应用层 retry 循环不能证明没有 HTTP 重试；实施时复核钉版 SDK，区分逻辑调用与尝试 |
-| 当前命令工具明确执行 `bash -c`，同时承担 Job、停止、超时和有界输出 | [bash.py:531–659](../../backend/core/tools/bash.py#L531) | 切换 Shell 不能顺带删掉通用执行保障 |
+| 当前命令工具明确执行 `bash -c`，同时承担 Job、停止、超时和有界输出 | [shell.py](../../backend/core/tools/shell.py) | 切换 Shell 不能顺带删掉通用执行保障 |
 | 文件 API 完整扫描后才截前 2000 项，面板按固定两秒轮询 | [routes.py:714–740](../../backend/api/routes.py#L714)、[FilePane.tsx:44–75](../../frontend/src/components/dash/FilePane.tsx#L44) | 先减少请求放大，再优化枚举；不能把响应限额当扫描限额 |
 
 ### Shell 已有证据及未验部分
@@ -55,7 +55,7 @@
 | 后台生命周期 | 启动/发现/就绪/状态/显式停止 | 唯一服务进程、锁、端口、配置与资源关闭；客户端不持有运行时 |
 | 任务运行 | 当前 Task + 准入 + 单轮执行/收尾 | 新建、恢复、续说、停止和终态；三种入口不再各维护一套执行核心 |
 | 模型解析与适配 | 明确的 `ResolvedModel` + `LLMClient.complete` | 当前模型解析、参数继承、协议适配；不依赖旧 profile 投影，凭据不进入可公开序列化配置 |
-| 命令执行 | 一个命令工具，显式 Shell 选择 + 共同执行结果 | 工作区、环境过滤、输出限制、超时、停止和进程树；Shell 分支只处理发现/启动/语义 |
+| 命令执行 | 一个命令工具 `shell`（参数 `command` / `shell` / `timeout`），显式 Shell 选择 + 共同执行结果 | 工作区、环境过滤、输出限制、超时、停止和进程树；Shell 分支只处理发现/启动/语义 |
 | 模型调用记录 | 扩展现有 `TraceRecorder` / 任务 trace；不可变调用上下文 + 实际请求尝试 + 脱敏副本 | 关联、完整性、脱敏和生命周期；不新建平行存储，不影响模型决策或重试 |
 | Web / 终端 | 当前任务 API + SSE + 按需详情 | 展示与用户操作；不直接访问 Persistence、EventBus 或 TaskManager 私有状态 |
 
@@ -76,7 +76,7 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 - 服务进程独立于终端客户端存活；单例锁归服务所有。并发冷启动只能有一个服务进入运行时装配和写盘。
 - 沿用现有 FastAPI + REST/SSE，不迁到 LangGraph Agent Server，也不引入第三方平台。`start.py` 仍只作开发入口。
 - 日常 `qianfan` 确保服务并打开 Web；`qianfan repl` 确保/连接服务，不强制打开浏览器。终端只需 API，缺前端构建不应妨碍终端使用。
-- 为独立后台提供明确的状态与优雅停止操作；停止后台与 `/stop` 当前任务区分。停后台须校验本实例身份、走现有本地认证约束，不按任意 PID 杀进程。
+- 为独立后台提供明确的状态与优雅停止操作；停止后台与 `/stop` 当前任务区分。停后台须校验本实例身份、走现有本地认证约束，不按任意 PID 杀进程。命令口径：`qianfan status` 读锁文件 + `/health`，输出 pid / port / mode / instance / started_at / healthy，无服务时明确报「未运行」并非 0；`qianfan stop` 调 `POST /api/server/stop` 并携带锁文件中的 instance，instance 不匹配被拒且不杀进程；`qianfan serve` 是前台服务入口，`start.py` 仍是开发入口。
 - 关闭顺序为拒绝新运行→请求停止任务并解除可取消的阻塞 I/O（含所属命令进程、MCP 调用）→等待 worker→完成记录/落盘→关闭剩余资源→释放锁；超时须报告未完成，不把“已收到关闭请求”写成“已停止”。
 - 后台日志复用 [现有日志模块](../../backend/utils/logging.py)，启动期 stdout/stderr 与异常也必须有可定位的本地去处；不丢进无人读取的管道，不重复倾倒模型请求全文。就绪前失败由启动客户端报告原因和日志位置；进程意外退出由客户端连接/health 检查识别，明确提示后台失联与重新连接/启动，不自动重发任务。日志写入失败必须显式暴露，不能宣称诊断记录完整。
 - 终端退出或断开只断连；运行中的任务继续。运行中 Ctrl-C / `/stop` 请求停止当前任务，不关闭共享后台。
@@ -87,8 +87,8 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 
 ### 4.3 PowerShell 7 / Git Bash
 
-- Windows 默认 `pwsh` 7，Git Bash 使用显式选择；POSIX 保持 Bash。缺少指定 Shell 给清楚错误，不静默退到 Windows PowerShell 5.1，不在执行失败后换 Shell 重跑。
-- 统一一个命令工具及执行器；模型可见描述、工具结果与观测均注明实际 Shell。更新能力包、策略规则目标名和停止绑定，不留旧工具别名。
+- Windows 默认 `pwsh` 7，Git Bash 使用显式选择；POSIX 保持 Bash。缺少指定 Shell 给清楚错误，不静默退到 Windows PowerShell 5.1，不在执行失败后换 Shell 重跑。工具名与能力包 id 均为 `shell`；参数 `command`（必填）、`shell`（可选，`pwsh` | `bash`）、`timeout`（可选）；结果如实返回实际子进程退出码与所用 Shell。
+- 统一一个命令工具及执行器；模型可见描述、工具结果与观测均注明实际 Shell。更新能力包、策略规则目标名和停止绑定，不留旧工具别名。旧 `data/plugins.json` 的 `bash` 包 id 属不支持的旧配置：按现有 fail-fast 报错并给修法，不静默映射、不自动改写文件。
 - 启动禁用用户 profile、避免交互提示；显式处理 UTF-8。PowerShell 的原生命令错误、cmdlet 错误、复合语句及退出码用矩阵明确，不能只靠 `$ErrorActionPreference`。
 - 结果中的退出码诚实表示实际子进程退出码；不能用陈旧 `$LASTEXITCODE` 掩盖 cmdlet 失败，也不承诺两个 Shell 的任意脚本语义相同。
 - 保留现有环境白名单、输出截断说明、超时、停止、Windows Job/进程树和后台清理。两种 Shell 都不是沙箱；不复制先例中的 `ExecutionPolicy Bypass`，不修改执行策略或安全产品权限来让测试通过。自己的输出流明确使用 UTF-8，第三方原生命令的编码差异不能假定已被统一。
@@ -102,9 +102,9 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 - 响应保留实际返回的 JSON/错误，提取已有 raw 中的 usage。未返回的用量标未知，不用估算冒充实数；不承诺获取未返回的内部思考。
 - 不为观测新增网络重试，也不悄悄改变当前 SDK 重试策略；已有实际尝试全部可见。记录失败不能导致再次调用模型。
 - 脱敏作用于记录副本，不能修改实际发给模型的参数。API Key、认证头和敏感 URL 参数不落 trace；任务正文/代码仍按本地敏感资料处理，不承诺识别所有未知秘密。
-- 模型调用以 log-only 事件写入现有任务 `data/traces/<task_id>.jsonl`，与 step/tool 事件共用同一生命周期；不新建平行 call-record 文件。任务结束/重启后 trace 仍可读。
-- 较大请求可截断并标 `truncated`；完整响应/错误保留。SSE 只传调用 ID、摘要、状态和读取指针，不能把全量上下文广播给每个客户端。
-- 调用列表从 trace 过滤/分页读取，详情按需读取。页面可以折叠或限制预览，但必须能读到 trace 里的完整记录（沿用 `/trace` 读取/导出）；不能为了界面流畅静默截断持久记录。
+- 模型调用以 log-only 事件 `llm_call` 写入现有任务 `data/traces/<task_id>.jsonl`，与 step/tool 事件共用同一生命周期；不新建平行 call-record 文件。`llm_call` 字段至少含 `call_id`、`attempt`、`owner_task_id`、`source`（`main` / `subagent` / `compaction`）、`round` / `step`（适用时）、`model`、`protocol`、`started_at` / `ended_at`、`status`（`ok` / `error` / `aborted`）、`request`、`response`、`error`、`truncated`、`usage`（未返回则为未知，不估算）。任务结束/重启后 trace 仍可读。
+- 较大请求可截断并标 `truncated`；完整响应/错误保留。SSE 只发轻量 `llm_call` 摘要事件：`call_id`、`status`、一句话摘要、读取指针 `(task_id, call_id)`；不能把全量上下文广播给每个客户端。
+- 调用列表从 trace 过滤/分页读取，详情按需读取。沿用现有 `/trace` 并增加增量查询参数：`type`（逗号分隔的事件类型）、`call_id`（可选）、`offset`（NDJSON 记录偏移）、`limit`（最大记录数）；默认不带参数时保持现有行为，非法参数 422、任务不存在 404、超出既有响应上限按现有 413/截断语义处理，不新增 call-record 端点。页面可以折叠或限制预览，但必须能读到 trace 里的完整记录（沿用 `/trace` 读取/导出）；不能为了界面流畅静默截断持久记录。
 - trace 写入失败遵循现有观测系统的 best-effort 原则：不覆盖模型结果、不拖垮任务，但必须暴露缺失/记录错误，不能显示成完整成功。进程中断后的无响应调用标为未完成/中断，不补造响应。
 - 删除任务历史时 trace（含模型调用事件）一起清理，沿用现有 trace 清理与失败反馈；关闭/删除与真正的 worker 生命周期联动，避免晚到写入重建已删目录。
 - S7 只记录 assembled 响应；token 级 delta 行另开切片，不把 `stream()` 引入 agent loop。
@@ -115,9 +115,9 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 
 ### S0：准备——明确新合同与基线
 
-- 实施前同步用户新裁定到现役决策/规则：旧兼容可退役、终端共享后台、双 Shell、默认模型调用记录；历史审计保留当时语境并指向新决定，不伪装成当时就已实现。
-- 对当前新建/恢复/续说、模型选择、工具面和事件序列补必要现状测试，在改实现前确认通过。
-- 建立旧断言→新合同→原因清单。明确属于退役规格的测试可以撤销/改写，真实功能覆盖迁到新接口，不删测试换绿色。
+- 实施前同步用户新裁定到现役决策/规则：旧兼容可退役、终端共享后台、双 Shell、默认模型调用记录；四项裁定落为 [ADR 0013](../adr/0013-kernel-simplification.md)，历史审计保留当时语境并指向新决定，不伪装成当时就已实现。
+- 对当前新建/恢复/续说、模型选择、工具面和事件序列补必要现状测试，在改实现前确认通过。基线测试文件与「旧断言 → 新合同 → 原因」清单见 [326-legacy-assertions.md](326-legacy-assertions.md)。
+- 清单逐条写「旧断言 → 新合同 → 原因 → 迁移/退役去向」。退役规格的断言可以撤销/改写，真实功能覆盖迁到新接口，不删测试换绿色。
 - 验收：既有审计改动隔离；基线可复跑；关键接口和数据副作用有清单，不触碰实际数据。
 
 ### S1：模型解析与接口收口
@@ -144,7 +144,7 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 
 ### S4：统一命令执行与能力装配
 
-- 文件面：[bash.py](../../backend/core/tools/bash.py)及必要的通用执行模块、工具注册/能力包、TaskManager 停止绑定、Settings、注入说明、测试。
+- 文件面：[shell.py](../../backend/core/tools/shell.py)及必要的通用执行模块、工具注册/能力包、TaskManager 停止绑定、Settings、注入说明、测试。
 - 抽取已有进程执行保障后接 PowerShell 7，Bash 行为单独对照保留；一个命令工具显式选择两种 Shell。
 - 清理 requires_confirm/danger_signal 等惰性元数据，保留策略钩子和仍有消费者的 registers_artifact；能力启停收敛到包配置，去掉重复旧闸。
 - 文件工具归属走统一工作区入口；独立测试/调用使用明确依赖，不保留硬编码旧目录兜底。
@@ -235,7 +235,7 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 
 ## 8. 授权与退出条件
 
-- 本轮只交付计划；产品目标已确认，不等于这些工程细节或代码实施已获授权。
+- 原计划只交付计划；产品目标已确认。作者 2026-11-18 已授权 S0–S12 按 B 模型实施；本文仍不授权合并、清空数据或修改用户级配置。
 - 开工前依据届时 HEAD 复核基线和既有未提交改动；不覆盖用户文件、不自动 stash/提交、不给整个工程打包一次大改。
 - 格式断代不授权删除真实数据；退出客户端不授权停共享后台；研究观测不授权上传任何任务内容。
 - 若发现必须改变已确认产品行为、引入新依赖/平台或改变权限设置，先报告并重新裁定；纯技术细节按本文职责与测试证据解决。
@@ -244,7 +244,7 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 ## 9. 发布记录（2026-11-17）
 
 > 本计划已按 `/to-spec` + `/to-tickets` 发布为父 spec 与 12 张切片票；票面发布本身不含实施或代码提交授权。
-> 发布边界：作者要求将审计、证据、预防规则、钩子/测试与本文分批提交到同一分支并开 PR #339；#326 的「既有未提交审计改动单独保留」在本 PR 范围内由作者显式覆盖。S0–S12 实施仍未授权。
+> 发布边界：作者要求将审计、证据、预防规则、钩子/测试与本文分批提交到同一分支并开 PR #339；#326 的「既有未提交审计改动单独保留」在本 PR 范围内由作者显式覆盖。S0–S12 实施由作者 2026-11-18 另行授权，按 B 模型推进。
 
 - 父 spec：[#326](https://github.com/renjianguojinqianfan/langgraph-agent/issues/326)（标签 `spec`，按仓库规则不打 `ready-for-agent`）。
 - 切片（原生阻塞边，串行；S5 与 S6 合并为同一原子交付票）：
@@ -265,3 +265,72 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 | S12 最终收口 | [#338](https://github.com/renjianguojinqianfan/langgraph-agent/issues/338) | #337 |
 
 - 12 张子票均挂在 #326 下，标签 `ready-for-agent`；父票关闭条件见 S12。
+
+## 10. 实施记录（2026-11-18）
+
+> 发布模型 B：单集成分支 `spec/326-kernel-simplification` + 单 PR（#340），每片独立提交与合入，
+> S5+S6 为一个原子交付；合并权在评审侧/用户。本节是收口快照，不复制各片设计细节。
+
+| 切片 | 集成分支合入提交 |
+|---|---|
+| S0 准备 | `5ef1cba` |
+| S1 模型解析与接口收口 | `43f42be` |
+| S2 任务与 checkpoint 当前合同 | `7081bbd` |
+| S3 单轮执行与收尾集中 | `10d8bb2` |
+| S4 统一命令执行与能力装配 | `1ef4d94` |
+| S5+S6 共享后台与终端薄客户端 | `d0d30f7` |
+| S7 模型调用捕获与 trace 扩展 | `587b288` |
+| S8 trace 调用查看与前端状态策略 | `83076ef`、`be5880e` |
+| S9 文件轮询去放大 | `2d62b1c` |
+| S10 文件枚举减成本 | `237b770` |
+| S11 批量持久化收口 | `5be54a2` |
+| S12 最终收口 | 本片提交 |
+
+### 10.1 门禁结果
+
+| 面 | 结果 |
+|---|---|
+| 后端离线套件 | 通过；本机受限 harness 的 MSYS bash 假红（`NtCreateDirectoryObject 0xC0000022`）不计为代码回退，判据见 [`docs/harness-bash-false-red.md`](../harness-bash-false-red.md) |
+| ruff / mypy | 通过（零 ignore / override） |
+| Windows 敏感清单 | 除同一 MSYS 假红文件外通过；CI `backend-windows-smoke` 为权威 |
+| 前端 typecheck / test / check:sse / build | 通过 |
+| 文档链接 / 本机路径暴露面 / 设计 token | 通过 |
+
+### 10.2 真机验收状态
+
+| 矩阵场景 | 状态 |
+|---|---|
+| Web / 终端共享同一任务、模式、模型、计划与结果 | 通过：终端接入 Web 创建的任务，沿同一 `task_id` 续说，产物落在任务自己的目录 |
+| 客户端退出不等于停止任务 | 通过：任务 RUNNING 时退出终端，后台继续执行并正常停下 |
+| 不同项目目录 | 通过：后台与终端在工作目录 A，任务与写入仍固定在目录 B |
+| 停止与恢复 | 通过：运行中停止 → `INTERRUPTED` → `resume` → 同一任务续跑并落产物 |
+| OpenAI 兼容协议 | 通过：真实模型完成 `write` + `shell`（pwsh）、Trace `llm_call`（占位/最终记录、usage、请求响应读取） |
+| Anthropic 协议 | **未运行**：本机 `data/models.json` 未配置 Anthropic Provider；离线适配器与错误映射测试覆盖，影响面为原生非流式路径未做真机回归 |
+| 双 Shell | pwsh 通过；显式 Git Bash **未运行**：受限 harness 阻止 MSYS 初始化，工具如实返回 `3221225794` 与 stderr，未静默回退或改参数；以 CI Windows smoke / 普通终端为准 |
+| 模型观测 | 主任务通过；子代理 / 压缩调用本轮**未运行**（离线覆盖 `llm_call` 的 source 与生命周期）；trace / 日志扫描无 Key、Authorization、Bearer 泄漏 |
+| 文件与存储 | 轮询单飞（S9 浏览器实测）、路径 / 忽略语义（套件）、批量写回滚（套件与基准）、任务删除联动清理（本轮真机删除后 trace 404） |
+| 关包 / 计划只读 / 子代理范围 | 离线面快照通过；本轮未重跑真机关包对比 |
+| 自用代码任务 | **未运行**（完整链）：Web 与终端各完成写文件 + `shell` 读取；完整「读代码 → 修改 → 运行验证」链未作为本轮新增场景重跑。影响面：自用闭环未做端到端真机回归，发布前按 [`docs/manual-verification.md`](../manual-verification.md) 执行 |
+
+收口期真机停止发现并修复：Web 的 SSE 长连接会让 uvicorn 无限等待关闭，`qianfan stop` 因此超时；
+`backend/serve.py` 现给优雅关闭加 5s 连接上限，活跃 SSE 下停止在超时窗口内完成并返回 0。
+停止顺序同步收口：锁记录由 `serve.run` 在 uvicorn 返回后释放，避免旧进程仍占端口时被新启动器接管。
+
+### 10.3 性能与轮询证据
+
+- **S9 文件轮询**：浏览器实测慢响应下同一时刻最多 1 条 `/files` 在途；切任务 / 关闭面板触发浏览器
+  `abort`，迟到响应不覆盖新列表；`/files` 返回 500 时显示原因与「重试」，重试立即发起并恢复；
+  任务停下后只做一次终态刷新。机械面由 `lib/filePolling.test.ts` 覆盖。
+- **S10 文件枚举**（2026-11-18 复核重跑，Windows / NTFS，Python 3.14；合成树结构 = 普通目录与
+  git 仓库各 2k / 20k 文件、120 / 440 个子目录、最大深度 3；同条件交错 5 轮，中位（范围）ms，旧 → 新）：
+  plain 2k 全量 3045（2834–3603）→ 536（514–685）、列表 2978（2822–3179）→ 591（553–638）；
+  plain 20k 全量 11776（9405–52032）→ 1146（969–2507）、列表 11066（8488–26281）→ 1106（899–2384）；
+  git 2k 全量 1380（1194–1439）→ 358（351–424）、列表 1348（1183–1520）→ 363（333–379）；
+  git 20k 全量 9677（8939–12103）→ 1310（1198–1593）、列表 10245（8483–11618）→ 1241（1178–1387）。
+  实施期单点中位与本次绝对值不可逐项对比（同机负载不同，旧实现范围内含冷缓存首轮），收益方向与
+  量级一致；输出等价断言与既有 Gitignore / 链接 / 越界 / 环路覆盖保持通过，结论以本轮中位/范围与
+  等价断言为据。
+- **S11 批量持久化**（启动对账，中位 / 范围）：N=50 76.2ms（76.1–94.4）→ 2.6ms（2.6–2.9）；
+  N=200 866.2ms（558.5–1032.8）→ 10.2ms（7.6–18.4）；单条终态写盘 1.3ms（1.2–1.5）vs
+  1.2ms（1.2–52.5，单次离群）。零变更零写、N 条一次 dump、写失败内存/盘不半更新由
+  `test_persistence.py` / `test_orphan_reconcile.py` 覆盖；记录规模基准与真实用户延迟分开。

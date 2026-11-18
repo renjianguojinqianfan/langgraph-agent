@@ -78,27 +78,20 @@ def test_httpx_proxy_patterns_parse_after_normalization(monkeypatch):
     _proxy_patterns_parse()
 
 
-def test_openai_client_constructs_after_normalization(monkeypatch):
-    """The exact startup failure: OpenAI(...) builds its httpx client from env."""
+def test_openai_client_normalizes_before_constructing(monkeypatch):
+    """OpenAI(...) builds its httpx client from env; the adapter heals it first."""
     _set_proxy_env(monkeypatch, "[::1]")
-    with pytest.raises(httpx.InvalidURL):
-        OpenAICompatibleClient(
-            base_url="http://example.invalid/v1",
-            api_key="test-key",
-            model="test-model",
-        )
-
-    normalize_no_proxy()
     client = OpenAICompatibleClient(
         base_url="http://example.invalid/v1",
         api_key="test-key",
         model="test-model",
     )
     assert client.model == "test-model"
+    assert os.environ["NO_PROXY"] == "::1"
 
 
 def test_build_runtime_normalizes_the_process_env(monkeypatch, tmp_path):
-    """The web and REPL entries share this seam; deleting the call must fail."""
+    """The runtime entry normalizes before any provider client exists."""
     _set_proxy_env(monkeypatch, "[::1],localhost")
     build_runtime(make_settings(tmp_path))
     assert os.environ["NO_PROXY"] == "::1,localhost"

@@ -16,14 +16,15 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
@@ -48,6 +49,7 @@ from ..services.plugins_store import (
     restart_required,
     save_plugins_config,
 )
+from ..services.server_control import stop_backend
 from ..services.task_manager import TaskManager
 from ..utils.logging import get_logger
 from .schemas import (
@@ -55,15 +57,13 @@ from .schemas import (
     AuthTokenRequest,
     CreateTaskRequest,
     McpServerInfo,
-    ModelCreateRequest,
-    ModelKeyRequest,
-    ModelUpdateRequest,
     PluginsUpdateRequest,
     ProviderCreateRequest,
     ProviderModelCreateRequest,
     ProviderModelUpdateRequest,
     ProviderUpdateRequest,
     SendMessageRequest,
+    ServerStopRequest,
     TaskModelRequest,
     UpdateModeRequest,
     UpdatePlanRequest,
@@ -291,65 +291,6 @@ def update_task_model(
     return _envelope(data=result)
 
 
-@router.get("/models")
-def list_models(
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    return _envelope(data=_tm(request).models.list_public())
-
-
-@router.post("/models")
-def create_model(
-    payload: ModelCreateRequest,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    try:
-        profile = _tm(request).add_model_profile(
-            name=payload.name,
-            base_url=payload.base_url,
-            model=payload.model,
-            api_key_env=payload.api_key_env,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _envelope(data=_tm(request).models.public_profile(profile.id))
-
-
-@router.put("/models/{model_id}")
-def update_model(
-    model_id: str,
-    payload: ModelUpdateRequest,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    try:
-        _tm(request).update_model_profile(model_id, **payload.model_dump(exclude_none=True))
-    except KeyError:
-        raise HTTPException(status_code=404, detail="model not found")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _envelope(data=_tm(request).models.public_profile(model_id))
-
-
-@router.delete("/models/{model_id}")
-def delete_model(
-    model_id: str,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    try:
-        _tm(request).delete_model_profile(model_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="model not found")
-    except CredentialsError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return _envelope(data={"ok": True})
-
-
 @router.post("/models/{model_id}/default")
 def set_default_model(
     model_id: str,
@@ -357,34 +298,10 @@ def set_default_model(
     _auth: str = Depends(verify_token),
 ) -> ApiResponse:
     try:
-        _tm(request).set_default_model_profile(model_id)
+        _tm(request).set_default_model(model_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="model not found")
     return _envelope(data={"ok": True, "default": model_id})
-
-
-@router.put("/models/{model_id}/key")
-def set_model_key(
-    model_id: str,
-    payload: ModelKeyRequest,
-    request: Request,
-    _auth: str = Depends(verify_token),
-) -> ApiResponse:
-    """Write-only: a key goes in, only ``key_set`` comes back."""
-    try:
-        _tm(request).set_model_key(model_id, payload.key)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="model not found")
-    except CredentialsError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    store = _tm(request).models
-    return _envelope(
-        data={
-            "ok": True,
-            "key_set": store.key_set(model_id),
-            "key_source": store.key_source(model_id),
-        }
-    )
 
 
 @router.post("/models/{model_id}/test")
@@ -723,7 +640,9 @@ def list_workspace_files(
     still reaches any file inside the workspace (``read`` behaves the same).
     """
     root = _task_workspace(request, task_id)
-    files = workspace_files(root)
+    # #336: one extra entry is enough to prove truncation; the bounded
+    # enumeration never stops after an arbitrary 2000th item.
+    files = workspace_files(root, limit=FILES_MAX + 1)
     entries = []
     for path in files[:FILES_MAX]:
         try:
@@ -834,6 +753,32 @@ def _trace_read_failed(task_id: str, exc: OSError) -> HTTPException:
     return HTTPException(status_code=500, detail=_TRACE_READ_ERROR_DETAIL)
 
 
+_TRACE_TYPE_TOKEN = re.compile(r"^[a-z_]+$")
+
+
+def _trace_type_filter(raw: str) -> frozenset[str]:
+    """Parse ``?type=a,b``; an empty/invalid token is a 422 before file I/O."""
+    if not raw:
+        return frozenset()
+    tokens = [token.strip() for token in raw.split(",")]
+    if not tokens or any(not token for token in tokens):
+        raise HTTPException(status_code=422, detail="type must be a comma-separated list")
+    for token in tokens:
+        if not _TRACE_TYPE_TOKEN.fullmatch(token):
+            raise HTTPException(
+                status_code=422, detail=f"invalid trace event type: {token!r}"
+            )
+    return frozenset(tokens)
+
+
+def _trace_matches(event: dict, types: frozenset[str], call_id: str) -> bool:
+    if types and event.get("type") not in types:
+        return False
+    if call_id and str((event.get("data") or {}).get("call_id") or "") != call_id:
+        return False
+    return True
+
+
 def _plan_read_failed(task_id: str, exc: PlanError) -> HTTPException:
     """Log the full cause, answer with the safe detail (#260 rework)."""
     logger.error("plan read failed for task %s: %s", task_id, exc)
@@ -867,6 +812,10 @@ def task_trace(
     task_id: str,
     request: Request,
     format: str = "ndjson",
+    event_type: str = Query("", alias="type"),
+    call_id: str = "",
+    offset: int = 0,
+    limit: int = 0,
     _auth: str = Depends(verify_token),
 ) -> ApiResponse | Response:
     """Return the persisted JSONL trace for a task.
@@ -885,10 +834,17 @@ def task_trace(
     ``{code, data:[Event,...], message}`` and validates every line, so a
     malformed trace is a located 422 instead of a silently shortened list.
 
+    Incremental read (#333 S7): ``type`` (comma-separated event types),
+    ``call_id`` (matches ``data.call_id``), ``offset`` (skip matching records)
+    and ``limit`` (maximum matching records, 0 = all). Any of them switches to
+    the bounded parsing path and keeps the requested representation: matched
+    raw lines for the default NDJSON form, the envelope list for
+    ``format=json``. Invalid syntax is a 422 before any file read.
+
     An illegal ``task_id`` is a 400 before any filesystem access; an unknown
-    task, a task without a trace file, or a disabled trace is a 404; a
-    ``?format=json`` file past :data:`TRACE_MAX_BYTES` is a 413; an unreadable
-    file (either branch) is a logged 500 with a generic detail.
+    task, a task without a trace file, or a disabled trace is a 404; a parsed
+    file past :data:`TRACE_MAX_BYTES` is a 413; an unreadable file (either
+    branch) is a logged 500 with a generic detail.
 
     The real return type is the union below (envelope for ``?format=json``,
     raw NDJSON response otherwise). ``response_model=None`` is stated explicitly
@@ -901,6 +857,12 @@ def task_trace(
     # client error and must not touch the filesystem (#254).
     if not _TASK_ID_RE.fullmatch(task_id):
         raise HTTPException(status_code=400, detail="invalid task_id")
+    types = _trace_type_filter(event_type)
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be >= 0")
+    if limit < 0:
+        raise HTTPException(status_code=422, detail="limit must be >= 0")
+    filtered = bool(types) or bool(call_id) or offset > 0 or limit > 0
     if not settings.trace_enabled:
         raise HTTPException(status_code=404, detail="task trace not enabled")
     task = _tm(request).get_task(task_id)
@@ -910,7 +872,7 @@ def task_trace(
     if not trace_file.exists():
         raise HTTPException(status_code=404, detail="task trace not found")
 
-    if format != "json":
+    if format != "json" and not filtered:
         # Stream the stat-time PREFIX (#260 rework): the file keeps growing
         # while the task runs, and a "read to EOF" stream (FileResponse) would
         # send more bytes than the length it declares up front — the client
@@ -947,7 +909,7 @@ def task_trace(
             status_code=413,
             detail=(
                 f"trace file exceeds the {TRACE_MAX_BYTES} byte limit; "
-                "the raw NDJSON form has no limit"
+                "the unfiltered raw NDJSON form (no query parameters) has no limit"
             ),
         )
     try:
@@ -957,7 +919,9 @@ def task_trace(
             status_code=422, detail="trace file is not valid UTF-8"
         ) from None
 
-    events = []
+    events: list[dict] = []
+    matched_lines: list[str] = []
+    skipped = 0
     # Split on "\n" only (#260): JSONL's separator is the newline, and the
     # recorder writes with ``ensure_ascii=False``, so U+2028 / U+2029 / NEL
     # stay raw inside a legal line — ``str.splitlines()`` would cut such a
@@ -977,7 +941,19 @@ def task_trace(
             raise _trace_line_error(lineno, "missing object field 'data'")
         if not isinstance(event.get("ts"), (int, float)):
             raise _trace_line_error(lineno, "missing numeric field 'ts'")
+        if filtered and not _trace_matches(event, types, call_id):
+            continue
+        if filtered and skipped < offset:
+            skipped += 1
+            continue
+        if filtered and limit and len(events) >= limit:
+            break
         events.append(event)
+        if filtered:
+            matched_lines.append(line)
+    if filtered and format != "json":
+        body = ("\n".join(matched_lines) + "\n") if matched_lines else ""
+        return Response(content=body.encode("utf-8"), media_type="application/x-ndjson")
     return _envelope(data=events)
 
 
@@ -1134,3 +1110,39 @@ def put_plugins(
     except PluginsConfigError as exc:  # pragma: no cover - valid file just written
         raise HTTPException(status_code=500, detail=str(exc)) from None
     return _envelope(data=_plugins_data(settings, saved, active))
+
+
+# ── #332 S5: explicit shutdown of the shared backend ──
+@router.post("/server/stop")
+def stop_server(
+    payload: ServerStopRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+):
+    """Stop this backend after settling tasks; refuses a foreign instance.
+
+    The caller must echo the instance id it read from ``data/server.json``.
+    A mismatch is a 409 and changes nothing — the server never kills a pid it
+    was not asked to stop by its own registered client. A completed sequence
+    answers 200 with the report; an incomplete one (a worker outlived the drain
+    window) answers 504, keeps the single-instance record and does not exit.
+    """
+    own = os.environ.get("QIANFAN_INSTANCE", "").strip()
+    asked = payload.instance.strip()
+    if not own or asked != own:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "instance 不匹配：拒绝停止（不会按 pid 杀进程）。"
+                f"请求 instance={asked or '(空)'}，本后台 instance={own or '(未登记)'}"
+            ),
+        )
+    try:
+        report = stop_backend(request.app.state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    body = {"code": 0 if report.complete else 1, "data": report.to_dict()}
+    if report.complete:
+        return _envelope(data=report.to_dict())
+    message = "后台停止未完成：仍有任务 worker 未退出；单实例记录保留，进程继续运行"
+    return JSONResponse(status_code=504, content={**body, "message": message})

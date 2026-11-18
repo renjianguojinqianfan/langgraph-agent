@@ -19,6 +19,7 @@ from backend.core.agent.context import (
 )
 from backend.core.agent.nodes import AgentRuntime
 from backend.services.event_bus import EventBus
+from backend.tests.conftest import make_agent_host
 
 
 def _msg(role: str, content: str, **extra) -> dict:
@@ -150,10 +151,9 @@ def test_summarize_messages_empty_input():
 
 # ── AgentRuntime._build_messages integration ──────────────────
 def _runtime_with(settings: Settings, event_bus: EventBus) -> AgentRuntime:
-    tm = SimpleNamespace(settings=settings, event_bus=event_bus)
     return AgentRuntime(
         task_id="qa-t1",
-        task_manager=tm,
+        task_manager=make_agent_host(settings, event_bus),
         llm=SimpleNamespace(),
         tools=[],
         tool_schemas=[],

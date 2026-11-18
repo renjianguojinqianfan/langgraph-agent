@@ -4,6 +4,7 @@ import { stepHasReasoning } from "./reasoning";
 
 const step = (overrides: Partial<StepRecord> = {}): StepRecord => ({
   index: 1,
+  round: 1,
   thought: "答",
   tool_calls: [],
   status: "done",

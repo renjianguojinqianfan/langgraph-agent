@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from backend.api.schemas import StepRecord, Task, TaskStatus, ToolCallRecord
+from backend.api.schemas import ChatTurn, StepRecord, Task, TaskStatus, ToolCallRecord
 from backend.core.llm.client import MockLLMClient
 from backend.services.persistence import Persistence
 from backend.tests.conftest import assert_no_in_flight, make_manager, make_settings
@@ -30,6 +30,8 @@ def _make_task_record(settings, task_id: str, status: str):
         id=task_id,
         title=f"orphan {task_id}",
         user_input="demo input",
+        workspace=str(settings.artifacts_path),
+        conversation=[ChatTurn(role="user", content="demo input")],
         status=TaskStatus(status),
         created_at=now,
         updated_at=now,
@@ -71,6 +73,8 @@ class TestOrphanReconciliation:
                 id="t-step",
                 title="orphan with a running step",
                 user_input="demo input",
+                workspace=str(settings.artifacts_path),
+                conversation=[ChatTurn(role="user", content="demo input")],
                 status=TaskStatus.RUNNING,
                 created_at=now,
                 updated_at=now,
@@ -88,7 +92,7 @@ class TestOrphanReconciliation:
                         round=1,
                         status="running",
                         tool_calls=[
-                            ToolCallRecord(id="c2", tool_name="bash", status="pending")
+                            ToolCallRecord(id="c2", tool_name="shell", status="pending")
                         ],
                     ),
                 ],
@@ -116,6 +120,8 @@ class TestOrphanReconciliation:
                 id="t-legacy",
                 title="parked with a leftover running step",
                 user_input="demo input",
+                workspace=str(settings.artifacts_path),
+                conversation=[ChatTurn(role="user", content="demo input")],
                 status=TaskStatus.INTERRUPTED,
                 created_at=now,
                 updated_at=now,
@@ -125,7 +131,7 @@ class TestOrphanReconciliation:
                         round=1,
                         status="running",
                         tool_calls=[
-                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                            ToolCallRecord(id="c1", tool_name="shell", status="pending")
                         ],
                     )
                 ],
@@ -158,6 +164,57 @@ class TestOrphanReconciliation:
         assert rebuilt.get_task("t-fail").status == TaskStatus.FAILED
         assert rebuilt.get_task("t-int").status == TaskStatus.INTERRUPTED
 
+    def test_clean_startup_writes_nothing(self, tmp_path, monkeypatch):
+        settings = make_settings(tmp_path)
+        _make_task_record(settings, "t-clean", "INTERRUPTED")
+        dumps: list[object] = []
+        real_dump = Persistence._dump
+
+        def counting_dump(self, overrides=None):
+            dumps.append(overrides)
+            return real_dump(self, overrides)
+
+        monkeypatch.setattr(Persistence, "_dump", counting_dump)
+        rebuilt = make_manager(settings, MockLLMClient())
+
+        assert dumps == []
+        assert rebuilt.get_task("t-clean").status == TaskStatus.INTERRUPTED
+
+    def test_many_orphans_are_reconciled_with_one_write(self, tmp_path, monkeypatch):
+        settings = make_settings(tmp_path)
+        for i in range(5):
+            _make_task_record(settings, f"t-orphan-{i}", "RUNNING")
+        dumps: list[object] = []
+        real_dump = Persistence._dump
+
+        def counting_dump(self, overrides=None):
+            dumps.append(overrides)
+            return real_dump(self, overrides)
+
+        monkeypatch.setattr(Persistence, "_dump", counting_dump)
+        rebuilt = make_manager(settings, MockLLMClient())
+
+        assert len(dumps) == 1
+        assert isinstance(dumps[0], dict) and len(dumps[0]) == 5
+        for i in range(5):
+            assert rebuilt.get_task(f"t-orphan-{i}").status == TaskStatus.INTERRUPTED
+        for i in range(5):
+            assert Persistence(settings).load_task(f"t-orphan-{i}").status == TaskStatus.INTERRUPTED
+
+    def test_failed_batch_leaves_memory_and_disk_live(self, tmp_path, monkeypatch):
+        settings = make_settings(tmp_path)
+        for i in range(3):
+            _make_task_record(settings, f"t-live-{i}", "RUNNING")
+        monkeypatch.setattr(Persistence, "_dump", lambda self, overrides=None: False)
+        rebuilt = make_manager(settings, MockLLMClient())
+
+        for i in range(3):
+            assert rebuilt.get_task(f"t-live-{i}").status == TaskStatus.RUNNING
+            assert (
+                Persistence(settings).load_task(f"t-live-{i}").status
+                == TaskStatus.RUNNING
+            )
+
 
 class TestTerminalRecordSettlement:
     def test_finalize_never_repersists_a_stale_running_step(self, tmp_path):
@@ -171,6 +228,8 @@ class TestTerminalRecordSettlement:
             id="t-resumed",
             title="resumed after a hard kill",
             user_input="demo input",
+            workspace=str(settings.artifacts_path),
+            conversation=[ChatTurn(role="user", content="demo input")],
             status=TaskStatus.RUNNING,
             created_at=now,
             updated_at=now,
@@ -190,7 +249,7 @@ class TestTerminalRecordSettlement:
                         "tool_calls": [
                             {
                                 "id": "c2",
-                                "tool_name": "bash",
+                                "tool_name": "shell",
                                 "input": {},
                                 "output": None,
                                 "status": "pending",
@@ -213,6 +272,115 @@ class TestTerminalRecordSettlement:
         assert persisted.steps[0].status == "failed"
         assert_no_in_flight(persisted)
 
+    def test_finalize_writes_the_record_once(self, tmp_path, monkeypatch):
+        settings = make_settings(tmp_path)
+        manager = make_manager(settings, MockLLMClient())
+        now = datetime.now(timezone.utc).isoformat()
+        task = Task(
+            id="t-finalize-batch",
+            title="finalize batch",
+            user_input="demo input",
+            workspace=str(settings.artifacts_path),
+            conversation=[ChatTurn(role="user", content="demo input")],
+            status=TaskStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+        assert manager.persistence.save_task(task)
+        dumps: list[object] = []
+        real_dump = manager.persistence._dump
+
+        def counting_dump(overrides=None):
+            dumps.append(overrides)
+            return real_dump(overrides)
+
+        monkeypatch.setattr(manager.persistence, "_dump", counting_dump)
+        manager._finalize_terminal(
+            task,
+            {
+                "status": "INTERRUPTED",
+                "steps": [
+                    {
+                        "index": 1,
+                        "round": 1,
+                        "thought": "Step 1: acting.",
+                        "reasoning": "",
+                        "status": "running",
+                        "tool_calls": [
+                            {
+                                "id": "c1",
+                                "tool_name": "shell",
+                                "input": {},
+                                "output": None,
+                                "status": "pending",
+                                "error": None,
+                            }
+                        ],
+                    }
+                ],
+                "messages": [],
+                "final_answer": "",
+            },
+        )
+
+        assert len(dumps) == 1
+        assert task.status == TaskStatus.INTERRUPTED
+        assert task.steps[0].status == "failed"
+        persisted = Persistence(settings).load_task("t-finalize-batch")
+        assert persisted is not None
+        assert persisted.steps[0].status == "failed"
+        assert_no_in_flight(persisted)
+
+    def test_failed_finalize_write_keeps_memory_and_disk_unchanged(
+        self, tmp_path, monkeypatch
+    ):
+        settings = make_settings(tmp_path)
+        manager = make_manager(settings, MockLLMClient())
+        now = datetime.now(timezone.utc).isoformat()
+        task = Task(
+            id="t-finalize-fail",
+            title="finalize failure",
+            user_input="demo input",
+            workspace=str(settings.artifacts_path),
+            conversation=[ChatTurn(role="user", content="demo input")],
+            status=TaskStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+        assert manager.persistence.save_task(task)
+        before_updated = task.updated_at
+        monkeypatch.setattr(
+            manager.persistence, "_dump", lambda overrides=None: False
+        )
+
+        manager._finalize_terminal(
+            task,
+            {
+                "status": "INTERRUPTED",
+                "steps": [
+                    {
+                        "index": 1,
+                        "round": 1,
+                        "thought": "Step 1: acting.",
+                        "reasoning": "",
+                        "status": "running",
+                        "tool_calls": [],
+                    }
+                ],
+                "messages": [],
+                "final_answer": "lost",
+            },
+        )
+
+        assert task.status == TaskStatus.RUNNING
+        assert task.steps == []
+        assert task.final_answer == ""
+        assert task.updated_at == before_updated
+        persisted = Persistence(settings).load_task("t-finalize-fail")
+        assert persisted is not None
+        assert persisted.status == TaskStatus.RUNNING
+        assert persisted.steps == []
+
     def test_failed_record_with_in_flight_step_is_settled(self, tmp_path):
         """The sweep is status-agnostic about the leftovers: a FAILED record
         can also carry a step the crash cut down mid-flight."""
@@ -223,6 +391,8 @@ class TestTerminalRecordSettlement:
                 id="t-failed-leftover",
                 title="failed with a running step",
                 user_input="demo input",
+                workspace=str(settings.artifacts_path),
+                conversation=[ChatTurn(role="user", content="demo input")],
                 status=TaskStatus.FAILED,
                 created_at=now,
                 updated_at=now,
@@ -232,7 +402,7 @@ class TestTerminalRecordSettlement:
                         round=1,
                         status="running",
                         tool_calls=[
-                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                            ToolCallRecord(id="c1", tool_name="shell", status="pending")
                         ],
                     )
                 ],
@@ -280,6 +450,9 @@ class TestPersistenceDurability:
                     t = Task(
                         id=f"t-{i}-{j}",
                         title="conc",
+                        user_input="conc",
+                        workspace=str(settings.artifacts_path),
+                        conversation=[ChatTurn(role="user", content="conc")],
                         status=TaskStatus.INTERRUPTED,
                         created_at=now,
                         updated_at=now,

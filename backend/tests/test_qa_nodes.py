@@ -14,7 +14,7 @@ from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.tools.base import BaseTool, ToolResult
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_isolated_settings
+from backend.tests.conftest import make_agent_host, make_isolated_settings
 
 
 class _FailTool(BaseTool):
@@ -87,7 +87,7 @@ def test_tool_node_executes_each_call_once():
     bus = EventBus()
     events = []
     bus.subscribe("t1", lambda e: events.append(e))
-    tm = SimpleNamespace(settings=settings, event_bus=bus, add_artifact=lambda *a: None)
+    tm = make_agent_host(settings, bus)
     rt = AgentRuntime("t1", tm, llm=SimpleNamespace(), tools=[tool], tool_schemas=[])
 
     state = _state_with_call()
@@ -106,7 +106,7 @@ def test_tool_node_unknown_tool_does_not_crash():
     bus = EventBus()
     events = []
     bus.subscribe("t2", lambda e: events.append(e))
-    tm = SimpleNamespace(settings=settings, event_bus=bus, add_artifact=lambda *a: None)
+    tm = make_agent_host(settings, bus)
     rt = AgentRuntime("t2", tm, llm=SimpleNamespace(), tools=[], tool_schemas=[])
 
     state = {
@@ -143,7 +143,7 @@ def _bus_runtime(tools: list, task_id: str = "t95") -> tuple:
     bus = EventBus()
     events: list = []
     bus.subscribe(task_id, lambda e: events.append(e))
-    tm = SimpleNamespace(settings=settings, event_bus=bus, add_artifact=lambda *a: None)
+    tm = make_agent_host(settings, bus)
     rt = AgentRuntime(task_id, tm, llm=SimpleNamespace(), tools=tools, tool_schemas=[])
     return rt, events
 

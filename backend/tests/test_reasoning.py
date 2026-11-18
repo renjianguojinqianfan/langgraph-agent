@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import json
 import time
-from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import LLMClient, LLMResponse, MockLLMClient
 from backend.services.task_manager import REASONING_TRUNCATE_LIMIT
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_agent_host, make_manager, make_settings
 
 SENTINEL = "reasoning-key-sentinel-do-not-leak"
 MARKER = "_reasoning_from"
@@ -40,14 +39,11 @@ class _ReasoningLLM(LLMClient):
         self._responses = list(responses)
         self.requests: List[List[Dict[str, Any]]] = []
 
-    def complete(self, messages, tools=None, **kwargs) -> LLMResponse:
+    def _complete(self, messages, tools=None, **kwargs) -> LLMResponse:
         self.requests.append([dict(message) for message in messages])
         if not self._responses:
             return LLMResponse(content="done")
         return self._responses.pop(0)
-
-    def stream(self, messages, tools=None, **kwargs):
-        yield self.complete(messages, tools, **kwargs)
 
 
 class _RecordingBus:
@@ -108,8 +104,8 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
     def redact(text: str) -> str:
         return text.replace(SENTINEL, "[redacted]")
 
-    tm = SimpleNamespace(
-        settings=make_settings(tmp_path),
+    tm = make_agent_host(
+        make_settings(tmp_path),
         event_bus=bus,
         redact=redact,
         redact_reasoning=redact,
@@ -135,13 +131,11 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
     # D-38 rule 2: the raw trace stays on the protocol message in state.
     assert state["steps"][-1]["reasoning"] == SENTINEL + " think"
 
-    # A non-thinking model emits exactly the pre-#267 payload shape.
+    # A non-thinking model still omits `reasoning` (S8 adds the shared
+    # revision fields to every event, so only the optional field is asserted).
     quiet_bus = _RecordingBus()
-    quiet_tm = SimpleNamespace(
-        settings=make_settings(tmp_path),
-        event_bus=quiet_bus,
-        redact=redact,
-        redact_reasoning=redact,
+    quiet_tm = make_agent_host(
+        make_settings(tmp_path), quiet_bus, redact=redact, redact_reasoning=redact
     )
     quiet_runtime = AgentRuntime(
         "t-quiet",
@@ -154,7 +148,8 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
     quiet_state = _state()
     quiet_runtime.agent(quiet_state)
     quiet_finals = [data for kind, data in quiet_bus.events if kind == "final_answer"]
-    assert quiet_finals[-1] == {"answer": "ok"}
+    assert quiet_finals[-1]["answer"] == "ok"
+    assert "reasoning" not in quiet_finals[-1]
     assert quiet_state["steps"][-1]["reasoning"] == ""
 
 
@@ -162,7 +157,7 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
 def test_request_history_keeps_same_scope_and_strips_foreign_reasoning(tmp_path):
     runtime = AgentRuntime(
         "t",
-        SimpleNamespace(settings=make_settings(tmp_path), event_bus=_RecordingBus()),
+        make_agent_host(make_settings(tmp_path), _RecordingBus()),
         llm=MockLLMClient(),
         tools=[],
         tool_schemas=[],
