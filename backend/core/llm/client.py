@@ -14,7 +14,7 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, List
 
 from ...config import PROJECT_ROOT
 from ...utils.logging import get_logger
@@ -53,28 +53,19 @@ class LLMClient(ABC):
         """Run one completion. ``tools`` follows the OpenAI function schema."""
         raise NotImplementedError
 
-    @abstractmethod
-    def stream(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Iterator[LLMResponse]:
-        """Yield incremental completions (best-effort streaming)."""
-        raise NotImplementedError
-
 
 class MockLLMClient(LLMClient):
     """Offline, deterministic client driven by a scripted plan.
 
     How it is used by the single ``agent`` node (issue #139):
 
-    * a call with ``tools is None`` is a legacy planner call — return the plan
-      JSON (kept so direct unit tests of the mock still read naturally);
-    * otherwise, remaining scripted ``tool_calls`` are emitted one per turn;
-    * once the script is exhausted, a **plan-mode** call (system prompt is
-      ``PLANNER_SYSTEM``) returns the plan JSON, and a build-mode call returns
-      the final answer.
+    * remaining scripted ``tool_calls`` are emitted one per turn;
+    * then a **plan-mode** call (system prompt is ``PLANNER_SYSTEM``) returns
+      the plan block, and a build-mode call returns the final answer.
+
+    The mode is read from the system prompt only. The retired rule treated an
+    empty tool face as "planner", which misread an empty-face build round as a
+    plan (#330): plan mode can mount an empty explore face just as well.
 
     This lets the LangGraph loop run end-to-end without any network access, in
     either mode.
@@ -102,9 +93,6 @@ class MockLLMClient(LLMClient):
         tools: List[Dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        if not tools:
-            # Legacy planner call: hand back the plan as a JSON array of steps.
-            return LLMResponse(content=json.dumps(self.plan, ensure_ascii=False))
         if self._turn < len(self.tool_calls):
             tc = self.tool_calls[self._turn]
             self._turn += 1
@@ -118,14 +106,6 @@ class MockLLMClient(LLMClient):
             )
         logger.info("MockLLM agent -> final_answer")
         return LLMResponse(content=self.final_answer)
-
-    def stream(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Iterator[LLMResponse]:
-        yield self.complete(messages, tools, **kwargs)
 
     def reset(self) -> None:
         """Reset the turn counter (useful between tasks in tests)."""

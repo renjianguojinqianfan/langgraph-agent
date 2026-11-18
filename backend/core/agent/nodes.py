@@ -23,7 +23,6 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from ...config import get_settings
 from ...services import plan_file
 from ...services.plan_file import extract_plan, plan_hash, write_plan
 from ...utils.logging import get_logger
@@ -35,6 +34,7 @@ from ..runtime_context import workspace_root
 from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
+from .host import AgentHost
 from .policy import DangerPolicy
 from .prompts import EXECUTOR_SYSTEM, planner_system
 from .state import AgentState
@@ -119,7 +119,7 @@ class AgentRuntime:
     def __init__(
         self,
         task_id: str,
-        task_manager: Any,
+        task_manager: AgentHost,
         llm: Any,
         tools: List[BaseTool],
         tool_schemas: List[Dict[str, Any]],
@@ -156,7 +156,7 @@ class AgentRuntime:
         # P1-A′: discover + merge once per task (task-level cache); mid-task edits
         # to AGENTS.md intentionally do not take effect. Subtask graphs share this
         # __init__, so they receive the same block with no extra code.
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        settings = self.tm.settings
         # S2 (#136): the danger rule table is compiled once per task, same snapshot
         # discipline as the injection block below — mid-task edits take effect on
         # the NEXT task. An empty table compiles to zero rules and `check` always
@@ -176,11 +176,11 @@ class AgentRuntime:
         # context (neither tool call nor delegation).
         self._planner_system: str = planner_system(
             packages,
-            subagent_enabled=getattr(settings, "subagent_enabled", True),
+            subagent_enabled=settings.subagent_enabled,
         )
         self._inject_block: str = (
             inject.build_inject_block(settings, include_skills=include_skills)
-            if getattr(settings, "context_inject_enabled", True)
+            if settings.context_inject_enabled
             else ""
         )
 
@@ -199,9 +199,7 @@ class AgentRuntime:
         """
         if state.get("stop_requested"):
             return True
-        tm = getattr(self, "tm", None)
-        checker = getattr(tm, "is_stop_flagged", None)  # test fakes may not ship it
-        if callable(checker) and any(checker(watched) for watched in self._stop_watch_ids):
+        if any(self.tm.is_stop_flagged(watched) for watched in self._stop_watch_ids):
             state["stop_requested"] = True
             return True
         return False
@@ -221,7 +219,7 @@ class AgentRuntime:
         (C6) and is outside the compression input, so compression cannot drop
         it; when the version changes, exactly one gray note records it.
         """
-        settings = getattr(getattr(self, "tm", None), "settings", None) or get_settings()
+        settings = self.tm.settings
         # The previous call's injected plan is stale input for eviction,
         # compression and the summarizer; the current file is appended below.
         messages = plan_file.strip_plan_messages(state.get("messages", []) or [])
@@ -331,23 +329,16 @@ class AgentRuntime:
 
     def _redact(self, text: str) -> str:
         """Strip known keys before an error reaches state / SSE / trace."""
-        redact = getattr(getattr(self, "tm", None), "redact", None)
-        return redact(text) if callable(redact) else text
+        return self.tm.redact(text)
 
     def _reasoning_for_display(self, text: str) -> str:
         """D-38: redacted + bounded reasoning copy for SSE / persistence.
 
-        The real manager owns the single truncation seam; the fallback keeps
-        test fakes (which have no redact_reasoning) working.
+        The host owns the single truncation seam (TaskManager.redact_reasoning).
         """
         if not text:
             return ""
-        redact_reasoning = getattr(
-            getattr(self, "tm", None), "redact_reasoning", None
-        )
-        if callable(redact_reasoning):
-            return redact_reasoning(text)
-        return self._redact(text)
+        return self.tm.redact_reasoning(text)
 
     def _stamp_reasoning(self, turn: Dict[str, Any], reasoning: str) -> None:
         """Attach raw reasoning for protocol replay + its D-39 provenance.

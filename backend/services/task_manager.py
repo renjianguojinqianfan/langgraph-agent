@@ -1246,85 +1246,92 @@ class TaskManager:
         t.start()
 
     def run(self, task_id: str) -> None:
-        # P1-B / ADR 0010: this worker thread is bound to the task and its
-        # workspace; tools read both from the runtime context.
-        task = self.persistence.load_task(task_id)
-        if task is None:
-            logger.warning("run: unknown task %s", task_id)
-            return
-        tokens = set_runtime_context(task_id, Path(task.workspace))
-
-        self._mutate_task(
-            task,
-            changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
-            strict=False,
+        """One round for a freshly created task (#330 shared core)."""
+        self._execute_round(
+            task_id,
+            self._prepare_new_round,
+            entry="run",
+            require_running=False,
+            flip_running=True,
         )
 
+    def _execute_round(
+        self,
+        task_id: str,
+        prepare: Callable[[Any, Task], AgentState],
+        *,
+        entry: str,
+        require_running: bool,
+        flip_running: bool,
+    ) -> None:
+        """Assemble once, invoke once, settle once — the one round runner.
+
+        New / resumed / continued rounds differ only in *admission* (request
+        side) and in how the starting state is prepared; everything from
+        runtime assembly to the ``finally`` teardown lives here so the three
+        paths cannot drift apart (#330).
+
+        ``prepare`` runs inside the try, after the runtime context is seated
+        and the record is optionally flipped to RUNNING: a checkpoint restore
+        needs the compiled graph, and a failure there must still settle the
+        record and tear down this worker's references.
+        """
+        # P1-B / ADR 0010: this worker thread is bound to the task and its
+        # workspace; tools read both from the runtime context.
+        tokens: Optional[Any] = None
         try:
-            # The directory may have disappeared while the task was queued.
-            # Fail before any file tool can recreate its root.
-            self._require_workspace(task)
-            # A fresh task has no plan file yet, so the lenient path is nearly
-            # unreachable here — but a lock must never fail the round (#260).
-            seeded = self._seed_plan_lenient(task) or {
-                "plan_text": "",
-                "plan_version": 0,
-                "plan_hash": "",
-            }
-            state: AgentState = {
-                "task_id": task_id,
-                "mode": task.mode.value,
-                "messages": [{"role": "user", "content": task.user_input}],
-                "plan_text": seeded["plan_text"],
-                "plan_version": seeded["plan_version"],
-                "plan_hash": seeded["plan_hash"],
-                "steps": [],
-                "status": "RUNNING",
-                "stop_requested": False,
-                "round_no": self._round_number(task),
-                "step_index": 0,
-                "round_steps": 0,
-                "final_answer": "",
-                "error": "",
-                "_last_action": "",
-                "_current_tool_calls": [],
-                "subtasks": [],
-            }
+            current = self.persistence.load_task(task_id)
+            if current is None:
+                logger.warning("%s: unknown task %s", entry, task_id)
+                return
+            if require_running and current.status != TaskStatus.RUNNING:
+                # A stop() (or a newer state) won the race before this worker
+                # got here; yield to it rather than run a round it refused.
+                logger.info(
+                    "%s of %s superseded by newer state; aborting.",
+                    entry.capitalize(),
+                    task_id,
+                )
+                return
+            tokens = set_runtime_context(task_id, Path(current.workspace))
+            if flip_running:
+                # Flip only now that this worker owns the task: the context is
+                # seated first, so a failure here cannot leak a contextvar set.
+                self._mutate_task(
+                    current,
+                    changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
+                    strict=False,
+                )
+            graph = build_graph(
+                self._build_runtime(current), checkpointer=self._checkpointer
+            )
+            state = prepare(graph, current)
             self._active_states[task_id] = state
 
-            runtime = AgentRuntime(
-                task_id=task_id,
-                task_manager=self,
-                llm=self._pin_round_model(task),
-                tools=self._tools,
-                tool_schemas=self._tool_schemas,
-                max_steps=self.settings.max_steps,
-                model_profile=self.model_id_for(task),
-                reasoning_scope=self.reasoning_scope_for(self.model_id_for(task)),
-                packages=self.packages,
-                injection_fragments=self.injection_fragments,
-            )
-            graph = build_graph(runtime, checkpointer=self._checkpointer)
             final = graph.invoke(
                 state, self._thread_config(task_id), **self._invoke_kwargs()
             )
 
-            task = self.persistence.load_task(task_id) or task
+            task = self.persistence.load_task(task_id)
+            if task is None:
+                raise RuntimeError(f"task {task_id} vanished during {entry}")
             self._finalize_terminal(task, final)
         except Exception as exc:  # pragma: no cover - defensive
-            error = self.redact(str(exc))
-            logger.error("run() crashed for task %s: %s", task_id, error)
-            self._mutate_task(
-                task,
-                changes={
-                    "status": TaskStatus.FAILED,
-                    "error": error,
-                    "updated_at": _now(),
-                },
-                strict=False,
-            )
+            message = self.redact(str(exc))
+            logger.error("%s crashed for task %s: %s", entry, task_id, message)
+            task = self.persistence.load_task(task_id)
+            if task is not None:
+                self._mutate_task(
+                    task,
+                    changes={
+                        "status": TaskStatus.FAILED,
+                        "error": message,
+                        "updated_at": _now(),
+                    },
+                    strict=False,
+                )
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": error}
+                task_id, "task_failed", {"task_id": task_id, "error": message}
             )
         finally:
             self._active_states.pop(task_id, None)
@@ -1332,11 +1339,105 @@ class TaskManager:
             self._stop_flags.pop(task_id, None)
             self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
-            reset_runtime_context(tokens)
-            # P0 item 4: always close the trace (success / failure / interrupt)
-            # so the JSONL terminates with a trace_end line.
+            if tokens is not None:
+                reset_runtime_context(tokens)
+            # P0 item 4: always close the trace (success / failure / interrupt /
+            # superseded) so the JSONL terminates with a trace_end line.
             if self._trace is not None:
                 self._trace.close(task_id)
+
+    def _build_runtime(self, task: Task) -> AgentRuntime:
+        """The per-round runtime; the three entries share this assembly."""
+        model_id = self.model_id_for(task)
+        return AgentRuntime(
+            task_id=task.id,
+            task_manager=self,
+            llm=self._pin_round_model(task),
+            tools=self._tools,
+            tool_schemas=self._tool_schemas,
+            max_steps=self.settings.max_steps,
+            model_profile=model_id,
+            reasoning_scope=self.reasoning_scope_for(model_id),
+            packages=self.packages,
+            injection_fragments=self.injection_fragments,
+        )
+
+    def _prepare_new_round(self, _graph: Any, task: Task) -> AgentState:
+        """A fresh task starts from zero channels; the plan file seeds the plan."""
+        # The directory may have disappeared while the task was queued.
+        # Fail before any file tool can recreate its root.
+        self._require_workspace(task)
+        # A fresh task has no plan file yet, so the lenient path is nearly
+        # unreachable here — but a lock must never fail the round (#260).
+        seeded = self._seed_plan_lenient(task) or {
+            "plan_text": "",
+            "plan_version": 0,
+            "plan_hash": "",
+        }
+        return {
+            "task_id": task.id,
+            "mode": task.mode.value,
+            "messages": [{"role": "user", "content": task.user_input}],
+            "plan_text": seeded["plan_text"],
+            "plan_version": seeded["plan_version"],
+            "plan_hash": seeded["plan_hash"],
+            "steps": [],
+            "status": "RUNNING",
+            "stop_requested": False,
+            "round_no": self._round_number(task),
+            "step_index": 0,
+            "round_steps": 0,
+            "final_answer": "",
+            "error": "",
+            "_last_action": "",
+            "_current_tool_calls": [],
+            "subtasks": [],
+        }
+
+    def _prepare_restored_round(
+        self, graph: Any, task: Task, *, user_text: Optional[str] = None
+    ) -> AgentState:
+        """Seed a resumed / continued round from the durable checkpoint.
+
+        The previous run ended at END, so this invoke starts a fresh pass from
+        START over the restored channels — the conversation keeps growing
+        instead of being replayed or reset. Reset *control* flags only; plan /
+        steps survive.
+        """
+        # Bounded re-read (Issue #23): resume() already proved a durable
+        # checkpoint exists, but under load the freshly mounted store can
+        # expose the tuple a beat before its channel values are readable.
+        # Retrying the read keeps a legitimately-admitted resume from
+        # spuriously FAILEDing; reject semantics are untouched.
+        values = self._read_restorable_state(graph, task.id)
+        # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
+        # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
+        restored = cast(AgentState, values)
+        if user_text is not None:
+            restored.setdefault("messages", []).append(
+                {"role": "user", "content": user_text}
+            )
+        # The plan file is the source of truth; seed it over the checkpoint.
+        # Lenient (#260): a transient lock keeps the checkpoint's plan
+        # instead of failing the round.
+        seeded = self._seed_plan_lenient(task)
+        if seeded is not None:
+            restored["plan_text"] = seeded["plan_text"]
+            restored["plan_version"] = max(
+                seeded["plan_version"], int(restored.get("plan_version", 0))
+            )
+            restored["plan_hash"] = seeded["plan_hash"]
+        restored["mode"] = task.mode.value
+        restored["status"] = "RUNNING"
+        restored["stop_requested"] = False
+        restored["_current_tool_calls"] = []
+        restored["_last_action"] = ""
+        restored["final_answer"] = ""
+        restored["error"] = ""
+        # Budget is per round; step_index stays cumulative for record ids.
+        restored["round_steps"] = 0
+        restored["round_no"] = self._round_number(task)
+        return restored
 
     # ── control ──
     def kill_background(self, task_id: str) -> int:
@@ -1406,6 +1507,25 @@ class TaskManager:
         teardown; a sub-agent's is popped by the executor's done callback
         (Issue #71), since a subtask never enters ``_active_states``."""
         return self._stop_flags.get(task_id, False)
+
+    # ── #330: the host surface the agent nodes / subtask executor use ──
+    def request_stop(self, task_id: str) -> None:
+        """Set the stop flag for a run that has no teardown of its own.
+
+        Only a subtask uses this: ``stop()`` parks a task *record*, while a
+        subtask is not a record — the executor sets the flag and clears it from
+        the future's done callback (Issue #71).
+        """
+        self._stop_flags[task_id] = True
+
+    def clear_stop(self, task_id: str) -> None:
+        """Drop a flag set by :meth:`request_stop` (unconditional pop)."""
+        self._stop_flags.pop(task_id, None)
+
+    @property
+    def tool_face(self) -> List[BaseTool]:
+        """The mounted tool instances; a subtask narrows this by tier."""
+        return self._tools
 
     # ── spec Issue #4: checkpoint-backed resume ──
     def _invoke_kwargs(self) -> Dict[str, Any]:
@@ -1720,99 +1840,14 @@ class TaskManager:
         raise RuntimeError(f"empty checkpoint state for task {task_id}")
 
     def _resume_run(self, task_id: str) -> None:
-        tokens = None
-        try:
-            # A stop() between our RUNNING flip and this point would otherwise
-            # be swallowed by the restored control flags below — re-check the
-            # persisted status and yield to the (newer) interrupt instead.
-            current = self.persistence.load_task(task_id)
-            if current is None or current.status != TaskStatus.RUNNING:
-                logger.info("Resume of %s superseded by newer state; aborting.", task_id)
-                return
-            tokens = set_runtime_context(task_id, Path(current.workspace))
-
-            runtime = AgentRuntime(
-                task_id=task_id,
-                task_manager=self,
-                llm=self._pin_round_model(current),
-                tools=self._tools,
-                tool_schemas=self._tool_schemas,
-                max_steps=self.settings.max_steps,
-                model_profile=self.model_id_for(current),
-                reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
-                packages=self.packages,
-                injection_fragments=self.injection_fragments,
-            )
-            graph = build_graph(runtime, checkpointer=self._checkpointer)
-
-            # Bounded re-read (Issue #23): resume() already proved a durable
-            # checkpoint exists, but under load the freshly mounted store can
-            # expose the tuple a beat before its channel values are readable.
-            # Retrying the read keeps a legitimately-admitted resume from
-            # spuriously FAILEDing; reject semantics are untouched.
-            values = self._read_restorable_state(graph, task_id)
-            # cast 在运行时是恒等函数：快照读回来是个普通 dict，而 _active_states
-            # 的类型面是 AgentState（TypedDict），这里只把两者对齐，不改任何行为。
-            restored = cast(AgentState, values)
-            # Reset *control* flags only; plan / steps survive.
-            # Since #139 one invoke is one round: the per-round budget restarts
-            # and the stale answer/error must not leak into this round's finish.
-            # The plan file is the source of truth; seed it over the checkpoint.
-            # Lenient (#260): a transient lock keeps the checkpoint's plan
-            # instead of failing the round.
-            seeded = self._seed_plan_lenient(current)
-            if seeded is not None:
-                restored["plan_text"] = seeded["plan_text"]
-                restored["plan_version"] = max(
-                    seeded["plan_version"], int(restored.get("plan_version", 0))
-                )
-                restored["plan_hash"] = seeded["plan_hash"]
-            restored["status"] = "RUNNING"
-            restored["stop_requested"] = False
-            restored["_current_tool_calls"] = []
-            restored["_last_action"] = ""
-            restored["final_answer"] = ""
-            restored["error"] = ""
-            restored["round_steps"] = 0
-            restored["round_no"] = self._round_number(current)
-            restored["mode"] = current.mode.value
-            self._active_states[task_id] = restored
-
-            final = graph.invoke(
-                restored, self._thread_config(task_id), **self._invoke_kwargs()
-            )
-
-            task = self.persistence.load_task(task_id)
-            if task is None:
-                raise RuntimeError(f"task {task_id} vanished during resume")
-            self._finalize_terminal(task, final)
-        except Exception as exc:
-            message = self.redact(str(exc))
-            logger.error("resume() crashed for task %s: %s", task_id, message)
-            task = self.persistence.load_task(task_id)
-            if task is not None:
-                self._mutate_task(
-                    task,
-                    changes={
-                        "status": TaskStatus.FAILED,
-                        "error": message,
-                        "updated_at": _now(),
-                    },
-                    strict=False,
-                )
-            self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": message}
-            )
-        finally:
-            self._active_states.pop(task_id, None)
-            self._threads.pop(task_id, None)
-            self._stop_flags.pop(task_id, None)
-            self._round_models.pop(task_id, None)
-            self._interrupt_announced.discard(task_id)
-            if tokens is not None:
-                reset_runtime_context(tokens)
-            if self._trace is not None:
-                self._trace.close(task_id)
+        """One round restored from the checkpoint (#330 shared core)."""
+        self._execute_round(
+            task_id,
+            self._prepare_restored_round,
+            entry="resume",
+            require_running=True,
+            flip_running=False,
+        )
 
     # ── #139: multi-turn continuation (one task = one conversation) ──
     def send_message(self, task_id: str, text: str) -> Dict[str, Any]:
@@ -1985,92 +2020,15 @@ class TaskManager:
         return {"ok": True, "status": TaskStatus.RUNNING.value, "task": snapshot}
 
     def _continue_run(self, task_id: str, user_text: Optional[str]) -> None:
-        """Run one more round on an existing conversation."""
-        tokens = None
-        try:
-            current = self.persistence.load_task(task_id)
-            if current is None or current.status != TaskStatus.RUNNING:
-                logger.info("Continuation of %s superseded by newer state; aborting.", task_id)
-                return
-            tokens = set_runtime_context(task_id, Path(current.workspace))
+        """One more round on an existing conversation (#330 shared core)."""
 
-            runtime = AgentRuntime(
-                task_id=task_id,
-                task_manager=self,
-                llm=self._pin_round_model(current),
-                tools=self._tools,
-                tool_schemas=self._tool_schemas,
-                max_steps=self.settings.max_steps,
-                model_profile=self.model_id_for(current),
-                reasoning_scope=self.reasoning_scope_for(self.model_id_for(current)),
-                packages=self.packages,
-                injection_fragments=self.injection_fragments,
-            )
-            graph = build_graph(runtime, checkpointer=self._checkpointer)
+        def prepare(graph: Any, task: Task) -> AgentState:
+            return self._prepare_restored_round(graph, task, user_text=user_text)
 
-            # The previous run ended at END, so this invoke starts a fresh pass
-            # from START over the restored channels — the conversation keeps
-            # growing instead of being replayed or reset.
-            values = self._read_restorable_state(graph, task_id)
-            restored = cast(AgentState, values)
-            if user_text is not None:
-                restored.setdefault("messages", []).append(
-                    {"role": "user", "content": user_text}
-                )
-            # The plan file is the source of truth; seed it over the checkpoint.
-            # Lenient (#260): a transient lock keeps the checkpoint's plan
-            # instead of failing the round.
-            seeded = self._seed_plan_lenient(current)
-            if seeded is not None:
-                restored["plan_text"] = seeded["plan_text"]
-                restored["plan_version"] = max(
-                    seeded["plan_version"], int(restored.get("plan_version", 0))
-                )
-                restored["plan_hash"] = seeded["plan_hash"]
-            restored["mode"] = current.mode.value
-            restored["status"] = "RUNNING"
-            restored["stop_requested"] = False
-            restored["_current_tool_calls"] = []
-            restored["_last_action"] = ""
-            restored["final_answer"] = ""
-            restored["error"] = ""
-            # Budget is per round; step_index stays cumulative for record ids.
-            restored["round_steps"] = 0
-            restored["round_no"] = self._round_number(current)
-            self._active_states[task_id] = restored
-
-            final = graph.invoke(
-                restored, self._thread_config(task_id), **self._invoke_kwargs()
-            )
-
-            task = self.persistence.load_task(task_id)
-            if task is None:
-                raise RuntimeError(f"task {task_id} vanished during continuation")
-            self._finalize_terminal(task, final)
-        except Exception as exc:
-            message = self.redact(str(exc))
-            logger.error("continuation crashed for task %s: %s", task_id, message)
-            task = self.persistence.load_task(task_id)
-            if task is not None:
-                self._mutate_task(
-                    task,
-                    changes={
-                        "status": TaskStatus.FAILED,
-                        "error": message,
-                        "updated_at": _now(),
-                    },
-                    strict=False,
-                )
-            self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": message}
-            )
-        finally:
-            self._active_states.pop(task_id, None)
-            self._threads.pop(task_id, None)
-            self._stop_flags.pop(task_id, None)
-            self._round_models.pop(task_id, None)
-            self._interrupt_announced.discard(task_id)
-            if tokens is not None:
-                reset_runtime_context(tokens)
-            if self._trace is not None:
-                self._trace.close(task_id)
+        self._execute_round(
+            task_id,
+            prepare,
+            entry="continuation",
+            require_running=True,
+            flip_running=False,
+        )

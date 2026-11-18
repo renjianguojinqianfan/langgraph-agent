@@ -24,15 +24,15 @@ from backend.core.agent.graph import (
 )
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import MockLLMClient
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_agent_host, make_manager, make_settings
 from backend.tests.test_smoke import main as smoke_main
 
 
-def _runtime(max_steps: int = 5) -> AgentRuntime:
+def _runtime(settings, max_steps: int = 5) -> AgentRuntime:
     """A runtime good enough to compile a graph (no LLM, no tools)."""
     return AgentRuntime(
         task_id="t",
-        task_manager=None,
+        task_manager=make_agent_host(settings),
         llm=None,
         tools=[],
         tool_schemas=[],
@@ -57,7 +57,7 @@ def _run_until_done(tm, task_id, timeout=15):
 
 # ── build / compile ──
 def test_build_graph_compiles(settings):
-    graph = build_graph(_runtime())
+    graph = build_graph(_runtime(settings))
     assert graph is not None
 
 
@@ -69,7 +69,7 @@ def test_topology_is_one_agent_loop_and_statically_declared(settings):
     声明不出真实分支：运行照跑，但拓扑不再可读，可视化与静态校验全部失效。
     这条测试把“声明出来了”钉住，免得日后改回 lambda 静默退化。
     """
-    compiled = build_graph(_runtime())
+    compiled = build_graph(_runtime(settings))
     edges = _declared_edges(compiled)
     nodes = set(compiled.get_graph().nodes)
 
@@ -95,9 +95,9 @@ def test_after_agent_router_ends_the_round_on_no_tool_call():
     assert _after_agent({"error": "boom"}) == "finish"
 
 
-def test_tool_router_spends_the_round_budget_into_finish():
+def test_tool_router_spends_the_round_budget_into_finish(settings):
     """步数预算按轮计：预算未尽回 agent，用尽即 finish；stop 优先于预算。"""
-    router = _tool_router(_runtime(max_steps=3))
+    router = _tool_router(_runtime(settings, max_steps=3))
     assert router({"round_steps": 2, "_last_action": "tool_done"}) == "agent"
     assert router({"round_steps": 3}) == "finish"
     assert router({"round_steps": 99, "stop_requested": True}) == "finish"

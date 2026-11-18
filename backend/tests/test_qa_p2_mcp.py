@@ -273,6 +273,15 @@ def test_agent_read_tool_executes_directly(tmp_path, mcp_managers):
         settings = s
         event_bus = bus
 
+        def is_stop_flagged(self, task_id):
+            return False
+
+        def redact(self, text):
+            return text
+
+        def redact_reasoning(self, text):
+            return text
+
         def add_artifact(self, *a, **kw):
             return None
 

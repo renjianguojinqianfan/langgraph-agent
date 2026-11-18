@@ -74,7 +74,7 @@ class _Probe(BaseTool):
 
 
 class _StubTM:
-    """TaskManager 的最小替身：只需要事件总线与停机探针。"""
+    """TaskManager 的最小替身：事件总线、停机探针与脱敏面（#330 宿主 Protocol）。"""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -82,6 +82,12 @@ class _StubTM:
 
     def is_stop_flagged(self, task_id: str) -> bool:
         return False
+
+    def redact(self, text: str) -> str:
+        return text
+
+    def redact_reasoning(self, text: str) -> str:
+        return text
 
     def add_artifact(self, *args: Any, **kwargs: Any) -> None:
         return None

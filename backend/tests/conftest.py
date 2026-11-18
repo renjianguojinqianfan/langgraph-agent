@@ -25,7 +25,7 @@ import tempfile
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, Optional
 
 import yaml
@@ -371,6 +371,29 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
     )
     base.update(overrides)
     return make_isolated_settings(**base)
+
+
+def make_agent_host(
+    settings: Settings,
+    event_bus: Any = None,
+    **overrides: Any,
+) -> SimpleNamespace:
+    """A minimal :class:`~backend.core.agent.host.AgentHost` double (#330).
+
+    Node-level tests drive one or two nodes directly, but the nodes read the
+    host through a Protocol with no ``getattr`` fallback — so the double must
+    provide the same members production does. Overrides let a test record
+    events on its own bus or assert a redaction call.
+    """
+    base: dict[str, Any] = dict(
+        settings=settings,
+        event_bus=event_bus if event_bus is not None else EventBus(),
+        is_stop_flagged=lambda _task_id: False,
+        redact=lambda text: text,
+        redact_reasoning=lambda text: text,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
 
 
 def make_manager(

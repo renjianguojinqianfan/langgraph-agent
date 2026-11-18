@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.client import LLMClient, LLMResponse, MockLLMClient
 from backend.services.task_manager import REASONING_TRUNCATE_LIMIT
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_agent_host, make_manager, make_settings
 
 SENTINEL = "reasoning-key-sentinel-do-not-leak"
 MARKER = "_reasoning_from"
@@ -45,9 +45,6 @@ class _ReasoningLLM(LLMClient):
         if not self._responses:
             return LLMResponse(content="done")
         return self._responses.pop(0)
-
-    def stream(self, messages, tools=None, **kwargs):
-        yield self.complete(messages, tools, **kwargs)
 
 
 class _RecordingBus:
@@ -111,6 +108,7 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
     tm = SimpleNamespace(
         settings=make_settings(tmp_path),
         event_bus=bus,
+        is_stop_flagged=lambda _task_id: False,
         redact=redact,
         redact_reasoning=redact,
     )
@@ -137,11 +135,8 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
 
     # A non-thinking model emits exactly the pre-#267 payload shape.
     quiet_bus = _RecordingBus()
-    quiet_tm = SimpleNamespace(
-        settings=make_settings(tmp_path),
-        event_bus=quiet_bus,
-        redact=redact,
-        redact_reasoning=redact,
+    quiet_tm = make_agent_host(
+        make_settings(tmp_path), quiet_bus, redact=redact, redact_reasoning=redact
     )
     quiet_runtime = AgentRuntime(
         "t-quiet",
@@ -162,7 +157,7 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
 def test_request_history_keeps_same_scope_and_strips_foreign_reasoning(tmp_path):
     runtime = AgentRuntime(
         "t",
-        SimpleNamespace(settings=make_settings(tmp_path), event_bus=_RecordingBus()),
+        make_agent_host(make_settings(tmp_path), _RecordingBus()),
         llm=MockLLMClient(),
         tools=[],
         tool_schemas=[],

@@ -9,7 +9,7 @@ used in compatibility mode.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, List
 
 from ...config import Settings
 from ...utils.logging import get_logger
@@ -123,47 +123,6 @@ class OpenAICompatibleClient(LLMClient):
             reasoning_content=getattr(msg, "reasoning_content", None) or "",
             raw=resp.model_dump() if hasattr(resp, "model_dump") else {},
         )
-
-    def stream(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> Iterator[LLMResponse]:
-        payload: Dict[str, Any] = {"model": self.model, "messages": messages, "stream": True}
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-        payload.update(self._sampling_payload(kwargs))
-
-        stream = self._client.chat.completions.create(**payload)
-        # D-38: streaming reasoning is collected instead of silently dropped.
-        # Each yielded response carries that chunk's delta (a consumer
-        # accumulates by joining `reasoning_content`), and a chunk that only
-        # carries reasoning is still yielded so none of it is lost. The graph
-        # does not consume this stream yet — the UI face is P2-4b.
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            content = getattr(delta, "content", "") or ""
-            reasoning = getattr(delta, "reasoning_content", "") or ""
-            tool_calls: List[Dict[str, Any]] = []
-            if getattr(delta, "tool_calls", None):
-                for tc in delta.tool_calls:
-                    tool_calls.append(
-                        {
-                            "id": getattr(tc, "id", "") or "",
-                            "name": getattr(getattr(tc, "function", None), "name", "") or "",
-                            "arguments": {},
-                        }
-                    )
-            if content or tool_calls or reasoning:
-                yield LLMResponse(
-                    content=content,
-                    tool_calls=tool_calls,
-                    reasoning_content=reasoning,
-                )
 
 
 # M1 / ADR 0010: DeepSeek is the only built-in preset. Other OpenAI-compatible

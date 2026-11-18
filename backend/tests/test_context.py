@@ -26,7 +26,7 @@ from backend.core.agent.context import (
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.services.event_bus import EventBus
-from backend.tests.conftest import make_settings
+from backend.tests.conftest import make_agent_host, make_settings
 
 
 def _msg(role: str, content: str, **extra) -> dict:
@@ -93,10 +93,8 @@ def _runtime(tmp_path: Path, bus: EventBus, task_id: str, **settings_overrides) 
     """A runtime wired to ``bus``, for the event-level assertions below."""
     return AgentRuntime(
         task_id=task_id,
-        task_manager=SimpleNamespace(
-            settings=make_settings(tmp_path, **settings_overrides),
-            event_bus=bus,
-            add_artifact=lambda *a, **k: None,
+        task_manager=make_agent_host(
+            make_settings(tmp_path, **settings_overrides), bus
         ),
         llm=SimpleNamespace(),
         tools=[],
@@ -764,9 +762,7 @@ def test_compressed_event_carries_band_evicted(tmp_path: Path):
     )
     rt = AgentRuntime(
         task_id="t49",
-        task_manager=SimpleNamespace(
-            settings=settings, event_bus=bus, add_artifact=lambda *a, **k: None
-        ),
+        task_manager=make_agent_host(settings, bus),
         llm=SimpleNamespace(),
         tools=[],
         tool_schemas=[],

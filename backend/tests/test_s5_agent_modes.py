@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, List, cast
 
 import pytest
@@ -32,7 +31,7 @@ from backend.core.tools.registry import build_tools
 from backend.main import app
 from backend.services.event_bus import EventBus
 from backend.services.persistence import Persistence, UnsupportedTasksFileError
-from backend.tests.conftest import make_manager, make_settings
+from backend.tests.conftest import make_agent_host, make_manager, make_settings
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -51,16 +50,9 @@ class _RecordingLLM(MockLLMClient):
 
 
 def _runtime(settings, llm, tools) -> AgentRuntime:
-    tm = SimpleNamespace(
-        settings=settings,
-        event_bus=EventBus(),
-        add_artifact=lambda *a, **k: None,
-        is_stop_flagged=lambda _tid: False,
-        _active_states={},
-    )
     return AgentRuntime(
         "t1",
-        tm,
+        make_agent_host(settings),
         llm=llm,
         tools=tools,
         tool_schemas=[t.to_openai_schema() for t in tools],
@@ -124,6 +116,26 @@ class _LoopingLLM(MockLLMClient):
 
 
 # ── mode -> tool face ───────────────────────────────────────────────────────
+def test_an_empty_face_follows_the_mode_not_the_tool_count(tmp_path: Path) -> None:
+    """#330: an empty face is legal in both modes and must not flip the mode.
+
+    The mock used to read "no tools" as "planner", so a build round with a
+    disabled face returned a plan block. The mode is what decides.
+    """
+    settings = make_settings(tmp_path)
+    plan_rt = _runtime(settings, MockLLMClient(plan=["step"]), [])
+    plan_state = _state(mode="plan")
+    plan_rt.agent(plan_state)
+    assert "step" in plan_state["plan_text"]
+
+    build_rt = _runtime(
+        settings, MockLLMClient(plan=["step"], final_answer="built"), []
+    )
+    build_state = _state(mode="build")
+    build_rt.agent(build_state)
+    assert build_state["final_answer"] == "built"
+
+
 def test_plan_mode_advertises_only_the_explore_tier(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     tools = build_tools(settings)
