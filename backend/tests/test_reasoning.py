@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import time
-from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from backend.core.agent.nodes import AgentRuntime
@@ -105,10 +104,9 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
     def redact(text: str) -> str:
         return text.replace(SENTINEL, "[redacted]")
 
-    tm = SimpleNamespace(
-        settings=make_settings(tmp_path),
+    tm = make_agent_host(
+        make_settings(tmp_path),
         event_bus=bus,
-        is_stop_flagged=lambda _task_id: False,
         redact=redact,
         redact_reasoning=redact,
     )

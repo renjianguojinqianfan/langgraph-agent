@@ -640,6 +640,22 @@ describe("tool_call 回放归属与幂等", () => {
     { type: "task_interrupted", data: { task_id: "t1" } },
   ];
 
+  it("没有任何步骤时，未归类的 tool_call 不造桩、不改任务", () => {
+    const prev = snapshot({ steps: [] });
+    const next = applyToTask(prev, "t1", {
+      type: "tool_call",
+      data: {
+        id: "c9",
+        tool_name: "write",
+        input: {},
+        output: null,
+        status: "pending",
+      },
+    });
+    expect(next).toBe(prev);
+    expect(next.steps).toEqual([]);
+  });
+
   it("回放已快照的调用落在原步骤，不追加到末步、不把收尾步骤翻回 running", () => {
     const next = applyToTask(settled(), "t1", {
       type: "tool_call",
