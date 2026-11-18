@@ -8,8 +8,9 @@ Covers:
 * connection + tool discovery (name/args_schema match the server inputSchema);
 * call forwarding (``call_tool``) and ToolResult mapping;
 * failure isolation: bad command, killed server -> ``success=False`` not crash;
-* danger classification from the server's self-reported ``destructiveHint`` /
-  ``readOnlyHint`` — issue #57; inert metadata since #138 removed the gate;
+* retired metadata stays retired: annotations are not read and ``McpTool``
+  carries no ``danger_signal`` (#331 — the #57 classification went with the
+  #138 confirmation gate); calls are judged by ``policy_rules`` like any tool;
 * idempotent cleanup (no leaked child processes).
 """
 
@@ -294,40 +295,25 @@ def test_mcp_tool_reports_exception_type_when_timeout_message_is_empty(tmp_path)
     assert res.error == "TimeoutError"
 
 
-# ─────────────────── danger classification ───────────────────
-def test_mcp_self_reported_annotations_drive_the_danger_signal(tmp_path, mcp_managers):
-    """The server's self-reported annotations (via ``connect_all``) reach McpTool.
+# ─────────────────── retired danger metadata (#331) ───────────────────
+def test_mcp_tool_carries_no_inert_danger_metadata(tmp_path):
+    """#331 removed the classification, not just its consumer.
 
-    #57 replaced the verb table with the protocol's own hints; #138 later retired
-    the confirmation gate, so the classification is inert metadata now.
+    The confirmation gate retired in #138; the three-state signal kept being
+    computed for nobody. A regression that re-introduces either name would make
+    this fail instead of quietly growing an unread field again.
     """
-    s = _echo_settings(tmp_path)
-    mgr = mcp_managers(s)
-    discovered = {t["name"]: t for t in mgr.connect_all()}
-    read_tool = McpTool(
+    from backend.core.tools import mcp_tool
+
+    for gone in ("classify_annotations", "DANGER_DANGEROUS", "DANGER_SAFE", "DANGER_UNKNOWN"):
+        assert not hasattr(mcp_tool, gone)
+    s = _echo_settings(tmp_path, mcp_servers="[]")
+    tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
-        input_schema={}, manager=mgr, settings=s,
-        annotations=discovered["echo"]["annotations"],
+        input_schema={}, manager=object(), settings=s,
     )
-    write_tool = McpTool(
-        server_name="echo", tool_name="write_file", description="Write a file.",
-        input_schema={}, manager=mgr, settings=s,
-        annotations=discovered["write_file"]["annotations"],
-    )
-    assert read_tool.danger_signal == "safe"
-    assert write_tool.danger_signal == "dangerous"
-
-
-def test_mcp_unreported_tool_reads_as_unknown(tmp_path, mcp_managers):
-    """AC2：server 两个 hint 都没给 → ``unknown``，不当作 safe。"""
-    s = _echo_settings(tmp_path)
-    mgr = mcp_managers(s)
-    mgr.connect_all()
-    unreported = McpTool(
-        server_name="echo", tool_name="quiet", description="Nobody knows.",
-        input_schema={}, manager=mgr, settings=s,
-    )
-    assert unreported.danger_signal == "unknown"
+    assert not hasattr(tool, "danger_signal")
+    assert not hasattr(tool, "requires_confirm")
 
 
 # ─────────────────── child environment (#254) ───────────────────

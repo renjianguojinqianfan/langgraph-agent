@@ -42,7 +42,7 @@ class WebSearchTool(BaseTool):
         },
         "required": ["query"],
     }
-    requires_confirm = False
+
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)
         self._provider = (settings.search_provider if settings else "duckduckgo").lower()

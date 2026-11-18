@@ -1,10 +1,11 @@
 """``spawn_subagent`` tool (P1 item 2).
 
 Lets the main agent delegate an isolated subtask through the ordinary
-function-calling interface. The tool carries ``requires_confirm=True`` as a
-danger marker (inert since #138 retired the confirmation gate). Subtasks run the
-same graph now, but their tool face is a declared tier that cannot reach a
-dangerous tool, so nothing can get stranded inside a subtask.
+function-calling interface. The isolation is the declared tier a subtask runs
+over — not a per-tool danger flag (the confirmation gate and its inert
+``requires_confirm`` marker are gone since #138 / #331). Subtasks run the same
+graph, but their tool face cannot reach a dangerous tool, so nothing can get
+stranded inside a subtask.
 
 The actual execution is delegated to the :class:`SubAgentExecutor` wired by
 :class:`TaskManager` (``SpawnSubagentTool.executor``). When the executor is
@@ -74,7 +75,6 @@ class SpawnSubagentTool(BaseTool):
         },
         "required": ["name", "instruction"],
     }
-    requires_confirm = True
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__(settings)

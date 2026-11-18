@@ -55,7 +55,6 @@ class LoadSkillTool(BaseTool):
         "that skill's instructions."
     )
     args_schema = _ARGS_SCHEMA
-    requires_confirm = False
 
     def __init__(self, settings: Settings | None = None, home_dir: Optional[Path] = None) -> None:
         super().__init__(settings)

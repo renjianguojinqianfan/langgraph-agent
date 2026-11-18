@@ -309,25 +309,29 @@ def test_check_face_resolves_without_running_anything(tmp_path):
 
 
 # ── tier reachability, judged on the real face (issue #56 AC) ────────────────
-def test_no_tier_mounts_a_danger_marked_tool(tmp_path):
-    """任何档位都拿不到被标成危险的工具（#56 收窄；#138 之后主图也无闸门了）。"""
-    seen_marked: set = set()
+def test_shell_and_spawn_subagent_are_outside_every_tier(tmp_path):
+    """命令执行与嵌套派发在档位表里就不存在；点名请求也按档外拒绝（#56 / #331）。"""
+    for tier in (EXPLORE_TIER, EXECUTE_TIER):
+        assert "shell" not in TOOL_TIERS[tier]
+        assert "spawn_subagent" not in TOOL_TIERS[tier]
+
     for label, tm, ex in _mounted_managers(tmp_path):
-        marked = {
-            t.name
-            for t in tm._tools
-            if getattr(t, "requires_confirm", False)
-        }
-        assert marked, f"{label} 装载面没有危险标记工具，下面的断言会空转"
-        seen_marked |= marked
         names = [t.name for t in tm._tools]
+        # 非空转前提：两个工具在父装配面上真的存在，只是进不了子任务。
+        assert {"shell", "spawn_subagent"} <= set(names), f"{label} 装配面缺工具"
         for tier in (EXPLORE_TIER, EXECUTE_TIER):
-            face = ex.check_face(_spec(subtask_id=f"{label}:sub:1", tier=tier))
+            face = ex.check_face(_spec(subtask_id=f"{label}:{tier}:1", tier=tier))
             assert face == tier_face_names(names, tier)
-            leaked = set(face) & marked
-            assert not leaked, f"{label}/{tier} 档漏进了危险标记的工具 {sorted(leaked)}"
-    # The dangerous families the issue names are all really present somewhere above.
-    assert {"shell", "spawn_subagent"} <= seen_marked
+            assert not set(face) & {"shell", "spawn_subagent"}
+            with pytest.raises(TierError) as excinfo:
+                ex.check_face(
+                    _spec(
+                        subtask_id=f"{label}:{tier}:req",
+                        tier=tier,
+                        tools=["shell"],
+                    )
+                )
+            assert "shell" in str(excinfo.value)
 
 
 def test_external_write_family_is_out_of_reach_in_every_tier(tmp_path):

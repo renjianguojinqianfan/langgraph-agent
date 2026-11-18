@@ -520,8 +520,6 @@ class ShellTool(BaseTool):
         },
         "required": ["command"],
     }
-    # Danger marker (inert since #138; the policy hook is what can block a call).
-    requires_confirm = True
     # The shell writes files without a single advertised ``path``, so it is not
     # a product source (same rule the removed ``code_exec`` followed).
     registers_artifact = False

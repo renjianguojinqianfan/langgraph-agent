@@ -2,8 +2,8 @@
 
 Issue #56 collapsed the feature to one entry point, so the QA angle is now:
 
-* ``spawn_subagent`` keeps its ``requires_confirm=True`` flag (inert metadata
-  since #138 removed the gate) and the delegation actually runs;
+* the delegation actually runs through ``spawn_subagent`` (the inert
+  ``requires_confirm`` flag went away with #331);
 * the parent's context carries only the folded digest (as a *tool* turn, never
   replayed as an assistant one — #51), never the subtask's internal messages;
 * subtask internal events live on the subtask's own channel, not the parent's;
@@ -175,14 +175,6 @@ class _SpawnOnceMock(MockLLMClient):
                 ],
             )
         return LLMResponse(content=self.final_answer)
-
-
-# ── the spawn flag ───────────────────────────────────────────────────────────
-def test_spawn_subagent_tool_requires_confirm(tmp_path):
-    settings = make_settings(tmp_path)
-    tm = make_manager(settings, MockLLMClient(plan=["p"], final_answer="d"))
-    tool = next(t for t in tm._tools if t.name == "spawn_subagent")
-    assert tool.requires_confirm is True
 
 
 # ── context isolation ────────────────────────────────────────────────────────
