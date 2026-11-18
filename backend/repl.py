@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, Optional, Sequence
 
 from . import api_client
 from .api.schemas import TaskStatus
-from .api_client import AdmissionRejected, ApiClient, ApiError, AuthExpired, BackendUnreachable
+from .api_client import ApiClient, ApiError, AuthExpired, BackendUnreachable
 from .config import ensure_loopback_host, get_settings
 from .services.auth import ensure_startup_auth_configured
 from .services.plugins_store import resolve_effective_plugins
@@ -192,7 +192,7 @@ class _Stream:
                 if self.stop.is_set():
                     return
                 self.queue.put(event)
-        except (BackendUnreachable, AuthExpired, ApiError) as exc:
+        except (BackendUnreachable, ApiError) as exc:
             self.error = exc
         except Exception:  # a bug, not a transport condition: never silent
             logger.exception("event stream reader failed for %s", task_id)
@@ -624,7 +624,7 @@ def repl_main(
                 emit(f"✗ {exc}")
                 emit("… 认证已过期或无效：请在设置页确认 auth_token 后重启终端。")
                 return 1
-            except (AdmissionRejected, ApiError, BackendUnreachable, RuntimeError, ValueError) as exc:
+            except (RuntimeError, ValueError) as exc:
                 # L4: command paths print the reason instead of a raw traceback.
                 emit(f"✗ {exc}")
                 continue
@@ -633,7 +633,7 @@ def repl_main(
         emit(f"✗ {exc}")
         emit("… 认证已过期或无效：请在设置页确认 auth_token 后重启终端。")
         return 1
-    except (ApiError, BackendUnreachable, RuntimeError, ValueError) as exc:
+    except (RuntimeError, ValueError) as exc:
         emit(f"✗ {exc}")
         return 1
     finally:

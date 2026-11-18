@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -567,6 +568,17 @@ def test_pwsh_runs_npm_cmd_when_available(settings):
     res = ShellTool(settings).run(command="npm --version", shell=SHELL_PWSH)
     assert res.success is True, res.error
     assert re.search(r"\d+\.\d+\.\d+", res.data["stdout"])
+
+
+@WINDOWS_ONLY
+def test_pwsh_runs_an_interpreter(settings):
+    res = ShellTool(settings).run(
+        command=f"& '{sys.executable}' -c \"print('interp-ok')\"",
+        shell=SHELL_PWSH,
+    )
+    assert res.success is True, res.error
+    assert res.data["exit_code"] == 0
+    assert res.data["stdout"].strip() == "interp-ok"
 
 
 @WINDOWS_ONLY

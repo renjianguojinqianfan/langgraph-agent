@@ -106,6 +106,24 @@ def test_stop_refuses_when_no_instance_is_registered(tmp_path, monkeypatch):
     assert exits == []
 
 
+def test_stop_refuses_a_dev_backend_without_an_exit_hook(tmp_path, monkeypatch):
+    settings, app, exits = _app(tmp_path, monkeypatch)
+    app.state.request_server_exit = None  # start.py has no programmable hook
+    lock_file = _claim(settings)
+    tm = FakeTaskManager([SimpleNamespace(id="t1", status=TaskStatus.RUNNING)])
+    with TestClient(app, base_url="http://localhost") as client:
+        app.state.task_manager = tm
+        response = client.post("/api/server/stop", json={"instance": "inst-1"})
+
+        assert response.status_code == 409
+        assert "start.py" in response.json()["detail"]
+        assert tm.stopped == []
+        assert exits == []
+        assert server_lock.read_lock(lock_file) is not None
+        # A refused stop leaves the dev backend serving.
+        assert client.get("/api/plugins").status_code == 200
+
+
 def test_stop_requires_an_instance_field(tmp_path, monkeypatch):
     _settings, app, _exits = _app(tmp_path, monkeypatch)
     with TestClient(app, base_url="http://localhost") as client:

@@ -18,7 +18,6 @@ a time.
 from __future__ import annotations
 
 import os
-import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -76,11 +75,23 @@ def stop_backend(app_state: Any, *, timeout: float | None = None) -> StopReport:
     ``app_state`` is the FastAPI state: ``settings``, ``task_manager``,
     ``accepting_runs`` (the 503 gate) and the optional ``request_server_exit``
     hook installed by ``backend.serve``.
+
+    A backend started by ``start.py`` has no programmable exit hook; it is
+    refused (409) before any task is touched, rather than reporting a stop that
+    cannot exit the process.
     """
     if timeout is None:
         timeout = STOP_TIMEOUT_SEC
+    request_exit = getattr(app_state, "request_server_exit", None)
+    if not callable(request_exit):
+        raise RuntimeError(
+            "该后台由 start.py 启动，没有可编程退出钩子；请在它的终端按 Ctrl-C 停止。"
+        )
+    stop_lock = getattr(app_state, "stop_lock", None)
+    if stop_lock is None:
+        raise RuntimeError("后台状态不完整（缺少 stop_lock），拒绝停止。")
     report = StopReport()
-    with getattr(app_state, "stop_lock", threading.Lock()):
+    with stop_lock:
         if getattr(app_state, "stop_in_progress", False):
             raise RuntimeError("后台正在停止，请等待本进程退出")
         app_state.stop_in_progress = True
@@ -118,10 +129,8 @@ def stop_backend(app_state: Any, *, timeout: float | None = None) -> StopReport:
             server_lock.release_lock(lock_file, own)
             record = server_lock.read_lock(lock_file)
             report.lock_released = record is None or record.instance != own
-            request_exit = getattr(app_state, "request_server_exit", None)
-            if callable(request_exit):
-                request_exit()
-                report.exit_requested = True
+            request_exit()
+            report.exit_requested = True
             logger.info(
                 "server stop: complete — %d task(s) parked, lock_released=%s,"
                 " exit_requested=%s",
