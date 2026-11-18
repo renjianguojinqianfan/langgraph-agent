@@ -56,8 +56,9 @@ class FakeTaskManager:
         return self._shutdown_ok
 
 
-def _app(tmp_path, monkeypatch, instance="inst-1"):
-    settings = make_settings(tmp_path)
+def _app(tmp_path, monkeypatch, instance="inst-1", auth=False):
+    overrides = {"auth_enabled": True, "auth_token": "secret"} if auth else {}
+    settings = make_settings(tmp_path, **overrides)
     monkeypatch.setenv("QIANFAN_INSTANCE", instance)
     app = create_app(settings)
     exits: list[bool] = []
@@ -199,6 +200,50 @@ def _running_task(settings, task_id="t1"):
     )
     assert Persistence(settings).save_task(task)
     return task
+
+
+def test_stop_retry_can_log_in_again_after_the_gate_closes(tmp_path, monkeypatch):
+    """The 503 gate must keep ``/api/auth/token`` reachable.
+
+    ``server_control`` promises that retrying an incomplete stop is allowed.
+    With auth enabled, a retry is a new CLI process and has to log in first;
+    closing the login route would leave killing the process as the only way
+    out. Every other route stays refused.
+    """
+    from backend.services import server_control
+
+    monkeypatch.setattr(server_control, "STOP_TIMEOUT_SEC", 0.2)
+    settings, app, exits = _app(tmp_path, monkeypatch, auth=True)
+    _claim(settings)
+    tm = FakeTaskManager(
+        [SimpleNamespace(id="t1", status=TaskStatus.RUNNING)],
+        joins=False,
+        shutdown_ok=False,
+    )
+    with TestClient(app, base_url="http://localhost") as client:
+        app.state.task_manager = tm
+        login = client.post("/api/auth/token", json={"token": "secret"})
+        assert login.status_code == 200
+        headers = {"Authorization": f"Bearer {login.json()['data']['token']}"}
+        first = client.post("/api/server/stop", json={"instance": "inst-1"}, headers=headers)
+        assert first.status_code == 504
+
+        # The gate is closed: unrelated routes are refused with or without auth.
+        assert client.get("/api/tasks", headers=headers).status_code == 503
+
+        # A retry logs in again, then reaches the stop route (still incomplete,
+        # but authenticated rather than 401/503).
+        relogin = client.post("/api/auth/token", json={"token": "secret"})
+        assert relogin.status_code == 200
+        retry_headers = {
+            "Authorization": f"Bearer {relogin.json()['data']['token']}"
+        }
+        retry = client.post(
+            "/api/server/stop", json={"instance": "inst-1"}, headers=retry_headers
+        )
+        assert retry.status_code == 504
+        assert retry.json()["data"]["shutdown_complete"] is False
+        assert exits == []
 
 
 def test_stop_parks_a_running_task_and_waits_for_its_worker(tmp_path, monkeypatch):

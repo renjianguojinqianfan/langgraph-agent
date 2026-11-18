@@ -159,8 +159,9 @@ def create_app(settings: Settings) -> FastAPI:
         runtime = build_runtime(settings)
         app.state.settings = settings
         # #332 S5: the stop endpoint closes this gate; the middleware below
-        # answers 503 for every later request except /health and the stop route
-        # itself (so a retry can finish an incomplete shutdown).
+        # answers 503 for every later request except /health, /api/auth/token
+        # and the stop route itself (so a retry can finish an incomplete
+        # shutdown, logging in again when auth is on).
         app.state.accepting_runs = True
         app.state.stop_in_progress = False
         app.state.stop_lock = threading.Lock()
@@ -200,10 +201,13 @@ def create_app(settings: Settings) -> FastAPI:
         ``/health`` stays public so ``qianfan stop`` can wait for the real
         process exit instead of mistaking a 503 probe for "already gone"; the
         stop route stays reachable so a retry can finish an incomplete drain.
+        ``/api/auth/token`` stays reachable for the same reason when auth is
+        enabled: a retry is a fresh CLI process and has to log in first
+        (``server_control`` promises the retry is allowed).
         """
         if getattr(request.app.state, "accepting_runs", True):
             return await call_next(request)
-        if request.url.path in ("/health", "/api/server/stop"):
+        if request.url.path in ("/health", "/api/auth/token", "/api/server/stop"):
             return await call_next(request)
         return JSONResponse(
             status_code=503,

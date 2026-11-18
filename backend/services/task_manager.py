@@ -1873,11 +1873,13 @@ class TaskManager:
 
         One user turn opens one round — counting the persisted turns is the one
         definition every entry point uses (first run, resume, continuation).
-        Every current record opens with its user turn (required by ``Task``), so
-        the count is at least 1. ``_merge_round_turns`` never replaces settled
-        turns, so compression cannot shrink the ledger beneath the counter.
+        Every record the app writes opens with its user turn; the floor keeps a
+        hand-edited record (non-empty ledger without one) from stamping round 0,
+        which the step validator would refuse on the next load.
+        ``_merge_round_turns`` never replaces settled turns, so compression
+        cannot shrink the ledger beneath the counter.
         """
-        return sum(1 for turn in task.conversation if turn.role == "user")
+        return max(1, sum(1 for turn in task.conversation if turn.role == "user"))
 
     @staticmethod
     def _conversation_from(messages: Any) -> List[ChatTurn]:

@@ -327,6 +327,26 @@ def test_compression_does_not_shrink_the_round_ledger(tmp_path: Path) -> None:
     assert tm._round_number(task) == 3
 
 
+def test_a_record_without_a_user_turn_still_starts_at_round_one(
+    tmp_path: Path,
+) -> None:
+    """A hand-edited current-format record must not stamp round 0.
+
+    ``Task`` requires a non-empty ledger but not a user-first one. Step rows
+    demand a 1-based round on load, so returning 0 here would write records
+    this process itself could not read back.
+    """
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient())
+    task = Task(
+        id="orphan",
+        workspace=str(settings.artifacts_path),
+        conversation=[ChatTurn(role="assistant", content="only a stray answer")],
+    )
+
+    assert tm._round_number(task) == 1
+
+
 def test_plan_rounds_append_their_notes_instead_of_overwriting(
     tmp_path: Path,
 ) -> None:
