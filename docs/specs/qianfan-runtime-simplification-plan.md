@@ -14,7 +14,7 @@
 | 命令工具（Q12） | Windows 默认 PowerShell 7；Git Bash 显式可选；共享执行保障，不自动换 Shell 重跑失败命令 | 终端 UI 与执行 Shell 是两个不同层次；其他平台的 Bash 路径保留 |
 | 能力（Q6） | 文件读写/搜索、命令执行、Skills、子代理、网络搜索、MCP 全部保留 | 减少重复装配和旧开关，不缩小实际能力 |
 | 会话与模型（Q7/Q8/Q9） | 显式计划/执行、可编辑计划、跨重启续跑、多模型与 OpenAI 兼容/Anthropic 双协议保留 | 保留同步 checkpoint、当前格式恢复、模型参数继承和轮内模型固定 |
-| 研究观测（Q10/Q11） | 默认完整记录任务内主任务、子代理、压缩的模型调用；保存脱敏请求、响应或错误，只存本地，随任务历史删除清理 | 新增调用级记录与查看能力，不是把已有任务事件改个名字 |
+| 研究观测（Q10/Q11） | 默认把任务内主任务、子代理、压缩的模型调用写入现有任务 trace（重启/任务结束后仍可读）；保存脱敏请求、响应或错误；不新建平行 call-record 存储 | 扩展现有 trace 与查看能力，不是新建第二套记录，也不是把已有任务事件改个名字 |
 
 本计划承接用户先前选择的“整体优化方案”，包含已审计的运行时性能项；grilling 细化产品取舍，没有撤销该范围。因此 S9–S11 是已选范围内的后置优化，不是新增产品功能，实施仍须证明收益。
 
@@ -55,10 +55,10 @@
 | 任务运行 | 当前 Task + 准入 + 单轮执行/收尾 | 新建、恢复、续说、停止和终态；三种入口不再各维护一套执行核心 |
 | 模型解析与适配 | 明确的 `ResolvedModel` + `LLMClient.complete` | 当前模型解析、参数继承、协议适配；不依赖旧 profile 投影，凭据不进入可公开序列化配置 |
 | 命令执行 | 一个命令工具，显式 Shell 选择 + 共同执行结果 | 工作区、环境过滤、输出限制、超时、停止和进程树；Shell 分支只处理发现/启动/语义 |
-| 模型调用记录 | 不可变调用上下文 + 实际请求尝试 + 本地记录读取 | 关联、脱敏、完整性和生命周期，不影响模型决策或重试 |
+| 模型调用记录 | 扩展现有 `TraceRecorder` / 任务 trace；不可变调用上下文 + 实际请求尝试 + 脱敏副本 | 关联、完整性、脱敏和生命周期；不新建平行存储，不影响模型决策或重试 |
 | Web / 终端 | 当前任务 API + SSE + 按需详情 | 展示与用户操作；不直接访问 Persistence、EventBus 或 TaskManager 私有状态 |
 
-Task、AgentState/checkpoint、trace/调用记录仍各有用途，不为了“唯一来源”强行合并。需要收敛的是各自职责和更新入口，而不是把不同用途的数据混成一个对象。
+Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源”强行合并；模型调用事件并入 trace，而不是另建一套记录。需要收敛的是各自职责和更新入口，而不是把不同用途的数据混成一个对象。
 
 ## 4. 工程约束与合理默认
 
@@ -100,11 +100,13 @@ Task、AgentState/checkpoint、trace/调用记录仍各有用途，不为了“�
 - 逻辑调用上下文在 `complete` 边界建立；真实请求与尝试在 HTTP transport/request-response hook 层捕获，覆盖 SDK 合并参数后的请求体和每次内部重试。仅记录适配器准备的 payload 不算完成此项。无 HTTP 的 Mock 调用明确标记，不伪造网络尝试。
 - 响应保留实际返回的 JSON/错误，提取已有 raw 中的 usage。未返回的用量标未知，不用估算冒充实数；不承诺获取未返回的内部思考。
 - 不为观测新增网络重试，也不悄悄改变当前 SDK 重试策略；已有实际尝试全部可见。记录失败不能导致再次调用模型。
-- 脱敏作用于记录副本，不能修改实际发给模型的参数。API Key、认证头和敏感 URL 参数不落记录；任务正文/代码仍按本地敏感资料处理，不承诺识别所有未知秘密。
-- 每个调用的较大请求/响应单独落本地记录；trace/SSE 只传调用 ID、摘要、状态和读取指针，不能把全量上下文广播给每个客户端。
-- 调用列表分页、详情按需读取。页面可以折叠或限制预览，但必须注明并提供完整记录读取/下载；不能为了界面流畅静默截断持久记录。
-- 记录失败遵循现有观测系统的 best-effort 原则：不覆盖模型结果、不拖垮任务，但必须暴露缺失/记录错误，不能显示成完整成功。进程中断后的无响应调用标为未完成/中断，不补造响应。
-- 删除任务历史时清理所属调用记录；先确认任务记录删除已落盘，再清理关联文件。清理失败明确反馈；关闭/删除与真正的 worker 生命周期联动，避免晚到写入重建已删目录。
+- 脱敏作用于记录副本，不能修改实际发给模型的参数。API Key、认证头和敏感 URL 参数不落 trace；任务正文/代码仍按本地敏感资料处理，不承诺识别所有未知秘密。
+- 模型调用以 log-only 事件写入现有任务 `data/traces/<task_id>.jsonl`，与 step/tool 事件共用同一生命周期；不新建平行 call-record 文件。任务结束/重启后 trace 仍可读。
+- 较大请求可截断并标 `truncated`；完整响应/错误保留。SSE 只传调用 ID、摘要、状态和读取指针，不能把全量上下文广播给每个客户端。
+- 调用列表从 trace 过滤/分页读取，详情按需读取。页面可以折叠或限制预览，但必须能读到 trace 里的完整记录（沿用 `/trace` 读取/导出）；不能为了界面流畅静默截断持久记录。
+- trace 写入失败遵循现有观测系统的 best-effort 原则：不覆盖模型结果、不拖垮任务，但必须暴露缺失/记录错误，不能显示成完整成功。进程中断后的无响应调用标为未完成/中断，不补造响应。
+- 删除任务历史时 trace（含模型调用事件）一起清理，沿用现有 trace 清理与失败反馈；关闭/删除与真正的 worker 生命周期联动，避免晚到写入重建已删目录。
+- S7 只记录 assembled 响应；token 级 delta 行另开切片，不把 `stream()` 引入 agent loop。
 
 ## 5. 切片与依赖
 
@@ -162,20 +164,22 @@ Task、AgentState/checkpoint、trace/调用记录仍各有用途，不为了“�
 - 删 REPL 自建 runtime、持服务锁和退出时 shutdown 的路径。实现连接断开、认证过期与服务不可达的明确反馈，不自动重放修改请求。
 - 验收：后台从 A 启动、终端从 B 创建任务归 B；终端创建/Web观察，Web创建/终端续说，两边结果一致；终端退出不中断任务，显式 stop 有效；真实双客户端测试而非只测假 Transport。
 
-### S7：模型调用捕获与本地记录
+### S7：模型调用捕获与 trace 扩展
 
-- 文件面：LLMClient 与两协议适配器、nodes/context/subagent、[trace.py](../../backend/services/trace.py)、任务清理与记录读取接口；允许新增职责单一的调用记录 module。
+- 文件面：LLMClient 与两协议适配器、nodes/context/subagent、[trace.py](../../backend/services/trace.py)、任务清理与 trace 读取接口；允许新增职责单一的 helper，不新增平行存储。
 - 明确不可变调用上下文、logical call/HTTP attempt 关系，在实际 Provider 请求边界取证；不在缓存客户端上存可变任务归属。
-- 独立存请求/响应主体，现有 trace/SSE 仅增加轻量关联元数据；新事件的发布点、类型、注册与文档同片接齐。
-- 默认完整本地记录；认证材料排除、记录副本脱敏、记录错误可见；不新增模型重试，保留并观测已有 SDK 实际尝试。
-- 验收：mock transport 接到的实际请求与记录副本除脱敏字段外一致；双协议、主/子/压缩、两个任务共享同一模型客户端并发、成功/HTTP错误/超时/中断/记录失败；假 Key canary 不出现在日志/SSE/响应/文件；原请求不因脱敏改变；删除及晚到写入竞态。
+- 以 log-only 事件写入现有任务 trace（`data/traces/<task_id>.jsonl`）；SSE 只增加轻量关联元数据；不新建 call-record 文件。
+- 默认写入 trace，任务结束/重启后仍可读；认证材料排除、trace 副本脱敏、记录错误可见；不新增模型重试，保留并观测已有 SDK 实际尝试。
+- 较大请求可截断并标 `truncated`；完整响应/错误保留；不静默截断。
+- 验收：mock transport 接到的实际请求与 trace 事件除脱敏字段外一致；双协议、主/子/压缩、两个任务共享同一模型客户端并发、成功/HTTP错误/超时/中断/记录失败；假 Key canary 不出现在日志/SSE/响应/trace；原请求不因脱敏改变；重启后可读、删除及晚到写入竞态、无平行记录文件。
 
-### S8：调用查看与前端状态策略
+### S8：trace 调用查看与前端状态策略
 
 - 文件面：任务详情/Trace 区、API/types、[taskStore.ts](../../frontend/src/store/taskStore.ts)、[reduceTask.ts](../../frontend/src/store/reduceTask.ts)、[useSSE.ts](../../frontend/src/hooks/useSSE.ts)、终端的轻量调用提示。
-- Web 增加调用列表与按需展开请求/响应/错误；显示模型、用途、归属、尝试和记录完整性。终端保留概要及查看位置，不复制完整 Web 调试界面。
+- Web 从任务 trace 过滤/分页读取模型调用事件，按需展开请求/响应/错误；显示模型、用途、归属、尝试和记录完整性。终端保留概要及查看位置，不复制完整 Web 调试界面。
+- 完整记录读取/导出沿用现有 `/trace`；不新增 call-record 下载端点。
 - 集中快照、事件、续说响应的合并策略；钉轮次、计划版本和迟到响应，不把数组长度包装成可靠版本号，不用重构掩盖尚未解决的顺序问题。
-- 验收：相同文本多轮、乱序/重连、子任务并发、失败记录、超大请求预览/完整读取、删除后不可再读；任务数据与网页文字按文本安全展示；真浏览器操作、控制台与网络请求检查。
+- 验收：相同文本多轮、乱序/重连、子任务并发、失败记录、超大请求预览/完整读取、任务结束/重启后可读、删除后不可再读；任务数据与网页文字按文本安全展示；真浏览器操作、控制台与网络请求检查。
 
 ### S9：文件轮询去放大
 
@@ -252,8 +256,8 @@ Task、AgentState/checkpoint、trace/调用记录仍各有用途，不为了“�
 | S3 单轮执行与收尾集中 | [#330](https://github.com/renjianguojinqianfan/langgraph-agent/issues/330) | #329 |
 | S4 统一命令执行与能力装配 | [#331](https://github.com/renjianguojinqianfan/langgraph-agent/issues/331) | #330 |
 | S5+S6 共享后台与终端薄客户端 | [#332](https://github.com/renjianguojinqianfan/langgraph-agent/issues/332) | #331 |
-| S7 模型调用捕获与本地记录 | [#333](https://github.com/renjianguojinqianfan/langgraph-agent/issues/333) | #332 |
-| S8 调用查看与前端状态策略 | [#334](https://github.com/renjianguojinqianfan/langgraph-agent/issues/334) | #333 |
+| S7 模型调用捕获与 trace 扩展 | [#333](https://github.com/renjianguojinqianfan/langgraph-agent/issues/333) | #332 |
+| S8 trace 调用查看与前端状态策略 | [#334](https://github.com/renjianguojinqianfan/langgraph-agent/issues/334) | #333 |
 | S9 文件轮询去放大 | [#335](https://github.com/renjianguojinqianfan/langgraph-agent/issues/335) | #334 |
 | S10 文件枚举减成本 | [#336](https://github.com/renjianguojinqianfan/langgraph-agent/issues/336) | #335 |
 | S11 批量持久化收口 | [#337](https://github.com/renjianguojinqianfan/langgraph-agent/issues/337) | #336 |
