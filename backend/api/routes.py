@@ -640,7 +640,9 @@ def list_workspace_files(
     still reaches any file inside the workspace (``read`` behaves the same).
     """
     root = _task_workspace(request, task_id)
-    files = workspace_files(root)
+    # #336: one extra entry is enough to prove truncation; the bounded
+    # enumeration never stops after an arbitrary 2000th item.
+    files = workspace_files(root, limit=FILES_MAX + 1)
     entries = []
     for path in files[:FILES_MAX]:
         try:
