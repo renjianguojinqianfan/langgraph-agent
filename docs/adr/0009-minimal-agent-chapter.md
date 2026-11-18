@@ -33,6 +33,9 @@ status: accepted
    要隔离就放进容器或虚拟机——README 写清楚（G-23；[危险规则调研](../archive/research-danger-policy-across-agents.md) §6.4）。
    子进程只放行环境变量白名单，密钥不进 bash。
    **修订（2026-10-20，M1 #172 / ADR 0010 决策 8）**：白名单照旧；但界面粘贴进 `~/.qianfan/credentials.json` 的 Key **bash 读得到**（同账号），这句话改为如实描述。
+   **修订（2026-11-18，[ADR 0013](0013-kernel-simplification.md) 决策 3）**：决策 2–4 的工具名与 Shell 口径由
+   `bash` 改为一个 `shell` 工具（Windows 默认 PowerShell 7、Git Bash 显式可选、POSIX 默认 Bash）；
+   执行保障与安全口径（白名单、账号权限、工作目录不是围墙）不变。
 5. **只让本机访问**：监听 127.0.0.1，跨域只放行自身页面（G-20），Host 检查只认 127.0.0.1 / localhost（G-35）；
    `.env.example` 的 `HOST` 旁注一句「本章只支持本机访问」。**本章不支持远程访问**：远程模式（改监听 + 扩 Host 允许名单 + 必须开登录）整块不做（G-26）。
 6. **交付 = 工作区里的文件**：「产物」栏换成「工作区文件」列表（整个工作区、不分任务、可预览下载，bash 写的也在）。
@@ -54,6 +57,9 @@ status: accepted
 10. **一条命令启动**：`qianfan` 是一个 Python 命令（`[project.scripts]`），本章用 `uv tool install -e .` 装给自己；
     后端同源托管打包好的 `frontend/dist` 并自动打开浏览器。**本章不分发**；分发放下一章，主渠道 PyPI + uv，npm / exe 以后按需套壳（G-22 / G-25）。
 11. **界面原则**：看行为变化靠步骤视图就够，不做「每次调用的完整请求」视图；研究用也要把自己当用户，界面不杂乱（G-7）。
+    **修订（2026-11-18，[ADR 0013](0013-kernel-simplification.md) 决策 4）**：模型调用以 log-only `llm_call`
+    事件写入现有任务 trace，完整脱敏请求/响应按需读取；界面仍保持轻量（SSE 只带摘要与读取指针），
+    但不再以「不看请求」为由不记录。
 
 ## 最简 agent 由什么组成（一页说明）
 

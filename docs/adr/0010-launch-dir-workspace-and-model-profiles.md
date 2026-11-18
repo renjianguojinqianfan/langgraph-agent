@@ -22,9 +22,18 @@ ADR 0009 定了「`qianfan` 一条命令启动」，但没有回答「在哪儿�
 
 1. **工作区 = 启动目录，并且属于任务**：在哪个目录敲 `qianfan`，新任务就在哪个目录读写、跑 bash、读那里的 `AGENTS.md` 与技能目录。目录记在任务上：续说时回到任务自己的目录（界面标明是哪个目录），目录不在了就只能看。不加 `--workspace` 参数（先 `cd`）。MCP 服务仍是整个后台共用一份，工作目录是后台的启动目录、不随任务切换（`backend/core/mcp/client.py:48,202`），README 写明。先例：pi 取启动目录（`packages/coding-agent/src/main.ts:594`）、codex 无 `--cd` 时取当前目录（`codex-rs/cli/src/cloud_config.rs:42`）。
 2. **历史列表默认只列当前目录的任务，可切「全部」**。先例：pi 选择器默认「Current Folder」可切「All」（`session-selector.ts:131,713`）、codex `resume` 默认按目录过滤、`--all` 看全部（`cli/src/main.rs:360-362`）、opencode 默认按当前子路径（`packages/tui/src/context/sync.tsx:160-172`）。旧任务没有目录字段，统一记为仓库的 `data/artifacts`。
+   **修订（2026-11-18，[ADR 0013](0013-kernel-simplification.md) 决策 1）**：旧任务没有目录字段时的
+   `data/artifacts` 回填随兼容断代退役——旧记录被明确拒绝且原文不变；新建任务省略目录仍由发起入口的
+   工作目录确定（新建默认值不是旧记录回填）。
 3. **一台机器共用一个后台**：第二次敲 `qianfan` 发现已有后台在跑，就把浏览器开到它、定位到新目录，不另起进程；`tasks.json` 因此始终只有一个写入者。关掉启动它的终端 = 所有任务停下（之后可续跑）。先例：codex 共享后台发现已运行即报 `AlreadyRunning`（`app-server-daemon/src/lib.rs:408-418`）、opencode 从 v1 的「每次一个服务」改成 v2 的共享服务（`cli/src/server-process.ts:152-169`）。端口默认 8000、`--port` 可改，被别的程序占用就报错提示；`--no-browser` 关自动开浏览器。
+   **修订（2026-11-18，[ADR 0013](0013-kernel-simplification.md) 决策 2）**：后台改为独立进程持有
+   单例锁；退出客户端只断连，运行中任务继续。「共用后台、单写者、第二次启动只交接浏览器」不变；
+   新增 `qianfan status` / `qianfan stop` / `qianfan serve`，停止任务与停止后台区分。
 4. **计划文件路径改为 `<任务目录>/.qianfan/plans/<task_id>.md`**，目录里放一个只含 `*` 的 `.gitignore`（pytest / ruff 缓存目录的做法），不出现在用户项目的 `git status` 里。计划的其余语义（系统替模型存文件、计划模式严格只读、整份重写、删了算无计划、执行模式下模型改文件算更新）全部照 ADR 0009 决策 7 / 8 与决策日志 §0.4。先例：opencode 把计划放在项目内 `.opencode/plans/`（`packages/opencode/src/session/session.ts:331-335`）。
 5. **搜索与文件列表跳过 `.git` 与 `.gitignore` 忽略的文件**：作用于 `glob` / `grep` 与界面的工作区文件列表；`read` 点名读仍可读。由 git 自己判断（本章本来就要求 Git Bash），不加依赖；非 git 目录只跳过 `.git`。先例：pi 的 find / grep「Respects .gitignore」（`packages/coding-agent/src/core/tools/find.ts:78`、`grep.ts:78`）。
+   **修订（2026-11-18，[ADR 0013](0013-kernel-simplification.md) 决策 3）**：Git Bash 不再是默认
+   Shell 前提（Windows 默认 PowerShell 7，Git Bash 显式可选）；`.gitignore` 判断仍由 git 自己完成，
+   不加依赖、非 git 目录只跳过 `.git` 的语义不变。
 6. **安全姿态不变，外加三条**：照 ADR 0009 决策 4 / 5（只让本机访问、危险规则默认空表、bash 拿账号权限、工作目录不是围墙）。在用户主目录或盘根启动**不检查**，README 写清（pi 的立场；codex 的目录信任提示 `tui/src/onboarding/trust_directory.rs` 被否）。删除 `backend/Dockerfile` 与 `docker-compose.yml`（不用 Docker；compose 监听 `0.0.0.0` 即审计 F1）；`start.py` 只作改前端时的热重载开发启动。
 7. **多套模型配置，任务中途可换**：设置页管理多套「地址 + 模型 + Key」；内置预设只有 DeepSeek，其余用「自定义」。只支持 **OpenAI 兼容**接口（所列各家都提供）。思考内容（`reasoning_content`）现已原样回传（`backend/core/agent/nodes.py:390-391,445-446,507-508`；DeepSeek 带工具时不回传会报 400）；中途换模型后，历史里带着上一家的思考内容，要实测下一家不报错，必要时在换模型时剥离。有一个全局默认，任务可以中途换、下一条消息生效、正在跑的那一步不变；子代理跟随父任务的模型；trace 每次调用记下所用模型。先例：dsh（`packages/client/ui-model-selection/README.md:14`）、opencode（`packages/opencode/src/session/prompt.ts:663-687`）、pi（`src/core/agent-session.ts:637`）都是「全局默认 + 会话中途可换」。现有 `.env` 的 `LLM_*` 自动成为第一套配置。〔2026-11-07 由 [ADR 0011](0011-model-config-two-protocols.md) 修订：协议扩为 OpenAI 兼容 + Anthropic；Provider + 模型目录与其余语义不变。〕
 8. **Key 两种来源都留**：每套配置可以引用一个环境变量名（界面显示「已设 / 未设」），也可以在界面里粘贴，存进**仓库外**的 `~/.qianfan/credentials.json`；先用粘贴的那份，没有再读环境变量。环境变量只读启动时继承的那份。模型配置清单本身（不含 Key）存在仓库 `data/` 里。先例：dsh 凭据文件 > 启动时环境变量（`packages/credentials/credentials-local/README.md:71-78`）、pi `auth.json` > 环境变量（`docs/models.md:23`）、opencode `auth.json`（`packages/opencode/src/auth/index.ts:10,79`）——三家都允许落盘明文，都没用系统钥匙串。
