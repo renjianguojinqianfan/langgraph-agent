@@ -1,5 +1,58 @@
 import { SSEvent, StepRecord, SubTask, Task, ToolCallRecord } from "../types";
 
+/**
+ * S8 (#334): the explicit revision every merge decision reads.
+ *
+ * `round` and `step` are the conversation round (#265) and the cumulative
+ * step index. `step` is null on task-level events (a park belongs to the
+ * whole round, not one step). The step-array LENGTH is deliberately not part
+ * of this type: an array that grew by replaying older steps is not newer.
+ */
+export interface TaskRevision {
+  round: number;
+  step: number | null;
+  plan_version: number | null;
+}
+
+/** Revision of an authoritative task snapshot (0/0 for an empty shell). */
+export function taskRevision(task: Task): TaskRevision {
+  let round = 0;
+  let step = 0;
+  for (const record of task.steps) {
+    if (record.round > round) round = record.round;
+    if (record.index > step) step = record.index;
+  }
+  return { round, step, plan_version: task.plan_version ?? 0 };
+}
+
+/** Revision carried by one SSE event; null when the frame predates S8. */
+export function eventRevision(ev: SSEvent): TaskRevision | null {
+  const d = ev.data as Record<string, unknown> | null | undefined;
+  if (!d || typeof d !== "object") return null;
+  const round = typeof d.round === "number" ? d.round : null;
+  const step = typeof d.step === "number" ? d.step : null;
+  const planVersion =
+    typeof d.plan_version === "number" ? d.plan_version : null;
+  if (round === null && step === null && planVersion === null) return null;
+  return { round: round ?? 0, step, plan_version: planVersion };
+}
+
+/** True when `candidate` provably predates `live` (round first, then step). */
+export function isOlderRevision(
+  candidate: TaskRevision,
+  live: TaskRevision
+): boolean {
+  if (candidate.round !== live.round) return candidate.round < live.round;
+  return candidate.step !== null && candidate.step < (live.step ?? 0);
+}
+
+/** A replayed frame from an older round/step must not touch live state. */
+function isStaleEvent(task: Task, ev: SSEvent): boolean {
+  const revision = eventRevision(ev);
+  if (!revision || revision.round <= 0) return false;
+  return isOlderRevision(revision, taskRevision(task));
+}
+
 function makeStep(index: number, round: number): StepRecord {
   return {
     index,
@@ -63,8 +116,13 @@ export function applyToTask(
   }
 
   const task = prev ?? emptyTask(id);
+  // S8: a replayed frame from an older round/step is history, not news. The
+  // guards below still handle same-round replays (terminal steps, settled
+  // tool calls); this one covers the cross-round case the array order cannot.
+  const staleFrame = isStaleEvent(task, ev);
   switch (ev.type) {
     case "step_start": {
+      if (staleFrame) return task;
       // The current protocol always carries the 1-based round (ADR 0013
       // decision 1): a frame without one is malformed, not an old record, so
       // there is no round to fabricate — the REST snapshot owns the step.
@@ -89,6 +147,7 @@ export function applyToTask(
       return { ...t, steps };
     }
     case "tool_call": {
+      if (staleFrame) return task;
       const rec = ev.data as ToolCallRecord;
       // Replay guard (P5-1 manual test): a reconnect replays the bus buffer
       // onto a REST snapshot that already carries these calls. Attribute the
@@ -128,6 +187,7 @@ export function applyToTask(
       return { ...task, steps };
     }
     case "tool_result": {
+      if (staleFrame) return task;
       const rec = ev.data as ToolCallRecord;
       const owner = findCallOwner(task.steps, rec.id);
       if (!owner) return task;
@@ -197,6 +257,10 @@ export function applyToTask(
       return { ...task, subtasks };
     }
     case "final_answer": {
+      // An old round's answer is not the current answer — even when the text
+      // is identical (the same-text multi-round case). Replay of the current
+      // round is handled by the sibling checks below.
+      if (staleFrame) return task;
       // The conversation itself is refreshed from REST when the round parks
       // (see TaskView): appending here would duplicate every turn whenever the
       // SSE buffer is replayed on reconnect.
@@ -213,15 +277,21 @@ export function applyToTask(
         lastStep && typeof lastStep.reasoning === "string" ? lastStep.reasoning : "";
       // #300 MEDIUM-1: SSE reconnect replays the bus buffer, so an old round's
       // final_answer can arrive after the next round already opened a step.
-      // Only a *new* answer can own the current last step; a replay (answer
-      // already equal to task.final_answer), a missing step, or an existing
-      // different reasoning on that step are all stale — never attach. (When
-      // two rounds produce identical answer text the late attach is dropped;
-      // the parked snapshot remains authoritative.)
+      // Only a *new* answer can own the current last step; a missing step or
+      // an existing different reasoning on that step is stale — never attach.
+      // S8: an event carrying the live round's revision may legitimately
+      // repeat the previous round's text (two rounds answering the same way);
+      // only a frame without revision falls back to the answer-equality replay
+      // test.
+      const revision = eventRevision(ev);
+      const currentRevision =
+        revision !== null &&
+        revision.round > 0 &&
+        !isOlderRevision(revision, taskRevision(task));
       const stale =
         !reasoning ||
         !lastStep ||
-        answer === task.final_answer ||
+        (answer === task.final_answer && !currentRevision) ||
         lastReasoning !== "";
       if (stale) {
         return { ...task, final_answer: answer };
@@ -233,11 +303,16 @@ export function applyToTask(
       return { ...task, steps, final_answer: answer };
     }
     case "task_failed":
+      if (staleFrame) return task;
       return { ...task, status: "FAILED", error: ev.data.error ?? task.error };
     case "task_interrupted":
+      // A replayed park from round N must not stop the round N+1 already
+      // streaming (the reconnect buffer outlives a continuation).
+      if (staleFrame) return task;
       return { ...task, status: "INTERRUPTED" };
     case "task_resumed":
       // A continuation started (this tab or another one): the task is running.
+      if (staleFrame) return task;
       return { ...task, status: "RUNNING" };
     default:
       return task;
@@ -248,8 +323,24 @@ export function applyToTask(
  * #189: a status refetch merges these fields only. The REST snapshot may lag the
  * live stream, so replacing the whole detail would wipe fresher steps /
  * conversation. Direction: snapshot → prev, status fields only.
+ *
+ * S8: the snapshot's explicit revision decides whether its status may land.
+ * A late answer from an older round/step never walks the live status back.
+ * The one exception is a still-PENDING shell: a status answer with an older
+ * step cannot overwrite settled state, but it is still the only source that
+ * can show the worker started before the next event arrives.
  */
 export function mergeStatusSnapshot(prev: Task, snapshot: Task): Task {
+  if (isOlderRevision(taskRevision(snapshot), taskRevision(prev))) {
+    if (prev.status === "PENDING" && snapshot.status === "RUNNING") {
+      return {
+        ...prev,
+        status: "RUNNING",
+        updated_at: snapshot.updated_at,
+      };
+    }
+    return prev;
+  }
   return {
     ...prev,
     status: snapshot.status,
@@ -260,27 +351,25 @@ export function mergeStatusSnapshot(prev: Task, snapshot: Task): Task {
 
 /**
  * #256: apply a refetched snapshot without letting a late one wipe the live
- * stream. A snapshot requested before the stream caught up carries fewer
- * steps than the detail already holds — that snapshot is provably older, so
- * its steps / conversation / subtasks / final answer (and the status that
- * came with them, #189) lose to the live detail. A snapshot with at least as
- * many steps is fresh and wins outright (same tie-break as before: REST is
- * authoritative).
+ * stream. S8 replaces the old step-count proxy with the explicit revision:
+ * a snapshot whose highest `(round, step)` is behind the live detail is
+ * provably older — even when its array happens to be longer because an old
+ * step was reinserted. Its steps / conversation / subtasks / final answer
+ * (and the status that came with them, #189) lose to the live detail; every
+ * other field stays snapshot-authoritative.
  *
  * The plan version is the one field both branches take with `max`: it only
  * ever grows on the server, and an in-flight GET requested across a save can
- * come back with the pre-save version at an *equal* step count — replacing
+ * come back with the pre-save version at an equal step count — replacing
  * wholesale there walked a saved v5 back to v1 (复审 AC4 相等步数分支).
  *
  * vs `mergeStatusSnapshot`: that one keeps prev wholesale and takes three
  * status fields (the #189 status-only refetch); this one takes the snapshot
- * wholesale unless it is provably stale. The step count is the staleness
- * proxy — no event carries a monotonic sequence, and `updated_at` is written
- * by REST only.
+ * wholesale unless it is provably stale.
  */
 export function mergeSnapshotUnlessStale(prev: Task, snapshot: Task): Task {
   const plan_version = Math.max(prev.plan_version, snapshot.plan_version);
-  const live = prev.steps.length > snapshot.steps.length;
+  const live = isOlderRevision(taskRevision(snapshot), taskRevision(prev));
   if (!live) return { ...snapshot, plan_version };
   return {
     ...snapshot,

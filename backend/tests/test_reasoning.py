@@ -131,7 +131,8 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
     # D-38 rule 2: the raw trace stays on the protocol message in state.
     assert state["steps"][-1]["reasoning"] == SENTINEL + " think"
 
-    # A non-thinking model emits exactly the pre-#267 payload shape.
+    # A non-thinking model still omits `reasoning` (S8 adds the shared
+    # revision fields to every event, so only the optional field is asserted).
     quiet_bus = _RecordingBus()
     quiet_tm = make_agent_host(
         make_settings(tmp_path), quiet_bus, redact=redact, redact_reasoning=redact
@@ -147,7 +148,8 @@ def test_final_answer_event_carries_optional_redacted_reasoning(tmp_path):
     quiet_state = _state()
     quiet_runtime.agent(quiet_state)
     quiet_finals = [data for kind, data in quiet_bus.events if kind == "final_answer"]
-    assert quiet_finals[-1] == {"answer": "ok"}
+    assert quiet_finals[-1]["answer"] == "ok"
+    assert "reasoning" not in quiet_finals[-1]
     assert quiet_state["steps"][-1]["reasoning"] == ""
 
 

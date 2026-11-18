@@ -122,7 +122,9 @@
 |---|---|---|---|
 | `test_api.py::test_one_tool_round_emits_the_expected_event_sequence`、`test_s3_shared_execution.py::test_new_resumed_and_continued_rounds_emit_the_same_sequence` | 同一轮序新增轻量 `llm_call` 摘要事件（每次模型调用一次，位置在对应 `step_start` 之后、`final_answer` / `tool_call` 之前） | S7 明确要求 SSE 只发轻量摘要，事件序列是有意扩展 | 改写：原顺序保留，插入 `llm_call`；`check:sse` 与 §3.4 表同步 |
 | `test_no_proxy_env.py::test_openai_client_constructs_after_normalization`（旧版先断言 `InvalidURL` 再手动清洗） | 适配器在构造 httpx 客户端前自行清洗；直接构造不再因括号 IPv6 失败 | S7 让 OpenAI 适配器自建 hook 客户端，必须像后端 runtime 一样自愈 | 改写为「构造前已清洗、环境已改写」，不再把可预见的启动失败当基线 |
-| `test_trace.py` 的默认 `/trace` 读取/导出断言 | **保留**：默认不带参数时行为不变；新增 `type` / `call_id` / `offset` / `limit` | 读取合同是扩展，不是重写 | 原样保留；S7 已增补新参数 200/422，S8 继续扩展读取面 |
+| `test_trace.py` 的默认 `/trace` 读取/导出断言 | **保留**：默认不带参数时行为不变；新增 `type` / `call_id` / `offset` / `limit` | 读取合同是扩展，不是重写 | 原样保留；S7 已增补新参数 200/422，S8 继续扩展 200/404/413 与过滤分页断言 |
+| `test_repl.py::test_rendered_event_types_are_the_small_face` | 终端小事件面新增 `llm_call` 一行摘要 + `/trace` 指针；不复制完整 Web 调试界面 | S8 要求终端保留调用概要及查看位置 | 改写；其余渲染 / 不打印 reasoning / 不泄露 secret 断言原样保留 |
+| `test_reasoning.py::test_final_answer_event_carries_optional_redacted_reasoning` 的 `quiet_finals[-1] == {"answer": "ok"}` | `final_answer` 保留「无 reasoning 时省略可选字段」，但事件统一带 `round` / `step` / `plan_version` | S8 的修订元数据是显式扩展；继续断言整份 payload 相等会把新增字段当回归 | 改写：断言 `answer` 与 `reasoning` 缺省，不再锁死整份字典 |
 | `test_sse_publish_ast.py` + `npm run check:sse` 的四处对齐 | **扩展**：新增 `llm_call` 必须同时进发布点、§3.4 表、`useSSE.ts`、`types/index.ts`、`eventLabels.ts` | 事件词汇表四处对齐的机械守卫不变 | 扩展，不替换 |
 | `test_models.py::test_provider_error_key_never_reaches_task_trace_logs_or_sse` | **保留并扩展**：假 Key canary 不得出现在 `llm_call` 的请求/响应/错误/trace/SSE | 观测面新增出口，脱敏矩阵必须覆盖 | 扩展 |
 | `test_qa_trace.py` 的 trace 生命周期/删除断言 | **保留**：`llm_call` 与 step/tool 共用同一生命周期与删除清理 | 不新建平行存储的前提 | 原样保留；S7 增补删除与晚到写入竞态 |

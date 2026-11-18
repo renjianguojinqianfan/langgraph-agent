@@ -1189,7 +1189,12 @@ class TaskManager:
         self.event_bus.publish(
             task_id,
             "task_created",
-            {"task_id": task_id, "title": task.title, "status": task.status.value},
+            {
+                "task_id": task_id,
+                "title": task.title,
+                "status": task.status.value,
+                **self._task_event_revision(task, round_no=1, step=0),
+            },
         )
         self._start_run(task_id)
         return task_id
@@ -1380,8 +1385,21 @@ class TaskManager:
                     },
                     strict=False,
                 )
+            active = self._active_states.get(task_id)
+            active_round = int(active.get("round_no", 0) or 0) if active else 0
+            active_step = int(active.get("step_index", 0) or 0) if active else None
             self.event_bus.publish(
-                task_id, "task_failed", {"task_id": task_id, "error": message}
+                task_id,
+                "task_failed",
+                {
+                    "task_id": task_id,
+                    "error": message,
+                    **self._task_event_revision(
+                        task,
+                        round_no=active_round or None,
+                        step=active_step,
+                    ),
+                },
             )
         finally:
             self._active_states.pop(task_id, None)
@@ -1532,10 +1550,25 @@ class TaskManager:
             # Claim the announcement before publishing: _finalize_terminal will
             # see the claim and stay quiet, so a human stop is one event, not two.
             if self._claim_interrupt(task_id):
+                # The persisted record may still carry the previous round's
+                # steps (steps are saved at park time); the live state owns
+                # the round the stop actually ends. Without it a stop during
+                # round N+1 would look older than the stream and be discarded
+                # as a replay (S8).
+                active_round = int(st.get("round_no", 0) or 0) if st else 0
+                active_step = int(st.get("step_index", 0) or 0) if st else None
                 self.event_bus.publish(
                     task_id,
                     "task_interrupted",
-                    {"task_id": task_id, "status": TaskStatus.INTERRUPTED.value},
+                    {
+                        "task_id": task_id,
+                        "status": TaskStatus.INTERRUPTED.value,
+                        **self._task_event_revision(
+                            task,
+                            round_no=active_round or None,
+                            step=active_step,
+                        ),
+                    },
                 )
             return {"ok": True, "status": TaskStatus.INTERRUPTED.value}
         return {"ok": True, "status": task.status.value if task else "UNKNOWN"}
@@ -1703,7 +1736,13 @@ class TaskManager:
             self.event_bus.publish(
                 task.id,
                 "task_failed",
-                {"task_id": task.id, "error": task.error or "unknown error"},
+                {
+                    "task_id": task.id,
+                    "error": task.error or "unknown error",
+                    **self._task_event_revision(
+                        task, step=int(final.get("step_index", 0) or 0)
+                    ),
+                },
             )
         elif self._claim_interrupt(task.id):
             # Claim-and-publish under one contract, so a stop() racing this
@@ -1711,7 +1750,13 @@ class TaskManager:
             self.event_bus.publish(
                 task.id,
                 "task_interrupted",
-                {"task_id": task.id, "status": status},
+                {
+                    "task_id": task.id,
+                    "status": status,
+                    **self._task_event_revision(
+                        task, step=int(final.get("step_index", 0) or 0)
+                    ),
+                },
             )
         self._save_task(task, strict=False)
 
@@ -1755,6 +1800,36 @@ class TaskManager:
         if last.role == "assistant" and last.content == final_answer:
             return kept
         return [*kept, ChatTurn(role="assistant", content=final_answer)]
+
+    @staticmethod
+    def _task_event_revision(
+        task: Optional[Task],
+        *,
+        round_no: Optional[int] = None,
+        step: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Revision stamp for a task-level event (S8 / #334).
+
+        Task-level events carry the highest round the record has reached (or
+        the round about to start for a resume) plus the plan version. When the
+        publisher knows the live step index it includes `step` too — the state
+        can be ahead of the persisted record while a round is in flight, and
+        the web store must be able to tell that park from an older replay.
+        """
+        if task is None:
+            return {}
+        if round_no is None:
+            rounds = [record.round for record in task.steps]
+            round_no = max(rounds) if rounds else 1
+        if step is None and task.steps:
+            step = max(record.index for record in task.steps)
+        revision: Dict[str, Any] = {
+            "round": round_no,
+            "plan_version": task.plan_version,
+        }
+        if step is not None:
+            revision["step"] = step
+        return revision
 
     @staticmethod
     def _round_number(task: Task) -> int:
@@ -1849,7 +1924,13 @@ class TaskManager:
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
-                {"task_id": task_id, "status": TaskStatus.RUNNING.value},
+                {
+                    "task_id": task_id,
+                    "status": TaskStatus.RUNNING.value,
+                    **self._task_event_revision(
+                        task, round_no=self._round_number(task)
+                    ),
+                },
             )
 
         t = threading.Thread(target=self._resume_run, args=(task_id,), daemon=True)
@@ -2058,7 +2139,13 @@ class TaskManager:
             self.event_bus.publish(
                 task_id,
                 "task_resumed",
-                {"task_id": task_id, "status": TaskStatus.RUNNING.value},
+                {
+                    "task_id": task_id,
+                    "status": TaskStatus.RUNNING.value,
+                    **self._task_event_revision(
+                        task, round_no=self._round_number(task)
+                    ),
+                },
             )
             snapshot = task.model_dump(mode="json")
 
