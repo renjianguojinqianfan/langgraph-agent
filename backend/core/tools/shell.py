@@ -286,7 +286,10 @@ def _pwsh_argv(pwsh: str, command: str) -> list[str]:
     """``pwsh`` argv: no profile, no prompts, the wrapper as a UTF-16 script.
 
     ``-EncodedCommand`` carries the script as base64 UTF-16LE, so quotes,
-    newlines and CJK text never travel through the Windows command line.
+    newlines and CJK text never travel through the Windows command line. The
+    whole argv still obeys the Windows command-line limit (~32k chars): base64
+    of UTF-16LE expands ~2.7x, so the script is capped at roughly 12k
+    characters; a longer one is rejected by the OS, not silently altered.
     """
     encoded = base64.b64encode(_pwsh_script(command).encode("utf-16-le")).decode("ascii")
     return [pwsh, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]

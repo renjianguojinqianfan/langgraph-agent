@@ -324,7 +324,7 @@ def test_default_shell_is_platform_specific():
     assert DEFAULT_SHELL == ("pwsh" if os.name == "nt" else "bash")
 
 
-def test_schema_advertises_the_optional_shell_choice(settings):
+def test_schema_advertises_the_optional_shell_choice():
     schema = ShellTool.args_schema
     assert schema["required"] == ["command"]
     assert schema["properties"]["shell"]["enum"] == ["pwsh", "bash"]

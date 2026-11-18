@@ -182,6 +182,35 @@ def test_plan_mode_refuses_to_dispatch_a_tool_outside_its_face(tmp_path: Path) -
     assert not (Path(settings.artifacts_path) / "should_not_exist.txt").exists()
 
 
+def test_plan_mode_refuses_the_shell_tool(tmp_path: Path) -> None:
+    """ADR 0013: the command tool cannot be used to bypass the read-only face."""
+    settings = make_settings(tmp_path)
+    tools = build_tools(settings)
+    rt = _runtime(settings, MockLLMClient(final_answer="done"), tools)
+    state = _state(
+        mode="plan",
+        steps=[{"index": 1, "thought": "", "status": "running", "tool_calls": []}],
+        _current_tool_calls=[
+            {
+                "id": "c1",
+                "tool_name": "shell",
+                "input": {"command": "echo x > escaped.txt"},
+                "output": None,
+                "status": "pending",
+                "error": "",
+            }
+        ],
+    )
+
+    rt.tool_node(state)
+
+    rec = state["_current_tool_calls"][0]
+    assert rec["status"] == "failed"
+    assert "not available in plan mode" in rec["error"]
+    assert "shell" in rec["error"]
+    assert not (Path(settings.artifacts_path) / "escaped.txt").exists()
+
+
 # ── a round ends = no tool call; the task can continue ──────────────────────
 def test_a_new_task_is_persisted_with_the_full_current_contract(
     tmp_path: Path,
