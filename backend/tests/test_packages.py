@@ -478,8 +478,7 @@ def test_cli_rejects_unknown_preset_before_serving(tmp_path, monkeypatch, capsys
 
     code = cli.main(
         [],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: None,
+        spawn=lambda *args: served.append(args),
     )
 
     assert code == 1

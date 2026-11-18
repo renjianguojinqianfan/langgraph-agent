@@ -617,16 +617,15 @@ def test_web_launcher_refuses_a_running_repl_without_probing(
         ),
     )
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
-    served: List[tuple] = []
+    spawned: List[tuple] = []
 
     code = cli.main(
         [],
-        serve=lambda host, port: served.append((host, port)),
-        when_ready=lambda url, port: None,
+        spawn=lambda *args: spawned.append(args),
     )
 
     assert code == 2
-    assert served == []
+    assert spawned == []
     assert "关终端会停任务" in capsys.readouterr().out
     # A live record is refused but must not be deleted by the refused launcher.
     record = server_lock.read_lock(lock_file)

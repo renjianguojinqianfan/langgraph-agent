@@ -121,6 +121,8 @@ jobs:
   #   test_test_isolation.py         conftest 的 os.name==nt 临时根探测（#264 c2/c3；#261 AC1）
   #   test_server_lock.py            单实例锁 / 浏览器交接 / 真子进程退出取证（#261 AC1/D-13）
   #   test_repl.py                   REPL 会话 / 锁互斥 / 编码 / 子进程 smoke（#20；连跑 3 次稳定后纳入）
+  #   test_cli_detach.py             detach 启动 flags / 日志目录（Windows 进程模型；#332）
+  #   test_shared_backend_e2e.py     共享后台真进程 e2e（并发冷启 / status / stop / 重启；#332）
   #   test_provider_key_isolation.py provider Key 环境变量离线守卫（子进程探针；#319；连跑 3 次稳定后纳入）
   # 回归锚：PR #195 的 Windows 白屏（Vite assets 全 404）在 ubuntu-only CI 下是绿的。
   backend-windows-smoke:
@@ -161,6 +163,8 @@ jobs:
           backend/tests/test_test_isolation.py
           backend/tests/test_server_lock.py
           backend/tests/test_repl.py
+          backend/tests/test_cli_detach.py
+          backend/tests/test_shared_backend_e2e.py
           backend/tests/test_provider_key_isolation.py
           -q -rs
 
