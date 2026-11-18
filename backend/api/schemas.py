@@ -224,6 +224,17 @@ class AuthTokenRequest(BaseModel):
     token: str
 
 
+class ServerStopRequest(BaseModel):
+    """POST /api/server/stop body: the caller's view of this backend's identity.
+
+    Required on purpose: a stop request without an instance id cannot be
+    matched against the single-instance record and must be refused, not
+    defaulted to "whatever is running" (#332 S5).
+    """
+
+    instance: str
+
+
 class AuthTokenResponse(BaseModel):
     token: str = ""
     expires_at: str = ""

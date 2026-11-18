@@ -735,8 +735,39 @@ class TaskManager:
         logger.info("shutdown: %s done", label)
         return True
 
-    def shutdown(self) -> None:
+    def wait_for_idle(self, timeout: float = 5.0) -> bool:
+        """Wait up to ``timeout`` for every task worker to finish.
+
+        True means no worker thread is still alive (the caller's own thread is
+        never counted). Used by the shared-backend stop path (#332): tasks are
+        asked to stop first, then the control plane waits here before the
+        terminal records and the checkpoint connection are touched.
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        current = threading.current_thread()
+        while True:
+            alive = [
+                th
+                for th in list(getattr(self, "_threads", {}).values())
+                if th is not current and th.is_alive()
+            ]
+            if not alive:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            for th in alive:
+                th.join(timeout=remaining)
+
+    def shutdown(self) -> bool:
         """Release process-level resources (MCP child processes).
+
+        Returns True when every resource was released (including a repeat call
+        after a clean shutdown); False when a worker outlived the join or a
+        release step failed — the same condition the "incomplete" /
+        "finished with errors" log lines name. Callers that only log ignore the
+        value; the stop endpoint (#332) uses it to avoid reporting a partial
+        shutdown as complete.
 
         Idempotent: calling it multiple times, or constructing a new
         :class:`TaskManager` over an old one, never leaks connections.
@@ -752,7 +783,7 @@ class TaskManager:
         """
         if getattr(self, "_shutdown_complete", False):
             logger.info("shutdown: already complete; nothing to release")
-            return
+            return True
         logger.info("shutdown: begin")
         failed = False
         mcp = getattr(self, "_mcp", None)
@@ -793,7 +824,7 @@ class TaskManager:
                 "writing. Process exit will close it.",
                 alive,
             )
-            return
+            return False
         logger.info("shutdown: all worker threads joined")
         conn = getattr(self, "_checkpoint_conn", None)
         if conn is not None:
@@ -808,9 +839,10 @@ class TaskManager:
             # often transient (a locked store closes on the next try), and
             # latching here would turn every later call into a silent no-op
             # that claims "already complete".
-        else:
-            logger.info("shutdown: complete")
-            self._shutdown_complete = True
+            return False
+        logger.info("shutdown: complete")
+        self._shutdown_complete = True
+        return True
 
     # ── creation / query ──
     @staticmethod

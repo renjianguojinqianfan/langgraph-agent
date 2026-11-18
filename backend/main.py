@@ -13,6 +13,7 @@ routes) instead of a hand-built probe.
 from __future__ import annotations
 
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -157,6 +158,12 @@ def create_app(settings: Settings) -> FastAPI:
         # stays here: the REPL never serves tokens and must not couple to it.
         runtime = build_runtime(settings)
         app.state.settings = settings
+        # #332 S5: the stop endpoint closes this gate; the middleware below
+        # answers 503 for every later request except /health and the stop route
+        # itself (so a retry can finish an incomplete shutdown).
+        app.state.accepting_runs = True
+        app.state.stop_in_progress = False
+        app.state.stop_lock = threading.Lock()
         app.state.event_bus = runtime.event_bus
         app.state.persistence = runtime.persistence
         # P1 item 5 / D-45: the issuer exists only when auth is enabled; the
@@ -185,6 +192,23 @@ def create_app(settings: Settings) -> FastAPI:
             logger.exception("task_manager.shutdown failed")
 
     app = FastAPI(title="LangGraph Autonomous Task Agent", version="0.1.0", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _reject_while_stopping(request: Request, call_next: Any) -> Any:
+        """#332 S5: once stop begins, no new work is admitted (503).
+
+        ``/health`` stays public so ``qianfan stop`` can wait for the real
+        process exit instead of mistaking a 503 probe for "already gone"; the
+        stop route stays reachable so a retry can finish an incomplete drain.
+        """
+        if getattr(request.app.state, "accepting_runs", True):
+            return await call_next(request)
+        if request.url.path in ("/health", "/api/server/stop"):
+            return await call_next(request)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "后台正在停止，不再接受新请求"},
+        )
 
     @app.exception_handler(PersistenceError)
     async def _persistence_error_handler(
