@@ -94,7 +94,6 @@ def _state(
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
 
 

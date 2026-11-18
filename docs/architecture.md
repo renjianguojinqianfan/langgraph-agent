@@ -107,13 +107,13 @@ data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>
 
 | 模型 | 字段要点 |
 |---|---|
-| `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；旧记录里的 `COMPLETED` 在加载时映射成 `INTERRUPTED` |
+| `TaskStatus` | **四值**：`PENDING`（创建到 worker 抢到之间的瞬间）/ `RUNNING` / `INTERRUPTED`（停下，等你说话）/ `FAILED`。**没有 `COMPLETED`**（ADR 0008 决策 5）；带 `COMPLETED` 的旧记录不做状态映射，按旧格式拒绝加载（ADR 0013 决策 1） |
 | `TaskMode` | `plan` \| `build`（黏性任务开关，默认 `build`） |
-| `ToolCallRecord` | `id` / `tool_name` / `input`（读入边界归一化：非 dict——旧 list / 标量 / provider 返回的非对象 JSON——包成 `{"value": ...}`，#255；派发读 `state["_current_tool_calls"]`，工具参数不被改写）/ `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
-| `StepRecord` | `index` / `round`（1 起的对话轮次，`0` = #265 前的旧记录）/ `thought` / `reasoning`（D-38：脱敏 + 单步 ≤8000 字符后落库；原始 trace 只留在 checkpoint 的 `messages` 里供下一轮协议回传）/ `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
+| `ToolCallRecord` | `id` / `tool_name` / `input`（**只存对象**：Provider 适配器在写面把非对象 JSON 折成 `{}`；读面不再包 `{"value": ...}`，非对象输入属旧格式、拒绝加载，ADR 0013 决策 1）/ `output` / `status`（`pending \| success \| failed \| skipped`）/ `error` |
+| `StepRecord` | `index` / `round`（**必填**，1 起的对话轮次；缺省或 `0` 属 #265 前的旧记录，拒绝加载）/ `thought` / `reasoning`（D-38：脱敏 + 单步 ≤8000 字符后落库；原始 trace 只留在 checkpoint 的 `messages` 里供下一轮协议回传）/ `tool_calls[]` / `status`（`pending \| running \| done \| failed`） |
 | `SubTask` | `subtask_id` / `name` / `status`（`pending \| running \| completed \| failed`）/ `summary` / `artifacts[]` / `error`。`artifacts` 是**现役字段**（子任务回传用，父任务无产物账本） |
 | `ChatTurn` | `role`（user \| assistant）/ `content`；只存人读的对话，工具流量在 `Task.steps` |
-| `Task` | `id` / `title` / `user_input` / `workspace`（绝对路径，规范化后比较）/ `model`（档案 id，空 = 全局默认）/ `status` / `mode` / `steps[]` / `plan_version` / `plan_hash` / `conversation[]` / `final_answer` / `error` / `created_at` / `updated_at` / `subtasks[]` |
+| `Task` | `id` / `title` / `user_input` / `workspace`（**必填**，绝对路径，规范化后比较；旧记录不回填 `data/artifacts`）/ `model`（档案 id，空 = 全局默认）/ `status` / `mode` / `steps[]` / `plan_version` / `plan_hash` / `conversation[]`（**必填**，从用户第一轮开始；旧记录的"读取时重建"删除）/ `final_answer` / `error` / `created_at` / `updated_at` / `subtasks[]` |
 | `McpServerInfo` | `name` / `transport` / `status` / `tools_count` / `error` |
 | `ApiResponse` | 统一信封 `{code, data, message}`（例外见 §3.5） |
 
@@ -133,7 +133,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 - **步数预算按轮计**：`round_steps` 只数本轮 `agent` 调用，不封顶任务总寿命（`max_steps` 默认 15）。
 - 子任务复用同一拓扑，在独立 `thread_id` 上跑，工作区继承父任务。
 
-**AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`round_no` / `step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks` / `_is_subtask`）。
+**AgentState**（`backend/core/agent/state.py`，TypedDict）分两层：公开/持久化字段（`task_id` / `mode` / `messages` / `plan_text` / `plan_version` / `plan_hash` / `steps` / `status` / `stop_requested`）与循环簿记（`round_no` / `step_index` / `round_steps` / `final_answer` / `error` / `compressed` / `context_tokens` / `_last_action` / `_current_tool_calls`）以及子任务字段（`subtasks`）。
 
 **D-39（reasoning 跨模型兼容）**：`state.messages` 里的 assistant 消息可带内部标记 `_reasoning_from = "<provider_id>:<protocol>"`（原始 `reasoning_content` 仍原样保留供下一轮协议回传）。请求构建时 `_build_messages` 在**副本**上删掉该标记，并在「来源 scope ≠ 当前模型 scope」时一并删 `reasoning_content`；同 provider 且同 protocol 保留。该标记永不出现在出站请求 / SSE / trace / `tasks.json`。升级前无标记的旧 checkpoint 消息按原样保留（已知边界，不做一次性迁移）。
 
@@ -371,8 +371,8 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 
 | 路径 | 内容 | 备注 |
 |---|---|---|
-| `data/tasks.json` | 任务记录（原子写，损坏自动备份） | 唯一任务记录源 |
-| `data/models.json` | 模型配置 v2（Provider + 模型目录，**不含 Key**）；v1 首次加载自动迁移并备份 `models.json.bak-v1` | 全局默认 / 每任务模型条目 id |
+| `data/tasks.json` | 任务记录（原子写；字节损坏自动备份后重新开始；**旧格式记录整体拒绝加载且原文不变**，ADR 0013 决策 1） | 唯一任务记录源 |
+| `data/models.json` | 模型配置 v2（Provider + 模型目录，**不含 Key**）；v1 明确拒绝、原文不变，不迁移不备份 | 全局默认 / 每任务模型条目 id |
 | `~/.qianfan/credentials.json` | 界面粘贴的 Key | 仓库外；接口只回 `key_set` / `key_source` |
 | `data/traces/<task_id>.jsonl` | 事件 + trace 时间线 | `trace_end` 只在这里 |
 | `data/checkpoints/checkpoints.sqlite` | LangGraph checkpoint | 格式戳 v2；v1 拒绝挂载 |

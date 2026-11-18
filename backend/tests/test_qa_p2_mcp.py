@@ -247,7 +247,7 @@ def _mcp_agent_state() -> dict:
         "status": "RUNNING", "stop_requested": False,
         "final_answer": "", "error": "",
         "_last_action": "", "_current_tool_calls": [],
-        "subtasks": [], "_is_subtask": False,
+        "subtasks": [],
     }
 
 

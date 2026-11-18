@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from backend.api.schemas import StepRecord, Task, TaskStatus, ToolCallRecord
+from backend.api.schemas import ChatTurn, StepRecord, Task, TaskStatus, ToolCallRecord
 from backend.core.llm.client import MockLLMClient
 from backend.services.persistence import Persistence
 from backend.tests.conftest import assert_no_in_flight, make_manager, make_settings
@@ -30,6 +30,8 @@ def _make_task_record(settings, task_id: str, status: str):
         id=task_id,
         title=f"orphan {task_id}",
         user_input="demo input",
+        workspace=str(settings.artifacts_path),
+        conversation=[ChatTurn(role="user", content="demo input")],
         status=TaskStatus(status),
         created_at=now,
         updated_at=now,
@@ -71,6 +73,8 @@ class TestOrphanReconciliation:
                 id="t-step",
                 title="orphan with a running step",
                 user_input="demo input",
+                workspace=str(settings.artifacts_path),
+                conversation=[ChatTurn(role="user", content="demo input")],
                 status=TaskStatus.RUNNING,
                 created_at=now,
                 updated_at=now,
@@ -116,6 +120,8 @@ class TestOrphanReconciliation:
                 id="t-legacy",
                 title="parked with a leftover running step",
                 user_input="demo input",
+                workspace=str(settings.artifacts_path),
+                conversation=[ChatTurn(role="user", content="demo input")],
                 status=TaskStatus.INTERRUPTED,
                 created_at=now,
                 updated_at=now,
@@ -171,6 +177,8 @@ class TestTerminalRecordSettlement:
             id="t-resumed",
             title="resumed after a hard kill",
             user_input="demo input",
+            workspace=str(settings.artifacts_path),
+            conversation=[ChatTurn(role="user", content="demo input")],
             status=TaskStatus.RUNNING,
             created_at=now,
             updated_at=now,
@@ -223,6 +231,8 @@ class TestTerminalRecordSettlement:
                 id="t-failed-leftover",
                 title="failed with a running step",
                 user_input="demo input",
+                workspace=str(settings.artifacts_path),
+                conversation=[ChatTurn(role="user", content="demo input")],
                 status=TaskStatus.FAILED,
                 created_at=now,
                 updated_at=now,
@@ -280,6 +290,9 @@ class TestPersistenceDurability:
                     t = Task(
                         id=f"t-{i}-{j}",
                         title="conc",
+                        user_input="conc",
+                        workspace=str(settings.artifacts_path),
+                        conversation=[ChatTurn(role="user", content="conc")],
                         status=TaskStatus.INTERRUPTED,
                         created_at=now,
                         updated_at=now,

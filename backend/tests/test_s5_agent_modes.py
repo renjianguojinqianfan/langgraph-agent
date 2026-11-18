@@ -22,15 +22,16 @@ from typing import Any, Dict, List, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.schemas import ChatTurn, Task, TaskStatus
+from backend.api.schemas import ChatTurn, Task, TaskMode, TaskStatus
 from backend.core.agent.nodes import AgentRuntime
 from backend.core.agent.state import AgentState
 from backend.core.agent.subagent import EXPLORE_TIER, tier_face_names
 from backend.core.llm.client import LLMResponse, MockLLMClient
+from backend.core.runtime_context import normalize_workspace
 from backend.core.tools.registry import build_tools
 from backend.main import app
 from backend.services.event_bus import EventBus
-from backend.services.persistence import Persistence
+from backend.services.persistence import Persistence, UnsupportedTasksFileError
 from backend.tests.conftest import make_manager, make_settings
 
 
@@ -85,7 +86,6 @@ def _state(**kw: Any) -> AgentState:
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     base.update(kw)
     # Partial/extra keys by design: these tests drive one or two nodes.
@@ -171,6 +171,33 @@ def test_plan_mode_refuses_to_dispatch_a_tool_outside_its_face(tmp_path: Path) -
 
 
 # ── a round ends = no tool call; the task can continue ──────────────────────
+def test_a_new_task_is_persisted_with_the_full_current_contract(
+    tmp_path: Path,
+) -> None:
+    """ADR 0013 decision 1: a new record writes every current field at once —
+    no later backfill fills in the workspace or the conversation ledger."""
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, MockLLMClient(final_answer="answer one"))
+
+    task_id = tm.create_task(title="chat", user_input="hello")
+    created = tm.get_task(task_id)
+    assert created is not None
+    assert created.workspace == normalize_workspace(settings.artifacts_path)
+    assert created.model
+    assert created.mode == TaskMode.BUILD
+    assert created.conversation == [ChatTurn(role="user", content="hello")]
+
+    parked = _wait_parked(tm, task_id)
+    assert [s.round for s in parked.steps] == [1]
+    raw = json.loads((settings.data_path / "tasks.json").read_text(encoding="utf-8"))[0]
+    assert raw["workspace"] == created.workspace
+    assert raw["conversation"] == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "answer one"},
+    ]
+    assert all(step["round"] == 1 for step in raw["steps"])
+
+
 def test_a_round_without_tool_calls_parks_and_the_next_message_continues(
     tmp_path: Path,
 ) -> None:
@@ -788,16 +815,19 @@ def test_rest_message_is_refused_while_running(tmp_path: Path) -> None:
 def test_completed_is_not_a_live_status(tmp_path: Path) -> None:
     assert "COMPLETED" not in TaskStatus.__members__
 
-    # Pre-S5 records still load, mapped to the one "停下" (ADR 0008 decision 5).
+    # ADR 0013 decision 1: a pre-S5 record is not mapped into the current
+    # status; the file is refused readably and keeps its bytes.
     settings = make_settings(tmp_path)
-    (tmp_path / "tasks.json").write_text(
-        json.dumps([{"id": "legacy", "status": "COMPLETED", "user_input": "old"}]),
-        encoding="utf-8",
-    )
-    rebuilt = Persistence(settings)
-    loaded = rebuilt.load_task("legacy")
-    assert loaded is not None
-    assert loaded.status == TaskStatus.INTERRUPTED
+    original = json.dumps(
+        [{"id": "legacy", "status": "COMPLETED", "user_input": "old"}]
+    ).encode("utf-8")
+    (tmp_path / "tasks.json").write_bytes(original)
+
+    with pytest.raises(UnsupportedTasksFileError) as excinfo:
+        Persistence(settings)
+
+    assert "COMPLETED" in str(excinfo.value)
+    assert (tmp_path / "tasks.json").read_bytes() == original
 
 
 # ── #255: finish only settles the step this round created ───────────────────
@@ -875,15 +905,15 @@ def test_finish_marks_the_running_step_failed_on_error(tmp_path: Path) -> None:
     assert out["steps"][0]["status"] == "failed"
 
 
-def test_finish_leaves_a_legacy_step_without_round_alone(tmp_path: Path) -> None:
-    """legacy step 无 ``round``（=0）视为不属于本轮：保守地不改。"""
+def test_finish_settles_a_current_rounds_running_step(tmp_path: Path) -> None:
+    """A step of the round being parked is settled; ``round`` is mandatory."""
     rt = _runtime(make_settings(tmp_path), MockLLMClient(), [])
     state = _finish_state(
         round_no=1,
         stop_requested=True,
-        steps=[{"index": 1, "status": "running", "tool_calls": []}],
+        steps=[{"index": 1, "round": 1, "status": "running", "tool_calls": []}],
     )
 
     out = rt.finish(state)
 
-    assert out["steps"][0]["status"] == "running"
+    assert out["steps"][0]["status"] == "failed"

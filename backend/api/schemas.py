@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 
 
 class TaskStatus(str, Enum):
@@ -20,8 +20,8 @@ class TaskStatus(str, Enum):
 
     There is deliberately **no COMPLETED**: a round ends when no tool call
     comes back, and that is the same "停下" as a human stop — the task can
-    always be continued. ``Persistence._load`` maps the retired value onto
-    ``INTERRUPTED`` so pre-S5 history stays readable.
+    always be continued. A record still carrying the retired value is not
+    mapped: it is refused as an unsupported format (ADR 0013 decision 1).
     """
 
     PENDING = "PENDING"
@@ -42,31 +42,21 @@ class TaskMode(str, Enum):
 class ToolCallRecord(BaseModel):
     id: str
     tool_name: str
+    #: Object always: the provider adapters fold a non-object payload to ``{}``
+    #: at the write face, so a stored non-object is a pre-contract record and
+    #: is refused on load (ADR 0013 decision 1) instead of wrapped.
     input: Dict[str, Any] = Field(default_factory=dict)
     output: Any = None
     status: str = "pending"  # pending | success | failed | skipped
     error: Optional[str] = None
 
-    @field_validator("input", mode="before")
-    @classmethod
-    def _normalize_input(cls, value: Any) -> Dict[str, Any]:
-        """Wrap non-dict inputs (legacy list / scalar / null) at the read boundary.
-
-        Old records stored a few calls' args as a list or scalar, and a provider
-        may return non-object JSON (``openai_compat.py`` only maps decode errors
-        to ``{}``); wrapping keeps the record readable instead of failing the
-        whole task record. Dispatch reads args from ``state["_current_tool_calls"]``,
-        never from this persisted field, so tool arguments are not rewritten.
-        """
-        return value if isinstance(value, dict) else {"value": value}
-
 
 class StepRecord(BaseModel):
     index: int
-    #: 1-based conversation round this step belongs to (#265). 0 marks records
-    #: persisted before the field existed; the UI renders those as a legacy
-    #: block instead of guessing a round.
-    round: int = 0
+    #: 1-based conversation round this step belongs to (#265). Required: the
+    #: agent node writes it for every step, and a record without it predates
+    #: the field (refused on load, ADR 0013 decision 1).
+    round: int = Field(ge=1)
     thought: str = ""
     #: D-38: the model's reasoning for this step. Persisted only after
     #: `TaskManager.redact_reasoning` (known keys stripped, max 8000 chars);
@@ -110,8 +100,10 @@ class Task(BaseModel):
     id: str
     title: str = ""
     user_input: str = ""
-    #: Absolute, normalized directory the task reads/writes (ADR 0010 decision 1).
-    workspace: str = ""
+    #: Absolute, normalized directory the task reads/writes (ADR 0010 decision
+    #: 1). Required: a record without one predates the field and is refused on
+    #: load — the old ``data/artifacts`` backfill is gone (ADR 0013 decision 1).
+    workspace: str = Field(min_length=1)
     #: Model profile id; empty -> the global default (ADR 0010 decision 7).
     model: str = ""
     status: TaskStatus = TaskStatus.PENDING
@@ -121,8 +113,10 @@ class Task(BaseModel):
     #: Plan file state (the text lives in ``<workspace>/.qianfan/plans/``).
     plan_version: int = 0
     plan_hash: str = ""
-    #: User/assistant text turns across every round of the conversation.
-    conversation: List[ChatTurn] = Field(default_factory=list)
+    #: User/assistant text turns across every round of the conversation. A task
+    #: opens with its user turn, so every current record carries at least one;
+    #: an empty ledger is a pre-#265 record and is refused on load.
+    conversation: List[ChatTurn] = Field(min_length=1)
     final_answer: str = ""
     error: Optional[str] = None
     created_at: str = ""
