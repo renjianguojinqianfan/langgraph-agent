@@ -24,21 +24,21 @@ function deferred<T>() {
 
 const pluginsData = (restartRequired = false): PluginsData => ({
   presets: [
-    { id: "minimal", packages: ["files", "bash"] },
-    { id: "research", packages: ["files", "bash", "mcp"] },
-    { id: "full", packages: ["files", "bash", "mcp"] },
+    { id: "minimal", packages: ["files", "shell"] },
+    { id: "research", packages: ["files", "shell", "mcp"] },
+    { id: "full", packages: ["files", "shell", "mcp"] },
   ],
   packages: [
     { id: "files", tools: ["read", "write"], connects_mcp: false, affects_subagent_face: false },
-    { id: "bash", tools: ["bash"], connects_mcp: false, affects_subagent_face: false },
+    { id: "shell", tools: ["shell"], connects_mcp: false, affects_subagent_face: false },
     { id: "mcp", tools: [], connects_mcp: true, affects_subagent_face: false },
   ],
   saved: { preset: "full", overrides: {} },
   active: {
     preset: "full",
     overrides: {},
-    packages: ["files", "bash", "mcp"],
-    tools: ["read", "write", "bash"],
+    packages: ["files", "shell", "mcp"],
+    tools: ["read", "write", "shell"],
   },
   restart_required: restartRequired,
 });
@@ -56,8 +56,8 @@ function minimalSnapshot(restartRequired: boolean): PluginsData {
     active: {
       preset: "minimal",
       overrides: {},
-      packages: ["files", "bash"],
-      tools: ["read", "write", "bash"],
+      packages: ["files", "shell"],
+      tools: ["read", "write", "shell"],
     },
   };
 }
@@ -80,7 +80,7 @@ describe("pluginsStore (#67 P4-2)", () => {
     await usePluginsStore.getState().refresh();
 
     const state = usePluginsStore.getState();
-    expect(state.data?.active.packages).toEqual(["files", "bash", "mcp"]);
+    expect(state.data?.active.packages).toEqual(["files", "shell", "mcp"]);
     expect(state.error).toBe("");
     expect(state.loading).toBe(false);
   });
@@ -153,7 +153,7 @@ describe("pluginsStore (#67 P4-2)", () => {
 
     const state = usePluginsStore.getState();
     expect(state.data?.saved.preset).toBe("minimal");
-    expect(state.data?.active.packages).toEqual(["files", "bash"]);
+    expect(state.data?.active.packages).toEqual(["files", "shell"]);
     expect(state.data?.restart_required).toBe(true);
     expect(state.loading).toBe(false);
   });

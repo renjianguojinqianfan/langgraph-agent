@@ -557,7 +557,6 @@ class _StoreProbeTool(BaseTool):
     name = "store_probe"
     description = "probe the checkpoint store from inside a running graph"
     args_schema: Dict[str, Any] = {"type": "object", "properties": {}}
-    requires_confirm = False
 
     def __init__(self, db_path: Path) -> None:
         super().__init__(None)

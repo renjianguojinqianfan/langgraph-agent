@@ -85,22 +85,22 @@ agent ──有 tool call──> tool ──> agent
 
 ## 工作区
 
-- 在哪个目录敲 `qianfan`，新任务就在哪个目录读写、跑 bash、加载那里的 `AGENTS.md` 与 `.agents/skills`；页面地址带 `?dir=` 时以它为准（ADR 0010）。
+- 在哪个目录敲 `qianfan`，新任务就在哪个目录读写、执行命令、加载那里的 `AGENTS.md` 与 `.agents/skills`；页面地址带 `?dir=` 时以它为准（ADR 0010）。
 - 历史列表默认只显示当前目录，可切「全部」；任务头标出目录。续说回到任务自己的目录；目录被删后只剩记录，续说返回 409。
 - 历史可逐条或按目录删除（#241）：只删 `tasks.json` 记录、checkpoint 与 trace，**不动工作区文件**；这些任务名下的后台进程会一并终止，运行中的任务会被拒绝（409）。
 - 页面内可切换工作区（#242）：左栏底部显示当前目录，点开输入一个已存在的本地目录或选最近目录；只切换历史与新建任务的落点，不重启后台，`?dir=` 深链保持。
-- 这就是在你的项目里直接干活：bash 与写工具会改真实文件，**撤销靠 git**；在主目录或盘根启动不拦（见「这不是安全边界」）。
+- 这就是在你的项目里直接干活：`shell` 与写工具会改真实文件，**撤销靠 git**；在主目录或盘根启动不拦（见「这不是安全边界」）。
 - MCP 服务仍是整个后台共用一份，工作目录是后台的启动目录，不随任务切换。
 
 **一台机器只共用一个后台**（ADR 0010）：第二次在别的目录敲 `qianfan`，它会把浏览器开到已在跑的后台、定位到当前目录，然后退出，不另起进程（`--port` 只对第一次生效）。关掉启动它的终端 = 所有项目的任务停下，之后可以续说 / 续跑。`start.py` 的开发后台与 `qianfan` 互斥，一个在跑时另一个会拒绝启动；`start.py` 现在**先抢 `data/server.json` 再起 uvicorn**，启动窗口内也不可能出现第二个写者；`--reload` 下锁保持 supervisor pid（reload worker 不接管，避免 reload 间隙锁被当 stale）。**手工 `uvicorn backend.main:app` 一律拒绝**：没有 `QIANFAN_INSTANCE` 实例标识会绕过单后台 / 回环 host / Key 三道守卫，请用 `qianfan`（日常）或 `python start.py`（开发）。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等非回环值在启动期直接拒绝（本章只支持本机访问）；健康探针跟随配置 host（IPv6 自动加方括号），开发态 Vite 代理固定 `127.0.0.1`（只用 IPv4 回环）。
 
 ## 能力
 
-- **工具**：沙箱文件读写（`read` / `write` / `edit` / `ls` / `glob` / `grep`）、`bash`（工作区根、环境白名单、可配超时、停止收进程树含调用返回后的后台进程）、`web_search`（搜索源 `duckduckgo` / `serpapi` / `exa`；国内网络下 duckduckgo 可能不可达，设 `search_provider=exa` 并导出 `EXA_API_KEY`）、MCP（子进程只继承白名单环境变量：**环境变量里的** LLM / 云 Key 不会被继承；文件仍可读，见「这不是安全边界」；额外变量用 `mcp_servers[].env` 显式声明）。
+- **工具**：沙箱文件读写（`read` / `write` / `edit` / `ls` / `glob` / `grep`）、`shell`（PowerShell 7 / Git Bash 二选一：Windows 默认 `pwsh`，`shell="bash"` 走 Git Bash；工作区根、环境白名单、可配超时、停止收进程树含调用返回后的后台进程）、`web_search`（搜索源 `duckduckgo` / `serpapi` / `exa`；国内网络下 duckduckgo 可能不可达，设 `search_provider=exa` 并导出 `EXA_API_KEY`）、MCP（子进程只继承白名单环境变量：**环境变量里的** LLM / 云 Key 不会被继承；文件仍可读，见「这不是安全边界」；额外变量用 `mcp_servers[].env` 显式声明）。
 - **子 agent**：`spawn_subagent` 单入口，`explore` / `execute` 两档，工具面只能收窄。
-- **能力包与预设（#67，ADR 0012）**：工具面与注入面按能力包声明（`files` / `bash` /
-  `skills` / `web-search` / `subagent` / `mcp`），全局预设三档：`minimal`（files+bash）、
-  `research`（files+bash+skills+web-search+subagent+mcp，当前与 full 同一面）、`full`（全部，
+- **能力包与预设（#67，ADR 0012）**：工具面与注入面按能力包声明（`files` / `shell` /
+  `skills` / `web-search` / `subagent` / `mcp`），全局预设三档：`minimal`（files+shell）、
+  `research`（files+shell+skills+web-search+subagent+mcp，当前与 full 同一面）、`full`（全部，
   **默认 = 原行为**）。保存的配置在 `data/plugins.json`：`{preset, overrides}`，overrides 叠在
   preset 上（true 强制开 / false 强制关），由设置页「能力」区或 `PUT /api/plugins` 写入，
   **重启后台生效**。一次性覆盖用 `qianfan --preset <id>`（网页后台）或
@@ -112,7 +112,7 @@ agent ──有 tool call──> tool ──> agent
   （文件仍是权威配置，不允许静默绕过；先删除或修好文件）。
 - **失败回传**：工具调用只执行一次（不自动重试、不熔断）；工具失败 / 被规则拒时，事件面与模型面各有一份可读原因。
 - **上下文**：两层 AGENTS.md 注入、skills 清单、工具结果逐出、压缩。
-- **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（bash 写的也在），文本预览、流式下载；**列表只是可见性过滤，preview / download 仍可点名被忽略的文件**；撤销靠 git。
+- **工作区文件**：列出当前任务目录里按 `.gitignore` 可见的文件（`shell` 写的也在），文本预览、流式下载；**列表只是可见性过滤，preview / download 仍可点名被忽略的文件**；撤销靠 git。
 - **观测**：SSE 事件流 + JSONL trace，前端可回放 / 导出。
 
 ## 模型
@@ -122,7 +122,7 @@ agent ──有 tool call──> tool ──> agent
 - Key 两种来源：界面粘贴（存 `~/.qianfan/credentials.json`，仓库外，按 Provider 记）优先；其次配置里写的环境变量名（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）。接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无），不回 Key 本身。
 - 新建任务默认用全局默认，创建前也可先选一套；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。
 - 采样参数挂在模型条目上、Provider 可给默认值：`temperature`（缺省 0.2）、`max_tokens`、`thinking` / `reasoning_effort`（`reasoning_effort` 限 low / medium / high；OpenAI 兼容路径经 `extra_body` 透传；Anthropic 路径开启 thinking 或非空 reasoning_effort 即 400）；参数可显式清空回落到 Provider / 缺省。
-- 粘贴的 Key 是明文落盘，同账号的 bash 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
+- 粘贴的 Key 是明文落盘，同账号的 `shell` 读得到；Coding Plan 条款通常不允许自建客户端调用，用「自定义」后果自担。
 - **保存 Key 失败**：Key 文件在仓库外的 `~/.qianfan/`；进程被沙箱/权限边界挡住写该目录时，界面会显示后端返回的原因与下一步（#244）——用普通终端启动 qianfan，或改用该配置的环境变量。
 
 ## 这不是安全边界
@@ -131,7 +131,7 @@ agent ──有 tool call──> tool ──> agent
 但这些都是**减少暴露面**，不是沙箱：
 
 - **默认没有登录**：同一台机器上的其他进程 / 用户可以直接驱动 API；`auth_enabled` 只挡无凭据的访问，不是权限边界。远程访问不在本章范围。`auth_enabled=true` 时 token 为空 / 占位会拒绝启动（issuer 本身也 fail-closed），启动日志会明示认证状态；开启后 REST 只认 `Authorization: Bearer`，`?token=` 只给 SSE 与文件下载两个浏览器原生入口，access log 里的 query token 已打码（#271）。
-- `bash` 拿到的是**运行账号的权限**：工作目录只是起点，`data/`（含 trace / checkpoint）、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
+- `shell` 拿到的是**运行账号的权限**：工作目录只是起点，`data/`（含 trace / checkpoint）、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
 - 子进程只继承白名单环境变量；这挡的是「继承」，不是读文件（Linux 下 `/proc/$PPID/environ` 不在本章形态内）。
 - **停止 / 超时**回收本次调用建立的进程组（POSIX）或 Job Object（Windows），包括调用已返回、任务随后被停止时的后台进程；用 `setsid` 等自行脱离的进程不受管。
 - **只限时**（默认 30s，1–600s）并截断输出尾部（每流 30KB）；没有 CPU / 内存 / 磁盘 / 进程数上限。

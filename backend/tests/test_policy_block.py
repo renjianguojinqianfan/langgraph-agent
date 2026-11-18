@@ -315,15 +315,15 @@ def test_exact_name_and_glob_and_pattern():
     policy = _policy(
         {"tool": "probe", "reason": "exact"},
         {"tool": "mcp__*__write", "reason": "mcp writer"},
-        {"tool": "bash", "pattern": "DROP TABLE", "reason": "ddl"},
+        {"tool": "shell", "pattern": "DROP TABLE", "reason": "ddl"},
     )
 
     assert policy.check("probe", {}) == "exact"
     assert policy.check("mcp__fs__write", {}) == "mcp writer"
     assert policy.check("mcp__fs__read", {}) is None
     # 命令模式不区分大小写
-    assert policy.check("bash", {"command": "drop table users"}) == "ddl"
-    assert policy.check("bash", {"command": "select 1"}) is None
+    assert policy.check("shell", {"command": "drop table users"}) == "ddl"
+    assert policy.check("shell", {"command": "select 1"}) is None
     assert policy.check("untouched", {"cmd": "drop table users"}) is None
 
 
@@ -487,12 +487,23 @@ def test_a_rule_that_names_no_mounted_tool_is_loud(tmp_path, policy_logs):
 
 
 def test_a_rule_that_names_a_mounted_tool_stays_silent(tmp_path, policy_logs):
-    """#145 AC1 反面：活规则不出声（``bash`` 恒在挂载面，不依赖工具开关）。"""
-    settings = _settings(tmp_path, policy_rules=_rules({"tool": "bash", "reason": "no"}))
+    """#145 AC1 反面：活规则不出声（``shell`` 恒在挂载面，不依赖工具开关）。"""
+    settings = _settings(tmp_path, policy_rules=_rules({"tool": "shell", "reason": "no"}))
 
     make_manager(settings)
 
     assert policy_logs.messages() == []
+
+
+def test_a_legacy_bash_rule_is_reported_dead(tmp_path, policy_logs):
+    """ADR 0013: a saved rule targeting the retired ``bash`` tool is a dead rule."""
+    settings = _settings(tmp_path, policy_rules=_rules({"tool": "bash", "reason": "no"}))
+
+    make_manager(settings)
+
+    messages = policy_logs.messages()
+    assert len(messages) == 1
+    assert "bash" in messages[0]
 
 
 def test_a_wildcard_rule_is_not_checked(tmp_path, policy_logs):
@@ -519,7 +530,7 @@ def test_each_dead_rule_is_reported_once_per_manager(tmp_path, policy_logs):
         policy_rules=_rules(
             {"tool": "git_comit", "reason": "typo"},
             {"tool": "file_read", "reason": "typo"},
-            {"tool": "bash", "reason": "live"},
+            {"tool": "shell", "reason": "live"},
         ),
     )
 
@@ -536,10 +547,10 @@ def test_the_dead_rule_return_value_skips_wildcards_and_live_names():
     policy = _policy(
         {"tool": "git_comit", "reason": "typo"},
         {"tool": "mcp__*__write", "reason": "glob"},
-        {"tool": "bash", "reason": "live"},
+        {"tool": "shell", "reason": "live"},
     )
 
-    assert warn_unmatched_rules(policy.rules, ["bash", "read"]) == ("git_comit",)
+    assert warn_unmatched_rules(policy.rules, ["shell", "read"]) == ("git_comit",)
 
 
 def test_a_broken_table_is_loud_at_manager_construction_too(tmp_path, policy_logs):

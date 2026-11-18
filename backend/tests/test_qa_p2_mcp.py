@@ -259,7 +259,6 @@ def test_agent_read_tool_executes_directly(tmp_path, mcp_managers):
     tool = McpTool(
         server_name="echo", tool_name="echo", description="Echo text.",
         input_schema={}, manager=mgr, settings=s,
-        annotations={"readOnlyHint": True},
     )
 
     from backend.core.agent.nodes import AgentRuntime

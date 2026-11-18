@@ -2,16 +2,12 @@
 
 A minimal Model Context Protocol server over stdio exposing two tools:
 
-* ``echo(text)``       -> ``TextContent("echo:<text>")``   (self-reported
-  read-only: ``readOnlyHint=True``)
-* ``write_file(...)``  -> ``TextContent("wrote:<path>")``  (self-reported
-  destructive: ``destructiveHint=True``, used by the danger-annotation tests
-  that pin ``danger_signal``)
+* ``echo(text)``       -> ``TextContent("echo:<text>")``
+* ``write_file(...)``  -> ``TextContent("wrote:<path>")``
 
-The annotations are what issue #57 made the danger judgement read — the server
-reporting them is the point, not the tool names. ``Tool`` carries them straight
-into ``list_tools`` results, so tests can cover both the reported and the
-un-reported shape (a tool built by hand with no annotations asks).
+The tool names are what the discovery/call tests drive; server-side
+``annotations`` are not sent because no code reads them since #331 retired the
+inert danger signal (the confirmation gate itself went in #138).
 
 The test suite launches this file with ``sys.executable`` (an absolute path, so
 it works on Windows without resolving ``python`` from PATH).
@@ -31,7 +27,6 @@ from mcp.types import (
     ServerCapabilities,
     TextContent,
     Tool,
-    ToolAnnotations,
     ToolsCapability,
 )
 
@@ -69,17 +64,10 @@ async def list_tools() -> list[Tool]:
                 "properties": {"text": {"type": "string", "description": "Text to echo."}},
                 "required": ["text"],
             },
-            annotations=ToolAnnotations(
-                title="Echo",
-                readOnlyHint=True,
-                destructiveHint=False,
-                idempotentHint=True,
-                openWorldHint=False,
-            ),
         ),
         Tool(
             name="write_file",
-            description="Write a file (destructive, requires confirmation).",
+            description="Write a file (destructive).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -88,11 +76,6 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["path", "content"],
             },
-            annotations=ToolAnnotations(
-                title="Write file",
-                readOnlyHint=False,
-                destructiveHint=True,
-            ),
         ),
     ]
 

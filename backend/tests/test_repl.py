@@ -265,7 +265,7 @@ def test_rendered_event_types_are_the_small_face():
             "✓",
         ),
         (
-            {"type": "tool_result", "data": {"tool_name": "bash", "status": "skipped"}},
+            {"type": "tool_result", "data": {"tool_name": "shell", "status": "skipped"}},
             "⊘",
         ),
         ({"type": "final_answer", "data": {"answer": "done"}}, "答: done"),
@@ -297,7 +297,7 @@ def test_render_event_never_prints_reasoning_or_unredacted_secrets():
     assert SENTINEL not in answered
 
     redacted = render_event(
-        {"type": "tool_result", "data": {"tool_name": "bash", "output": SENTINEL}},
+        {"type": "tool_result", "data": {"tool_name": "shell", "output": SENTINEL}},
         redact=lambda text: text.replace(SENTINEL, "[redacted]"),
     )
     assert redacted is not None

@@ -12,7 +12,7 @@
 - stderr 一律是 MSYS 运行时的 `*** fatal error -`；**卡住的那一步随 harness 而不同**（同一个 `.venv311`、同一个 bash）：
   - opencode / qoder：`NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022`（建共享对象目录被拒）
   - dsh：`couldn't create signal pipe, Win32 error 5`（建信号管道被拒）
-- 表现：`test_bash_tool.py` 整文件 + 依赖 bash 的 e2e（`test_models.py::test_tool_args_and_final_answer_are_redacted`）集体失败，断言看着像逻辑错。
+- 表现：`test_shell_tool.py` 整文件 + 依赖 bash 的 e2e（`test_models.py::test_tool_args_and_final_answer_are_redacted`）集体失败，断言看着像逻辑错。
 
 已实测的 agent（2026-11-01；「仓库内」= 用 `.venv311` 解释器跑探针，「仓库外」= 用 `pyvenv.cfg` 的 `home` 解释器跑同一条探针）：
 

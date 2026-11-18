@@ -20,21 +20,21 @@ import {
 // #67 P4-2 / D-24: the tri-state ↔ PUT body mapping and the active-face copy.
 
 const presets: PluginPresetInfo[] = [
-  { id: "minimal", packages: ["files", "bash"] },
-  { id: "research", packages: ["files", "bash", "skills", "web-search", "subagent", "mcp"] },
-  { id: "full", packages: ["files", "bash", "skills", "web-search", "subagent", "mcp"] },
+  { id: "minimal", packages: ["files", "shell"] },
+  { id: "research", packages: ["files", "shell", "skills", "web-search", "subagent", "mcp"] },
+  { id: "full", packages: ["files", "shell", "skills", "web-search", "subagent", "mcp"] },
 ];
 
 const packages: PluginPackageInfo[] = [
   { id: "files", tools: ["read", "write"], connects_mcp: false, affects_subagent_face: false },
-  { id: "bash", tools: ["bash"], connects_mcp: false, affects_subagent_face: false },
+  { id: "shell", tools: ["shell"], connects_mcp: false, affects_subagent_face: false },
   { id: "mcp", tools: [], connects_mcp: true, affects_subagent_face: false },
   { id: "subagent", tools: ["spawn_subagent"], connects_mcp: false, affects_subagent_face: true },
 ];
 
 const draft = (overrides: Partial<PluginsDraft> = {}): PluginsDraft => ({
   preset: "full",
-  states: { files: "follow", bash: "follow", mcp: "follow", subagent: "follow" },
+  states: { files: "follow", shell: "follow", mcp: "follow", subagent: "follow" },
   ...overrides,
 });
 
@@ -47,16 +47,16 @@ describe("preset labels / package list", () => {
   });
 
   it("reads a preset's packages; unknown preset = empty list", () => {
-    expect(presetPackages(presets, "minimal")).toEqual(["files", "bash"]);
+    expect(presetPackages(presets, "minimal")).toEqual(["files", "shell"]);
     expect(presetPackages(presets, "nope")).toEqual([]);
   });
 });
 
 describe("tri-state ↔ saved overrides ↔ PUT body", () => {
   it("derives follow / on / off from saved overrides", () => {
-    const overrides = { files: true, bash: false };
+    const overrides = { files: true, shell: false };
     expect(overrideState(overrides, "files")).toBe("on");
-    expect(overrideState(overrides, "bash")).toBe("off");
+    expect(overrideState(overrides, "shell")).toBe("off");
     expect(overrideState(overrides, "mcp")).toBe("follow");
   });
 
@@ -68,7 +68,7 @@ describe("tri-state ↔ saved overrides ↔ PUT body", () => {
     expect(result.preset).toBe("research");
     expect(result.states).toEqual({
       files: "follow",
-      bash: "follow",
+      shell: "follow",
       mcp: "off",
       subagent: "follow",
     });
@@ -76,13 +76,13 @@ describe("tri-state ↔ saved overrides ↔ PUT body", () => {
 
   it("omits follow from the PUT body and keeps on/off booleans", () => {
     const result = buildPluginsPayload(
-      draft({ states: { files: "on", bash: "off", mcp: "follow", subagent: "follow" } })
+      draft({ states: { files: "on", shell: "off", mcp: "follow", subagent: "follow" } })
     );
-    expect(result).toEqual({ preset: "full", overrides: { files: true, bash: false } });
+    expect(result).toEqual({ preset: "full", overrides: { files: true, shell: false } });
   });
 
   it("switching preset keeps the explicit overrides", () => {
-    const current = draft({ states: { files: "off", bash: "follow", mcp: "follow", subagent: "on" } });
+    const current = draft({ states: { files: "off", shell: "follow", mcp: "follow", subagent: "on" } });
     const next = changePreset(current, "minimal");
     expect(next.preset).toBe("minimal");
     expect(next.states.files).toBe("off");
@@ -116,8 +116,8 @@ describe("pluginsDirty (save-button guard)", () => {
 
 describe("effective package face (backend active is the authority)", () => {
   it("tests membership in the backend-computed active list only", () => {
-    expect(effectivePackageEnabled(["files", "bash"], "files")).toBe(true);
-    expect(effectivePackageEnabled(["files", "bash"], "mcp")).toBe(false);
+    expect(effectivePackageEnabled(["files", "shell"], "files")).toBe(true);
+    expect(effectivePackageEnabled(["files", "shell"], "mcp")).toBe(false);
     expect(effectivePackageEnabled([], "files")).toBe(false);
   });
 });
@@ -138,7 +138,7 @@ describe("shouldAdoptSnapshot (dirty draft wins over a late snapshot)", () => {
 
 describe("active face / restart copy", () => {
   it("summarises the assembled packages and tools", () => {
-    expect(activeFaceSummary({ packages: ["files", "bash"], tools: ["read", "write", "bash"] })).toEqual({
+    expect(activeFaceSummary({ packages: ["files", "shell"], tools: ["read", "write", "shell"] })).toEqual({
       packageCount: 2,
       toolCount: 3,
       summary: "2 个能力包 · 3 个工具",

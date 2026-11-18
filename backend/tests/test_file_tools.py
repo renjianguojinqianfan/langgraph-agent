@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import backend.core.tools.file_io as file_io
 from backend.config import Settings
 from backend.core.tools.file_io import (
@@ -532,7 +534,7 @@ def test_ls_rejects_escape(settings):
 
 
 # ────────────── cross-cutting: policy / schema / registry / round-trip ──────────────
-def test_new_tools_sandbox_policy(settings):
+def test_new_tools_have_no_confirm_metadata(settings):
     for tool in (
         ReadTool(settings),
         GlobTool(settings),
@@ -541,8 +543,20 @@ def test_new_tools_sandbox_policy(settings):
         WriteTool(settings),
         LsTool(settings),
     ):
-        # sandbox-confined local FS: no confirm
-        assert tool.requires_confirm is False
+        # #331 removed the inert confirmation field; the schema never carried it.
+        assert not hasattr(tool, "requires_confirm")
+        assert set(tool.to_openai_schema()["function"]) == {
+            "name",
+            "description",
+            "parameters",
+        }
+
+
+def test_file_tools_require_explicit_settings():
+    """No silent ``data/artifacts`` fallback: the workspace root is injected."""
+    for cls in (ReadTool, GlobTool, GrepTool, EditTool, WriteTool, LsTool):
+        with pytest.raises(ValueError, match="explicit Settings"):
+            cls(None)
 
 
 def test_new_tools_openai_schema_names(settings):

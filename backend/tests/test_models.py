@@ -547,7 +547,13 @@ def test_tool_output_echoing_a_key_is_redacted(tmp_path, monkeypatch):
     settings = make_settings(tmp_path, use_mock_llm=False, trace_enabled=True)
     script = MockLLMClient(
         plan=["p"],
-        tool_calls=[{"id": "c1", "name": "bash", "arguments": {"command": "echo $LLM_API_KEY"}}],
+        tool_calls=[
+            {
+                "id": "c1",
+                "name": "shell",
+                "arguments": {"shell": "bash", "command": "echo $LLM_API_KEY"},
+            }
+        ],
         final_answer="done",
     )
     tm = make_manager(settings, script)
@@ -567,7 +573,13 @@ def test_tool_args_and_final_answer_are_redacted(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", SENTINEL)
     settings = make_settings(tmp_path, use_mock_llm=False, trace_enabled=True)
     script = MockLLMClient(
-        tool_calls=[{"id": "c1", "name": "bash", "arguments": {"command": f"echo {SENTINEL}"}}],
+        tool_calls=[
+            {
+                "id": "c1",
+                "name": "shell",
+                "arguments": {"shell": "bash", "command": f"echo {SENTINEL}"},
+            }
+        ],
         final_answer=f"the key is {SENTINEL}",
     )
     tm = make_manager(settings, script)
@@ -586,7 +598,7 @@ def test_tool_args_and_final_answer_are_redacted(tmp_path, monkeypatch):
         tc.output
         for step in task.steps
         for tc in step.tool_calls
-        if tc.tool_name == "bash"
+        if tc.tool_name == "shell"
     ]
     assert outputs and "[redacted]" in json.dumps(outputs, ensure_ascii=False)
 

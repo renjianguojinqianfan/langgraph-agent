@@ -113,7 +113,7 @@ jobs:
   #   test_workspace_files_api.py    workspace 文件面（junction 逃逸 / 循环 / 预览截断；B1 首个实验文件）
   #   test_workspace.py              workspace 归属 / 注入 / 续说 / 子代理继承（B1 第二个文件）
   #   test_p2_mcp.py                 MCP 客户端 / 回声服务器 / 子进程清理（B1 第三个文件）
-  #   test_bash_tool.py              bash 路径解析 / 命令执行 / 后台进程树（B1 第四个文件）
+  #   test_shell_tool.py             shell 选择/发现（pwsh / Git Bash）/ 命令执行 / 后台进程树（B1 第四个文件）
   #   test_task_delete.py            任务/目录历史删除（只删记录、checkpoint 与 trace；#241）
   #   test_strict_msgpack_guard.py   langgraph 自读开关的离线守卫（子进程探针；#216）
   #   test_trace.py                  trace 文件名判据（反斜杠穿越 / 非法 task_id；#254）
@@ -153,7 +153,7 @@ jobs:
           backend/tests/test_workspace_files_api.py
           backend/tests/test_workspace.py
           backend/tests/test_p2_mcp.py
-          backend/tests/test_bash_tool.py
+          backend/tests/test_shell_tool.py
           backend/tests/test_task_delete.py
           backend/tests/test_strict_msgpack_guard.py
           backend/tests/test_trace.py
