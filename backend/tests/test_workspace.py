@@ -26,7 +26,9 @@ from backend.core.runtime_context import (
     set_runtime_context,
 )
 from backend.main import app
-from backend.services.persistence import Persistence
+from backend.services.event_bus import EventBus
+from backend.services.persistence import Persistence, UnsupportedTasksFileError
+from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_manager, make_settings
 
 
@@ -272,7 +274,9 @@ def test_resolve_in_workspace_rejects_non_local_paths_before_resolve(tmp_path, m
     assert resolve_calls == []
 
 
-def test_legacy_task_gets_the_old_sandbox_workspace(tmp_path):
+def test_task_record_without_a_workspace_is_refused(tmp_path):
+    """ADR 0013 decision 1: the pre-ADR-0010 backfill is gone; the record is
+    refused readably and the file keeps its bytes (no quiet substitution)."""
     settings = make_settings(tmp_path)
     settings.data_path.mkdir(parents=True, exist_ok=True)
     legacy = [
@@ -281,16 +285,41 @@ def test_legacy_task_gets_the_old_sandbox_workspace(tmp_path):
             "title": "legacy",
             "user_input": "legacy",
             "status": "INTERRUPTED",
+            "conversation": [{"role": "user", "content": "legacy"}],
             "created_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
         }
     ]
-    (settings.data_path / "tasks.json").write_text(json.dumps(legacy), encoding="utf-8")
+    original = json.dumps(legacy).encode("utf-8")
+    (settings.data_path / "tasks.json").write_bytes(original)
 
-    task = Persistence(settings).load_task("old-1")
+    with pytest.raises(UnsupportedTasksFileError) as excinfo:
+        Persistence(settings)
 
-    assert task is not None
-    assert task.workspace == normalize_workspace(settings.artifacts_path)
+    assert "workspace" in str(excinfo.value)
+    assert (settings.data_path / "tasks.json").read_bytes() == original
+
+
+def test_task_created_without_a_directory_uses_the_entry_cwd(tmp_path, monkeypatch):
+    """An omitted directory is a NEW-task default, not a legacy backfill:
+    the entry point's working directory decides it (ADR 0013 decision 1)."""
+    launch = tmp_path / "launch"
+    launch.mkdir()
+    monkeypatch.chdir(launch)
+    settings = make_settings(tmp_path)
+    tm = TaskManager(
+        settings,
+        EventBus(),
+        Persistence(settings),
+        llm_client=MockLLMClient(final_answer="ok"),
+        tools=[],
+        default_workspace=Path.cwd(),
+    )
+    try:
+        task = _wait_manager(tm, tm.create_task(None, "hello"))
+        assert task.workspace == normalize_workspace(launch)
+    finally:
+        tm.shutdown()
 
 
 def test_send_message_to_a_deleted_workspace_returns_409(tmp_path):
@@ -399,7 +428,9 @@ def test_malformed_workspace_does_not_quarantine_history(tmp_path):
             "id": "good",
             "title": "good",
             "user_input": "good",
+            "workspace": str(tmp_path / "good-ws"),
             "status": "INTERRUPTED",
+            "conversation": [{"role": "user", "content": "good"}],
             "created_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
         },
@@ -409,6 +440,7 @@ def test_malformed_workspace_does_not_quarantine_history(tmp_path):
             "user_input": "bad",
             "workspace": "bad\u0000path",
             "status": "INTERRUPTED",
+            "conversation": [{"role": "user", "content": "bad"}],
             "created_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
         },

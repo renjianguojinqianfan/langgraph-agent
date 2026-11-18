@@ -11,8 +11,6 @@ interface TurnProcessProps {
   markers: TraceMarker[];
   /** The round currently running: opens by itself and keeps live status. */
   live?: boolean;
-  /** Legacy records have no round; name the block instead of guessing one. */
-  title?: string;
   /** Owning task identity, forwarded to StepRow so the thinking fold resets on
    * a task switch (#300 L1). */
   taskId?: string;
@@ -29,7 +27,6 @@ export function TurnProcess({
   steps,
   markers,
   live = false,
-  title,
   taskId,
   answers,
 }: TurnProcessProps) {
@@ -51,12 +48,11 @@ export function TurnProcess({
   const verdict = turnVerdict(steps, live);
   const toolCount = steps.reduce((n, step) => n + step.tool_calls.length, 0);
   const label =
-    title ??
-    (verdict === "failed"
+    verdict === "failed"
       ? "处理失败"
       : verdict === "running"
         ? "执行中"
-        : "已完成");
+        : "已完成";
   const dot =
     verdict === "failed"
       ? "bg-state-danger"

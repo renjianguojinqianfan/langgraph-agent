@@ -1281,6 +1281,7 @@ class TaskManager:
                 "steps": [],
                 "status": "RUNNING",
                 "stop_requested": False,
+                "round_no": self._round_number(task),
                 "step_index": 0,
                 "round_steps": 0,
                 "final_answer": "",
@@ -1288,7 +1289,6 @@ class TaskManager:
                 "_last_action": "",
                 "_current_tool_calls": [],
                 "subtasks": [],
-                "_is_subtask": False,
             }
             self._active_states[task_id] = state
 
@@ -1515,14 +1515,11 @@ class TaskManager:
         task.plan_version = int(final.get("plan_version", task.plan_version))
         task.plan_hash = str(final.get("plan_hash", task.plan_hash))
         task.final_answer = self.redact(final.get("final_answer", "") or "")
-        rebuilt = self._conversation_from(final.get("messages"))
-        if task.conversation:
-            task.conversation = self._merge_round_turns(
-                task.conversation, rebuilt, task.final_answer
-            )
-        else:
-            # Legacy records predate the persisted conversation; rebuild once.
-            task.conversation = rebuilt
+        task.conversation = self._merge_round_turns(
+            task.conversation,
+            self._conversation_from(final.get("messages")),
+            task.final_answer,
+        )
         task.error = self.redact(final["error"]) if final.get("error") else None
         task.subtasks = [SubTask(**st) for st in final.get("subtasks", [])]
         task.updated_at = _now()
@@ -1591,13 +1588,13 @@ class TaskManager:
     def _round_number(task: Task) -> int:
         """1-based conversation round for the run about to start (#265).
 
-        One user turn opens one round. Counting the persisted turns (rather than
-        a checkpoint-only counter) keeps pre-#265 checkpoints attributable: the
-        next round is still the next user turn, even when old steps carry 0.
-        ``_merge_round_turns`` never replaces settled turns, so compression
-        cannot shrink the ledger beneath the counter.
+        One user turn opens one round — counting the persisted turns is the one
+        definition every entry point uses (first run, resume, continuation).
+        Every current record opens with its user turn (required by ``Task``), so
+        the count is at least 1. ``_merge_round_turns`` never replaces settled
+        turns, so compression cannot shrink the ledger beneath the counter.
         """
-        return max(1, sum(1 for turn in task.conversation if turn.role == "user"))
+        return sum(1 for turn in task.conversation if turn.role == "user")
 
     @staticmethod
     def _conversation_from(messages: Any) -> List[ChatTurn]:

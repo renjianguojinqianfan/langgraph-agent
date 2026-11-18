@@ -341,13 +341,13 @@ class SubAgentExecutor:
                 "status": "RUNNING",
                 "stop_requested": False,
                 "step_index": 0,
+                "round_no": 1,
                 "round_steps": 0,
                 "final_answer": "",
                 "error": "",
                 "_last_action": "",
                 "_current_tool_calls": [],
                 "subtasks": [],
-                "_is_subtask": True,
             }
             tools = self._subtask_tools(spec)
             face = [t.name for t in tools]

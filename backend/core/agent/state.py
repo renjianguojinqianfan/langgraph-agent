@@ -38,4 +38,3 @@ class AgentState(TypedDict, total=False):
 
     # ── P1 item 2: sub-agent ──
     subtasks: List[Dict[str, Any]]          # SubTask dicts folded into the parent record
-    _is_subtask: bool                       # True inside a subtask state

@@ -4,6 +4,12 @@ Tasks are kept in memory and periodically flushed to
 ``<data_dir>/tasks.json``. The interface is intentionally narrow so a
 SQLite-backed implementation can replace it later without touching the service
 layer.
+
+ADR 0013 decision 1: the current record format is the only readable one. A
+record carrying a retired shape is refused with :class:`UnsupportedTasksFileError`
+and the file is left byte-for-byte untouched — no read-time backfill, no
+migration. Byte-level corruption keeps its own path (preserve the file, start
+fresh), because that is damage, not a format this build never wrote.
 """
 
 from __future__ import annotations
@@ -13,11 +19,11 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from ..api.schemas import Task
+from ..api.schemas import Task, TaskStatus
 from ..config import Settings
-from ..core.runtime_context import normalize_workspace, workspace_key
+from ..core.runtime_context import reject_non_local_path, workspace_key
 from ..utils.logging import get_logger
 
 logger = get_logger("persistence")
@@ -31,12 +37,67 @@ class PersistenceError(OSError):
     """A mutation could not be written to tasks.json and was rolled back."""
 
 
+class UnsupportedTasksFileError(RuntimeError):
+    """``tasks.json`` holds records this build does not accept (ADR 0013).
+
+    Raised while loading, before anything is written or moved: a record with a
+    retired shape (a ``COMPLETED`` status, no workspace, no conversation
+    ledger, a step without its 1-based round, a non-object tool-call input) is
+    refused with the file path, the record and a next step. The file itself is
+    left byte-for-byte untouched — no migration, rewrite, rename or backup.
+    """
+
+
+# Retired record shapes are checked before Pydantic sees the record, so the
+# refusal can name the field instead of quoting a validation traceback.
+def _retired_problem(item: Any) -> Optional[str]:
+    """Why ``item`` belongs to a retired format; None when it is current."""
+    if not isinstance(item, dict):
+        return "record is not a JSON object"
+    status = item.get("status")
+    if status not in TaskStatus.__members__:
+        return (
+            f"status {status!r} is not a current TaskStatus "
+            "(COMPLETED was retired by ADR 0008 decision 5)"
+        )
+    if not str(item.get("workspace") or "").strip():
+        return "record has no workspace (records written before ADR 0010)"
+    conversation = item.get("conversation")
+    if not isinstance(conversation, list) or not conversation:
+        return "record has no conversation ledger (records written before #265)"
+    steps = item.get("steps") or []
+    if not isinstance(steps, list):
+        return "steps is not a list"
+    for step in steps:
+        if not isinstance(step, dict):
+            return "step is not a JSON object"
+        round_no = step.get("round")
+        if isinstance(round_no, bool) or not isinstance(round_no, int) or round_no < 1:
+            return (
+                f"step {step.get('index')!r} has no 1-based round "
+                "(records written before #265)"
+            )
+        calls = step.get("tool_calls") or []
+        if not isinstance(calls, list):
+            return "tool_calls is not a list"
+        for call in calls:
+            if not isinstance(call, dict):
+                return "tool call is not a JSON object"
+            if not isinstance(call.get("input", {}), dict):
+                return (
+                    f"tool call {call.get('id')!r} input is not an object "
+                    "(records written before the object contract)"
+                )
+    return None
+
+
 class Persistence:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.data_path = settings.data_path
         self.data_path.mkdir(parents=True, exist_ok=True)
-        # The historical/default workspace for tasks without an explicit dir.
+        # Fallback root for tools that run outside a task context
+        # (``runtime_context.workspace_root``); not a task default.
         settings.artifacts_path.mkdir(parents=True, exist_ok=True)
         self._tasks_file = self.data_path / "tasks.json"
         # Worker threads run save_task concurrently with the request thread;
@@ -50,23 +111,8 @@ class Persistence:
             return
         try:
             raw = json.loads(self._tasks_file.read_text(encoding="utf-8"))
-            for item in raw:
-                try:
-                    # ADR 0008 decision 5 / slice S5: ``COMPLETED`` is retired —
-                    # "完成" is just another "停下". Records written before S5
-                    # still carry it, so map it on load instead of dropping the
-                    # user's history as a corrupt record.
-                    if item.get("status") == "COMPLETED":
-                        item["status"] = "INTERRUPTED"
-                    task = Task(**item)
-                    # ADR 0010: pre-workspace records lived in the old sandbox root.
-                    task.workspace = normalize_workspace(
-                        task.workspace or self.settings.artifacts_path
-                    )
-                except Exception:
-                    logger.warning("Skipping corrupt task record %s", item.get("id"))
-                    continue
-                self._tasks[task.id] = task
+            if not isinstance(raw, list):
+                raise ValueError("tasks.json is not a JSON array")
         except Exception:
             # Spec Issue #4: a torn/partial tasks.json must never silently wipe
             # history. Preserve it for forensics, then start fresh.
@@ -79,8 +125,41 @@ class Persistence:
                 )
             except OSError:
                 logger.exception("tasks.json unreadable and could not be archived.")
-            else:
-                return  # file moved away; do not fall through to re-read it
+            return
+        self._load_records(raw)
+
+    def _load_records(self, raw: List[Any]) -> None:
+        """Load current-contract records; refuse the file on a retired one."""
+        for item in raw:
+            problem = _retired_problem(item)
+            if problem is not None:
+                record_id = item.get("id") if isinstance(item, dict) else None
+                raise UnsupportedTasksFileError(
+                    f"{self._tasks_file} 含本版本不接受的旧任务记录"
+                    f"（record={record_id!r}：{problem}）。当前合同要求：status 属于"
+                    f" {', '.join(TaskStatus.__members__)}、workspace 非空、"
+                    "conversation 从用户第一轮开始、每个 step 带 1-based round、"
+                    "tool call input 为对象。文件保持原样未改动：本版本不做迁移，"
+                    "请先备份并移走该文件（ADR 0013 决策 1）。"
+                )
+            try:
+                task = Task(**item)
+            except Exception:
+                logger.warning("Skipping corrupt task record %s", item.get("id"))
+                continue
+            try:
+                # A workspace this build cannot even name is damaged data, not
+                # a retired format: drop that record (the file is untouched)
+                # instead of refusing the whole history over one bad path.
+                reject_non_local_path(task.workspace)
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping task record %s with an unusable workspace: %s",
+                    task.id,
+                    exc,
+                )
+                continue
+            self._tasks[task.id] = task
 
     def _dump(self) -> bool:
         # Atomic replace so a crash mid-write can never tear tasks.json.
@@ -185,4 +264,3 @@ class Persistence:
     def delete_tasks(self, task_ids: List[str]) -> int:
         with self._lock:
             return self._delete_locked(task_ids)
-

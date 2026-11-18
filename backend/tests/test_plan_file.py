@@ -123,7 +123,6 @@ def test_a_non_plan_reply_does_not_create_the_file(tmp_path):
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     runtime.agent(state)
 
@@ -175,7 +174,6 @@ def test_a_non_plan_reply_keeps_the_previous_plan_note(tmp_path):
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     runtime.agent(state)
 
@@ -275,7 +273,6 @@ def test_compression_replaces_an_old_plan_message_with_the_latest(tmp_path):
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     built = runtime._build_messages(state, "system")
     plans = [m for m in built if plan_file.is_plan_message(m.get("content"))]
@@ -319,7 +316,6 @@ def test_compression_refreshes_a_mid_round_plan(tmp_path):
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     built = runtime._build_messages(state, "system")
 
@@ -429,7 +425,6 @@ def test_model_write_to_the_plan_file_is_used_next_round(tmp_path):
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     runtime.agent(state)  # tool round
     runtime.tool_node(state)  # execute the write
@@ -704,7 +699,6 @@ def test_old_plan_never_reaches_the_summarizer(tmp_path):
         "_last_action": "",
         "_current_tool_calls": [],
         "subtasks": [],
-        "_is_subtask": False,
     }
     built = runtime._build_messages(state, "system")
 

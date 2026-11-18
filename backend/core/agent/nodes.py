@@ -882,7 +882,7 @@ class AgentRuntime:
         steps = state.get("steps") or []
         if steps:
             last = steps[-1]
-            same_round = last.get("round", 0) == int(state.get("round_no", 1) or 1)
+            same_round = last.get("round") == int(state.get("round_no", 1) or 1)
             if same_round and last.get("status") == "running":
                 answered = bool(state.get("final_answer")) and not state.get("error")
                 last["status"] = "done" if answered else "failed"

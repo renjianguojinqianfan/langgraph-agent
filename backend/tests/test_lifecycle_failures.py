@@ -418,6 +418,7 @@ def test_stop_save_failure_rolls_back_status(tmp_path, monkeypatch):
         title="running",
         user_input="hi",
         workspace=str(settings.artifacts_path),
+        conversation=[ChatTurn(role="user", content="hi")],
         status=TaskStatus.RUNNING,
         created_at=now,
         updated_at=now,

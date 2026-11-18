@@ -11,7 +11,7 @@
 - **日常形态补充（启动目录即工作区、共用一个后台、多套模型配置，2026-10-22 已交付）**：[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)；实施记录见 `docs/specs/qianfan-daily-form-plan.md`（spec #166，切片 PR #167、#176–#187）。现役以下表 + 代码为准。
 - **插件 + 预设（能力包 / 全局组合，2026-11-08 P4 三片已交付）**：[ADR 0012](docs/adr/0012-plugin-packages-and-presets.md)；P4-1 静态 manifest + 装配 + 三预设真关，P4-2 `data/plugins.json` + 设置页「能力」区 + `GET/PUT /api/plugins` + `qianfan --preset`，P4-3 面快照 + 文件配置关闭面端到端 + 文档对账。现役以下表 + 代码为准。
 - **本文件面向外部开发 agent**（改这个仓库时读）。
-- **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md`（`Task.workspace`；旧任务为 `data/artifacts`）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py` + `backend/core/runtime_context.py`。
+- **产品运行时两层注入**只读 home 层 `~/.agents/AGENTS.md` → 任务目录 `AGENTS.md`（`Task.workspace`）；盘根 / 中间层 / 子目录一律不读，`docs/` 不进注入。实现：`backend/core/agent/inject.py` + `backend/core/runtime_context.py`。
 
 ## 跨任务安全边界（不变量）
 

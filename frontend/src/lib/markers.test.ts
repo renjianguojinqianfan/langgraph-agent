@@ -14,10 +14,10 @@ function marker(stepIndex: number, dropped = 1): TraceMarker {
   };
 }
 
-function step(index: number, round?: number): StepRecord {
+function step(index: number, round = 1): StepRecord {
   return {
     index,
-    ...(round !== undefined ? { round } : {}),
+    round,
     thought: "",
     tool_calls: [],
     status: "done",

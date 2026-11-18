@@ -243,6 +243,8 @@ class TestBlackBoxResume:
                 id="t-legacy",
                 title="legacy",
                 user_input="x",
+                workspace=str(settings.artifacts_path),
+                conversation=[{"role": "user", "content": "x"}],
                 status=TaskStatus.INTERRUPTED,
                 created_at=now,
                 updated_at=now,

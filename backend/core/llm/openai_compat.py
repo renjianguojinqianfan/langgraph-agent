@@ -106,6 +106,11 @@ class OpenAICompatibleClient(LLMClient):
                     args = json.loads(tc.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
+                # ADR 0013 decision 1: the record contract stores an object,
+                # so a non-object JSON payload (array / scalar) is folded here,
+                # at the write face — never wrapped when the record is read.
+                if not isinstance(args, dict):
+                    args = {}
                 tool_calls.append(
                     {"id": tc.id, "name": tc.function.name, "arguments": args}
                 )

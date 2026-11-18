@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ChatTurn, StepRecord } from "../types";
-import {
-  isPlanNotice,
-  legacySteps,
-  splitRounds,
-  stepsForRound,
-  turnVerdict,
-} from "./rounds";
+import { isPlanNotice, splitRounds, stepsForRound, turnVerdict } from "./rounds";
 
 describe("splitRounds", () => {
   it("空对话 → 无轮次", () => {
@@ -34,18 +28,15 @@ describe("splitRounds", () => {
     ]);
   });
 
-  it("用户之前的助手回合保留为无用户气泡的首轮", () => {
+  it("轮号就是用户轮次计数，与后端 _round_number 同一口径", () => {
     const rounds = splitRounds([
-      { role: "assistant", content: "开场" },
-      { role: "user", content: "提问" },
+      { role: "user", content: "一" },
+      { role: "user", content: "二" },
+      { role: "assistant", content: "二答" },
+      { role: "user", content: "三" },
     ]);
-    expect(rounds).toHaveLength(2);
-    expect(rounds[0].user).toBeNull();
-    expect(rounds[0].answers[0].content).toBe("开场");
-    // #265: the leading block must not shift the backend's user-turn numbering.
-    expect(rounds[0].index).toBe(0);
-    expect(rounds[1].index).toBe(1);
-    expect(rounds[1].user?.content).toBe("提问");
+    expect(rounds.map((r) => r.index)).toEqual([1, 2, 3]);
+    expect(rounds[2].user.content).toBe("三");
   });
 
   it("同轮多条助手回合全部保留", () => {
@@ -58,10 +49,10 @@ describe("splitRounds", () => {
   });
 });
 
-function makeStep(index: number, round?: number, status = "done"): StepRecord {
+function makeStep(index: number, round: number, status = "done"): StepRecord {
   return {
     index,
-    ...(round !== undefined ? { round } : {}),
+    round,
     thought: "",
     tool_calls: [],
     status,
@@ -71,20 +62,16 @@ function makeStep(index: number, round?: number, status = "done"): StepRecord {
 // #265 replaces the old `stepsRoundIndex` guess: steps now carry their own
 // round, so the two "which round owns the block" cases were deleted with the
 // helper. `Round.index` itself is still covered by the splitRounds cases above.
-describe("stepsForRound / legacySteps", () => {
-  const steps = [makeStep(1, 1), makeStep(2, 2), makeStep(3, 0), makeStep(4)];
+describe("stepsForRound", () => {
+  const steps = [makeStep(1, 1), makeStep(2, 2), makeStep(3, 1)];
 
   it("只取指定轮的步骤", () => {
-    expect(stepsForRound(steps, 1).map((s) => s.index)).toEqual([1]);
+    expect(stepsForRound(steps, 1).map((s) => s.index)).toEqual([1, 3]);
     expect(stepsForRound(steps, 2).map((s) => s.index)).toEqual([2]);
   });
 
   it("没有对应轮次时返回空数组", () => {
     expect(stepsForRound(steps, 9)).toEqual([]);
-  });
-
-  it("旧记录（round=0 或缺失）单独归为 legacy，不猜轮次", () => {
-    expect(legacySteps(steps).map((s) => s.index)).toEqual([3, 4]);
   });
 });
 
@@ -106,11 +93,8 @@ describe("turnVerdict", () => {
     expect(turnVerdict([makeStep(1, 1, "failed")], true)).toBe("failed");
   });
 
-  it("末步 running 或旧记录残留 running 按执行中兜底", () => {
+  it("末步 running 按执行中", () => {
     expect(turnVerdict([makeStep(1, 1, "running")], false)).toBe("running");
-    expect(
-      turnVerdict([makeStep(1, 1, "running"), makeStep(2, 1)], false),
-    ).toBe("running");
   });
 });
 

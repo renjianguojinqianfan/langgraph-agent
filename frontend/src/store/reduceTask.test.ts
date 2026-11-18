@@ -12,7 +12,7 @@ function snapshot(overrides: Partial<Task> = {}): Task {
     model: "",
     status: "RUNNING",
     mode: "build",
-    steps: [{ index: 1, thought: "先看一眼", tool_calls: [], status: "running" }],
+    steps: [{ index: 1, round: 1, thought: "先看一眼", tool_calls: [], status: "running" }],
     plan_version: 0,
     conversation: [{ role: "user", content: "做点事" }],
     final_answer: "",
@@ -112,12 +112,14 @@ describe("#265 step_start 的轮次归属", () => {
     expect(next.steps[0]).toMatchObject({ index: 1, round: 2, thought: "做点事" });
   });
 
-  it("旧事件没有 round 时不伪造轮次", () => {
-    const next = applyToTask(snapshot({ steps: [] }), "t1", {
+  it("缺 round 的 step_start 是坏帧：不建步骤、不伪造轮次", () => {
+    const prev = snapshot({ steps: [] });
+    const next = applyToTask(prev, "t1", {
       type: "step_start",
       data: { task_id: "t1", index: 1 },
     });
-    expect(next.steps[0].round).toBeUndefined();
+    expect(next).toBe(prev);
+    expect(next.steps).toEqual([]);
   });
 
   it("已有步骤收到带 round 的 step_start 时补上轮次", () => {
@@ -230,8 +232,8 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     snapshot({
       status: "RUNNING",
       steps: [
-        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
-        { index: 2, thought: "第二步", tool_calls: [], status: "running" },
+        { index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, round: 1, thought: "第二步", tool_calls: [], status: "running" },
       ],
       conversation: [
         { role: "user", content: "做点事" },
@@ -243,7 +245,7 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
   it("快照步骤更少（请求早于流）→ 保留实时 steps / conversation / 状态", () => {
     const stale = snapshot({
       status: "PENDING",
-      steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+      steps: [{ index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" }],
       conversation: [{ role: "user", content: "做点事" }],
       updated_at: "2026-10-27T00:00:01",
     });
@@ -266,7 +268,7 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     const stale = snapshot({
       status: "PENDING",
       plan_version: 1,
-      steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+      steps: [{ index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" }],
     });
 
     const merged = mergeSnapshotUnlessStale({ ...live(), plan_version: 5 }, stale);
@@ -281,8 +283,8 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
       status: "PENDING",
       plan_version: 1,
       steps: [
-        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
-        { index: 2, thought: "第二步", tool_calls: [], status: "running" },
+        { index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, round: 1, thought: "第二步", tool_calls: [], status: "running" },
       ],
     });
 
@@ -298,8 +300,8 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
       status: "INTERRUPTED",
       plan_version: 7,
       steps: [
-        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
-        { index: 2, thought: "第二步", tool_calls: [], status: "running" },
+        { index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, round: 1, thought: "第二步", tool_calls: [], status: "running" },
       ],
     });
 
@@ -312,9 +314,9 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     const fresh = snapshot({
       status: "INTERRUPTED",
       steps: [
-        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
-        { index: 2, thought: "第二步", tool_calls: [], status: "done" },
-        { index: 3, thought: "第三步", tool_calls: [], status: "done" },
+        { index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, round: 1, thought: "第二步", tool_calls: [], status: "done" },
+        { index: 3, round: 1, thought: "第三步", tool_calls: [], status: "done" },
       ],
       conversation: [
         { role: "user", content: "做点事" },
@@ -336,8 +338,8 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     const tie = snapshot({
       status: "FAILED",
       steps: [
-        { index: 1, thought: "第一步", tool_calls: [], status: "done" },
-        { index: 2, thought: "第二步（带结果）", tool_calls: [], status: "failed" },
+        { index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" },
+        { index: 2, round: 1, thought: "第二步（带结果）", tool_calls: [], status: "failed" },
       ],
       error: "炸了",
     });
@@ -356,7 +358,7 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
     useTaskStore.getState().upsertTask(
       snapshot({
         status: "PENDING",
-        steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+        steps: [{ index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" }],
         conversation: [{ role: "user", content: "做点事" }],
         updated_at: "2026-10-27T00:00:01",
       })
@@ -379,7 +381,7 @@ describe("#256 迟到快照不清 SSE 已渲染步骤", () => {
       snapshot({
         status: "PENDING",
         plan_version: 1,
-        steps: [{ index: 1, thought: "第一步", tool_calls: [], status: "done" }],
+        steps: [{ index: 1, round: 1, thought: "第一步", tool_calls: [], status: "done" }],
       })
     );
 
@@ -417,8 +419,8 @@ describe("D-38/D-40: final_answer reasoning 落到步骤", () => {
     const prev = {
       ...snapshot({
         steps: [
-          { index: 1, thought: "先看", tool_calls: [], status: "done" },
-          { index: 2, thought: "答", tool_calls: [], status: "done" },
+          { index: 1, round: 1, thought: "先看", tool_calls: [], status: "done" },
+          { index: 2, round: 1, thought: "答", tool_calls: [], status: "done" },
         ],
       }),
       final_answer: "",
@@ -471,9 +473,10 @@ describe("D-38/D-40: final_answer reasoning 落到步骤", () => {
     const prev = snapshot({
       final_answer: "第二轮答案",
       steps: [
-        { index: 1, thought: "第一轮", tool_calls: [], status: "done" },
+        { index: 1, round: 1, thought: "第一轮", tool_calls: [], status: "done" },
         {
           index: 2,
+          round: 1,
           thought: "第二轮",
           tool_calls: [],
           status: "done",
@@ -534,7 +537,7 @@ describe("step_start 回放不降级已收尾步骤", () => {
   it("新步骤仍按 step_start 置 running 并写入 thought", () => {
     const prev = snapshot({
       steps: [
-        { index: 1, thought: "第一轮", tool_calls: [], status: "done" },
+        { index: 1, round: 1, thought: "第一轮", tool_calls: [], status: "done" },
       ],
     });
     const next = applyToTask(prev, "t1", {
@@ -696,6 +699,7 @@ describe("tool_call 回放归属与幂等", () => {
       steps: [
         {
           index: 1,
+          round: 1,
           thought: "跑一下",
           status: "running",
           tool_calls: [

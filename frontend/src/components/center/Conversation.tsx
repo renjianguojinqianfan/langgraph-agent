@@ -1,6 +1,6 @@
 import type { Task } from "../../types";
 import { groupMarkers } from "../../lib/markers";
-import { isPlanNotice, legacySteps, splitRounds, stepsForRound } from "../../lib/rounds";
+import { isPlanNotice, splitRounds, stepsForRound } from "../../lib/rounds";
 import { useTaskStore } from "../../store/taskStore";
 import { AnswerSheet } from "./AnswerSheet";
 import { CompressMarker } from "./CompressMarker";
@@ -15,17 +15,10 @@ interface ConversationProps {
 }
 
 export function Conversation({ task, onOpenPlan }: ConversationProps) {
-  const conversation = task.conversation.length
-    ? task.conversation
-    : task.user_input
-      ? [{ role: "user" as const, content: task.user_input }]
-      : [];
-  const rounds = splitRounds(conversation);
-  const legacy = legacySteps(task.steps);
+  const rounds = splitRounds(task.conversation);
   const markers = useTaskStore((s) => s.markers[task.id] ?? []);
   // Ownership is resolved once here; each block receives only its own markers.
   const { byStep, loose } = groupMarkers(markers, task.steps);
-  const legacyMarkers = legacy.flatMap((step) => byStep.get(step.index) ?? []);
   const empty =
     rounds.length === 0 && task.steps.length === 0 && loose.length === 0;
   const running = task.status === "RUNNING";
@@ -45,23 +38,13 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
           </p>
         )}
 
-        {legacy.length > 0 && (
-          <TurnProcess
-            steps={legacy}
-            markers={legacyMarkers}
-            title="历史执行过程"
-            taskId={task.id}
-          />
-        )}
-
         {rounds.map((round, i) => {
-          // Index 0 is a leading assistant-only block, not a backend round.
-          const roundSteps = round.index > 0 ? stepsForRound(task.steps, round.index) : [];
+          const roundSteps = stepsForRound(task.steps, round.index);
           const roundMarkers = roundSteps.flatMap((step) => byStep.get(step.index) ?? []);
           const last = i === rounds.length - 1;
           return (
             <div key={round.index} className="flex flex-col gap-3">
-              {round.user && <UserBubble text={round.user.content} />}
+              <UserBubble text={round.user.content} />
               {roundSteps.length > 0 && (
                 <TurnProcess
                   steps={roundSteps}
