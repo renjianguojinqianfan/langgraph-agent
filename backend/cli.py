@@ -136,10 +136,9 @@ def _argv_preset(argv: list[str]) -> Optional[str]:
     return None
 
 
-def _open_at(port: int, no_browser: bool, browser: Callable[[str], None]) -> None:
+def _open_at(port: int, browser: Callable[[str], None]) -> None:
     url = f"http://{HOST}:{port}/?dir={quote(os.getcwd())}"
-    if not no_browser:
-        browser(url)
+    browser(url)
     print(f"[qianfan] 已有后台在 http://{HOST}:{port}/，本目录：{os.getcwd()}")
 
 
@@ -165,7 +164,7 @@ def _handoff(
     if browser is None or no_browser:
         print(f"[qianfan] 已有后台在 http://{HOST}:{running.port}/，本目录：{os.getcwd()}")
         return 0
-    _open_at(running.port, no_browser, browser)
+    _open_at(running.port, browser)
     return 0
 
 

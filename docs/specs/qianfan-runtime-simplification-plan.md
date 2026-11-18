@@ -1,7 +1,7 @@
 # qianfan 内核简化、共享交互与调用观测实施计划
 
 > 状态：**目标已由本次 grilling 确认；作者 2026-11-18 已授权 S0–S12 按 B 模型实施**（单集成分支 + 单 PR）。本文提出工程切片、接口约束和验收要求；实施进度以子票、集成分支与 PR 为准，不以本文代替完成证据。
-> 源码基线：`bd1151afe3459bd3e1b1f63ebccd6ebcbe799c41`。依据：[历史与维护成本审计](../history-and-maintainability-audit-2026-11.md)及后续用户裁定。审计、证据、预防规则与本文按作者 2026-11-17 的授权分批提交、推送并开 PR #339；本文仍不授权代码实施、合并、清空数据或修改用户级配置。
+> 源码基线：`bd1151afe3459bd3e1b1f63ebccd6ebcbe799c41`。依据：[历史与维护成本审计](../history-and-maintainability-audit-2026-11.md)及后续用户裁定。审计、证据、预防规则与本文按作者 2026-11-17 的授权分批提交、推送并开 PR #339；本文仍不授权合并、清空数据或修改用户级配置。
 > 发布模型：作者 2026-11-18 裁定 S0–S12 采用**单集成分支 + 单 PR**（`spec/326-kernel-simplification`），覆盖原「一个切片一个分支、一个 PR」；每片仍有独立提交、验收与报告，`S5`+`S6` 仍是一个原子交付单元。
 
 ## 1. 已确认的目标与边界
@@ -265,3 +265,52 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 | S12 最终收口 | [#338](https://github.com/renjianguojinqianfan/langgraph-agent/issues/338) | #337 |
 
 - 12 张子票均挂在 #326 下，标签 `ready-for-agent`；父票关闭条件见 S12。
+
+## 10. 实施记录（2026-11-18）
+
+> 发布模型 B：单集成分支 `spec/326-kernel-simplification` + 单 PR（#340），每片独立提交与合入，
+> S5+S6 为一个原子交付；合并权在评审侧/用户。本节是收口快照，不复制各片设计细节。
+
+| 切片 | 集成分支合入提交 |
+|---|---|
+| S0 准备 | `5ef1cba` |
+| S1 模型解析与接口收口 | `43f42be` |
+| S2 任务与 checkpoint 当前合同 | `7081bbd` |
+| S3 单轮执行与收尾集中 | `10d8bb2` |
+| S4 统一命令执行与能力装配 | `1ef4d94` |
+| S5+S6 共享后台与终端薄客户端 | `d0d30f7` |
+| S7 模型调用捕获与 trace 扩展 | `587b288` |
+| S8 trace 调用查看与前端状态策略 | `83076ef`、`be5880e` |
+| S9 文件轮询去放大 | `2d62b1c` |
+| S10 文件枚举减成本 | `237b770` |
+| S11 批量持久化收口 | `5be54a2` |
+| S12 最终收口 | 本片提交 |
+
+### 10.1 门禁结果
+
+| 面 | 结果 |
+|---|---|
+| 后端离线套件 | 通过；本机受限 harness 的 MSYS bash 假红（`NtCreateDirectoryObject 0xC0000022`）不计为代码回退，判据见 [`docs/harness-bash-false-red.md`](../harness-bash-false-red.md) |
+| ruff / mypy | 通过（零 ignore / override） |
+| Windows 敏感清单 | 除同一 MSYS 假红文件外通过；CI `backend-windows-smoke` 为权威 |
+| 前端 typecheck / test / check:sse / build | 通过 |
+| 文档链接 / 本机路径暴露面 / 设计 token | 通过 |
+
+### 10.2 真机验收状态
+
+| 矩阵场景 | 状态 |
+|---|---|
+| Web / 终端共享同一任务、模式、模型、计划与结果 | 通过：终端接入 Web 创建的任务，沿同一 `task_id` 续说，产物落在任务自己的目录 |
+| 客户端退出不等于停止任务 | 通过：任务 RUNNING 时退出终端，后台继续执行并正常停下 |
+| 不同项目目录 | 通过：后台与终端在工作目录 A，任务与写入仍固定在目录 B |
+| 停止与恢复 | 通过：运行中停止 → `INTERRUPTED` → `resume` → 同一任务续跑并落产物 |
+| OpenAI 兼容协议 | 通过：真实模型完成 `write` + `shell`（pwsh）、Trace `llm_call`（占位/最终记录、usage、请求响应读取） |
+| Anthropic 协议 | **未运行**：本机 `data/models.json` 未配置 Anthropic Provider；离线适配器与错误映射测试覆盖，影响面为原生非流式路径未做真机回归 |
+| 双 Shell | pwsh 通过；显式 Git Bash **未运行**：受限 harness 阻止 MSYS 初始化，工具如实返回 `3221225794` 与 stderr，未静默回退或改参数；以 CI Windows smoke / 普通终端为准 |
+| 模型观测 | 主任务通过；子代理 / 压缩调用本轮**未运行**（离线覆盖 `llm_call` 的 source 与生命周期）；trace / 日志扫描无 Key、Authorization、Bearer 泄漏 |
+| 文件与存储 | 轮询单飞（S9 浏览器实测）、路径 / 忽略语义（套件）、批量写回滚（套件与基准）、任务删除联动清理（本轮真机删除后 trace 404） |
+| 关包 / 计划只读 / 子代理范围 | 离线面快照通过；本轮未重跑真机关包对比 |
+| 自用代码任务 | Web 与终端各完成写文件 + `shell` 读取；完整「读代码 → 修改 → 运行验证」链未作为本轮新增场景重跑，按 [`docs/manual-verification.md`](../manual-verification.md) 发布前执行 |
+
+收口期真机停止发现并修复：Web 的 SSE 长连接会让 uvicorn 无限等待关闭，`qianfan stop` 因此超时；
+`backend/serve.py` 现给优雅关闭加 5s 连接上限，活跃 SSE 下停止在超时窗口内完成并返回 0。

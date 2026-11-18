@@ -320,7 +320,7 @@ class LLMCallRecorder:
             if error:
                 message = self.scope.redact(error) if self.scope.redact else error
             self._finalize_open(status, message)
-            final_status = self._attempts[-1].error and "error" or status
+            final_status = "error" if self._attempts[-1].error else status
             if status == "aborted":
                 final_status = "aborted"
             self._emit_summary(final_status)

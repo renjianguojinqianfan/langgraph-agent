@@ -18,7 +18,7 @@
 |---|---|---|---|
 | 新建 / 恢复 / 续说 | `backend/tests/test_api.py`、`test_resume.py`、`test_s5_agent_modes.py`、`test_checkpointer.py`、`test_lifecycle_failures.py`、`test_orphan_reconcile.py`、`test_workspace.py` | 任务 API + TaskManager + Persistence/checkpoint | 创建信封、默认目录、停下后 resume（仅 INTERRUPTED）、续说（INTERRUPTED/FAILED）、停止→重建→恢复、进程重启后续说、终态无悬空步骤、孤儿对账 |
 | 模型选择 | `backend/tests/test_models.py`、`test_providers_api.py`、`test_llm.py` | ModelStore + Provider/模型 API + `LLMClient.complete` | 默认/显式模型、任务中途换模型下一条消息生效、子代理与压缩跟随父轮模型、删除模型后不偷换 Provider、Key 不回显、双协议请求映射 |
-| 工具面 | `backend/tests/test_c1_minimal_face.py`、`test_packages.py`、`test_plugins_face.py`、`test_plugins_store.py`、`test_plugins_api.py`、`test_tools.py`、`test_bash_tool.py`、`test_subagent.py`（`test_s5_agent_modes.py` 的计划模式面共用） | TaskManager 装配 + 工具 dispatch + 子代理档位 | 计划模式只读面与档外拒绝、执行模式全量面、能力包零实例/零 schema/零 dispatch/零注入/不连 MCP、子代理档位、命令执行保障 |
+| 工具面 | `backend/tests/test_c1_minimal_face.py`、`test_packages.py`、`test_plugins_face.py`、`test_plugins_store.py`、`test_plugins_api.py`、`test_tools.py`、`test_shell_tool.py`、`test_subagent.py`（`test_s5_agent_modes.py` 的计划模式面共用） | TaskManager 装配 + 工具 dispatch + 子代理档位 | 计划模式只读面与档外拒绝、执行模式全量面、能力包零实例/零 schema/零 dispatch/零注入/不连 MCP、子代理档位、命令执行保障 |
 | SSE 事件序列 | `backend/tests/test_eventbus.py`、`test_sse_delivery.py`、`test_sse_publish_ast.py`、`test_policy_block.py`、`test_api.py`、`test_trace.py` | EventBus → SSE / trace | 发布-订阅与回放、迟到订阅、有界缓冲、跨线程送达顺序、发布点与 `docs/architecture.md` §3.4 表对齐、一次 agent+tool 的确切事件序、trace 写入顺序与读取合同 |
 
 复跑命令（根目录，解释器按 `AGENTS.md`）：
@@ -31,7 +31,7 @@
   backend/tests/test_models.py backend/tests/test_providers_api.py backend/tests/test_llm.py \
   backend/tests/test_c1_minimal_face.py backend/tests/test_packages.py \
   backend/tests/test_plugins_face.py backend/tests/test_plugins_store.py backend/tests/test_plugins_api.py \
-  backend/tests/test_tools.py backend/tests/test_bash_tool.py backend/tests/test_subagent.py \
+  backend/tests/test_tools.py backend/tests/test_shell_tool.py backend/tests/test_subagent.py \
   backend/tests/test_eventbus.py backend/tests/test_sse_delivery.py backend/tests/test_sse_publish_ast.py \
   backend/tests/test_policy_block.py backend/tests/test_trace.py \
   -q
@@ -133,7 +133,7 @@
 
 | 旧表述（位置） | 新合同 | 原因 | 迁移 / 退役去向 |
 |---|---|---|---|
-| README / architecture / GLOSSARY / 设置说明里的 `bash` 工具名、前台启动、旧模型 CRUD 描述 | 按届时实跑更新为 `shell`、`qianfan status` / `stop` / `serve`、当前模型面与 `llm_call` 读取 | 现态文档随代码，S0 不提前改成未来态 | S12 统一更新；S0 只落 ADR 0013 与修订指针 |
+| README / architecture / GLOSSARY / 设置说明里的 `bash` 工具名、前台启动、旧模型 CRUD 描述 | 按届时实跑更新为 `shell`、`qianfan status` / `stop` / `serve`、当前模型面与 `llm_call` 读取 | 现态文档随代码，S0 不提前改成未来态 | S12 已统一更新；文档链接 / 暴露面 / 设计 token / SSE 检查按触发范围通过 |
 
 ## 3. 使用方式
 

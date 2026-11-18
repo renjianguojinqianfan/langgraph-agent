@@ -37,6 +37,7 @@ def test_build_server_wraps_the_given_app_and_address():
     assert server.config.app is marker_app
     assert server.config.host == "127.0.0.1"
     assert server.config.port == 8123
+    assert server.config.timeout_graceful_shutdown == 5
 
 
 def test_run_installs_the_exit_hook_and_releases_the_lock(tmp_path):

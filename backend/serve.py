@@ -21,6 +21,11 @@ from . import server_lock
 
 HOST = "127.0.0.1"  # ADR 0010 decision 6: local only
 
+#: An open browser SSE stream otherwise keeps uvicorn waiting forever after
+#: ``qianfan stop`` asked for exit; bound the wait so the launcher can report
+#: a completed stop instead of timing out with the process still alive.
+GRACEFUL_SHUTDOWN_TIMEOUT_SEC = 5
+
 ServerFactory = Callable[[Any, str, int], Any]
 
 
@@ -28,7 +33,14 @@ def build_server(app: Any, host: str, port: int) -> Any:
     """One uvicorn server around ``app`` (default factory for :func:`run`)."""
     import uvicorn
 
-    return uvicorn.Server(uvicorn.Config(app, host=host, port=port))
+    return uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT_SEC,
+        )
+    )
 
 
 def run(
