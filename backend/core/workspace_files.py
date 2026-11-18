@@ -74,6 +74,7 @@ def _resolve_candidates(
     if limit == 0:
         return []
     ordered = sorted(candidates)
+    wanted = limit
     # A file link may resolve to a name outside this lexical prefix; only a
     # link-free tree guarantees prefix == sorted resolved output. Links are
     # rare, so the full path stays the fallback.
@@ -97,9 +98,9 @@ def _resolve_candidates(
         if limit is not None and len(accepted) >= limit and not saw_link:
             return accepted[:limit]
 
-    if limit is None or saw_link:
-        return sorted(accepted)[:limit]
-    return accepted
+    if wanted is None:
+        return sorted(accepted)
+    return sorted(accepted)[:wanted]
 
 
 def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:

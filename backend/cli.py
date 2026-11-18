@@ -62,6 +62,12 @@ _IS_WINDOWS = os.name == "nt"
 
 def _port_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        if os.name != "nt":
+            # uvicorn binds with SO_REUSEADDR; without it a just-stopped
+            # backend's TIME_WAIT connections make this probe report a free
+            # port as occupied on Linux. On Windows SO_REUSEADDR can hide an
+            # active listener, so the strict check stays.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind((HOST, port))
         except OSError:
