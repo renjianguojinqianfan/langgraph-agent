@@ -6,12 +6,13 @@ import json
 import threading
 import time
 from dataclasses import asdict
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.llm.anthropic_native import AnthropicClient
-from backend.core.llm.client import LLMResponse, MockLLMClient
+from backend.core.llm.client import LLMClient, LLMResponse, MockLLMClient
 from backend.core.llm.openai_compat import OpenAICompatibleClient
 from backend.main import app
 from backend.services.model_store import (
@@ -361,6 +362,24 @@ class _LeakyClient:
         raise RuntimeError(f"401 Authorization: Bearer {self.key}")
 
 
+class _LeakyRecordingClient(LLMClient):
+    """A provider client behind the real ``LLMClient.complete`` recorder."""
+
+    protocol = "openai-compatible"
+    model = "leaky-recording"
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+
+    def _complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        raise RuntimeError(f"401 Authorization: Bearer {self.key}")
+
+
 def test_provider_error_key_never_reaches_task_trace_logs_or_sse(tmp_path, caplog):
     settings = make_settings(tmp_path, use_mock_llm=False, trace_enabled=True)
     store = ModelStore(settings, home_dir=tmp_path / "home")
@@ -381,6 +400,40 @@ def test_provider_error_key_never_reaches_task_trace_logs_or_sse(tmp_path, caplo
     assert SENTINEL not in json.dumps(task.model_dump(), ensure_ascii=False)
     assert SENTINEL not in trace
     assert SENTINEL not in events
+    assert SENTINEL not in caplog.text
+
+
+def test_the_recorded_provider_error_is_redacted_by_the_manager(tmp_path, caplog):
+    """The production recorder path redacts with the manager's known secrets.
+
+    `_LeakyClient` above overrides `complete()` and never enters the S7
+    wrapper; this client implements `_complete()`, so the real
+    `AgentRuntime._llm_scope -> TraceRecorder` path sees the provider error.
+    """
+    settings = make_settings(tmp_path, use_mock_llm=False, trace_enabled=True)
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+    store.set_provider_key("default", SENTINEL)
+    tm = make_manager(
+        settings,
+        None,
+        llm_factory=lambda profile, key: _LeakyRecordingClient(key),
+        model_store=store,
+    )
+    with caplog.at_level("DEBUG"):
+        task_id = tm.create_task("t", "hi")
+        task = _wait(tm, task_id)
+
+    assert task.status.value == "FAILED"
+    trace = (settings.trace_path / f"{task_id}.jsonl").read_text(encoding="utf-8")
+    records = [
+        json.loads(line)
+        for line in trace.splitlines()
+        if line.strip() and json.loads(line).get("type") == "llm_call"
+    ]
+    assert records, "the recording wrapper must produce an llm_call record"
+    assert any("[redacted]" in json.dumps(record, ensure_ascii=False) for record in records)
+    assert SENTINEL not in trace
+    assert SENTINEL not in json.dumps(tm.event_bus.replay(task_id), ensure_ascii=False)
     assert SENTINEL not in caplog.text
 
 

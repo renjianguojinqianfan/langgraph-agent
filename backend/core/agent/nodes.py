@@ -192,6 +192,15 @@ class AgentRuntime:
         )
 
     # ── helpers ──
+    @staticmethod
+    def _revision(state: AgentState) -> Dict[str, Any]:
+        """The explicit revision S8 stamps on every runtime event."""
+        return {
+            "round": int(state.get("round_no", 1) or 1),
+            "step": int(state.get("step_index", 0) or 0),
+            "plan_version": int(state.get("plan_version", 0) or 0),
+        }
+
     def _publish(
         self, event_type: str, data: Dict[str, Any], state: AgentState
     ) -> None:
@@ -201,12 +210,9 @@ class AgentRuntime:
         ``(round, step, plan_version)``; a step-array length is not a sequence.
         State is required so no call site can forget the stamp.
         """
-        revision = {
-            "round": int(state.get("round_no", 1) or 1),
-            "step": int(state.get("step_index", 0) or 0),
-            "plan_version": int(state.get("plan_version", 0) or 0),
-        }
-        self.tm.event_bus.publish(self.task_id, event_type, {**data, **revision})
+        self.tm.event_bus.publish(
+            self.task_id, event_type, {**data, **self._revision(state)}
+        )
 
     def _stopped(self, state: AgentState) -> bool:
         """Authoritative stop check (Issue #4).
@@ -358,24 +364,17 @@ class AgentRuntime:
 
     def _llm_scope(self, source: str, state: AgentState) -> Any:
         """Attribution for one model call (S7): owner, source, round, step."""
+        revision = self._revision(state)
         return llm_call_scope(
             owner_task_id=self.trace_owner,
             source=source,
-            round_no=int(state.get("round_no", 1) or 1),
-            step=int(state.get("step_index", 0) or 0),
+            round_no=int(revision["round"]),
+            step=int(revision["step"]),
             sink=self.tm.trace_sink(self.trace_owner),
+            # S8: the summary is a live event like any other; it carries the
+            # same revision fields as every other runtime event.
             publish_summary=lambda payload: self.tm.publish_llm_call(
-                self.trace_owner,
-                {
-                    **payload,
-                    # S8: the summary is a live event like any other; the
-                    # model-call list and the store merge read the same three
-                    # revision fields (the full record in trace carries them
-                    # too).
-                    "round": int(state.get("round_no", 1) or 1),
-                    "step": int(state.get("step_index", 0) or 0),
-                    "plan_version": int(state.get("plan_version", 0) or 0),
-                },
+                self.trace_owner, {**payload, **revision}
             ),
             redact=self._redact,
         )
