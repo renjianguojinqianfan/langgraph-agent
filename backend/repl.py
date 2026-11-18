@@ -44,8 +44,9 @@ PROMPT = "qianfan> "
 OUTPUT_LINE_MAX = 160
 
 #: D-49 (#20): render only task/step/tool/final plus the two terminal events.
-#: Everything else (heartbeat, context compression, evicted tool results,
-#: subtask strips) is intentionally dropped from the terminal face.
+#: S8 (#334) adds the model-call SUMMARY and its view pointer — the terminal
+#: never copies the web trace debugger. Everything else (heartbeat, context
+#: compression, evicted tool results, subtask strips) is intentionally dropped.
 RENDERED_EVENT_TYPES = frozenset(
     {
         "task_created",
@@ -54,6 +55,7 @@ RENDERED_EVENT_TYPES = frozenset(
         "tool_call",
         "tool_result",
         "final_answer",
+        "llm_call",
         "task_interrupted",
         "task_failed",
     }
@@ -158,6 +160,14 @@ def _render_known(kind: str, data: Dict[str, Any]) -> Optional[str]:
     if kind == "final_answer":
         answer = str(data.get("answer") or "").strip()
         return f"答: {answer or '(空)'}"
+    if kind == "llm_call":
+        summary = str(data.get("summary") or "模型调用")
+        task_id = str(data.get("task_id") or "?")
+        call_id = str(data.get("call_id") or "?")
+        pointer = (
+            f"/api/tasks/{task_id}/trace?type=llm_call&call_id={call_id}"
+        )
+        return _preview(f"· {summary}（task {task_id} / call {call_id}；查看 {pointer}）", 260)
     if kind == "task_interrupted":
         return f"■ 停下（{data.get('status') or 'INTERRUPTED'}）"
     if kind == "task_failed":

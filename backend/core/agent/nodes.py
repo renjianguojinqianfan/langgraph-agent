@@ -192,8 +192,21 @@ class AgentRuntime:
         )
 
     # ── helpers ──
-    def _publish(self, event_type: str, data: Dict[str, Any]) -> None:
-        self.tm.event_bus.publish(self.task_id, event_type, data)
+    def _publish(
+        self, event_type: str, data: Dict[str, Any], state: AgentState
+    ) -> None:
+        """Publish one runtime event stamped with its explicit revision.
+
+        S8 (#334): clients decide whether an event is newer from
+        ``(round, step, plan_version)``; a step-array length is not a sequence.
+        State is required so no call site can forget the stamp.
+        """
+        revision = {
+            "round": int(state.get("round_no", 1) or 1),
+            "step": int(state.get("step_index", 0) or 0),
+            "plan_version": int(state.get("plan_version", 0) or 0),
+        }
+        self.tm.event_bus.publish(self.task_id, event_type, {**data, **revision})
 
     def _stopped(self, state: AgentState) -> bool:
         """Authoritative stop check (Issue #4).
@@ -254,6 +267,7 @@ class AgentRuntime:
                         self._publish(
                             "tool_result_evicted",
                             {"step_index": state.get("step_index", 0), **ev},
+                            state,
                         )
             except Exception:  # pragma: no cover - defensive
                 logger.warning("tool-result eviction failed; continuing without it", exc_info=True)
@@ -292,6 +306,7 @@ class AgentRuntime:
                         "model": getattr(self.llm, "model", ""),
                         "model_profile": self.model_profile,
                     },
+                    state,
                 )
             except Exception:  # pragma: no cover - event is optional
                 logger.warning("failed to publish context_compressed event", exc_info=True)
@@ -350,7 +365,17 @@ class AgentRuntime:
             step=int(state.get("step_index", 0) or 0),
             sink=self.tm.trace_sink(self.trace_owner),
             publish_summary=lambda payload: self.tm.publish_llm_call(
-                self.trace_owner, payload
+                self.trace_owner,
+                {
+                    **payload,
+                    # S8: the summary is a live event like any other; the
+                    # model-call list and the store merge read the same three
+                    # revision fields (the full record in trace carries them
+                    # too).
+                    "round": int(state.get("round_no", 1) or 1),
+                    "step": int(state.get("step_index", 0) or 0),
+                    "plan_version": int(state.get("plan_version", 0) or 0),
+                },
             ),
             redact=self._redact,
         )
@@ -484,6 +509,7 @@ class AgentRuntime:
                 "model": getattr(self.llm, "model", ""),
                 "model_profile": self.model_profile,
             },
+            state,
         )
 
         if mode == PLAN_MODE:
@@ -544,7 +570,9 @@ class AgentRuntime:
         step["thought"] = answer
         step["reasoning"] = resp.reasoning_content or ""
         self._publish(
-            "final_answer", self._final_answer_payload(answer, resp.reasoning_content)
+            "final_answer",
+            self._final_answer_payload(answer, resp.reasoning_content),
+            state,
         )
         state["_last_action"] = "final_answer"
         return state
@@ -599,7 +627,9 @@ class AgentRuntime:
         step["thought"] = answer
         step["reasoning"] = resp.reasoning_content or ""
         self._publish(
-            "final_answer", self._final_answer_payload(answer, resp.reasoning_content)
+            "final_answer",
+            self._final_answer_payload(answer, resp.reasoning_content),
+            state,
         )
         state["_last_action"] = "final_answer"
         return state
@@ -663,11 +693,11 @@ class AgentRuntime:
         state.setdefault("messages", []).append(assistant_turn)
         for rec in tcs:
             step["tool_calls"].append(rec)
-            self._publish("tool_call", self._public_record(rec))
+            self._publish("tool_call", self._public_record(rec), state)
             if rec["status"] == "skipped":
                 # S2 (#136): a policy refusal is delivered here, at the point of
                 # decision, and never handed to the tool node.
-                self._publish("tool_result", rec)
+                self._publish("tool_result", rec, state)
                 self._feed_blocked(state, rec)
 
         state["_last_action"] = "tool_call"
@@ -779,7 +809,7 @@ class AgentRuntime:
                 else:
                     rec["error"] = f"unknown tool: {rec['tool_name']}"
                 rec["input"] = self._redact_value(rec.get("input"))
-                self._publish("tool_result", rec)
+                self._publish("tool_result", rec, state)
                 self._feed_tool_failure(state, rec)
                 continue
 
@@ -796,7 +826,7 @@ class AgentRuntime:
             rec["status"] = "success" if result.success else "failed"
             rec["output"] = self._redact_value(result.data)
             rec["error"] = self._redact(result.error or "")
-            self._publish("tool_result", rec)
+            self._publish("tool_result", rec, state)
 
             # Feed the tool result back into the conversation: the payload
             # verbatim on success, the reason on failure (#95 — a bare ``null``

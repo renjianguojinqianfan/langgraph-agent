@@ -257,6 +257,17 @@
 - [ ] 把任务记录改成旧格式（缺 `workspace` / `round=0`）→ 后台明确拒绝，网页显示失败而不是渲染伪造轮次或旧目录。
 - [ ] 运行中收到无对应步骤的 `tool_call` 回放 → 页面不凭空生成步骤或轮次头，随后的 REST 快照能正常显示真实步骤。
 
+### S8 Trace 模型调用与合并策略手测清单（#334）
+
+机械面由 `lib/modelCalls.test.ts`（占位/最终记录按 attempt 去重、重放不翻倍、`truncated`、失败记录、畸形帧）与 `store/reduceTask.test.ts` 的「S8 显式修订」组（快照/事件/续说按 `(round, step, plan_version)` 判新旧、旧轮 park 不停止新轮、相同文本多轮、迟到状态响应）覆盖；下列为真机走查项。
+
+- [ ] 跑一个含工具往返的任务，打开「完整 Trace」→ 模型调用区列出每次调用的用途、模型、状态、`call_id` 与记录完整性；「模型」筛选计数与列表一致。
+- [ ] 展开一条调用 → Network 出现一次 `GET /tasks/{id}/trace?type=llm_call&call_id=...`，面板显示请求/响应/错误/usage；收起再展开不重复堆记录。
+- [ ] 请求超过 128 KiB 的调用显示「请求预览已截断」；记录仍可读，导出 `.jsonl` 仍是无参完整 trace。
+- [ ] 任务停下后刷新页面、重启后台再打开 → 模型调用仍可读；删除任务后 Trace 显示「暂无 Trace 回放」且网络请求为 404。
+- [ ] 运行中触发一次 SSE 重连（DevTools 离线/恢复）→ 不出现旧轮「停下」把新轮翻停、状态与步骤不倒退；控制台无报错。
+- [ ] 模型返回的文本/请求体按纯文本展示（含 `<script>` 字样时不执行），长内容可滚动。
+
 ## 7. 空 / 错 / 加载
 
 - 空（未选任务）：一句 21px 邀请 + 一行副说明；composer 可用。
@@ -329,3 +340,4 @@
 - 2026-11-09（#287 retro / 回放幂等）：`store/reduceTask.ts` 的 `tool_call` 回放不再一律追加到末步——先按 call id 在全部步骤中定位归属，已知调用只更新原步骤且保留快照里的终态（不把收尾步骤翻回 `running`）；快照从未见过的调用才落到当前步，末步已收尾时同样不翻状态；`tool_result` 只更新仍 `pending` 的调用，回放帧不覆盖快照终态；`tool_result` 与 `tool_call` 共用同一归属查找。修 P5-1 真机复验发现的「重开已停下任务时末步工具数翻倍、轮次头显示执行中」；§6 增回放手测清单。
 - 2026-11-18（#328 S1）：旧 `/api/models` 扁平投影与前端兼容读取删除（ADR 0013 决策 1）；设置页只读 `GET /providers` + `/providers/{id}/models`；`lib/modelCatalog` 删除 `entriesFromProfiles`，`api/client` 删除 legacy CRUD 函数；`ModelProfile` / `ModelsData` 类型退役。
 - 2026-11-18（#329 S2）：旧任务格式整文件拒绝、`step.round` 必填；前端删除 round=0 旧轮次展示与无步骤 `tool_call` 桩；§6 增 S2 手测清单。
+- 2026-11-18（#334 S8）：Trace 区新增模型调用列表/按需详情（筛选 `type=llm_call` + `call_id`，读请求/响应/错误/usage，`truncated` / 未完成标记；完整导出仍走无参 `/trace`）；`lib/modelCalls` 按 `(call_id, attempt)` 去重；`store/reduceTask` 的合并改为显式 `(round, step, plan_version)`，快照/事件/续说迟到响应不再用数组长度判新旧；终端只加一行模型调用摘要 + `/trace` 指针；§6 增 S8 手测清单。

@@ -16,6 +16,8 @@ function summary(ev: SSEvent): string {
       return compressFaceParts(d);
     case "task_failed":
       return typeof d.error === "string" ? d.error : "";
+    case "llm_call":
+      return typeof d.summary === "string" ? d.summary : "";
     case "subtask_start":
     case "subtask_result":
     case "subtask_failed":

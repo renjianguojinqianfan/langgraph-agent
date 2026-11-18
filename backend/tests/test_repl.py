@@ -281,6 +281,7 @@ def test_rendered_event_types_are_the_small_face():
             "tool_call",
             "tool_result",
             "final_answer",
+            "llm_call",
             "task_interrupted",
             "task_failed",
         }
@@ -309,6 +310,17 @@ def test_rendered_event_types_are_the_small_face():
             "⊘",
         ),
         ({"type": "final_answer", "data": {"answer": "done"}}, "答: done"),
+        (
+            {
+                "type": "llm_call",
+                "data": {
+                    "summary": "main m1 ok",
+                    "task_id": "t1",
+                    "call_id": "c1",
+                },
+            },
+            "/api/tasks/t1/trace?type=llm_call&call_id=c1",
+        ),
         ({"type": "task_interrupted", "data": {"status": "INTERRUPTED"}}, "停下"),
         ({"type": "task_failed", "data": {"error": "boom"}}, "boom"),
     ],

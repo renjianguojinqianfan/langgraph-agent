@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SSEvent, Task } from "../types";
-import { applyToTask, mergeSnapshotUnlessStale, needsStatusRefetch } from "./reduceTask";
+import {
+  applyToTask,
+  eventRevision,
+  mergeSnapshotUnlessStale,
+  mergeStatusSnapshot,
+  needsStatusRefetch,
+  taskRevision,
+} from "./reduceTask";
 import { useTaskStore } from "./taskStore";
 
 function snapshot(overrides: Partial<Task> = {}): Task {
@@ -769,5 +776,278 @@ describe("tool_call 回放归属与幂等", () => {
     expect(task.steps[1].status).toBe("done");
     expect(task.steps[1].tool_calls).toHaveLength(1);
     expect(task.status).toBe("INTERRUPTED");
+  });
+});
+
+describe("S8 显式修订：快照 / SSE / 续说合并", () => {
+  const round2 = () =>
+    snapshot({
+      status: "RUNNING",
+      final_answer: "第二轮答案",
+      steps: [
+        { index: 1, round: 1, thought: "第一轮", tool_calls: [], status: "done" },
+        { index: 2, round: 2, thought: "第二轮", tool_calls: [], status: "running" },
+      ],
+    });
+
+  it("taskRevision 取最大 round / step.index，不读数组长度", () => {
+    const rev = taskRevision(
+      snapshot({
+        steps: [
+          { index: 7, round: 2, thought: "", tool_calls: [], status: "done" },
+          { index: 3, round: 1, thought: "", tool_calls: [], status: "done" },
+        ],
+      })
+    );
+    expect(rev).toEqual({ round: 2, step: 7, plan_version: 0 });
+  });
+
+  it("eventRevision 缺元数据时返回 null（旧帧走原规则）", () => {
+    expect(eventRevision({ type: "task_interrupted", data: {} })).toBeNull();
+    expect(
+      eventRevision({
+        type: "task_interrupted",
+        data: { round: 2, plan_version: 3 },
+      })
+    ).toEqual({ round: 2, step: null, plan_version: 3 });
+  });
+
+  it("快照数组更长但最大步号更旧 → 仍判旧，不覆盖实时步骤", () => {
+    const live = snapshot({
+      steps: [{ index: 5, round: 2, thought: "现在", tool_calls: [], status: "running" }],
+    });
+    const longerButOlder = snapshot({
+      steps: [
+        { index: 1, round: 1, thought: "旧一", tool_calls: [], status: "done" },
+        { index: 2, round: 1, thought: "旧二", tool_calls: [], status: "done" },
+        { index: 3, round: 1, thought: "旧三", tool_calls: [], status: "done" },
+      ],
+    });
+
+    const merged = mergeSnapshotUnlessStale(live, longerButOlder);
+
+    expect(merged.steps).toEqual(live.steps);
+    expect(merged.status).toBe("RUNNING");
+  });
+
+  it("迟到状态响应（旧轮次）不把 RUNNING/INTERRUPTED 走回去", () => {
+    const prev = round2();
+    expect(
+      mergeStatusSnapshot(
+        prev,
+        snapshot({
+          status: "INTERRUPTED",
+          steps: [{ index: 1, round: 1, thought: "第一轮", tool_calls: [], status: "done" }],
+        })
+      )
+    ).toBe(prev);
+  });
+
+  it("同轮但步号更旧的迟到状态响应也不覆盖", () => {
+    const prev = snapshot({
+      status: "INTERRUPTED",
+      steps: [
+        { index: 1, round: 1, thought: "一", tool_calls: [], status: "done" },
+        { index: 2, round: 1, thought: "二", tool_calls: [], status: "done" },
+      ],
+    });
+    expect(
+      mergeStatusSnapshot(
+        prev,
+        snapshot({
+          status: "RUNNING",
+          steps: [{ index: 1, round: 1, thought: "一", tool_calls: [], status: "done" }],
+        })
+      )
+    ).toBe(prev);
+  });
+
+  it("PENDING 壳仍可被一份旧快照的 RUNNING 状态点亮", () => {
+    const prev = snapshot({
+      status: "PENDING",
+      steps: [{ index: 2, round: 1, thought: "二", tool_calls: [], status: "running" }],
+    });
+    const merged = mergeStatusSnapshot(
+      prev,
+      snapshot({
+        status: "RUNNING",
+        steps: [{ index: 1, round: 1, thought: "一", tool_calls: [], status: "done" }],
+      })
+    );
+    expect(merged.status).toBe("RUNNING");
+    expect(merged.steps).toEqual(prev.steps);
+  });
+
+  it("回放旧轮 task_interrupted 不停止已经开跑的新轮", () => {
+    const prev = round2();
+    const next = applyToTask(prev, "t1", {
+      type: "task_interrupted",
+      data: { task_id: "t1", round: 1, plan_version: 0 },
+    });
+    expect(next).toBe(prev);
+    expect(next.status).toBe("RUNNING");
+  });
+
+  it("回放旧轮 task_resumed 不把已停下的新轮翻回运行中", () => {
+    const prev = snapshot({
+      status: "INTERRUPTED",
+      steps: [
+        { index: 1, round: 1, thought: "一", tool_calls: [], status: "done" },
+        { index: 2, round: 2, thought: "二", tool_calls: [], status: "done" },
+      ],
+    });
+    const next = applyToTask(prev, "t1", {
+      type: "task_resumed",
+      data: { task_id: "t1", round: 1 },
+    });
+    expect(next).toBe(prev);
+  });
+
+  it("相同文本多轮：旧轮 final_answer 不覆盖新轮回答与思考", () => {
+    const prev = {
+      ...round2(),
+      final_answer: "同样的话",
+      steps: [
+        { index: 1, round: 1, thought: "第一轮", tool_calls: [], status: "done" as const, reasoning: "旧思考" },
+        { index: 2, round: 2, thought: "第二轮", tool_calls: [], status: "running" as const },
+      ],
+    };
+    const next = applyToTask(prev, "t1", {
+      type: "final_answer",
+      data: {
+        task_id: "t1",
+        answer: "同样的话",
+        reasoning: "旧思考",
+        round: 1,
+        step: 1,
+        plan_version: 0,
+      },
+    });
+    expect(next).toBe(prev);
+    expect(next.final_answer).toBe("同样的话");
+    expect(next.steps[1].reasoning).toBeUndefined();
+  });
+
+  it("当前轮带修订的 final_answer 正常落到最后一步", () => {
+    const next = applyToTask(round2(), "t1", {
+      type: "final_answer",
+      data: {
+        task_id: "t1",
+        answer: "第二轮答案",
+        reasoning: "第二轮思考",
+        round: 2,
+        step: 2,
+        plan_version: 3,
+      },
+    });
+    expect(next.steps[1].reasoning).toBe("第二轮思考");
+    expect(next.final_answer).toBe("第二轮答案");
+  });
+
+  it("旧轮 tool_result 回放不动当前轮的 pending 调用", () => {
+    const prev = snapshot({
+      steps: [
+        {
+          index: 4,
+          round: 2,
+          thought: "",
+          tool_calls: [
+            {
+              id: "c4",
+              tool_name: "write",
+              input: {},
+              output: null,
+              status: "pending",
+            },
+          ],
+          status: "running",
+        },
+      ],
+    });
+    const next = applyToTask(prev, "t1", {
+      type: "tool_result",
+      data: {
+        id: "c4",
+        tool_name: "write",
+        input: {},
+        output: "stale",
+        status: "failed",
+        round: 1,
+        step: 2,
+      },
+    });
+    expect(next).toBe(prev);
+    expect(next.steps[0].tool_calls[0].status).toBe("pending");
+  });
+
+  it("store 层：续说迟到快照不覆盖新轮步骤，计划版本只增不减", () => {
+    useTaskStore.setState({
+      currentTaskId: "t1",
+      detail: { t1: { ...round2(), plan_version: 5 } },
+    });
+    useTaskStore.getState().upsertTask(
+      snapshot({
+        status: "PENDING",
+        plan_version: 4,
+        steps: [{ index: 1, round: 1, thought: "第一轮", tool_calls: [], status: "done" }],
+        conversation: [{ role: "user", content: "旧" }],
+      })
+    );
+    const task = useTaskStore.getState().detail["t1"];
+    expect(task.steps).toHaveLength(2);
+    expect(task.status).toBe("RUNNING");
+    expect(task.plan_version).toBe(5);
+  });
+});
+
+describe("S8 并发子任务事件按任务隔离", () => {
+  it("两个任务交错回放 subtask_* 只更新各自 subtasks", () => {
+    useTaskStore.setState({
+      currentTaskId: "t1",
+      detail: { t1: snapshot({ id: "t1" }), t2: snapshot({ id: "t2" }) },
+    });
+    const apply = useTaskStore.getState().applyEvent;
+    apply({
+      type: "subtask_start",
+      data: { task_id: "t1", subtask_id: "s1", name: "甲", status: "running" },
+    });
+    apply({
+      type: "subtask_start",
+      data: { task_id: "t2", subtask_id: "s2", name: "乙", status: "running" },
+    });
+    apply({
+      type: "subtask_result",
+      data: {
+        task_id: "t2",
+        subtask_id: "s2",
+        name: "乙",
+        status: "completed",
+        summary: "完成",
+        artifacts: [],
+      },
+    });
+
+    const state = useTaskStore.getState();
+    expect(state.detail.t1.subtasks?.map((s) => s.subtask_id)).toEqual(["s1"]);
+    expect(state.detail.t1.subtasks?.[0].status).toBe("running");
+    expect(state.detail.t2.subtasks?.map((s) => s.subtask_id)).toEqual(["s2"]);
+    expect(state.detail.t2.subtasks?.[0].status).toBe("completed");
+  });
+});
+
+describe("S8 当前轮的任务级事件仍然落地", () => {
+  it("同一轮、无 step 的 task_interrupted 正常停下", () => {
+    const prev = snapshot({
+      status: "RUNNING",
+      steps: [
+        { index: 1, round: 1, thought: "一", tool_calls: [], status: "done" },
+        { index: 2, round: 2, thought: "二", tool_calls: [], status: "running" },
+      ],
+    });
+    const next = applyToTask(prev, "t1", {
+      type: "task_interrupted",
+      data: { task_id: "t1", round: 2, plan_version: 0 },
+    });
+    expect(next.status).toBe("INTERRUPTED");
   });
 });

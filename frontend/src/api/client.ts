@@ -418,6 +418,15 @@ export interface TraceResult {
   raw: string;
 }
 
+/** Incremental trace read (S8 / #334). Omitted fields keep the old default. */
+export interface TraceQuery {
+  /** Comma-separated event types, e.g. ``llm_call``. */
+  type?: string;
+  call_id?: string;
+  offset?: number;
+  limit?: number;
+}
+
 /**
  * Fetch a task's persisted trace.
  *
@@ -431,12 +440,23 @@ export interface TraceResult {
  * Throws :class:`TraceFetchError` with the HTTP status on failure (e.g. 404
  * when trace is disabled or the file is missing).
  */
-export async function getTaskTrace(taskId: string): Promise<TraceResult> {
+export async function getTaskTrace(
+  taskId: string,
+  query: TraceQuery = {}
+): Promise<TraceResult> {
   const headers: Record<string, string> = {};
   const token = getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  const params = new URLSearchParams();
+  if (query.type) params.set("type", query.type);
+  if (query.call_id) params.set("call_id", query.call_id);
+  if (query.offset !== undefined) params.set("offset", String(query.offset));
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const suffix = params.toString();
   const res = await fetch(
-    `${API_BASE}/tasks/${encodeURIComponent(taskId)}/trace`,
+    `${API_BASE}/tasks/${encodeURIComponent(taskId)}/trace${
+      suffix ? `?${suffix}` : ""
+    }`,
     { headers }
   );
   const text = await res.text();
