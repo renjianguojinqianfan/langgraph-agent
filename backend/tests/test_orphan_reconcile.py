@@ -92,7 +92,7 @@ class TestOrphanReconciliation:
                         round=1,
                         status="running",
                         tool_calls=[
-                            ToolCallRecord(id="c2", tool_name="bash", status="pending")
+                            ToolCallRecord(id="c2", tool_name="shell", status="pending")
                         ],
                     ),
                 ],
@@ -131,7 +131,7 @@ class TestOrphanReconciliation:
                         round=1,
                         status="running",
                         tool_calls=[
-                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                            ToolCallRecord(id="c1", tool_name="shell", status="pending")
                         ],
                     )
                 ],
@@ -198,7 +198,7 @@ class TestTerminalRecordSettlement:
                         "tool_calls": [
                             {
                                 "id": "c2",
-                                "tool_name": "bash",
+                                "tool_name": "shell",
                                 "input": {},
                                 "output": None,
                                 "status": "pending",
@@ -242,7 +242,7 @@ class TestTerminalRecordSettlement:
                         round=1,
                         status="running",
                         tool_calls=[
-                            ToolCallRecord(id="c1", tool_name="bash", status="pending")
+                            ToolCallRecord(id="c1", tool_name="shell", status="pending")
                         ],
                     )
                 ],

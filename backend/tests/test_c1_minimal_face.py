@@ -37,7 +37,7 @@ def test_builtin_tool_face_has_no_removed_features(tmp_path):
     assert not names & REMOVED_TOOL_NAMES
     assert not [n for n in names if n.startswith("git_")]
     # The survivors of C1, still mounted; C3 replaced code_exec/http_request
-    # with bash.
+    # with shell.
     assert {
         "read",
         "write",
@@ -48,7 +48,7 @@ def test_builtin_tool_face_has_no_removed_features(tmp_path):
         "load_skill",
         "web_search",
         "spawn_subagent",
-        "bash",
+        "shell",
     } <= names
     assert not {"code_exec", "http_request"} & names
 

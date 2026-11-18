@@ -33,7 +33,7 @@
 | Provider 的最后请求组装与原始响应在适配器内 | [openai_compat.py:88–120](../../backend/core/llm/openai_compat.py#L88)、[anthropic_native.py:89–125](../../backend/core/llm/anthropic_native.py#L89) | 从最终 Provider 请求取证，不能从 Task/对话列表事后重建 |
 | `LLMResponse.raw` 已承接 Provider 原始响应，usage 可能已在其中 | [client.py:26–37](../../backend/core/llm/client.py#L26)、[anthropic_native.py:379](../../backend/core/llm/anthropic_native.py#L379) | 不宣称 usage 已丢失；提取实际返回值，未返回就标未知 |
 | OpenAI 构造未指定 `max_retries`；本机安装 SDK 默认值为 2 | [openai_compat.py:56](../../backend/core/llm/openai_compat.py#L56)、[依赖约束](../../requirements.txt) | 没有应用层 retry 循环不能证明没有 HTTP 重试；实施时复核钉版 SDK，区分逻辑调用与尝试 |
-| 当前命令工具明确执行 `bash -c`，同时承担 Job、停止、超时和有界输出 | [bash.py:531–659](../../backend/core/tools/bash.py#L531) | 切换 Shell 不能顺带删掉通用执行保障 |
+| 当前命令工具明确执行 `bash -c`，同时承担 Job、停止、超时和有界输出 | [shell.py](../../backend/core/tools/shell.py) | 切换 Shell 不能顺带删掉通用执行保障 |
 | 文件 API 完整扫描后才截前 2000 项，面板按固定两秒轮询 | [routes.py:714–740](../../backend/api/routes.py#L714)、[FilePane.tsx:44–75](../../frontend/src/components/dash/FilePane.tsx#L44) | 先减少请求放大，再优化枚举；不能把响应限额当扫描限额 |
 
 ### Shell 已有证据及未验部分
@@ -144,7 +144,7 @@ Task、AgentState/checkpoint、trace 仍各有用途，不为了“唯一来源�
 
 ### S4：统一命令执行与能力装配
 
-- 文件面：[bash.py](../../backend/core/tools/bash.py)及必要的通用执行模块、工具注册/能力包、TaskManager 停止绑定、Settings、注入说明、测试。
+- 文件面：[shell.py](../../backend/core/tools/shell.py)及必要的通用执行模块、工具注册/能力包、TaskManager 停止绑定、Settings、注入说明、测试。
 - 抽取已有进程执行保障后接 PowerShell 7，Bash 行为单独对照保留；一个命令工具显式选择两种 Shell。
 - 清理 requires_confirm/danger_signal 等惰性元数据，保留策略钩子和仍有消费者的 registers_artifact；能力启停收敛到包配置，去掉重复旧闸。
 - 文件工具归属走统一工作区入口；独立测试/调用使用明确依赖，不保留硬编码旧目录兜底。

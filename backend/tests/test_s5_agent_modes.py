@@ -146,7 +146,7 @@ def test_plan_mode_advertises_only_the_explore_tier(tmp_path: Path) -> None:
     expected = tier_face_names([t.name for t in tools], EXPLORE_TIER)
     assert mock.offered[-1] == sorted(expected)
     assert "write" not in mock.offered[-1]
-    assert "bash" not in mock.offered[-1]  # C3: shell access stays out of plan mode
+    assert "shell" not in mock.offered[-1]  # C3: shell access stays out of plan mode
     assert "spawn_subagent" not in mock.offered[-1]
 
     rt.agent(_state(mode="build"))

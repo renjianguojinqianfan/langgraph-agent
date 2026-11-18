@@ -1,10 +1,16 @@
-"""Bash tool (ADR 0009 decision 2; pi-style shell access).
+"""Shell tool (ADR 0013 decision 3; pi-style shell access).
 
-The command runs through bash with the workspace root as its working
+One command tool with an explicit shell choice: PowerShell 7 (``pwsh``) is the
+Windows default, Git Bash (``bash``) is the POSIX default and the explicit
+Windows alternative. The command runs with the workspace root as its working
 directory, an allowlisted environment (:data:`backend.utils.sandbox.ENV_ALLOWLIST`),
 a wall-clock timeout and a stop watcher. There is **no sandbox**: the child has
 the same account privileges as this process and the working directory is a
 starting point, not a fence — see README「这不是安全边界」.
+
+Shell discovery is separate from execution: :func:`find_pwsh` never falls back
+to Windows PowerShell 5.1, and a missing shell is a readable error — the tool
+never retries the command under the other shell.
 
 The working directory is the task's workspace (runtime context, falling back
 to ``Settings.artifacts_path`` outside a run). Output is captured to a bounded
@@ -24,6 +30,7 @@ service) is outside this control — it is a starting point, not a sandbox.
 
 from __future__ import annotations
 
+import base64
 import contextvars
 import ctypes
 import os
@@ -43,7 +50,15 @@ from ...utils.sandbox import build_child_env
 from .base import BaseTool, ToolResult
 from .registry import register
 
-logger = get_logger("tool.bash")
+logger = get_logger("tool.shell")
+
+#: Shell ids the ``shell`` argument accepts.
+SHELL_PWSH = "pwsh"
+SHELL_BASH = "bash"
+SHELLS = (SHELL_PWSH, SHELL_BASH)
+
+#: Windows runs PowerShell 7 by default; POSIX only has bash (ADR 0013).
+DEFAULT_SHELL = SHELL_PWSH if os.name == "nt" else SHELL_BASH
 
 #: Per-stream byte cap kept for the model (the head is discarded).
 MAX_OUTPUT_BYTES = 30_000
@@ -146,13 +161,13 @@ def _path_bash_candidates(
     return candidates
 
 
-def find_bash(
+def find_git_bash(
     settings: Settings,
     *,
     environ: Optional[Mapping[str, str]] = None,
     which: Optional[Callable[[str], Optional[str]]] = None,
 ) -> Optional[str]:
-    """Resolve the bash executable: config -> Git install dir -> PATH.
+    """Resolve the Git Bash executable: config -> Git install dir -> PATH.
 
     ``environ`` / ``which`` are injectable so the discovery order is testable
     without depending on the host's real installation.
@@ -174,6 +189,107 @@ def find_bash(
         if Path(candidate).is_file():
             return candidate
     return None
+
+
+def _pwsh_candidates(
+    environ: Mapping[str, str], first: Optional[str]
+) -> list[str]:
+    """pwsh.exe candidates: PATH first, then the conventional install roots.
+
+    The Microsoft Store / winget install exposes ``pwsh.exe`` through the
+    per-user ``WindowsApps`` alias, which is *not* the same directory as
+    ``%ProgramFiles%\\PowerShell\\7``; both are probed. Windows PowerShell
+    5.1 (``System32\\WindowsPowerShell\\v1.0\\powershell.exe``) is deliberately
+    absent: ADR 0013 forbids a silent downgrade.
+    """
+    candidates: list[str] = []
+    if first:
+        candidates.append(first)
+    filename = "pwsh.exe" if os.name == "nt" else "pwsh"
+    for entry in (environ.get("PATH") or "").split(os.pathsep):
+        if not entry:
+            continue
+        candidate = str(Path(entry) / filename)
+        if candidate not in candidates:
+            candidates.append(candidate)
+    if os.name == "nt":
+        for env_name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+            base = environ.get(env_name)
+            if base:
+                candidates.append(str(Path(base) / "PowerShell" / "7" / "pwsh.exe"))
+        local = environ.get("LOCALAPPDATA")
+        if local:
+            candidates.append(
+                str(Path(local) / "Microsoft" / "WindowsApps" / "pwsh.exe")
+            )
+    return candidates
+
+
+def find_pwsh(
+    settings: Settings,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    which: Optional[Callable[[str], Optional[str]]] = None,
+) -> Optional[str]:
+    """Resolve PowerShell 7: config ``pwsh_path`` -> PATH -> install roots.
+
+    Returns ``None`` instead of downgrading to Windows PowerShell 5.1; the
+    caller turns that into a readable error naming the shell that is missing.
+    """
+    if os.name != "nt":
+        return None
+    env = os.environ if environ is None else environ
+    lookup = shutil.which if which is None else which
+
+    candidates: list[str] = []
+    configured = (settings.pwsh_path or "").strip()
+    if configured:
+        candidates.append(configured)
+    candidates.extend(_pwsh_candidates(env, lookup("pwsh")))
+
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def _pwsh_script(command: str) -> str:
+    """Wrap ``command`` so the process exit code is the command's verdict.
+
+    PowerShell's own exit status is not reliable for this job: a native
+    command's failure only lands in ``$LASTEXITCODE`` (and only until the next
+    native call), a cmdlet error is non-terminating by default, and a compound
+    statement has no single ``$?``. The wrapper therefore:
+
+    * runs with ``$ErrorActionPreference = 'Stop'`` so a cmdlet error becomes a
+      terminating error handled by the ``catch`` (exit 1, message on stderr);
+    * resets ``$LASTEXITCODE`` first, then propagates the last native exit code;
+    * exits 0 only when neither of the above fired.
+    """
+    return (
+        "$ErrorActionPreference = 'Stop'\n"
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+        "$OutputEncoding = [System.Text.Encoding]::UTF8\n"
+        "$global:LASTEXITCODE = 0\n"
+        "try {\n"
+        f"{command}\n"
+        "} catch {\n"
+        "  [Console]::Error.WriteLine($_.Exception.Message)\n"
+        "  exit 1\n"
+        "}\n"
+        "if ($global:LASTEXITCODE -ne 0) { exit $global:LASTEXITCODE }\n"
+        "exit 0\n"
+    )
+
+
+def _pwsh_argv(pwsh: str, command: str) -> list[str]:
+    """``pwsh`` argv: no profile, no prompts, the wrapper as a UTF-16 script.
+
+    ``-EncodedCommand`` carries the script as base64 UTF-16LE, so quotes,
+    newlines and CJK text never travel through the Windows command line.
+    """
+    encoded = base64.b64encode(_pwsh_script(command).encode("utf-16-le")).decode("ascii")
+    return [pwsh, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
 
 
 def _peek_named_pipe() -> Any:
@@ -369,20 +485,30 @@ def _never_stopped() -> bool:
 
 
 @register
-class BashTool(BaseTool):
-    name = "bash"
+class ShellTool(BaseTool):
+    name = "shell"
     description = (
-        "Run a bash command in the workspace root. Returns the exit code and the "
-        "tail of stdout/stderr (long output is truncated). The command runs with "
-        "this process's account privileges; the working directory is a starting "
-        "point, not a sandbox."
+        "Run a shell command in the workspace root. Returns the exit code, the "
+        "shell that actually ran it and the tail of stdout/stderr (long output is "
+        "truncated). `shell` is optional: Windows defaults to PowerShell 7 "
+        "(`pwsh`), POSIX defaults to `bash`; pass `shell=\"bash\"` on Windows to "
+        "use Git Bash. The command runs with this process's account privileges; "
+        "the working directory is a starting point, not a sandbox."
     )
     args_schema = {
         "type": "object",
         "properties": {
             "command": {
                 "type": "string",
-                "description": "Bash command line, passed to `bash -c`.",
+                "description": "Command line for the selected shell.",
+            },
+            "shell": {
+                "type": "string",
+                "enum": list(SHELLS),
+                "description": (
+                    "Optional shell: `pwsh` (PowerShell 7) or `bash` (Git Bash). "
+                    "Windows defaults to pwsh, POSIX to bash."
+                ),
             },
             "timeout": {
                 "type": "integer",
@@ -393,8 +519,8 @@ class BashTool(BaseTool):
     }
     # Danger marker (inert since #138; the policy hook is what can block a call).
     requires_confirm = True
-    # Bash writes files without a single advertised ``path``, so it is not a
-    # product source (same rule the removed ``code_exec`` followed).
+    # The shell writes files without a single advertised ``path``, so it is not
+    # a product source (same rule the removed ``code_exec`` followed).
     registers_artifact = False
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -419,7 +545,7 @@ class BashTool(BaseTool):
             value = default
         if value > MAX_TIMEOUT_SEC:
             logger.warning(
-                "bash timeout %ss exceeds the %ss cap; clamping",
+                "shell timeout %ss exceeds the %ss cap; clamping",
                 value,
                 MAX_TIMEOUT_SEC,
             )
@@ -433,7 +559,7 @@ class BashTool(BaseTool):
         try:
             return bool(checker())
         except Exception:  # pragma: no cover - a broken watcher must not hang a command
-            logger.warning("bash stop checker failed", exc_info=True)
+            logger.warning("shell stop checker failed", exc_info=True)
             return False
 
     def kill_background(self, task_id: str) -> int:
@@ -464,7 +590,7 @@ class BashTool(BaseTool):
             )
             if self._reaper is None or not self._reaper.is_alive():
                 self._reaper = threading.Thread(
-                    target=self._reap_background, name="bash-reaper", daemon=True
+                    target=self._reap_background, name="shell-reaper", daemon=True
                 )
                 self._reaper.start()
 
@@ -497,6 +623,58 @@ class BashTool(BaseTool):
             else:
                 time.sleep(REAP_INTERVAL_SEC)
 
+    def _resolve_shell(self, raw: Any) -> tuple[Optional[str], list[str], str]:
+        """Pick the shell: (shell id, argv prefix, error). Explicit wins.
+
+        The default is platform-dependent (Windows pwsh, POSIX bash). A missing
+        shell is an error naming the shell — never a fallback to another one.
+        """
+        requested = raw.strip() if isinstance(raw, str) else ""
+        if requested and requested not in SHELLS:
+            return (
+                None,
+                [],
+                f"unsupported shell {requested!r}; expected one of {list(SHELLS)}.",
+            )
+        shell = requested or DEFAULT_SHELL
+        settings = self._settings
+        if shell == SHELL_PWSH:
+            if os.name != "nt":
+                return (
+                    None,
+                    [],
+                    "shell='pwsh' is only supported on Windows; use shell='bash'.",
+                )
+            pwsh = find_pwsh(settings)
+            if pwsh is None:
+                configured = (settings.pwsh_path or "").strip()
+                hint = f" (pwsh_path={configured!r})" if configured else ""
+                return (
+                    None,
+                    [],
+                    "PowerShell 7 (pwsh) not found"
+                    + hint
+                    + ". Install PowerShell 7 (e.g. `winget install "
+                    "Microsoft.PowerShell`) or put pwsh on PATH, or pass "
+                    "shell='bash' to use Git Bash. Windows PowerShell 5.1 is "
+                    "not used as a fallback.",
+                )
+            return SHELL_PWSH, [pwsh], ""
+        bash = find_git_bash(settings)
+        if bash is None:
+            configured = (settings.bash_path or "").strip()
+            hint = f" (bash_path={configured!r})" if configured else ""
+            return (
+                None,
+                [],
+                "shell='bash': Git Bash not found"
+                + hint
+                + ". Install Git for Windows (bash.exe under <Git>\\bin) or put "
+                "bash on PATH; System32\\bash.exe is the WSL stub and is "
+                "ignored. On Windows the default is shell='pwsh'.",
+            )
+        return SHELL_BASH, [bash], ""
+
     def run(self, **kwargs: Any) -> ToolResult:
         command = kwargs.get("command", "")
         if not isinstance(command, str) or not command.strip():
@@ -508,18 +686,9 @@ class BashTool(BaseTool):
         stop_checker: Callable[[], bool] = self.stop_checker or _never_stopped
         task_id = get_current_task_id() or ""
         settings = self._settings
-        bash = find_bash(settings)
-        if bash is None:
-            configured = (settings.bash_path or "").strip()
-            hint = f" (bash_path={configured!r})" if configured else ""
-            return ToolResult(
-                success=False,
-                error=(
-                    "bash not found" + hint + ". Install Git for Windows (bash.exe "
-                    "under <Git>\\bin) or put bash on PATH; System32\\bash.exe is "
-                    "the WSL stub and is ignored."
-                ),
-            )
+        shell, prefix, shell_error = self._resolve_shell(kwargs.get("shell"))
+        if shell is None:
+            return ToolResult(success=False, error=shell_error)
 
         timeout = self._resolve_timeout(kwargs.get("timeout"))
         workdir = workspace_root(settings)
@@ -545,13 +714,17 @@ class BashTool(BaseTool):
             # Own session -> the whole tree shares one process group.
             popen_kwargs["start_new_session"] = True
 
+        if shell == SHELL_PWSH:
+            argv = _pwsh_argv(prefix[0], command)
+        else:
+            argv = [prefix[0], "-c", command]
         try:
-            proc = subprocess.Popen([bash, "-c", command], **popen_kwargs)
+            proc = subprocess.Popen(argv, **popen_kwargs)
         except Exception as exc:
             if job is not None:
                 job.close()
-            logger.exception("bash failed to start")
-            return ToolResult(success=False, error=f"failed to start bash: {exc}")
+            logger.exception("%s failed to start", shell)
+            return ToolResult(success=False, error=f"failed to start {shell}: {exc}")
 
         if job is not None:
             assigned = True
@@ -569,7 +742,7 @@ class BashTool(BaseTool):
                     proc.wait(timeout=5)
                 except Exception:  # pragma: no cover - defensive
                     pass
-                return ToolResult(success=False, error=f"failed to resume bash: {exc}")
+                return ToolResult(success=False, error=f"failed to resume {shell}: {exc}")
             if not assigned:
                 job.close()
                 job = None
@@ -581,13 +754,13 @@ class BashTool(BaseTool):
             threading.Thread(
                 target=_pump,
                 args=(proc.stdout, stdout, container.stop_event),
-                name="bash-pump-out",
+                name="shell-pump-out",
                 daemon=True,
             ),
             threading.Thread(
                 target=_pump,
                 args=(proc.stderr, stderr, container.stop_event),
-                name="bash-pump-err",
+                name="shell-pump-err",
                 daemon=True,
             ),
         ]
@@ -653,6 +826,8 @@ class BashTool(BaseTool):
                 "stderr": err,
                 "exit_code": exit_code,
                 "cwd": str(workdir),
+                "shell": shell,
+                "shell_path": prefix[0],
                 "timed_out": timed_out,
                 "stopped": stopped,
                 "truncated": stdout.truncated or stderr.truncated,

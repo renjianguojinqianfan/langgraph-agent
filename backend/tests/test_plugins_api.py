@@ -19,7 +19,7 @@ from backend.services.plugins_store import (
 from backend.services.task_manager import TaskManager
 from backend.tests.conftest import make_settings
 
-ALL_PACKAGE_IDS = ["files", "bash", "skills", "web-search", "subagent", "mcp"]
+ALL_PACKAGE_IDS = ["files", "shell", "skills", "web-search", "subagent", "mcp"]
 
 
 @pytest.fixture
@@ -228,12 +228,12 @@ def test_active_tools_keeps_dynamic_names_in_the_dynamic_segment():
     # Use the real catalogue (not a hand-written stub): files is disabled, so a
     # dynamically mounted "write" must land in the dynamic segment.
     ordered = _active_tools(
-        frozenset({"bash", "write", "mcp_fetch"}),
+        frozenset({"shell", "write", "mcp_fetch"}),
         packages_catalog(),
-        frozenset({"bash"}),
+        frozenset({"shell"}),
     )
     # write's package (files) is disabled, so it is dynamic, not static files.
-    assert ordered == ["bash", "mcp_fetch", "write"]
+    assert ordered == ["shell", "mcp_fetch", "write"]
 
 
 # ── #308 M3: write failures are 500 and leave the old file in place ──

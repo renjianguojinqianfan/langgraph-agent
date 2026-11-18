@@ -85,7 +85,7 @@ def test_mock_executor_emits_scripted_tool_calls_then_final_answer():
     """Executor calls return one scripted tool call per turn, then final_answer."""
     tool_calls = [
         {"id": "c1", "name": "write", "arguments": {"path": "a.txt"}},
-        {"id": "c2", "name": "bash", "arguments": {"command": "echo 1"}},
+        {"id": "c2", "name": "shell", "arguments": {"command": "echo 1"}},
     ]
     mock = MockLLMClient(plan=["p"], tool_calls=tool_calls, final_answer="all done")
 
@@ -94,7 +94,7 @@ def test_mock_executor_emits_scripted_tool_calls_then_final_answer():
     r3 = mock.complete([], tools=[{"type": "function"}])
 
     assert r1.tool_calls[0]["name"] == "write"
-    assert r2.tool_calls[0]["name"] == "bash"
+    assert r2.tool_calls[0]["name"] == "shell"
     assert r3.tool_calls == []            # script exhausted
     assert r3.content == "all done"       # now a final answer
 
@@ -175,7 +175,7 @@ def test_factory_reads_mock_llm_script_path(tmp_path):
             "tool_calls": [
                 {
                     "id": "call_exec",
-                    "name": "bash",
+                    "name": "shell",
                     "arguments": {"command": "echo probe"},
                 }
             ],
@@ -187,7 +187,7 @@ def test_factory_reads_mock_llm_script_path(tmp_path):
     assert isinstance(client, MockLLMClient)
     assert client.plan == ["Run a probe command"]
     assert client.final_answer == "mock confirm demo finished."
-    assert [tc["name"] for tc in client.tool_calls] == ["bash"]
+    assert [tc["name"] for tc in client.tool_calls] == ["shell"]
     assert client.tool_calls[0]["arguments"] == {"command": "echo probe"}
 
 

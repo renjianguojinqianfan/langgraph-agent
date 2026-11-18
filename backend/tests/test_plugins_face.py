@@ -115,7 +115,7 @@ FACE_CASES = [
     (
         "minimal",
         {"skills": True},
-        {"read", "write", "edit", "ls", "glob", "grep", "bash", "load_skill"},
+        {"read", "write", "edit", "ls", "glob", "grep", "shell", "load_skill"},
     ),
     (
         "full",
@@ -127,7 +127,7 @@ FACE_CASES = [
             "ls",
             "glob",
             "grep",
-            "bash",
+            "shell",
             "load_skill",
             "web_search",
             "spawn_subagent",
@@ -135,7 +135,7 @@ FACE_CASES = [
     ),
     (
         "research",
-        {"bash": False, "web-search": True},
+        {"shell": False, "web-search": True},
         {
             "read",
             "write",
@@ -184,7 +184,7 @@ def test_file_config_unknown_override_errors_with_package_and_fix(tmp_path):
 # ── 2) closed-face end to end through the real file ──
 def test_file_config_files_off_schema_and_dispatch(tmp_path):
     tm, _settings = _manager(tmp_path, "full", {"files": False})
-    assert _names(tm) == {"bash", "load_skill", "web_search", "spawn_subagent"}
+    assert _names(tm) == {"shell", "load_skill", "web_search", "spawn_subagent"}
     assert _schema_names(tm) == _names(tm)
     assert FILES.isdisjoint(_names(tm))
 

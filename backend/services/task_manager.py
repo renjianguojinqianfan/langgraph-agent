@@ -53,8 +53,8 @@ from ..core.runtime_context import (
     workspace_key,
 )
 from ..core.tools.base import BaseTool
-from ..core.tools.bash import BashTool
 from ..core.tools.registry import build_tools
+from ..core.tools.shell import ShellTool
 from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from . import plan_file
@@ -642,11 +642,11 @@ class TaskManager:
 
     # ── P1 wiring of runtime-injected tools ──
     def _wire_injected_tools(self) -> None:
-        """Give stateful tools their service references (subagent, bash stop)."""
+        """Give stateful tools their service references (subagent, shell stop)."""
         for t in self._tools:
             if isinstance(t, SpawnSubagentTool):
                 t.executor = self._subagent
-            elif isinstance(t, BashTool):
+            elif isinstance(t, ShellTool):
                 # Nodes are synchronous: a stop clicked while a command is
                 # running is only observable from inside the tool. The flag
                 # stays authoritative (is_stop_flagged), and the run loop polls
@@ -1441,10 +1441,10 @@ class TaskManager:
 
     # ── control ──
     def kill_background(self, task_id: str) -> int:
-        """Reap bash background trees owned by ``task_id`` (S1 / #148 F3)."""
+        """Reap shell background trees owned by ``task_id`` (S1 / #148 F3)."""
         killed = 0
         for tool in self._tools:
-            if isinstance(tool, BashTool):
+            if isinstance(tool, ShellTool):
                 killed += tool.kill_background(task_id)
         return killed
 

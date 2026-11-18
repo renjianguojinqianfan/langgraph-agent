@@ -49,7 +49,7 @@ PACKAGES: Tuple[CapabilityPackage, ...] = (
         tools=("read", "write", "edit", "ls", "glob", "grep"),
         affects_subagent_face=True,
     ),
-    CapabilityPackage(id="bash", tools=("bash",)),
+    CapabilityPackage(id="shell", tools=("shell",)),
     CapabilityPackage(
         id="skills",
         tools=("load_skill",),
@@ -70,8 +70,8 @@ PACKAGE_IDS: FrozenSet[str] = frozenset(PACKAGE_BY_ID)
 
 #: All packages are on by default, matching the pre-#67 behaviour exactly.
 PRESETS: Dict[str, Tuple[str, ...]] = {
-    "minimal": ("files", "bash"),
-    "research": ("files", "bash", "skills", "web-search", "subagent", "mcp"),
+    "minimal": ("files", "shell"),
+    "research": ("files", "shell", "skills", "web-search", "subagent", "mcp"),
     "full": tuple(package.id for package in PACKAGES),
 }
 

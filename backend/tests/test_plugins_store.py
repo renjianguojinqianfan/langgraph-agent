@@ -38,7 +38,7 @@ from backend.tests.conftest import make_settings
 from backend.tests.test_repl import _fake_runtime
 
 ALL_PACKAGES = frozenset(
-    {"files", "bash", "skills", "web-search", "subagent", "mcp"}
+    {"files", "shell", "skills", "web-search", "subagent", "mcp"}
 )
 
 
@@ -110,7 +110,7 @@ def test_missing_file_falls_back_to_the_env_field(tmp_path):
     effective = resolve_effective_plugins(settings)
     assert effective.source == "env"
     assert effective.preset == "minimal"
-    assert effective.packages == frozenset({"files", "bash"})
+    assert effective.packages == frozenset({"files", "shell"})
 
 
 def test_valid_file_overrides_the_env_field(tmp_path):
@@ -127,7 +127,7 @@ def test_valid_file_overrides_the_env_field(tmp_path):
     # File exists -> authoritative; the env value is only the file-missing fallback.
     assert effective.source == "file"
     assert effective.preset == "minimal"
-    assert effective.packages == frozenset({"files", "bash", "mcp"})
+    assert effective.packages == frozenset({"files", "shell", "mcp"})
 
 
 def test_cli_override_beats_the_file_but_keeps_its_overrides(tmp_path):
@@ -149,7 +149,7 @@ def test_internal_override_env_is_a_cli_override(tmp_path, monkeypatch):
     effective = resolve_effective_plugins(settings)
     assert effective.source == "cli"
     assert effective.preset == "minimal"
-    assert effective.packages == frozenset({"files", "bash"})
+    assert effective.packages == frozenset({"files", "shell"})
 
 
 def test_invalid_file_json_is_a_readable_error(tmp_path):
@@ -185,6 +185,25 @@ def test_invalid_file_contents_are_readable_errors(tmp_path, payload):
     message = str(excinfo.value)
     assert str(path) in message
     assert "修法" in message
+
+
+def test_legacy_bash_package_id_fails_fast_and_keeps_the_file(tmp_path):
+    """ADR 0013: the retired `bash` id is unsupported — no alias, no rewrite."""
+    settings = make_settings(tmp_path)
+    path = _write_config(settings, {"preset": "full", "overrides": {"bash": True}})
+    before = path.read_bytes()
+
+    with pytest.raises(PluginsConfigError) as excinfo:
+        load_plugins_config(settings)
+    message = str(excinfo.value)
+    assert "bash" in message  # the offending id is named
+    assert "shell" in message  # and the valid set is shown
+    assert str(path) in message
+    assert path.read_bytes() == before, "the old file must not be rewritten"
+
+    # Startup resolution refuses the same file instead of falling back to full.
+    with pytest.raises(PluginsConfigError):
+        resolve_effective_plugins(settings)
 
 
 def test_save_is_atomic_and_round_trips(tmp_path):
@@ -258,7 +277,7 @@ def test_api_catalogues_cover_the_manifest():
     packages = packages_catalog()
     assert [item["id"] for item in packages] == [
         "files",
-        "bash",
+        "shell",
         "skills",
         "web-search",
         "subagent",
@@ -277,7 +296,7 @@ def test_task_manager_plugins_param_beats_settings(tmp_path):
     settings = make_settings(tmp_path, plugins_preset="full")
     _write_config(settings, {"preset": "minimal", "overrides": {}})
     plugins = resolve_effective_plugins(settings)
-    assert plugins.packages == frozenset({"files", "bash"})
+    assert plugins.packages == frozenset({"files", "shell"})
 
     tm = TaskManager(
         settings,
@@ -315,7 +334,7 @@ def test_task_manager_resolves_the_file_when_not_injected(tmp_path):
         model_store=ModelStore(settings, home_dir=settings.data_path / "home"),
     )
     try:
-        assert tm.packages == frozenset({"files", "bash"})
+        assert tm.packages == frozenset({"files", "shell"})
     finally:
         tm.shutdown()
 
@@ -355,7 +374,7 @@ def test_cli_web_valid_preset_reaches_the_serving_process_env(
 
     assert code == 0
     assert seen["env"] == "minimal"
-    assert seen["effective"].packages == frozenset({"files", "bash"})
+    assert seen["effective"].packages == frozenset({"files", "shell"})
 
 
 def test_cli_web_invalid_preset_fails_before_claim_or_spawn(

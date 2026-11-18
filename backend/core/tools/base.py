@@ -38,7 +38,7 @@ class BaseTool(ABC):
     # the class declares True *and* the result advertises the written file under
     # ``data["path"]`` as a real file. Read-only tools keep this False even when
     # their result carries a ``path`` (``read`` does). A tool that writes files
-    # without advertising one under ``path`` (``bash``) stays False too — it has
+    # without advertising one under ``path`` (``shell``) stays False too — it has
     # no single deliverable to collect. The parent task's artifact ledger is
     # retired (C5 #160); only the sub-agent result consumes this flag now.
     registers_artifact: bool = False

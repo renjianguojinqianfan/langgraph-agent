@@ -1,7 +1,7 @@
 """W1: the workspace belongs to the task (ADR 0010 decisions 1 / 2).
 
 Two tasks in two directories run the same tool script; every tool (file
-read/write/edit/ls/glob/grep, bash, load_skill) and the injection block must
+read/write/edit/ls/glob/grep, shell, load_skill) and the injection block must
 see its own directory. Also covers directory filtering, legacy records and the
 deleted-directory 409.
 """
@@ -53,7 +53,7 @@ def _script(tag: str) -> list[dict]:
         {"id": f"{tag}-l", "name": "ls", "arguments": {"path": "."}},
         {"id": f"{tag}-g", "name": "glob", "arguments": {"pattern": "*.txt"}},
         {"id": f"{tag}-gr", "name": "grep", "arguments": {"pattern": "bye", "path": "."}},
-        {"id": f"{tag}-b", "name": "bash", "arguments": {"command": "pwd"}},
+        {"id": f"{tag}-b", "name": "shell", "arguments": {"shell": "bash", "command": "pwd"}},
         {"id": f"{tag}-s", "name": "load_skill", "arguments": {"name": "demo"}},
     ]
 
@@ -109,8 +109,8 @@ def test_every_tool_and_skill_follow_its_own_workspace(tmp_path):
         assert "probe.txt" in json.dumps(_outputs(task, "ls"), ensure_ascii=False)
         assert "probe.txt" in json.dumps(_outputs(task, "glob"), ensure_ascii=False)
         assert f"bye {tag}" in json.dumps(_outputs(task, "grep"), ensure_ascii=False)
-        bash = _outputs(task, "bash")[0]
-        assert os.path.normcase(bash["cwd"]) == os.path.normcase(normalize_workspace(a if tag == "A" else b))
+        shell = _outputs(task, "shell")[0]
+        assert os.path.normcase(shell["cwd"]) == os.path.normcase(normalize_workspace(a if tag == "A" else b))
         assert f"BODY-SENTINEL-{tag}" in json.dumps(_outputs(task, "load_skill"), ensure_ascii=False)
 
     assert "SENTINEL-B" not in json.dumps(task_a, ensure_ascii=False)
