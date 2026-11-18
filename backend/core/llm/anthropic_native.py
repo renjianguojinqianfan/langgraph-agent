@@ -22,7 +22,8 @@ import json
 from typing import Any, Dict, List
 
 from .client import LLMClient, LLMResponse
-from .protocols import DEFAULT_TEMPERATURE
+from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_ANTHROPIC
+from .trace import capture_http_request, capture_http_response
 
 ANTHROPIC_VERSION = "2023-06-01"
 #: Messages API requires max_tokens; 4096 keeps a normal non-streaming answer
@@ -32,6 +33,8 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
 
 class AnthropicClient(LLMClient):
     """Non-streaming Anthropic Messages client over httpx."""
+
+    protocol = PROTOCOL_ANTHROPIC
 
     def __init__(
         self,
@@ -86,7 +89,15 @@ class AnthropicClient(LLMClient):
             return f"{self.base_url}/messages"
         return f"{self.base_url}/v1/messages"
 
-    def complete(
+    def _request_snapshot(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._build_payload(messages, tools, kwargs)
+
+    def _complete(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
@@ -105,6 +116,10 @@ class AnthropicClient(LLMClient):
                 timeout=self.timeout,
                 transport=self._transport,
                 follow_redirects=False,
+                event_hooks={
+                    "request": [capture_http_request],
+                    "response": [capture_http_response],
+                },
             ) as client:
                 response = client.post(self._messages_url(), json=payload, headers=headers)
         except httpx.TimeoutException as exc:

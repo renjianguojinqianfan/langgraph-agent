@@ -292,6 +292,7 @@ export type SSEventType =
   | "subtask_start" // #70-A: {subtask_id, name, status, parent_task_id}（父频道）
   | "subtask_result" // #70-A: {subtask_id, name, status, summary, artifacts}（父频道）
   | "subtask_failed" // #70-A: {subtask_id, name, error}（父频道）
+  | "llm_call" // S7: {call_id, status, summary, task_id, attempts}（轻量摘要）
   | "trace_end" // 仅 trace 回放面（见上方说明）
   | "heartbeat";
 

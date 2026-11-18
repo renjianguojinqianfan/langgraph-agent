@@ -19,6 +19,12 @@ from typing import Any, Dict, List
 from ...config import PROJECT_ROOT
 from ...utils.logging import get_logger
 from ..agent.prompts import PLANNER_MARKER
+from .trace import (
+    LLMCallRecorder,
+    current_scope,
+    reset_active_call,
+    set_active_call,
+)
 
 logger = get_logger("llm")
 
@@ -42,16 +48,63 @@ class LLMClient(ABC):
 
     #: Model name for trace / UI; clients that know their model override it.
     model: str = ""
+    #: Protocol label carried by trace records (``mock`` for offline runs).
+    protocol: str = ""
 
-    @abstractmethod
     def complete(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        """Run one completion. ``tools`` follows the OpenAI function schema."""
+        """Run one completion; when a call scope is seated, record the call.
+
+        The logical call id and immutable owner/source/round/step come from the
+        scope; provider adapters see the active recorder through a contextvar
+        and feed it the actual HTTP request/response per SDK attempt.
+        """
+        scope = current_scope()
+        if scope is None:
+            return self._complete(messages, tools, **kwargs)
+        recorder = LLMCallRecorder(scope, self.model, self.protocol)
+        recorder.set_fallback_request(self._request_snapshot(messages, tools, kwargs))
+        token = set_active_call(recorder)
+        try:
+            response = self._complete(messages, tools, **kwargs)
+        except Exception as exc:
+            recorder.finish("error", str(exc))
+            raise
+        except BaseException as exc:
+            recorder.finish("aborted", str(exc))
+            raise
+        else:
+            recorder.finish("ok")
+            return response
+        finally:
+            reset_active_call(token)
+
+    @abstractmethod
+    def _complete(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Provider implementation behind :meth:`complete`'s recording wrapper."""
         raise NotImplementedError
+
+    def _request_snapshot(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Adapter-prepared request used only when no HTTP hook fired.
+
+        Production HTTP paths are captured from the transport; this fallback
+        (Mock, stubbed SDK tests) must not pretend to be a network request.
+        """
+        return {"model": self.model, "messages": messages, "tools": tools or []}
 
 
 class MockLLMClient(LLMClient):
@@ -71,6 +124,8 @@ class MockLLMClient(LLMClient):
     either mode.
     """
 
+    protocol = "mock"
+
     def __init__(
         self,
         plan: List[str] | None = None,
@@ -87,7 +142,7 @@ class MockLLMClient(LLMClient):
         head = str((messages or [{}])[0].get("content") or "")
         return PLANNER_MARKER in head
 
-    def complete(
+    def _complete(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,

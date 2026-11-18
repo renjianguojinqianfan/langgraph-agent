@@ -39,7 +39,7 @@ class _ReasoningLLM(LLMClient):
         self._responses = list(responses)
         self.requests: List[List[Dict[str, Any]]] = []
 
-    def complete(self, messages, tools=None, **kwargs) -> LLMResponse:
+    def _complete(self, messages, tools=None, **kwargs) -> LLMResponse:
         self.requests.append([dict(message) for message in messages])
         if not self._responses:
             return LLMResponse(content="done")

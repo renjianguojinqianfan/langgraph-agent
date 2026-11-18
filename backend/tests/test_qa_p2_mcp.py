@@ -281,6 +281,12 @@ def test_agent_read_tool_executes_directly(tmp_path, mcp_managers):
         def redact_reasoning(self, text):
             return text
 
+        def trace_sink(self, task_id):
+            return None
+
+        def publish_llm_call(self, task_id, payload):
+            return None
+
         def add_artifact(self, *a, **kw):
             return None
 
