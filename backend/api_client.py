@@ -26,6 +26,7 @@ import json
 from typing import Any, Dict, Iterator, List, Optional
 
 from . import server_lock
+from .utils.net import normalize_no_proxy
 
 #: Connect/write are short; the read window covers the SSE heartbeat (15 s) with
 #: room to spare, so an idle stream is not mistaken for a dropped one.
@@ -85,6 +86,10 @@ class ApiClient:
     ) -> None:
         import httpx
 
+        # httpx reads NO_PROXY while the client is constructed; a bracketed
+        # IPv6 entry (`[::1]`) raises InvalidURL before the first request.
+        # Same sanitation the backend runtime performs at startup.
+        normalize_no_proxy()
         self.base_url = base_url.rstrip("/")
         self._token = token
         self._httpx = httpx

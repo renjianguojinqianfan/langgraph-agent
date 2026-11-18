@@ -32,6 +32,7 @@ from urllib.request import Request, urlopen
 import pytest
 
 from backend import server_lock
+from backend.api_client import ApiClient
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -42,7 +43,7 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _make_stack(tmp_path: Path) -> SimpleNamespace:
+def _make_stack(tmp_path: Path, *, script: dict | None = None) -> SimpleNamespace:
     data = tmp_path / "data"
     dist = tmp_path / "dist"
     work = tmp_path / "work"
@@ -50,9 +51,13 @@ def _make_stack(tmp_path: Path) -> SimpleNamespace:
     for path in (data, dist, work, home):
         path.mkdir(parents=True, exist_ok=True)
     (dist / "index.html").write_text("<!doctype html><title>e2e</title>", encoding="utf-8")
-    script = tmp_path / "mock.json"
-    script.write_text(
-        json.dumps({"plan": ["one"], "tool_calls": [], "final_answer": "e2e done"}),
+    script_path = tmp_path / "mock.json"
+    script_path.write_text(
+        json.dumps(
+            script
+            if script is not None
+            else {"plan": ["one"], "tool_calls": [], "final_answer": "e2e done"}
+        ),
         encoding="utf-8",
     )
 
@@ -70,7 +75,7 @@ def _make_stack(tmp_path: Path) -> SimpleNamespace:
             "CHECKPOINT_DIR": str(tmp_path / "checkpoints"),
             "FRONTEND_DIST": str(dist),
             "USE_MOCK_LLM": "true",
-            "MOCK_LLM_SCRIPT_PATH": str(script),
+            "MOCK_LLM_SCRIPT_PATH": str(script_path),
             "LLM_BASE_URL": "",
             "LLM_API_KEY": "",
             "DASHSCOPE_API_KEY": "",
@@ -268,6 +273,123 @@ def test_stop_refuses_a_foreign_instance_without_killing_the_process(stack):
 
     stopped = _run_cli(stack, "stop", timeout=60)
     assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+
+
+def _run_repl(
+    stack: SimpleNamespace, cwd: Path, lines: list[str], *, timeout: float = 120.0
+) -> subprocess.CompletedProcess:
+    """A real ``qianfan repl`` process: piped stdin, own cwd, shared backend."""
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from backend.cli import main; raise SystemExit(main())",
+            "repl",
+        ],
+        cwd=str(cwd),
+        env=stack.env,
+        input="\n".join(lines) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
+
+
+def _create_task(stack: SimpleNamespace, port: int, text: str) -> str:
+    status, body = _request_json(
+        port,
+        "/api/tasks",
+        method="POST",
+        payload={"title": "e2e", "input": text, "workspace": str(stack.work)},
+    )
+    assert status == 200, body
+    return str(body["data"]["task_id"])
+
+
+def _task(port: int, task_id: str) -> dict:
+    status, body = _request_json(port, f"/api/tasks/{task_id}")
+    assert status == 200, body
+    return body["data"]
+
+
+def _assistant_turns(task: dict) -> list[str]:
+    return [
+        str(turn.get("content") or "")
+        for turn in task.get("conversation") or []
+        if turn.get("role") == "assistant"
+    ]
+
+
+def test_terminal_creates_a_task_in_its_own_directory_and_web_sees_it(stack):
+    port = _free_port()
+    _start(stack, port)
+
+    repl = _run_repl(stack, stack.work, ["hello from B", "exit"])
+
+    assert repl.returncode == 0, repl.stdout + repl.stderr
+    assert "已连接后台" in repl.stdout
+    with ApiClient(f"http://127.0.0.1:{port}") as client:
+        tasks = client.list_tasks(limit=100, directory="all").get("tasks") or []
+        mine = [task for task in tasks if task.get("workspace") == str(stack.work.resolve())]
+    assert len(mine) == 1, tasks
+    assert mine[0]["status"] == "INTERRUPTED"
+    detail = _task(port, str(mine[0]["id"]))
+    assert detail["workspace"] == str(stack.work.resolve())
+    assert "e2e done" in _assistant_turns(detail)
+
+
+def test_web_created_task_is_continued_from_the_terminal(stack):
+    port = _free_port()
+    _start(stack, port)
+    task_id = _create_task(stack, port, "from web")
+    assert _wait_until(lambda: _task_status(port, task_id) == "INTERRUPTED")
+
+    repl = _run_repl(stack, stack.work, [f"/use {task_id[:8]}", "again", "exit"])
+
+    assert repl.returncode == 0, repl.stdout + repl.stderr
+    assert "已接入" in repl.stdout
+    detail = _task(port, task_id)
+    assert detail["status"] == "INTERRUPTED"
+    assert detail["workspace"] == str(stack.work.resolve())
+    assert _assistant_turns(detail).count("e2e done") == 2
+
+
+def test_terminal_exit_does_not_stop_a_running_task_and_explicit_stop_works(tmp_path):
+    command = "Start-Sleep -Seconds 30" if os.name == "nt" else "sleep 30"
+    stack = _make_stack(
+        tmp_path,
+        script={
+            "plan": ["wait"],
+            "tool_calls": [
+                {"id": "call_slow", "name": "shell", "arguments": {"command": command}}
+            ],
+            "final_answer": "slow done",
+        },
+    )
+    port = _free_port()
+    _start(stack, port)
+    try:
+        task_id = _create_task(stack, port, "slow")
+        running = _wait_until(lambda: _task_status(port, task_id) == "RUNNING", timeout=10)
+        assert running, "the slow task never reached RUNNING"
+
+        repl = _run_repl(stack, stack.work, [f"/use {task_id[:8]}", "exit"])
+
+        assert repl.returncode == 0, repl.stdout + repl.stderr
+        time.sleep(0.5)
+        assert _task_status(port, task_id) == "RUNNING", "terminal exit stopped the task"
+
+        status, body = _request_json(port, f"/api/tasks/{task_id}/stop", method="POST")
+        assert status == 200, body
+        parked = _wait_until(lambda: _task_status(port, task_id) == "INTERRUPTED", timeout=20)
+        assert parked, "explicit stop did not park the task"
+    finally:
+        _run_cli(stack, "stop", timeout=40)
+        record = _record(stack)
+        if record is not None and server_lock.pid_alive(record.pid):
+            _force_kill(record.pid)
 
 
 def test_a_crashed_backend_record_is_taken_over_by_the_next_launch(stack):

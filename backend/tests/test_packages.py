@@ -500,29 +500,24 @@ def test_cli_repl_dispatch_goes_through_the_preset_guard(tmp_path, monkeypatch, 
     assert "unknown plugins preset" in capsys.readouterr().out
 
 
-def test_repl_rejects_unknown_preset_before_claiming(tmp_path, monkeypatch):
+def test_repl_rejects_unknown_preset_before_starting_the_backend(tmp_path, monkeypatch):
     settings = make_settings(
         tmp_path, plugins_preset="bogus", single_backend_guard_enabled=True
     )
     monkeypatch.setattr(repl, "get_settings", lambda: settings)
-    claimed: List[int] = []
-    built: List[int] = []
-    monkeypatch.setattr(
-        server_lock, "claim_lock", lambda *args, **kwargs: claimed.append(1) or True
-    )
+    ensured: List[Any] = []
     out: List[str] = []
 
     code = repl.repl_main(
         [],
-        runtime_factory=lambda _settings: built.append(1),
         input_fn=lambda prompt: "exit",
         output=out.append,
         configure_stdio=False,
+        ensure=lambda *args, **kwargs: ensured.append((args, kwargs)) or (0, settings.port),
     )
 
     assert code == 1
-    assert claimed == []
-    assert built == []
+    assert ensured == []
     assert any("unknown plugins preset" in line for line in out)
 
 

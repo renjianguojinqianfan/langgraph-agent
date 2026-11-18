@@ -515,6 +515,27 @@ def test_eof_exits_cleanly(tmp_path, monkeypatch):
     assert code == 0
 
 
+def test_repl_normalizes_no_proxy_before_building_the_client(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path, port=9123)
+    fake = FakeBackend()
+    monkeypatch.setenv("NO_PROXY", "[::1], localhost")
+    monkeypatch.setenv("no_proxy", "[::1], localhost")
+    monkeypatch.setattr(repl, "get_settings", lambda: settings)
+
+    code = repl_main(
+        [],
+        input_fn=lambda prompt: "exit",
+        output=lambda line: None,
+        configure_stdio=False,
+        transport=fake.transport(),
+        ensure=lambda _settings, **kw: (0, settings.port),
+    )
+
+    assert code == 0
+    assert os.environ["NO_PROXY"] == "::1,localhost"
+    assert os.environ["no_proxy"] == "::1,localhost"
+
+
 def test_terminal_event_finishes_the_round_even_before_status_settles(
     tmp_path, monkeypatch
 ):
