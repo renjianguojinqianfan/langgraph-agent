@@ -153,7 +153,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 方法 | 路径 | 说明 | 请求体 / 参数 | 响应 `data` |
 |---|---|---|---|---|
 | GET | `/health` | 健康检查（无 `/api` 前缀） | — | 服务状态 |
-| POST | `/api/server/stop` | 优雅停止共享后台：只接受锁文件登记的 instance；拒绝新运行 → 停止任务 → 等 worker → 落盘 → 释放锁 | `{instance}`（必填） | `{ok, stopped_tasks, workers_joined, shutdown_complete, lock_released, exit_requested}`；instance 不匹配 / 未登记 / start.py 起的开发后台（无退出钩子）→ 409（不杀进程、不改状态）；worker 未退出 → 504（记录保留、进程继续） |
+| POST | `/api/server/stop` | 优雅停止共享后台：只接受锁文件登记的 instance；拒绝新运行 → 停止任务 → 等 worker → 落盘 → 请求 uvicorn 退出；锁由 `serve.run` 在 uvicorn 返回后释放（旧进程未放端口前不允许新启动器接管） | `{instance}`（必填） | `{ok, stopped_tasks, workers_joined, shutdown_complete, exit_requested}`；instance 不匹配 / 未登记 / start.py 起的开发后台（无退出钩子）→ 409（不杀进程、不改状态）；worker 未退出 → 504（记录保留、进程继续） |
 | POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
 | GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
@@ -374,7 +374,7 @@ python start.py --install     # 开发：先按 CI 同口径装后端依赖（pi
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
 ```
 
-一台机器**只共用一个后台**，后台是独立进程并持 `data/server.json`：启动器 detach 拉起 `backend.serve`、等 `/health` 就绪后退出，**退出启动终端不停后台**。第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；`qianfan repl` 复用同一后台（也接受 `start.py` 的开发后台，但不接管其锁或停止它），关闭终端只断连。`qianfan stop` 校验 instance 后按顺序收尾（拒绝新运行 → 停止任务并解除可取消阻塞 I/O → 等 worker → 落盘 → 释放锁），超时非 0 并报告未完成，不把「已收到请求」写成「已停止」；`start.py` 起的开发后台没有可编程退出钩子，端点直接 409 拒绝（不触碰任务、不释放锁），请在开发终端 Ctrl-C。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `qianfan serve` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
+一台机器**只共用一个后台**，后台是独立进程并持 `data/server.json`：启动器 detach 拉起 `backend.serve`、等 `/health` 就绪后退出，**退出启动终端不停后台**。第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；`qianfan repl` 复用同一后台（也接受 `start.py` 的开发后台，但不接管其锁或停止它），关闭终端只断连。`qianfan stop` 校验 instance 后按顺序收尾（拒绝新运行 → 停止任务并解除可取消阻塞 I/O → 等 worker → 落盘 → 请求 uvicorn 退出；锁在 uvicorn 返回后由 `serve.run` 释放），超时非 0 并报告未完成，不把「已收到请求」写成「已停止」；`start.py` 起的开发后台没有可编程退出钩子，端点直接 409 拒绝（不触碰任务、不释放锁），请在开发终端 Ctrl-C。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `qianfan serve` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
 
 后台启动装配（`build_runtime`）与终端 HTTP 客户端构造（`ApiClient`）都会先改写进程 env 的 `NO_PROXY` / `no_proxy`：括号化 IPv6 条目改成裸主机，`[host]:port` 丢掉端口。httpx 把 `NO_PROXY` 拼成代理挂载键时只认裸主机，`[::1]` 会让客户端在构造时抛 `InvalidURL`；后台发生改写时打一条 WARNING 日志（#317），终端侧静默修正后继续连接。
 

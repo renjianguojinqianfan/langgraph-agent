@@ -1794,8 +1794,7 @@ class TaskManager:
             return
         # Keep the caller's reference live too: save_tasks updates the store's
         # record, which may be a different object when the task was detached.
-        for name in Task.model_fields:
-            setattr(task, name, getattr(candidate, name))
+        task.adopt(candidate)
 
     def _merge_round_turns(
         self, settled: List[ChatTurn], rebuilt: List[ChatTurn], final_answer: str

@@ -152,7 +152,9 @@ class ApiClient:
         except ApiError as exc:
             if exc.status != 404:
                 raise
-        tasks = self.list_tasks(limit=100, directory="all").get("tasks") or []
+        tasks = self.list_tasks(limit=1000, directory="all").get("tasks") or []
+        if len(tasks) >= 1000:
+            raise ApiError(400, "任务过多，前缀查找不完整；请给完整 task id")
         matches = [
             task for task in tasks if str(task.get("id") or "").startswith(ref)
         ]
