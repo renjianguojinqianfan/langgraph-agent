@@ -190,8 +190,8 @@ def test_provider_catalog_crud_and_default_handling(tmp_path):
         # Deleting the provider removes its catalog entries too.
         assert client.delete("/api/providers/bailian").status_code == 200
         assert client.get("/api/providers/bailian/models").status_code == 404
-        legacy_ids = [m["id"] for m in client.get("/api/models").json()["data"]["models"]]
-        assert entry["id"] not in legacy_ids
+        # The flat legacy read face is gone (ADR 0013 decision 1).
+        assert client.get("/api/models").status_code == 404
     finally:
         client.__exit__(None, None, None)
 
@@ -492,8 +492,8 @@ def test_discover_anthropic_protocol_is_refused_before_any_request():
         )
 
 
-# ── legacy /api/models projection keeps working ──
-def test_legacy_models_projection_and_provider_scoped_key(tmp_path, monkeypatch):
+# ── a key belongs to the provider and is shared by its entries ──
+def test_provider_key_is_shared_by_its_entries(tmp_path, monkeypatch):
     monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
     client, tm = _client(tmp_path)
     try:
@@ -505,24 +505,24 @@ def test_legacy_models_projection_and_provider_scoped_key(tmp_path, monkeypatch)
             "/api/providers/bailian/models", json={"model": "m2"}
         ).json()["data"]
 
-        listing = client.get("/api/models").json()["data"]
-        projected = next(m for m in listing["models"] if m["id"] == first["id"])
-        assert projected["provider_id"] == "bailian"
-        assert projected["protocol"] == "openai-compatible"
-        assert projected["base_url"] == "https://dashscope.test/v1"
-        assert projected["model"] == "m1"
-        assert projected["key_set"] is False
-
-        # A key belongs to the provider, so both entries report it.
-        saved = client.put(f"/api/models/{first['id']}/key", json={"key": SENTINEL})
+        saved = client.put("/api/providers/bailian", json={"key": SENTINEL})
         assert saved.status_code == 200
         assert SENTINEL not in saved.text
-        entries = client.get("/api/models").json()["data"]["models"]
-        assert all(m["key_set"] is True for m in entries if m["provider_id"] == "bailian")
-        assert SENTINEL not in client.get("/api/models").text
+        card = next(
+            p
+            for p in client.get("/api/providers").json()["data"]["providers"]
+            if p["id"] == "bailian"
+        )
+        assert card["key_set"] is True
+        assert card["key_source"] == "pasted"
+        assert SENTINEL not in client.get("/api/providers/bailian/models").text
+        assert [
+            m["id"]
+            for m in client.get("/api/providers/bailian/models").json()["data"]["models"]
+        ] == [first["id"], second["id"]]
 
-        # Legacy delete drops one entry and keeps the provider for its sibling.
-        assert client.delete(f"/api/models/{first['id']}").status_code == 200
+        # Deleting one entry keeps the provider and its sibling.
+        assert client.delete(f"/api/providers/bailian/models/{first['id']}").status_code == 200
         remaining = client.get("/api/providers/bailian/models").json()["data"]["models"]
         assert [m["id"] for m in remaining] == [second["id"]]
     finally:
@@ -733,15 +733,11 @@ def test_sampling_params_round_trip_through_the_api(tmp_path, monkeypatch):
         assert stored["temperature"] == 0.5
         assert stored["reasoning_effort"] == "high"
 
-        # The legacy flat projection carries the effective D-36 values
+        # The runtime resolution carries the effective D-36 values
         # (entry override wins over the provider default).
-        legacy = next(
-            m
-            for m in client.get("/api/models").json()["data"]["models"]
-            if m["id"] == entry["id"]
-        )
-        assert legacy["temperature"] == 0.5
-        assert legacy["max_tokens"] == 2048
+        resolved = tm.models.resolve(entry["id"])
+        assert resolved.temperature == 0.5
+        assert resolved.max_tokens == 2048
     finally:
         client.__exit__(None, None, None)
 
@@ -809,15 +805,11 @@ def test_api_can_clear_sampling_params_to_the_fallback(tmp_path):
         assert data["max_tokens"] is None
         assert data["thinking"] is None
 
-        # Effective projection falls back to the provider-level values.
-        legacy = next(
-            m
-            for m in client.get("/api/models").json()["data"]["models"]
-            if m["id"] == entry["id"]
-        )
-        assert legacy["temperature"] == 0.3
-        assert legacy["max_tokens"] == 1024
-        assert legacy["thinking"] is True
+        # Effective resolution falls back to the provider-level values.
+        resolved = tm.models.resolve(entry["id"])
+        assert resolved.temperature == 0.3
+        assert resolved.max_tokens == 1024
+        assert resolved.thinking is True
 
         # The provider-level parameters can be cleared the same way; omitting a
         # field still keeps it (only explicit null clears).
@@ -835,12 +827,7 @@ def test_api_can_clear_sampling_params_to_the_fallback(tmp_path):
         assert kept.json()["data"]["temperature"] is None
         assert kept.json()["data"]["name"] == "Renamed"
 
-        legacy = next(
-            m
-            for m in client.get("/api/models").json()["data"]["models"]
-            if m["id"] == entry["id"]
-        )
-        assert legacy["temperature"] is None
+        assert tm.models.resolve(entry["id"]).temperature is None
     finally:
         client.__exit__(None, None, None)
 

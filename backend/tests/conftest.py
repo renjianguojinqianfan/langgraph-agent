@@ -389,6 +389,12 @@ def make_manager(
     releases its process-level resources (MCP children, checkpoint sqlite
     connection) even when a test forgets to call ``shutdown()``.
     """
+    # Mirror build_runtime(): production sanitizes NO_PROXY before the first
+    # env-reading HTTP client exists. Tests that build a real client through
+    # this seam must not inherit a harness proxy list that httpx cannot parse.
+    from backend.utils.net import normalize_no_proxy
+
+    normalize_no_proxy()
     eb = event_bus or EventBus()
     persistence = persistence or Persistence(settings)
     # packages=<set> exercises the capability-package assembler: the manager

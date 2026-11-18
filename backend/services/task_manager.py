@@ -59,7 +59,7 @@ from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from . import plan_file
 from .event_bus import EventBus
-from .model_store import IMPLEMENTED_PROTOCOLS, PROTOCOL_OPENAI, ModelStore
+from .model_store import IMPLEMENTED_PROTOCOLS, ModelStore, ResolvedModel
 from .persistence import Persistence, PersistenceError
 from .plugins_store import EffectivePluginsConfig, resolve_effective_plugins
 from .trace import TraceRecorder
@@ -224,7 +224,7 @@ class TaskManager:
         #: Keys a live/cached client may still hold after a rotation. Memory
         #: only: the point is redaction, not a second credentials store.
         self._known_secrets: set[str] = set()
-        #: The (profile, client) a round is pinned to; subagents inherit it.
+        #: The (model entry id, client) a round is pinned to; subagents inherit it.
         self._round_models: Dict[str, tuple[str, LLMClient]] = {}
         # D-53/D-56 (#67): global capability-package combination, resolved once
         # at manager construction. Precedence: explicit `packages` (test seam) >
@@ -821,8 +821,8 @@ class TaskManager:
         if not Path(task.workspace).is_dir():
             raise RuntimeError(f"task workspace no longer exists: {task.workspace}")
 
-    def _build_llm(self, profile: Any, key: str) -> LLMClient:
-        """Build one client for a resolved model entry, dispatching on protocol.
+    def _build_llm(self, model: ResolvedModel, key: str) -> LLMClient:
+        """Build one client for a resolved model, dispatching on protocol.
 
         D-35: ``openai-compatible`` and ``anthropic`` both go through the one
         factory; the D-36 params resolved by ``ModelStore`` (entry overrides
@@ -830,53 +830,52 @@ class TaskManager:
         """
         if key:
             self._known_secrets.add(key)
-        protocol = getattr(profile, "protocol", PROTOCOL_OPENAI) or PROTOCOL_OPENAI
-        if protocol not in IMPLEMENTED_PROTOCOLS:
-            raise RuntimeError(f"model protocol {protocol!r} is not supported")
+        if model.protocol not in IMPLEMENTED_PROTOCOLS:
+            raise RuntimeError(f"model protocol {model.protocol!r} is not supported")
         if self._llm_factory is not None:
-            return self._llm_factory(profile, key)
+            return self._llm_factory(model, key)
         return build_llm_client(
-            protocol=protocol,
-            base_url=profile.base_url,
-            model=profile.model,
+            protocol=model.protocol,
+            base_url=model.base_url,
+            model=model.model,
             key=key,
             timeout=self.settings.llm_request_timeout_sec,
-            temperature=getattr(profile, "temperature", None),
-            max_tokens=getattr(profile, "max_tokens", None),
-            thinking=getattr(profile, "thinking", None),
-            reasoning_effort=getattr(profile, "reasoning_effort", None),
+            temperature=model.temperature,
+            max_tokens=model.max_tokens,
+            thinking=model.thinking,
+            reasoning_effort=model.reasoning_effort,
         )
 
     def _llm_for(self, task: Optional[Task]) -> LLMClient:
-        """The task's model client, cached per profile (ADR 0010 decision 7)."""
+        """The task's model client, cached per model entry (ADR 0010 decision 7)."""
         if self._injected_llm is not None:
             return self._injected_llm
         if self.settings.use_mock_llm:
             return self._llm
         requested = task.model if task is not None else ""
         # Resolve, read the key, check the cache and build under one lock: a
-        # concurrent profile edit invalidates the cache before this method can
-        # insert a client built from the pre-edit profile.
+        # concurrent provider/model edit invalidates the cache before this
+        # method can insert a client built from the pre-edit resolution.
         with self._lock:
-            profile = self.models.resolve(requested)
-            if profile is None:
-                # A pinned profile that no longer exists must not silently
+            model = self.models.resolve(requested)
+            if model is None:
+                # A pinned model that no longer exists must not silently
                 # reroute the conversation to another provider.
                 raise RuntimeError(
-                    f"model profile {requested!r} no longer exists; switch the task's model"
+                    f"model {requested!r} no longer exists; switch the task's model"
                 )
-            client = self._llm_clients.get(profile.id)
+            client = self._llm_clients.get(model.id)
             if client is None:
-                client = self._build_llm(profile, self.models.key_for(profile.id))
-                self._llm_clients[profile.id] = client
+                client = self._build_llm(model, self.models.key_for(model.id))
+                self._llm_clients[model.id] = client
         return client
 
     def _pin_round_model(self, task: Task) -> LLMClient:
         """Fix this round's client; a subagent must not re-read the task record."""
         llm = self._llm_for(task)
-        profile_id = self.model_id_for(task)
+        model_id = self.model_id_for(task)
         with self._lock:
-            self._round_models[task.id] = (profile_id, llm)
+            self._round_models[task.id] = (model_id, llm)
         return llm
 
     def round_llm_for(self, task_id: str) -> Optional[tuple[str, LLMClient]]:
@@ -887,7 +886,7 @@ class TaskManager:
         return self._llm_for(self.persistence.load_task(task_id))
 
     def model_id_for(self, task: Optional[Task]) -> str:
-        """The profile id a task runs with; empty task -> the global default."""
+        """The model entry id a task runs with; empty task -> the global default."""
         return (task.model if task is not None else "") or self.models.default_id
 
     def redact(self, text: str) -> str:
@@ -918,14 +917,17 @@ class TaskManager:
         building a request. Unknown model -> empty (tests / legacy fakes keep
         history untouched).
         """
-        profile = self.models.get(model_id or "")
-        if profile is None:
+        entry = self.models.get_model(model_id or "")
+        if entry is None:
             return ""
-        return f"{profile.provider_id}:{profile.protocol}"
+        provider = self.models.get_provider(entry.provider_id)
+        if provider is None:  # pragma: no cover - load() drops orphan entries
+            return ""
+        return f"{provider.id}:{provider.protocol}"
 
     def set_model(self, task_id: str, model_id: str) -> Dict[str, Any]:
         """Switch a task's model; the next message uses it."""
-        if self.models.get(model_id) is None:
+        if self.models.get_model(model_id) is None:
             raise RuntimeError(f"unknown model {model_id!r}")
         with self._lock:
             task = self.persistence.load_task(task_id)
@@ -969,44 +971,15 @@ class TaskManager:
                 "task": task.model_dump(mode="json"),
             }
 
-    # Model mutations go through the manager so the client cache cannot keep
-    # serving an old address / key. A provider edit or a key rotation can affect
-    # every model entry under that provider, so the whole cache is dropped
-    # (clients are cheap to rebuild; a stale credential is not).
-    def add_model_profile(self, **fields: Any) -> Any:
-        with self._lock:
-            return self.models.add(**fields)
-
-    def set_default_model_profile(self, model_id: str) -> None:
+    def set_default_model(self, model_id: str) -> None:
         with self._lock:
             self.models.set_default(model_id)
 
-    def update_model_profile(self, model_id: str, **fields: Any) -> Any:
-        with self._lock:
-            old_key = self.models.key_for(model_id)
-            profile = self.models.update(model_id, **fields)
-            self._llm_clients.clear()
-            if old_key:
-                self._known_secrets.add(old_key)
-        return profile
-
-    def delete_model_profile(self, model_id: str) -> None:
-        with self._lock:
-            old_key = self.models.key_for(model_id)
-            self.models.delete(model_id)
-            self._llm_clients.clear()
-            if old_key:
-                self._known_secrets.add(old_key)
-
-    def set_model_key(self, model_id: str, key: str) -> None:
-        with self._lock:
-            old_key = self.models.key_for(model_id)
-            self.models.set_key(model_id, key)
-            self._llm_clients.clear()
-            if old_key:
-                self._known_secrets.add(old_key)
-
-    # Provider / catalog mutations (D-34): same cache rule as above.
+    # Provider / catalog mutations (D-34): model mutations go through the
+    # manager so the client cache cannot keep serving an old address / key. A
+    # provider edit or a key rotation can affect every model entry under that
+    # provider, so the whole cache is dropped (clients are cheap to rebuild; a
+    # stale credential is not).
     def add_provider(self, **fields: Any) -> Dict[str, Any]:
         with self._lock:
             provider = self.models.add_provider(**fields)
@@ -1067,16 +1040,16 @@ class TaskManager:
 
     def test_model(self, model_id: str) -> Dict[str, Any]:
         """Send one minimal request; the key never appears in the answer."""
-        profile = self.models.get(model_id)
-        if profile is None:
+        model = self.models.resolve(model_id)
+        if model is None:
             raise KeyError(model_id)
         if self.settings.use_mock_llm:
             return {"ok": True, "note": "mock mode"}
-        key = self.models.key_for(model_id)
+        key = self.models.key_for(model.id)
         if not key:
             return {"ok": False, "error": "key not set"}
         try:
-            self._build_llm(profile, key).complete(
+            self._build_llm(model, key).complete(
                 [{"role": "user", "content": "ping"}], max_tokens=1
             )
             return {"ok": True}
@@ -1136,13 +1109,13 @@ class TaskManager:
 
         ``mode`` is the sticky task switch; default is build (decision 3).
         ``workspace`` is the page-supplied directory; absent -> the launch dir.
-        ``model`` is a profile id; absent -> the global default.
+        ``model`` is a model entry id; absent -> the global default.
         """
         chosen = normalize_workspace(workspace or self._default_workspace)
         if not Path(chosen).is_dir():
             raise ValueError(f"workspace does not exist: {chosen}")
         model_id = model or self.models.default_id
-        if self.models.get(model_id) is None:
+        if self.models.get_model(model_id) is None:
             raise ValueError(f"unknown model: {model_id}")
         task_id = uuid.uuid4().hex
         now = _now()

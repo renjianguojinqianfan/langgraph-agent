@@ -6,10 +6,7 @@ import {
   DiscoverCandidate,
   FilePreview,
   ModelEntry,
-  ModelKeySource,
   ModelParamsUpdate,
-  ModelProfile,
-  ModelsData,
   PluginsData,
   PluginsSaveRequest,
   Provider,
@@ -239,38 +236,11 @@ export const sendMessage = (id: string, input: string) =>
 
 export type { ChatTurn };
 
-// ── M1/M2: model profiles (Key is write-only) ──
-export const listModels = () => req<ModelsData>("/models");
-
-export const createModel = (body: {
-  name: string;
-  base_url: string;
-  model: string;
-  api_key_env: string;
-}) => req<ModelProfile>("/models", { method: "POST", body: JSON.stringify(body) });
-
-export const updateModel = (
-  id: string,
-  body: Partial<Pick<ModelProfile, "name" | "base_url" | "model" | "api_key_env">>
-) => req<ModelProfile>(`/models/${encodeURIComponent(id)}`, {
-  method: "PUT",
-  body: JSON.stringify(body),
-});
-
-export const deleteModel = (id: string) =>
-  req<{ ok: boolean }>(`/models/${encodeURIComponent(id)}`, { method: "DELETE" });
-
+// ── Model entry actions (default / test; keys are provider-level) ──
 export const setDefaultModel = (id: string) =>
   req<{ ok: boolean; default: string }>(`/models/${encodeURIComponent(id)}/default`, {
     method: "POST",
   });
-
-/** Write-only: the response reports set/source, never the key. */
-export const setModelKey = (id: string, key: string) =>
-  req<{ ok: boolean; key_set: boolean; key_source: ModelKeySource }>(
-    `/models/${encodeURIComponent(id)}/key`,
-    { method: "PUT", body: JSON.stringify({ key }) }
-  );
 
 export const testModel = (id: string) =>
   req<{ ok: boolean; error?: string; note?: string }>(
@@ -291,11 +261,9 @@ export const putTaskModel = (
   });
 
 // ── #243 P2-2/P2-3: providers + model catalog (D-34) ──
-// The legacy /api/models surface above stays as the flat compatibility
-// projection; since #267 the production consumers read `GET /providers` plus
-// each provider's raw catalog (`GET /providers/{id}/models`) and `listModels`
-// has no live consumer left — it is kept for the documented legacy face only.
-// These are the v2 write faces the settings page drives.
+// The settings page reads `GET /providers` plus each provider's raw catalog
+// (`GET /providers/{id}/models`); the legacy flat `/api/models` projection is
+// retired (ADR 0013 decision 1). These are the write faces it drives.
 export const listProviders = () => req<ProvidersData>("/providers");
 
 export const createProvider = (body: ProviderCreateRequest) =>

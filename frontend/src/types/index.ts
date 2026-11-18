@@ -139,27 +139,6 @@ export type ModelKeySource = "pasted" | "env" | "none";
  * `thinking=false` is allowed). */
 export type ModelProtocol = "openai-compatible" | "anthropic";
 
-/** Public v1-shaped model profile: the legacy `/api/models` compatibility
- * projection (old fields + `provider_id` / `protocol`); keys never travel. */
-export interface ModelProfile {
-  id: string;
-  name: string;
-  base_url: string;
-  model: string;
-  api_key_env: string;
-  preset: boolean;
-  key_set: boolean;
-  key_source: ModelKeySource;
-  /** #243 P2-2: the provider this entry belongs to (v2 projection). */
-  provider_id: string;
-  protocol: ModelProtocol;
-}
-
-export interface ModelsData {
-  default: string;
-  models: ModelProfile[];
-}
-
 export type ReasoningEffort = "low" | "medium" | "high";
 
 /** D-36 sampling fields (null / absent = not configured). A model entry

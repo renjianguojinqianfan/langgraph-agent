@@ -3,7 +3,6 @@ import type {
   DiscoverCandidate,
   ModelEntry,
   ModelKeySource,
-  ModelProfile,
   ModelProtocol,
   Provider,
 } from "../types";
@@ -15,22 +14,6 @@ import type {
  */
 
 // ── catalog projections ──
-
-/** The legacy `/api/models` projection is one flat row per entry + provider;
- * the v2 catalog only needs the entry half. Providers are read separately
- * (`GET /providers`), so one flat read covers every entry id `Task.model` can
- * hold (D-34 compatibility projection). */
-export function entriesFromProfiles(
-  profiles: readonly ModelProfile[]
-): ModelEntry[] {
-  return profiles.map((profile) => ({
-    id: profile.id,
-    // Pre-v2 rows carried one profile == one provider with the same id.
-    provider_id: profile.provider_id || profile.id,
-    model: profile.model,
-    name: profile.name,
-  }));
-}
 
 export interface ProviderGroup {
   provider: Provider;

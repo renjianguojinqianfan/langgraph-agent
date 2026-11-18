@@ -78,15 +78,13 @@ def model_key_is_missing(settings: Settings, store: Any) -> bool:
     """True when no model entry can serve a call (D-44 posture, logger-free).
 
     Mock mode never needs a key. Otherwise the default model must have a usable
-    key source, or *some* entry must already have one; a missing default model
-    with another keyed entry is not "no usable key".
+    key, or *some* entry must already have one; a missing default model with
+    another keyed entry is not "no usable key". Reads the model catalog through
+    the same accessors as the runtime resolution (no flat projection).
     """
     if settings.use_mock_llm:
         return False
-    snapshot = store.list_public()
-    default_id = str(snapshot.get("default") or "")
-    models = list(snapshot.get("models") or [])
-    default = next((item for item in models if item.get("id") == default_id), None)
-    default_source = str((default or {}).get("key_source") or "none")
-    any_key = any(bool(item.get("key_set")) for item in models)
-    return not (default_source != "none" or any_key)
+    default = store.get_model(store.default_id)
+    if default is not None and store.key_for(default.id):
+        return False
+    return not any(store.key_for(entry.id) for entry in store.model_entries.values())

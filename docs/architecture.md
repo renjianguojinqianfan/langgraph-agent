@@ -168,12 +168,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（最多返回前 200 KB，`truncated` 标记） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400；文件不存在 → 404；工作区不存在 → 409。404 的 `detail` 是 `task not found` 或 `file not found`，前端据此区分任务与文件消失（`frontend/src/lib/preview.ts`） |
 | GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件；auth 开启时可用 `?token=`（`<a href>` 例外端点） | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
-| GET | `/api/models` | 模型目录的扁平兼容投影（旧字段 + `provider_id` / `protocol`，不含 Key） | — | `[public profile...]` |
-| POST | `/api/models` | 新建兼容档案（1:1 建 Provider + 模型条目，id 由名称派生） | `{name, base_url, model, api_key_env?}` | public profile；非法 → 400 |
-| PUT | `/api/models/{id}` | 更新兼容档案（名称/模型改条目，地址/环境变量名改其 Provider） | `{name?, base_url?, model?, api_key_env?}` | public profile；404/400 |
-| DELETE | `/api/models/{id}` | 删除模型条目（其 Provider 无其它条目时一并删除并撤销 Key） | — | `{ok}`；404/409 |
 | POST | `/api/models/{id}/default` | 设为全局默认模型条目 | — | `{ok, default}`；404 |
-| PUT | `/api/models/{id}/key` | 写入粘贴的 Key（只写；写到该条目所属 Provider） | `{key}` | `{ok, key_set, key_source}`；404/409 |
 | POST | `/api/models/{id}/test` | 测试该条目所属 Provider + 模型连通性 | — | 测试结果；404 |
 | GET | `/api/providers` | Provider 卡片列表 + 全局默认模型条目 id | — | `{providers: [...], default}`；只回 `key_set` / `key_source` |
 | POST | `/api/providers` | 新建 Provider（**id 必填**且须匹配 `^[a-z][a-z0-9_-]*$`；`key` 只写） | `{id, name?, protocol?, base_url, api_key_env?, key?, temperature?, max_tokens?, thinking?, reasoning_effort?}` | public provider（含 D-36 默认值）；重复 id / 非法协议或参数 → 400 |
@@ -194,11 +189,11 @@ START → agent ──有 tool call──→ tool ──→ agent
 **模型配置 v2（D-33 / D-34 / D-35 / D-36）**
 
 - 文件：`data/models.json` = `{schema_version: 2, default: <模型条目 id>, providers: [{id, name, protocol, base_url, api_key_env, preset, temperature?, max_tokens?, thinking?, reasoning_effort?}], models: [{id, provider_id, model, name, source, temperature?, max_tokens?, thinking?, reasoning_effort?}]}`（`?` = D-36 可选参数，缺省不写；旧文件缺这些键 = None）。Key 不在这里：粘贴的 Key 在 `~/.qianfan/credentials.json`（按 **Provider id** 取），接口只回 `key_set` / `key_source`（pasted / env / none）。
-- 迁移：v1（无 `schema_version` 的扁平 `models` 列表）首次加载迁移为同 id 的 Provider（`protocol: openai-compatible`，base_url / api_key_env / preset 原样）+ 同 id 模型条目（model / name，`source: migrated`）；`Task.model` / `default` / credentials 键不变；迁移前把**原始字节**复制为 `models.json.bak-v1`（仅首次，已有备份不覆盖），二次加载不改文件、不再备份；坏文件 / 未来 schema 版本 quarantine + seed。
+- 旧格式：v1（无 `schema_version` 的扁平 `models` 列表）不再迁移；加载时明确拒绝且原文件字节不变，不生成 `models.json.bak-v1`。坏文件 / 未来 schema 版本仍 quarantine + seed。
 - 协议（D-35）：Provider 可存 `openai-compatible` / `anthropic`，两种都可创建 / 编辑 / 被任务使用；未知协议 → 400「不支持的协议」。Anthropic 适配器为 **httpx 非流式 `complete()`**（`backend/core/llm/anthropic_native.py`，经统一工厂 `core/llm/factory.py` 分派）；`stream()` 显式报错。**Anthropic 路径暂不支持 `thinking` / `reasoning_effort`**（需要保留 thinking 签名，见 ADR 0011）——**写面在 protocol=anthropic 且有效值为开启 / 非空时直接 400**（不可运行组合不落卡），运行期构造客户端再守一层；显式传 `null` 清空后可切换。发现接口对 anthropic 仍返回 400「协议暂不支持发现」（Anthropic 无标准目录端点）。
 - 采样参数（D-36）：`temperature` / `max_tokens` / `thinking` / `reasoning_effort` 可挂在 Provider（默认值）与模型条目（覆盖）；`temperature` 缺省 0.2（不再硬编码在调用点），合法范围按协议（openai-compatible 0–2 / anthropic 0–1）；Anthropic 的 `max_tokens` 必填、缺省 4096，OpenAI 兼容路径不设缺省 `max_tokens`；`thinking` / `reasoning_effort` 在 OpenAI 兼容路径经 `extra_body` 透传**已校验值**（`reasoning_effort` 限 low / medium / high）。参数更新支持显式 `null` 清空（省略 = 不改），清空后回落 Provider 默认 / 客户端缺省。
 - 发现接口（D-34）的出站面：只请求该 Provider 自己的 `base_url`、带该 Provider 的 Key（无 Key 时不发 `Authorization`）、拒绝重定向、超时 + 1 MB 响应上限、错误文本脱敏、响应不落库；本机单用户 / 回环部署下不视为新增 SSRF 面（威胁模型见 [`docs/security.md`](security.md) §2）。
-- 旧 `/api/models` 是模型条目的**扁平兼容投影**（旧字段 + `provider_id` / `protocol`），**当前前端已不读**（P2-4b 起设置页 / Composer 只读 `GET /providers` + `GET /providers/{id}/models`）；写路径仍走 `POST/PUT/DELETE /api/models` 系列或 `/api/providers`。
+- 旧扁平 `/api/models` 投影与 CRUD 已移除（ADR 0013）：设置页 / Composer 只读 `GET /api/providers` + `GET /api/providers/{id}/models`；写路径走 `/api/providers` 系列。仅保留 `POST /api/models/{id}/default` 与 `POST /api/models/{id}/test` 两个条目动作。
 
 ### 3.4 SSE 事件协议（步骤事件 schema）
 

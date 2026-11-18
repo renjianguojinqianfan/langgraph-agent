@@ -65,14 +65,14 @@ def warn_if_no_usable_model_key(settings: Settings, store: Any) -> bool:
 
     The old warning lived in the client constructor and keyed off the global
     `llm_api_key`, so it fired even when a pasted key existed (and told people
-    to write `.env`). The real source of truth is the model store: the default
-    model's `key_source` (pasted / env / none) plus whether *any* entry has a
-    key. Warn only when nothing can serve a call, and point at the settings
-    page / provider env var -- never at `.env`. Returns whether it warned.
+    to write `.env`). The real source of truth is the model store: whether the
+    default model can resolve a key plus whether *any* entry has one. Warn only
+    when nothing can serve a call, and point at the settings page / provider
+    env var -- never at `.env`. Returns whether it warned.
     """
     if not model_key_is_missing(settings, store):
         return False
-    default_id = str(store.list_public().get("default") or "")
+    default_id = str(store.default_id or "")
     logger.warning(
         "没有可用的模型 Key：默认模型 %r 的来源是 none，且没有任何模型条目配过 Key。"
         "请在设置页给对应 Provider 粘贴 Key，或设置它配置的环境变量"
