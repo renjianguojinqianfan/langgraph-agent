@@ -577,7 +577,7 @@ describe("tool_call 回放归属与幂等", () => {
           tool_calls: [
             {
               id: "c2",
-              tool_name: "bash",
+              tool_name: "shell",
               input: { command: "ls" },
               output: "a.txt",
               status: "success",
@@ -620,7 +620,7 @@ describe("tool_call 回放归属与幂等", () => {
       type: "tool_call",
       data: {
         id: "c2",
-        tool_name: "bash",
+        tool_name: "shell",
         input: { command: "ls" },
         output: null,
         status: "pending",
@@ -630,7 +630,7 @@ describe("tool_call 回放归属与幂等", () => {
       type: "tool_result",
       data: {
         id: "c2",
-        tool_name: "bash",
+        tool_name: "shell",
         input: { command: "ls" },
         output: "a.txt",
         status: "success",
@@ -680,7 +680,7 @@ describe("tool_call 回放归属与幂等", () => {
       type: "tool_call",
       data: {
         id: "c9",
-        tool_name: "bash",
+        tool_name: "shell",
         input: { command: "pwd" },
         output: null,
         status: "pending",
@@ -721,7 +721,7 @@ describe("tool_call 回放归属与幂等", () => {
           tool_calls: [
             {
               id: "c1",
-              tool_name: "bash",
+              tool_name: "shell",
               input: { command: "ls" },
               output: null,
               status: "pending",
@@ -735,7 +735,7 @@ describe("tool_call 回放归属与幂等", () => {
       type: "tool_result",
       data: {
         id: "c1",
-        tool_name: "bash",
+        tool_name: "shell",
         input: { command: "ls" },
         output: "a.txt",
         status: "success",

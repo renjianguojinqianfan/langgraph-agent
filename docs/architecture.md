@@ -50,7 +50,7 @@ backend/
 │   ├── llm/             client.py（LLMClient 抽象 + MockLLMClient）· protocols.py 协议词汇
 │   │                    factory.py 单一分派 · openai_compat.py · anthropic_native.py
 │   ├── tools/           base.py 契约 · registry.py @register · file_io.py（read/write/edit/ls/glob/grep）
-│   │                    bash.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
+│   │                    shell.py · web_search.py · skill_tool.py · subagent_tool.py · mcp_tool.py
 │   ├── mcp/             MCP 客户端（stdio 现役；http 预留）
 │   ├── workspace_files.py  工作区文件可见性过滤（W3）
 │   └── capability_packages.py 能力包 / 预设静态声明与真关装配清单（#67 P4；ADR 0012）
@@ -58,7 +58,7 @@ backend/
 │                        persistence.py tasks.json · plan_file.py 计划文件 · trace.py JSONL trace
 │                        model_store.py Provider/模型目录与凭据 · auth.py token 签发/校验
 │                        plugins_store.py data/plugins.json 读/写（atomic）与生效解析
-└── utils/               logging.py · sandbox.py（bash 进程组/超时）· winjob.py（Windows Job Object）
+└── utils/               logging.py · sandbox.py（shell 进程组/超时）· winjob.py（Windows Job Object）
 
 frontend/src/
 ├── pages/               TaskView · LoginPage
@@ -276,7 +276,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 ### 4.5 工具执行与危险动作
 
 - **能力包 / 预设**（#67，ADR 0012）：`backend/core/capability_packages.py` 静态声明六个包
-  （`files` / `bash` / `skills` / `web-search` / `subagent` / `mcp`：工具名集合 + 注入片段 +
+  （`files` / `shell` / `skills` / `web-search` / `subagent` / `mcp`：工具名集合 + 注入片段 +
   是否连 MCP + 是否影响子代理面）与三预设（`minimal` / `research` / `full`，默认 `full` =
   #67 前行为；`research` 当前与 `full` 同一面）。`TaskManager` 启动期解析包清单后按名单装配
   工具面与注入片段。**真关**：禁用包不实例化、不进 schema / dispatch、不加注入片段、不连 MCP。
@@ -315,7 +315,7 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 ### 4.8 工作区与文件接口
 
 - 任务拥有一个目录：`Task.workspace`（绝对路径；创建时规范化 `~` / 相对路径 / `..` / 符号链接，比较用 `workspace_key`）。日常入口 `qianfan` 的启动目录就是新任务的工作区（ADR 0010 决策 1/2）。
-- 文件工具与工作区文件接口的路径**限定在任务目录**；`bash` 不受围栏——工作目录只是起点（见 §7）。
+- 文件工具与工作区文件接口的路径**限定在任务目录**；`shell` 不受围栏——工作目录只是起点（见 §7）。
 - 文件列表按 `.gitignore` 类规则做**可见性过滤**，不是安全边界：点名 `preview` / `download` 仍可达工作区内的任意文件。
 - `artifacts_path`（`data/artifacts`）只作**无任务时的 fallback**（注入块发现、子任务无父工作区等场景），不是现役产物账本。
 
@@ -327,12 +327,12 @@ checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_
 
 1. **配置管理**：所有配置经 [`backend/config.py`](../backend/config.py) 的 `Settings`（pydantic-settings）从 `.env` / 环境变量读取；业务代码用 `get_settings()` 单例，**禁止**硬编码 Key/路径。例外：`ModelStore` 自带 `data/models.json`（Provider + 模型目录）与仓库外 `~/.qianfan/credentials.json`（Key 只在那里，按 Provider id 取）。
 2. **LLM 接入**：业务只依赖 `LLMClient` 抽象；`LLMResponse{content, tool_calls, raw, reasoning_content}`。现役真实实现 = `OpenAICompatibleClient`（OpenAI 兼容）+ `AnthropicClient`（Anthropic Messages API，httpx 非流式 `complete()`），另有离线 `MockLLMClient`；协议分派收敛在 `core/llm/factory.py` 一处（Settings 种子路径与任务路径共用）。**选哪套模型不再是硬编码分支**：由 `ModelStore` 的 Provider + 模型条目（`data/models.json` v2）+ 任务 `Task.model` / 全局默认决定；预设只有 DeepSeek，其余用自定义 `base_url`；协议与 D-36 参数随 Provider / 条目持久化（ADR 0011）。
-3. **工具接口**：`name / description / args_schema(JSON Schema) / requires_confirm / registers_artifact / run(**kwargs) -> ToolResult`。`run` 不得抛未捕获异常（内核兜底）；新工具 `@register` 即被自动发现。**现状**：`requires_confirm` 是确认闸门退役后的**兼容字段，已无消费者**；`registers_artifact` 只剩子任务产物收集在用；MCP 工具不经 `@register`，由 `task_manager` 追加。
+3. **工具接口**：`name / description / args_schema(JSON Schema) / registers_artifact / run(**kwargs) -> ToolResult`。`run` 不得抛未捕获异常（内核兜底）；新工具 `@register` 即被自动发现。**现状**：确认闸门退役后遗留的 `requires_confirm` 字段与 MCP `danger_signal` 分类已随 #331 删除（调用只由 `policy_rules` 判定）；`registers_artifact` 只剩子任务产物收集在用；MCP 工具不经 `@register`，由 `task_manager` 追加。
 4. **事件/消息协议**：后端 → 前端只经 SSE（§3.4）；`data` 字段名与后端模型一致；`frontend/src/types/index.ts` 与 `schemas.py` 字段对齐（单一来源 `schemas.py`）。字段级无机械守卫，只有事件**类型名**有。
 5. **错误口径**：见 §3.5（失败两个面 + 规则拒绝第三形状 + 只执行一次）。
 6. **停止信号**：权威信号是 `TaskManager` 级的 `_stop_flags`（带 checkpointer 时 state 是每 superstep 副本，不可靠）；`stop()` 同时翻 state 与 flag，**`task_interrupted` 由 `TaskManager` 发布**（节点从不发布它）。
 7. **危险动作拦截**：设置里的 `policy_rules` 规则表 + `agent` 里一个钩子；命中当场拒、不弹框、不进图重入（ADR 0008 决策 6）。
-8. **路径安全**：`read/write/edit/ls/glob/grep` 与工作区文件接口限定在当前任务目录；`bash` 不受此围栏；文件列表是可见性过滤，不是安全边界（`bash` 拿运行账号权限）。
+8. **路径安全**：`read/write/edit/ls/glob/grep` 与工作区文件接口限定在当前任务目录；`shell` 不受此围栏；文件列表是可见性过滤，不是安全边界（`shell` 拿运行账号权限）。
 9. **停下判定**：一轮的最后一次 `agent` 调用没有工具调用 → `finish` 停成 `INTERRUPTED`；错误 → `FAILED`；**没有 `COMPLETED` 终态**。
 10. **日志**：统一经 [`backend/utils/logging.py`](../backend/utils/logging.py)，结构化输出到控制台 + `data_dir/logs/`；不打印明文 Key。
 
@@ -393,10 +393,10 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 `qianfan` 只监听回环、Host 检查只认 `127.0.0.1` / `localhost`（挡 DNS 重绑定）、CORS 只放行自身来源——这些是**减少暴露面**，不是沙箱。完整口径与审计证据见 [`README.md`](../README.md)「这不是安全边界」与 [`security-audit-2026-10-19-bash.md`](archive/security-audit-2026-10-19-bash.md)。
 
 - **默认没有登录**：同机其他进程/用户可直接驱动 API；`auth_enabled` 只挡无凭据访问，不是权限边界。远程访问不在本章范围。
-- **`bash` 拿运行账号权限**：工作目录只是起点，`data/`、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
+- **`shell` 拿运行账号权限**：工作目录只是起点，`data/`、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
 - **子进程只继承白名单环境变量**（挡「继承」，不挡读文件）；停止 / 超时回收本次调用建立的进程组 / Job Object，自行 `setsid` 脱离的进程不受管。
 - **只限时**（默认 30s，1–600s）+ 截断输出尾部；**没有** CPU / 内存 / 磁盘 / 进程数上限。
-- `policy_rules` 空表 = 不拦；它拦的是「工具调用入参」，不是 bash 内部行为。
+- `policy_rules` 空表 = 不拦；它拦的是「工具调用入参」，不是 `shell` 内部行为。
 - 需要真隔离就放进容器或虚拟机（本章不提供 Docker 启动方式；C4 已删 `Dockerfile` 与 `docker-compose.yml`）。
 - 完整暴露面、密钥面与已知 CVE 缓解见 [`docs/security.md`](security.md) §1/§2/§6/§7；本节只保留架构视角，不复述细节。
 
