@@ -48,6 +48,11 @@ READY_POLL_INTERVAL_SEC = 0.2
 #: the endpoint reported a complete shutdown.
 STOP_TIMEOUT_SEC = 15.0
 
+#: The stop request itself covers the server drain window (10s) plus
+#: ``TaskManager.shutdown``; the default 5s JSON timeout would report a
+#: transport failure while the backend is still stopping correctly.
+STOP_REQUEST_TIMEOUT_SEC = 30.0
+
 #: Startup stdout/stderr of the detached child (the app log stays agent.log).
 SERVER_LOG_NAME = "server.log"
 
@@ -598,6 +603,7 @@ def _stop(
             f"{base}/api/server/stop",
             payload={"instance": record.instance},
             bearer=bearer,
+            timeout=STOP_REQUEST_TIMEOUT_SEC,
         )
     except OSError as exc:
         print(f"[qianfan] 无法连接后台（{exc}）；未确认停止")
@@ -619,7 +625,7 @@ def _stop(
             f"stopped_tasks={data.get('stopped_tasks') or []} "
             f"workers_joined={data.get('workers_joined')} "
             f"shutdown_complete={data.get('shutdown_complete')} "
-            f"lock_released={data.get('lock_released')}"
+            f"exit_requested={data.get('exit_requested')}"
         )
         return 1
     if status != 200:

@@ -1,4 +1,4 @@
-"""Windows Job Object wrapper for bash process trees (S1 / #148 F3).
+"""Windows Job Object wrapper for shell process trees (S1 / #148 F3).
 
 Only imported on Windows. A job keeps track of every descendant of the shell,
 so the tree can be terminated even after the shell itself has exited. Pure
@@ -79,7 +79,7 @@ class _BasicAccountingInformation(ctypes.Structure):
 
 
 class WindowsJob:
-    """A job holding one bash shell and every process it spawns."""
+    """A job holding one shell process and every process it spawns."""
 
     def __init__(self) -> None:
         self._k32 = _dll("kernel32")

@@ -245,8 +245,7 @@ class Persistence:
                 if live is None:
                     self._tasks[task_id] = candidate
                     continue
-                for name in Task.model_fields:
-                    setattr(live, name, getattr(candidate, name))
+                live.adopt(candidate)
             return True
 
     def load_task(self, task_id: str) -> Optional[Task]:

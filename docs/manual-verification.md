@@ -61,6 +61,19 @@
     spawn_subagent / MCP 工具）；minimal 轮不出现被关闭工具的调用；切回 full 后工具面恢复。
     **P4-3 交付场景；P5-1（2026-11-09）真机执行，结果见结果表。**
 
+## 收口补充判据（S4 / S5 / S7）
+
+- **后台状态与停止**：`qianfan status` 输出 pid / port / mode / instance / started_at / healthy，无服务时非 0；
+  `qianfan stop` 在网页保持打开（SSE 在连）时仍于超时窗口内完成，进程退出、锁记录消失；停止当前任务与停止后台分别验证。
+- **双 Shell**：同一任务默认用 `pwsh` 跑一条命令；再显式 `shell="bash"` 跑一条。缺指定 Shell 时给可读错误，
+  **不降级到 Windows PowerShell 5.1、失败后不自动换 Shell 重跑**（模型自行重试是模型行为，不是工具回退）。
+- **模型调用查看**：Trace 区「模型」筛选计数与列表一致；展开一次调用能看到请求 / 响应 / 错误 / usage 与
+  `call_id` 与 attempt 信息；请求头无 `Authorization`、URL 无 Key；截断或未完成有标记。
+
+> 2026-11-18 收口实跑：共享后台 + Web/终端同一任务、终端退出不停任务、停止 / 恢复、pwsh 默认、
+> 文件列表与 Trace 模型调用查看均通过；显式 Git Bash 受本机 harness 的 MSYS 初始化限制未跑通
+> （工具如实返回 `3221225794` 与 stderr，未静默回退）；Anthropic Provider 未配置，原生协议真机未运行。
+
 ## 结果记录
 
 | # | 日期 | 配置 / 模型 | 结果 | 证据 |

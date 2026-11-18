@@ -2,9 +2,9 @@
 
 The endpoint is the only way a client may stop the registered backend. It
 verifies the caller's instance id, refuses new work (503), parks live tasks,
-waits for their workers, releases process resources and the single-instance
-record, then asks uvicorn to exit. An incomplete shutdown is reported as such
-(504) and never claims success.
+waits for their workers, releases process resources, then asks uvicorn to exit;
+``serve.run`` releases the single-instance record when uvicorn returns. An
+incomplete shutdown is reported as such (504) and never claims success.
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ def test_stop_requires_an_instance_field(tmp_path, monkeypatch):
     assert response.status_code == 422
 
 
-def test_stop_reports_completion_releases_the_lock_and_rejects_new_work(tmp_path, monkeypatch):
+def test_stop_reports_completion_requests_exit_and_rejects_new_work(tmp_path, monkeypatch):
     settings, app, exits = _app(tmp_path, monkeypatch)
     lock_file = _claim(settings)
     tm = FakeTaskManager([SimpleNamespace(id="t1", status=TaskStatus.RUNNING)])
@@ -145,12 +145,14 @@ def test_stop_reports_completion_releases_the_lock_and_rejects_new_work(tmp_path
         assert data["stopped_tasks"] == ["t1"]
         assert data["workers_joined"] is True
         assert data["shutdown_complete"] is True
-        assert data["lock_released"] is True
+        assert "lock_released" not in data
         assert data["exit_requested"] is True
         assert tm.stopped == ["t1"]
         assert tm.shutdown_calls == 1
         assert exits == [True]
-        assert server_lock.read_lock(lock_file) is None
+        # The record stays ours until serve.run releases it after uvicorn
+        # returns; a new launcher must not claim it while the port is held.
+        assert server_lock.read_lock(lock_file) is not None
         # 拒绝新运行：the stop request itself completed, everything after is 503.
         assert client.get("/api/tasks").status_code == 503
         # The readiness probe still answers while the process finishes exiting.
@@ -177,7 +179,6 @@ def test_stop_reports_an_incomplete_shutdown_without_claiming_success(tmp_path, 
         assert data["stopped_tasks"] == ["t1"]
         assert data["workers_joined"] is False
         assert data["shutdown_complete"] is False
-        assert data["lock_released"] is False
         assert data["exit_requested"] is False
         assert exits == []
         # A live worker may still write tasks.json: the record must stay ours.
@@ -234,4 +235,5 @@ def test_stop_parks_a_running_task_and_waits_for_its_worker(tmp_path, monkeypatc
 
     persisted = Persistence(settings).load_task(task.id)
     assert persisted is not None and persisted.status is TaskStatus.INTERRUPTED
-    assert server_lock.read_lock(lock_file) is None
+    # The fake exit hook does not model serve.run's finally; the record stays.
+    assert server_lock.read_lock(lock_file) is not None

@@ -136,6 +136,7 @@ def test_stop_sends_the_recorded_instance_and_waits_for_the_process(tmp_path, mo
     assert url == "http://127.0.0.1:9234/api/server/stop"
     assert kwargs["payload"] == {"instance": "inst-a"}
     assert kwargs["bearer"] is None
+    assert kwargs["timeout"] == cli.STOP_REQUEST_TIMEOUT_SEC
     assert "已停止" in capsys.readouterr().out
 
 
@@ -172,7 +173,7 @@ def test_stop_reports_an_incomplete_shutdown_as_failure(tmp_path, monkeypatch, c
                     "stopped_tasks": ["t1"],
                     "workers_joined": False,
                     "shutdown_complete": False,
-                    "lock_released": False,
+                    "exit_requested": False,
                 },
             },
         ),

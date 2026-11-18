@@ -6,23 +6,23 @@ backend. The order is the contract (ADR 0013 decision 2):
 1. stop accepting new work (the app middleware answers 503);
 2. park live tasks and wait for their workers;
 3. settle their records and release process resources (``TaskManager.shutdown``);
-4. remove this instance's single-instance record;
-5. ask uvicorn to exit.
+4. ask uvicorn to exit;
+5. ``backend.serve`` releases this instance's record after uvicorn returns.
 
+The record deliberately stays ours through step 4: until the old process has
+released the port, a new launcher claiming the record would only fail to bind.
 A worker that outlives the drain window is reported as incomplete — the lock
 stays ours and the process keeps running, because a live worker may still be
-writing ``tasks.json``. Retrying the endpoint is allowed; only one stop runs at
-a time.
+writing ``tasks.json``. Retrying the endpoint is allowed; the stop lock
+serializes concurrent attempts.
 """
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .. import server_lock
 from ..api.schemas import TaskStatus
 from ..utils.logging import get_logger
 
@@ -41,12 +41,11 @@ class StopReport:
     stopped_tasks: list[str] = field(default_factory=list)
     workers_joined: bool = False
     shutdown_complete: bool = False
-    lock_released: bool = False
     exit_requested: bool = False
 
     @property
     def complete(self) -> bool:
-        return self.shutdown_complete and self.lock_released
+        return self.shutdown_complete and self.exit_requested
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,7 +53,6 @@ class StopReport:
             "stopped_tasks": list(self.stopped_tasks),
             "workers_joined": self.workers_joined,
             "shutdown_complete": self.shutdown_complete,
-            "lock_released": self.lock_released,
             "exit_requested": self.exit_requested,
         }
 
@@ -92,8 +90,6 @@ def stop_backend(app_state: Any, *, timeout: float | None = None) -> StopReport:
         raise RuntimeError("后台状态不完整（缺少 stop_lock），拒绝停止。")
     report = StopReport()
     with stop_lock:
-        if getattr(app_state, "stop_in_progress", False):
-            raise RuntimeError("后台正在停止，请等待本进程退出")
         app_state.stop_in_progress = True
         try:
             app_state.accepting_runs = False
@@ -123,20 +119,12 @@ def stop_backend(app_state: Any, *, timeout: float | None = None) -> StopReport:
                     report.workers_joined,
                 )
                 return report
-            own = os.environ.get("QIANFAN_INSTANCE", "").strip()
-            settings = app_state.settings
-            lock_file = server_lock.lock_path(settings)
-            server_lock.release_lock(lock_file, own)
-            record = server_lock.read_lock(lock_file)
-            report.lock_released = record is None or record.instance != own
             request_exit()
             report.exit_requested = True
             logger.info(
-                "server stop: complete — %d task(s) parked, lock_released=%s,"
-                " exit_requested=%s",
+                "server stop: complete — %d task(s) parked, exit requested;"
+                " serve.run will release the record when uvicorn returns",
                 len(report.stopped_tasks),
-                report.lock_released,
-                report.exit_requested,
             )
             return report
         finally:

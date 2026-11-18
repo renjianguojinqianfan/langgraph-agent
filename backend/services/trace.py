@@ -107,27 +107,34 @@ class TraceRecorder:
             fh = self._files.get(task_id)
             if fh is None:
                 return
-            try:
-                line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
-                fh.write(line)
-                fh.flush()
-            except Exception:
-                # A failed write must be visible (#260): the bus swallows
-                # subscriber exceptions by contract, so without this the
-                # recorder would lose events in total silence. Count the loss
-                # and log the FIRST failure per task with the traceback; later
-                # ones only bump the counter, so a disk-full run cannot flood
-                # the log with one line per event. ``Exception``, not
-                # ``OSError``: serialization is inside the guard too, so a
-                # payload json cannot encode counts as the loss it is.
-                first = self.write_failures.get(task_id, 0) == 0
-                self.write_failures[task_id] = self.write_failures.get(task_id, 0) + 1
-                if first:
-                    logger.exception(
-                        "trace write failed for %s; events are being lost from "
-                        "this task's trace — close() will log the total",
-                        task_id,
-                    )
+            self._write_locked(task_id, fh, event)
+
+    def _write_locked(self, task_id: str, fh: Any, event: Dict[str, Any]) -> bool:
+        """Append one JSON line; caller holds ``_lock``. A failure is counted
+        and the first one is logged (see the #260 note below)."""
+        try:
+            line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
+            fh.write(line)
+            fh.flush()
+            return True
+        except Exception:
+            # A failed write must be visible (#260): the bus swallows
+            # subscriber exceptions by contract, so without this the recorder
+            # would lose events in total silence. Count the loss and log the
+            # FIRST failure per task with the traceback; later ones only bump
+            # the counter, so a disk-full run cannot flood the log with one
+            # line per event. ``Exception``, not ``OSError``: serialization is
+            # inside the guard too, so a payload json cannot encode counts as
+            # the loss it is.
+            first = self.write_failures.get(task_id, 0) == 0
+            self.write_failures[task_id] = self.write_failures.get(task_id, 0) + 1
+            if first:
+                logger.exception(
+                    "trace write failed for %s; events are being lost from "
+                    "this task's trace — close() will log the total",
+                    task_id,
+                )
+            return False
 
     def log_event(self, task_id: str, event_type: str, data: Dict[str, Any]) -> bool:
         """Append one log-only event to an already-attached task trace.
@@ -141,21 +148,8 @@ class TraceRecorder:
             fh = self._files.get(task_id)
             if fh is None:
                 return False
-            try:
-                event = {"type": event_type, "data": data, "ts": time.time()}
-                fh.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
-                fh.flush()
-                return True
-            except Exception:
-                first = self.write_failures.get(task_id, 0) == 0
-                self.write_failures[task_id] = self.write_failures.get(task_id, 0) + 1
-                if first:
-                    logger.exception(
-                        "trace write failed for %s; events are being lost from "
-                        "this task's trace — close() will log the total",
-                        task_id,
-                    )
-                return False
+            event = {"type": event_type, "data": data, "ts": time.time()}
+            return self._write_locked(task_id, fh, event)
 
     def close(self, task_id: str) -> None:
         """Write ``trace_end``, unsubscribe, and close the file handle.

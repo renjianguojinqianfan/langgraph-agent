@@ -123,6 +123,15 @@ class Task(BaseModel):
     updated_at: str = ""
     subtasks: List[SubTask] = Field(default_factory=list)  # P1 item 2
 
+    def adopt(self, candidate: "Task") -> None:
+        """Replace every field from a persisted candidate, keeping identity.
+
+        Used after an atomic batch write so live object references see the
+        durable record without being swapped for a new instance.
+        """
+        for name in type(self).model_fields:
+            setattr(self, name, getattr(candidate, name))
+
 
 # ── Request bodies ──
 class CreateTaskRequest(BaseModel):
