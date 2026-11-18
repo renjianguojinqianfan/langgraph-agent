@@ -144,6 +144,63 @@ def test_failed_dump_restores_the_previous_record(settings, monkeypatch):
     assert p.load_task("t-keep").status == TaskStatus.INTERRUPTED
 
 
+# ── #337 S11: detached batch candidates, one dump, no half update ────────────
+def test_save_tasks_with_no_candidates_never_writes(settings, monkeypatch):
+    p = Persistence(settings)
+    dumps: list[object] = []
+    monkeypatch.setattr(
+        p, "_dump", lambda overrides=None: dumps.append(overrides) or True
+    )
+
+    assert p.save_tasks([]) is True
+    assert dumps == []
+
+
+def test_save_tasks_writes_all_candidates_once(settings, monkeypatch):
+    p = Persistence(settings)
+    for task_id in ("t1", "t2", "t3"):
+        assert p.save_task(_sample_task(task_id))
+    candidates = []
+    for task_id in ("t1", "t2"):
+        candidate = _sample_task(task_id).model_copy(deep=True)
+        candidate.status = TaskStatus.FAILED
+        candidate.updated_at = "2025-01-02T00:00:00+00:00"
+        candidates.append(candidate)
+
+    dumps: list[object] = []
+    real_dump = p._dump
+
+    def counting_dump(overrides=None):
+        dumps.append(overrides)
+        return real_dump(overrides)
+
+    monkeypatch.setattr(p, "_dump", counting_dump)
+    assert p.save_tasks(candidates) is True
+
+    assert len(dumps) == 1
+    assert p.load_task("t1").status == TaskStatus.FAILED
+    assert p.load_task("t2").status == TaskStatus.FAILED
+    assert p.load_task("t3").status == TaskStatus.INTERRUPTED
+    reread = Persistence(settings)
+    assert reread.load_task("t1").updated_at == "2025-01-02T00:00:00+00:00"
+    assert reread.load_task("t2").status == TaskStatus.FAILED
+
+
+def test_failed_batch_keeps_memory_and_disk_on_the_old_records(settings, monkeypatch):
+    p = Persistence(settings)
+    original = _sample_task("t-keep")
+    assert p.save_task(original)
+    candidate = original.model_copy(deep=True)
+    candidate.status = TaskStatus.FAILED
+    candidate.updated_at = "2025-01-02T00:00:00+00:00"
+    monkeypatch.setattr(p, "_dump", lambda overrides=None: False)
+
+    assert p.save_tasks([candidate]) is False
+    assert p.load_task("t-keep") is original
+    assert p.load_task("t-keep").status == TaskStatus.INTERRUPTED
+    assert Persistence(settings).load_task("t-keep").status == TaskStatus.INTERRUPTED
+
+
 # ── ADR 0013 decision 1: the current format is the only readable one ────────
 def test_current_record_round_trips_through_tasks_json(settings):
     """The current format reads back field for field and re-dumps identically."""

@@ -93,7 +93,7 @@ data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>
 |---|---|---|
 | `TaskManager` | 任务生命周期：创建 / worker 执行 / 停止 / 续说 / 续跑 / 崩溃对账 / 事件发布；权威停止信号 `_stop_flags` | [`backend/services/task_manager.py`](../backend/services/task_manager.py) |
 | `EventBus` | 进程内 SSE 事件广播；前端按 task 订阅 | [`backend/services/event_bus.py`](../backend/services/event_bus.py) |
-| `Persistence` | `tasks.json` 原子落盘 + 损坏备份；API 与磁盘的唯一桥 | [`backend/services/persistence.py`](../backend/services/persistence.py) |
+| `Persistence` | `tasks.json` 原子落盘 + 损坏备份；API 与磁盘的唯一桥；启动对账与终态收尾共用候选批（一次 dump，失败不落地，#337） | [`backend/services/persistence.py`](../backend/services/persistence.py) |
 | checkpointer | `SqliteSaver`，`thread_id == task_id`；`durability="sync"`；格式戳 v2，v1 旧库启动时拒绝挂载 | [`backend/services/task_manager.py`](../backend/services/task_manager.py) |
 | `plan_file` | 计划文件唯一来源在任务目录 `.qianfan/plans/<task_id>.md`；版本与 hash | [`backend/services/plan_file.py`](../backend/services/plan_file.py) |
 | `TraceRecorder` | 订阅事件直写 JSONL（含唯一只进文件的 `trace_end`）；前端回放/导出 | [`backend/services/trace.py`](../backend/services/trace.py) |
@@ -262,7 +262,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | 停止 | 用户按停 | `TaskManager.stop()` 翻 `_stop_flags` 与 state、发布 `task_interrupted`；worker 在节点入口检测后收口，状态 `INTERRUPTED` |
 | 续说 | 停下后发消息 | `POST /api/tasks/{id}/messages`：同一 `thread_id` / checkpoint 继续同一段对话（多轮入口） |
 | 续跑 | 停止 / 崩溃后 | `POST /api/tasks/{id}/resume`：从最近 durable checkpoint 重建并继续；发布 `task_resumed` |
-| 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），并收尾死进程留下的在途状态：`running` 步骤 → `failed`、`pending` 调用 → `skipped`（含旧启动逻辑只翻状态、不动步骤的 INTERRUPTED / FAILED 记录；任务状态不重写），逐条隔离；消息面悬空 tool call 的清扫仍在 `agent` 节点循环入口（#46），不在启动对账里。`_finalize_terminal` 写记录前也走同一收尾（resume 会原样恢复 checkpoint 的 steps） |
+| 崩溃对账 | 进程重启 | 启动时（`TaskManager` 构造期，无 worker 线程）把 `tasks.json` 里 `RUNNING` / `PENDING` 记录翻成 `INTERRUPTED`（可恢复），并收尾死进程留下的在途状态：`running` 步骤 → `failed`、`pending` 调用 → `skipped`（含旧启动逻辑只翻状态、不动步骤的 INTERRUPTED / FAILED 记录；任务状态不重写），逐条隔离（候选准备失败只跳过该条）；N 条待收尾候选整批一次 dump，零变更不写，写失败时内存与会话文件都停在旧状态（#337）。消息面悬空 tool call 的清扫仍在 `agent` 节点循环入口（#46），不在启动对账里。`_finalize_terminal` 写记录前也走同一收尾与同一批量提交路径（resume 会原样恢复 checkpoint 的 steps） |
 
 checkpoint 采用 `SqliteSaver` + `durability="sync"`（`task_manager.py` 的 `_DURABILITY`），格式戳 v2；v1 旧库启动时拒绝挂载并按迁移文档 §2.4 处置。`data/` 可弃，不做跨大版本快照兼容。
 
@@ -384,7 +384,7 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 
 | 路径 | 内容 | 备注 |
 |---|---|---|
-| `data/tasks.json` | 任务记录（原子写；字节损坏自动备份后重新开始；**旧格式记录整体拒绝加载且原文不变**，ADR 0013 决策 1） | 唯一任务记录源 |
+| `data/tasks.json` | 任务记录（原子写；启动对账/终态收尾按候选批量一次提交；字节损坏自动备份后重新开始；**旧格式记录整体拒绝加载且原文不变**，ADR 0013 决策 1） | 唯一任务记录源 |
 | `data/server.json` | 共享后台单实例记录（pid / port / started_at / instance；原子写） | 启动器 / `status` / `stop` 的实例权威 |
 | `data/logs/server.log` | 后台启动期 stdout/stderr 与异常 | 应用日志仍在 `data/logs/agent.log` |
 | `data/models.json` | 模型配置 v2（Provider + 模型目录，**不含 Key**）；v1 明确拒绝、原文不变，不迁移不备份 | 全局默认 / 每任务模型条目 id |
