@@ -86,7 +86,7 @@ frontend/src/
 
 docs/                    adr/ · specs/（冻结归档）· agents/（agent 规则）· archive/（历史）· 本文件
 scripts/                 check_doc_links.py 等
-data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>.jsonl · checkpoints/checkpoints.sqlite · logs/
+data/（运行态，不入库）   tasks.json · models.json · traces/<task_id>.jsonl · checkpoints/checkpoints.sqlite · changes/<task_id>/<round>/ · logs/
 ```
 
 | 运行时组件 | 职责 | 权威位置 |
@@ -394,6 +394,7 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 | `~/.qianfan/credentials.json` | 界面粘贴的 Key | 仓库外；接口只回 `key_set` / `key_source` |
 | `data/traces/<task_id>.jsonl` | 事件 + trace 时间线 | `trace_end` 只在这里 |
 | `data/checkpoints/checkpoints.sqlite` | LangGraph checkpoint | 格式戳 v2；v1 拒绝挂载 |
+| `data/changes/<task_id>/<round>/<index>/{meta.json,before,after}` | 每轮 `write`/`edit` 净变更 sidecar（#343） | 可能含原始文件内容；仅本地 `data/`、不入库、不返回绝对路径；任务删除 / 启动对账清理 |
 | `data/logs/` | 结构化日志 | |
 | `<任务目录>/.qianfan/plans/<task_id>.md` | 计划文件 | 任务工作区内，唯一来源 |
 

@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { reviewKey } from "../lib/changes";
-import {
-  isReviewed,
-  useChangesReviewStore,
-} from "./changesReviewStore";
+import { useChangesReviewStore } from "./changesReviewStore";
 
 describe("changes review store", () => {
   beforeEach(() => {
@@ -23,8 +20,8 @@ describe("changes review store", () => {
       "b.ts",
     ]);
     expect(useChangesReviewStore.getState().reviewed[roundTwo]).toEqual(["a.ts"]);
-    expect(isReviewed(useChangesReviewStore.getState(), roundOne, "a.ts")).toBe(true);
-    expect(isReviewed(useChangesReviewStore.getState(), roundOne, "c.ts")).toBe(false);
+    expect(useChangesReviewStore.getState().reviewed[roundOne]).toContain("a.ts");
+    expect(useChangesReviewStore.getState().reviewed[roundOne]).not.toContain("c.ts");
   });
 
   it("toggles a marker off without touching its neighbours", () => {
@@ -42,8 +39,8 @@ describe("changes review store", () => {
     state.toggle(reviewKey("task-2", 1), "b.ts");
     state.clearAll();
     expect(useChangesReviewStore.getState().reviewed).toEqual({});
-    expect(isReviewed(useChangesReviewStore.getState(), reviewKey("task-1", 1), "a.ts")).toBe(
-      false
-    );
+    expect(
+      useChangesReviewStore.getState().reviewed[reviewKey("task-1", 1)]
+    ).toBeUndefined();
   });
 });

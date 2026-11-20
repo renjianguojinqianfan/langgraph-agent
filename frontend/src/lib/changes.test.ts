@@ -6,7 +6,10 @@ import {
   changeHeader,
   changeStatusLabel,
   changesFailure,
+  createPreviewGate,
   diffMode,
+  diffPrefix,
+  diffTone,
   flattenHunks,
   hiddenChangeCount,
   reviewKey,
@@ -119,6 +122,37 @@ describe("flattenHunks", () => {
       { kind: "add", oldLine: null, newLine: 11, oldText: null, newText: "extra" },
       { kind: "context", oldLine: 11, newLine: 12, oldText: "tail", newText: "tail" },
     ]);
+  });
+});
+
+describe("diff row semantics", () => {
+  it("names the tone and unified marker once for both diff surfaces", () => {
+    expect(diffTone("add")).toBe("add");
+    expect(diffTone("delete")).toBe("delete");
+    expect(diffTone("context")).toBe("context");
+    expect(diffPrefix("add")).toBe("+");
+    expect(diffPrefix("delete")).toBe("-");
+    expect(diffPrefix("context")).toBe(" ");
+  });
+});
+
+describe("preview gate", () => {
+  it("lets the newest generation land and drops cancelled ones", () => {
+    const gate = createPreviewGate();
+    const first = gate.next();
+    expect(gate.isCurrent(first)).toBe(true);
+
+    gate.invalidate();
+    expect(gate.isCurrent(first)).toBe(false);
+
+    const second = gate.next();
+    expect(gate.isCurrent(second)).toBe(true);
+    expect(gate.isCurrent(first)).toBe(false);
+
+    // A newer request supersedes an older one even without a cancel.
+    const third = gate.next();
+    expect(gate.isCurrent(second)).toBe(false);
+    expect(gate.isCurrent(third)).toBe(true);
   });
 });
 

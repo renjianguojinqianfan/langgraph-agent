@@ -293,6 +293,7 @@
 - [ ] hover 或键盘聚焦文件行 500ms 后出现 unified 预览，高度不超过 420px；快速移开不闪出迟到预览。
 - [ ] 点 header / 行打开右栏 review 页签并选中正确文件；同一 `(task, round)` 再点只复用 / 切换，不重复开页签；关闭页签回到相邻页签或文件列表。
 - [ ] review 页签：文件列表、每文件 reviewed checkbox 与 `N/M reviewed` 生效；切换 round 后标记从 0 开始；切换任务后全部清空。
+- [ ] reviewed checkbox 的命中区至少 24×24（label 包裹），点勾选不误触文件选择按钮。
 - [ ] 合并 / 并排可切；新增 / 删除文件只能合并；换行开关改变长行呈现；diff 区内部滚动，420px 下页面不横向溢出。
 - [ ] 「打开文件」复用已有文件预览页签；下载走现有 `/files/download`；binary / oversized 行显示状态、无 diff、仍可下载。
 - [ ] 页签顶部能看到「不是完整工作区 diff」说明；界面没有 apply / reject。

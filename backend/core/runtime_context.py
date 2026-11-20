@@ -20,8 +20,10 @@ from ..config import Settings
 
 _task_id: ContextVar[Optional[str]] = ContextVar("qianfan_task_id", default=None)
 _workspace: ContextVar[Optional[Path]] = ContextVar("qianfan_workspace", default=None)
+_round: ContextVar[Optional[int]] = ContextVar("qianfan_round", default=None)
 
 Tokens = Tuple[Token[Optional[str]], Token[Optional[Path]]]
+RoundToken = Token[Optional[int]]
 
 
 def reject_non_local_path(value: "str | Path") -> None:
@@ -76,6 +78,16 @@ def get_current_task_id() -> Optional[str]:
     return _task_id.get()
 
 
+def get_current_round() -> Optional[int]:
+    """The 1-based parent round whose tool dispatch is running, if any.
+
+    ``AgentRuntime.tool_node`` seats this around each tool call so a tool that
+    spawns work (``spawn_subagent``) can attribute the callee's file writes to
+    the parent round (spec §5.1). Outside a tool dispatch it is ``None``.
+    """
+    return _round.get()
+
+
 def get_current_workspace() -> Optional[Path]:
     return _workspace.get()
 
@@ -98,3 +110,11 @@ def reset_runtime_context(tokens: Tokens) -> None:
 
 def set_current_task_id(task_id: Optional[str]) -> Token[Optional[str]]:
     return _task_id.set(task_id or None)
+
+
+def set_current_round(round_no: int) -> RoundToken:
+    return _round.set(round_no)
+
+
+def reset_current_round(token: RoundToken) -> None:
+    _round.reset(token)

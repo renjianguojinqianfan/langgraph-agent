@@ -1,4 +1,8 @@
-import type { HighlighterCore, ThemedToken } from "shiki";
+import type {
+  HighlighterCore,
+  LanguageRegistration,
+  ThemedToken,
+} from "shiki";
 import type { CodeLanguage } from "./codePreview";
 
 /** One Shiki token. `color` is a CSS variable (see `--shiki-*` in index.css),
@@ -11,7 +15,10 @@ type HighlightLanguage = Exclude<CodeLanguage, "plaintext">;
 /** Statically analysable dynamic imports: each grammar becomes its own chunk,
  * so the initial bundle only pays for the preview shell. `html` pulls its own
  * embedded CSS/JS grammars. */
-const GRAMMARS: Record<HighlightLanguage, () => Promise<{ default: unknown }>> = {
+const GRAMMARS: Record<
+  HighlightLanguage,
+  () => Promise<{ default: LanguageRegistration[] }>
+> = {
   typescript: () => import("@shikijs/langs/typescript"),
   tsx: () => import("@shikijs/langs/tsx"),
   javascript: () => import("@shikijs/langs/javascript"),
@@ -72,7 +79,7 @@ async function ensureLanguage(instance: HighlighterCore, language: HighlightLang
   const task = (async () => {
     const { default: registrations } = await GRAMMARS[language]();
     // Shiki accepts the language module's default registration array directly.
-    await instance.loadLanguage(registrations as never);
+    await instance.loadLanguage(registrations);
     loaded.add(language);
   })().finally(() => loading.delete(language));
   loading.set(language, task);

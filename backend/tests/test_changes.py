@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.core.llm.client import MockLLMClient
+from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.main import app
 from backend.services.auth import TokenIssuer
 from backend.services.changes import ChangesRecorder, ChangesStore
@@ -722,3 +722,143 @@ def test_changes_api_rejects_query_token_on_rest_reads(tmp_path: Path) -> None:
         )
     finally:
         client.__exit__(None, None, None)
+
+
+# ── #343 review fix: subagent attribution + configuration ───────────────────
+def test_subagent_write_is_captured_on_the_parent_round(tmp_path: Path) -> None:
+    """A subtask is not an independent Task: its write/edit belongs to the
+    parent task and the parent round that triggered the spawn (spec §5.1)."""
+    from backend.core.agent.subagent import SubAgentExecutor, SubTaskSpec
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    settings = make_settings(tmp_path)
+    mock = MockLLMClient(tool_calls=[], final_answer="parked")
+    tm = make_manager(settings, mock)
+    task_id = tm.create_task("parent", "park", workspace=str(ws))
+    assert _wait(tm, task_id).status.value == "INTERRUPTED"
+
+    # Wiring: TaskManager hands the executor its live store (construction order).
+    assert tm._subagent is not None
+    assert tm._subagent.changes is tm.changes
+
+    mock.tool_calls = [
+        {
+            "id": "sub-write",
+            "name": "write",
+            "arguments": {"path": "sub/out.txt", "content": "hello\nworld\n"},
+        }
+    ]
+    mock._turn = 0
+    mock.final_answer = "subtask done"
+    subtask_id = "parent:sub:capture"
+    result = SubAgentExecutor(tm, settings, tm.changes).run_subtask(
+        SubTaskSpec(
+            subtask_id=subtask_id,
+            name="writer",
+            instruction="write it",
+            parent_task_id=task_id,
+            round_no=1,
+        )
+    )
+    assert result.status == "completed", result.error
+
+    summary = tm.changes.read_round(task_id, 1)
+    assert summary["total"] == 1
+    entry = summary["files"][0]
+    assert entry["path"] == "sub/out.txt"
+    assert entry["status"] == "added"
+    detail = tm.changes.read_detail(task_id, 1, entry["index"])
+    assert detail is not None
+    assert detail["hunks"][0]["lines"] == ["+hello", "+world"]
+
+    # The child graph must not also record round 1 under the subtask id.
+    assert tm.changes.read_round(subtask_id, 1)["total"] == 0
+    assert not (settings.changes_path / subtask_id).exists()
+
+
+class _SpawnThenWriteMock(MockLLMClient):
+    """One client for both graphs: the parent delegates, the subtask writes."""
+
+    MARKER = "子任务写文件"
+
+    def __init__(self) -> None:
+        super().__init__(plan=["委托子任务"], final_answer="主任务结束")
+        self.parent_turns = 0
+        self.child_turns = 0
+
+    @staticmethod
+    def _user_text(messages: list[dict[str, Any]]) -> str:
+        return " ".join(
+            str(m.get("content") or "") for m in messages if m.get("role") == "user"
+        )
+
+    def complete(self, messages, tools=None, **kwargs):
+        if not tools:
+            return LLMResponse(content=json.dumps(self.plan))
+        if self.MARKER in self._user_text(messages):
+            self.child_turns += 1
+            if self.child_turns == 1:
+                return LLMResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "sub-write",
+                            "name": "write",
+                            "arguments": {
+                                "path": "from-sub/task.txt",
+                                "content": "subtask\n",
+                            },
+                        }
+                    ],
+                )
+            return LLMResponse(content="子任务写好了")
+        self.parent_turns += 1
+        if self.parent_turns == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "spawn-1",
+                        "name": "spawn_subagent",
+                        "arguments": {
+                            "name": "writer",
+                            "instruction": f"{self.MARKER}：写出报告",
+                        },
+                    }
+                ],
+            )
+        return LLMResponse(content=self.final_answer)
+
+
+def test_spawn_tool_propagates_the_round_to_the_subtask_capture(tmp_path: Path) -> None:
+    """The round comes from the parent's tool_node contextvar, not from the
+    subtask graph (whose own ``round_no`` is always 1)."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    settings = make_settings(tmp_path)
+    tm = make_manager(settings, _SpawnThenWriteMock())
+    task_id = tm.create_task("parent", "派个子任务", workspace=str(ws))
+    task = _wait(tm, task_id)
+    assert task is not None and task.status.value == "INTERRUPTED"
+
+    summary = tm.changes.read_round(task_id, 1)
+    assert summary["total"] == 1
+    assert summary["files"][0]["path"] == "from-sub/task.txt"
+    assert summary["files"][0]["status"] == "added"
+    detail = tm.changes.read_detail(task_id, 1, summary["files"][0]["index"])
+    assert detail is not None
+    assert ["+subtask"] in [hunk["lines"] for hunk in detail["hunks"]]
+
+
+def test_changes_path_resolves_relative_and_empty_values(tmp_path: Path) -> None:
+    from backend.config import PROJECT_ROOT
+    from backend.tests.conftest import make_isolated_settings
+
+    relative = make_isolated_settings(
+        data_dir=str(tmp_path), changes_dir="relative/changes"
+    )
+    assert relative.changes_path == PROJECT_ROOT / "relative" / "changes"
+
+    default = make_isolated_settings(data_dir=str(tmp_path), changes_dir="")
+    assert default.changes_path == tmp_path / "changes"
