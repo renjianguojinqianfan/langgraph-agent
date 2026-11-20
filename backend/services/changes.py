@@ -273,21 +273,63 @@ class ChangesStore:
         return candidate
 
     def _records(self, round_dir: Path) -> List[tuple[int, Path, Dict[str, Any]]]:
-        records: List[tuple[int, Path, Dict[str, Any]]] = []
+        with self._lock:
+            self._recover_reindex(round_dir)
+            records: List[tuple[int, Path, Dict[str, Any]]] = []
+            try:
+                children = list(round_dir.iterdir())
+            except OSError:
+                return records
+            for child in children:
+                try:
+                    if not child.is_dir() or child.is_symlink() or not child.name.isdigit():
+                        continue
+                except OSError:
+                    continue
+                meta = _read_meta(child)
+                if meta is not None:
+                    records.append((int(child.name), child, meta))
+            return sorted(
+                records, key=lambda item: (item[2].get("display", ""), item[2]["path"])
+            )
+
+    @staticmethod
+    def _recover_reindex(round_dir: Path) -> None:
+        """Restore records a crash left under ``.reindex-N`` temp names.
+
+        ``finalize_round`` renames every record to its display position in two
+        phases; a kill between the phases must not make the captured changes
+        disappear. Append the temp dirs back under free numeric indices; a
+        later finalize (or read) will sort them again.
+        """
         try:
             children = list(round_dir.iterdir())
         except OSError:
-            return records
-        for child in children:
+            return
+        temps = sorted(
+            (
+                child
+                for child in children
+                if child.is_dir()
+                and not child.is_symlink()
+                and child.name.startswith(".reindex-")
+            ),
+            key=lambda child: child.name,
+        )
+        if not temps:
+            return
+        numeric = [
+            int(child.name)
+            for child in children
+            if child.is_dir() and child.name.isdigit()
+        ]
+        next_index = max(numeric, default=-1) + 1
+        for temp in temps:
             try:
-                if not child.is_dir() or child.is_symlink() or not child.name.isdigit():
-                    continue
+                temp.rename(round_dir / str(next_index))
             except OSError:
-                continue
-            meta = _read_meta(child)
-            if meta is not None:
-                records.append((int(child.name), child, meta))
-        return sorted(records, key=lambda item: (item[2].get("display", ""), item[2]["path"]))
+                return
+            next_index += 1
 
     def _ensure_index(
         self, task_id: str, round_no: int, round_dir: Path

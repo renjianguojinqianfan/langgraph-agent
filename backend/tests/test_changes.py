@@ -499,6 +499,23 @@ def test_tampered_meta_with_an_absolute_path_is_ignored(tmp_path: Path) -> None:
     assert store.read_detail("task-1", 1, summary["files"][0]["index"]) is None
 
 
+def test_crashed_reindex_is_recovered(tmp_path: Path) -> None:
+    """A kill between reindex renames must not hide captured records."""
+    settings = make_settings(tmp_path)
+    store = ChangesStore(settings)
+    _record(store, path="a.txt", after=b"one\n")
+    round_dir = settings.changes_path / "task-1" / "1"
+    original = next(p for p in round_dir.iterdir() if p.is_dir())
+    original.rename(round_dir / ".reindex-0")
+
+    summary = store.read_round("task-1", 1)
+    assert summary["total"] == 1
+    assert summary["files"][0]["path"] == "a.txt"
+    detail = store.read_detail("task-1", 1, summary["files"][0]["index"])
+    assert detail is not None
+    assert detail["hunks"][0]["lines"] == ["+one"]
+
+
 def test_concurrent_tasks_keep_separate_task_directories(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ChangesStore(settings)
