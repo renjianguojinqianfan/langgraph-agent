@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cx } from "../../lib/cx";
 import { Icon, type IconName } from "./Icon";
 
@@ -61,21 +61,27 @@ const ICON_SIZES: Record<ButtonSize, string> = {
   md: "h-8 w-8",
 };
 
-export function IconButton({
-  icon,
-  variant = "quiet",
-  size = "md",
-  className,
-  type = "button",
-  ...rest
-}: IconButtonProps) {
-  return (
-    <button
-      type={type}
-      className={cx(BASE, VARIANTS[variant], ICON_SIZES[size], className)}
-      {...rest}
-    >
-      <Icon name={icon} />
-    </button>
-  );
-}
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
+  function IconButton(
+    {
+      icon,
+      variant = "quiet",
+      size = "md",
+      className,
+      type = "button",
+      ...rest
+    },
+    ref
+  ) {
+    return (
+      <button
+        ref={ref}
+        type={type}
+        className={cx(BASE, VARIANTS[variant], ICON_SIZES[size], className)}
+        {...rest}
+      >
+        <Icon name={icon} />
+      </button>
+    );
+  }
+);

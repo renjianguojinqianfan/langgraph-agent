@@ -1,6 +1,8 @@
 import {
   ApiResponse,
   AuthTokenResponse,
+  ChangeDetail,
+  ChangesSummary,
   ChatTurn,
   CreateTaskRequest,
   DiscoverCandidate,
@@ -14,6 +16,7 @@ import {
   ProvidersData,
   ProviderUpdateRequest,
   SSEvent,
+  SkillInfo,
   Task,
   TaskMode,
   WorkspaceFile,
@@ -179,12 +182,13 @@ export const getTaskSnapshot = (id: string) =>
     return data && typeof data.id === "string" ? (data as Task) : null;
   });
 
-/** #241: delete one task's history (record + checkpoint + trace; disk stays). */
+/** #241/#343: delete one task's history (record + checkpoint + trace + change
+ * sidecars; disk stays). */
 export const deleteTask = (id: string) =>
-  req<{ ok: boolean; cleanup: { checkpoint: boolean; trace: boolean } }>(
-    `/tasks/${id}`,
-    { method: "DELETE" }
-  );
+  req<{
+    ok: boolean;
+    cleanup: { checkpoint: boolean; trace: boolean; changes: boolean };
+  }>(`/tasks/${id}`, { method: "DELETE" });
 
 /** #241: delete one directory's history; `dir` is required (no "all"). */
 export const deleteWorkspaceTasks = (dir: string) =>
@@ -385,6 +389,40 @@ export const listFiles = (id: string, signal?: AbortSignal) =>
     signal ? { signal } : undefined
   );
 
+// ── #345: skill catalogue for the `/` menu ──
+export type SkillCatalogResult = StatusResult<{
+  enabled: boolean;
+  skills: SkillInfo[];
+}>;
+
+/**
+ * Read the two-layer skill catalogue for an existing task or a new task's
+ * workspace. The status is kept so the menu can name 400 / 401 / 500 inside
+ * the skill group while built-in commands stay usable.
+ */
+export const listSkills = (
+  params: { taskId?: string; workspace?: string } = {},
+  signal?: AbortSignal
+) => {
+  const search = new URLSearchParams();
+  if (params.taskId) search.set("task_id", params.taskId);
+  if (params.workspace) search.set("workspace", params.workspace);
+  const query = search.toString();
+  return reqWithStatus<{ enabled: boolean; skills: SkillInfo[] }>(
+    `/skills${query ? `?${query}` : ""}`,
+    (json) => {
+      const data = (json as { data?: { enabled?: unknown; skills?: unknown } } | null)
+        ?.data;
+      return data &&
+        typeof data.enabled === "boolean" &&
+        Array.isArray(data.skills)
+        ? { enabled: data.enabled, skills: data.skills as SkillInfo[] }
+        : null;
+    },
+    signal ? { signal } : undefined
+  );
+};
+
 export type PreviewResult = StatusResult<FilePreview>;
 
 /**
@@ -402,6 +440,35 @@ export const previewFile = (id: string, path: string) =>
 
 export const fileDownloadUrl = (id: string, path: string) =>
   _withToken(`${API_BASE}/tasks/${id}/files/download?path=${encodeURIComponent(path)}`);
+
+// ── #343: per-round changes ──
+
+/**
+ * One round's write/edit net changes. A missing round is a normal empty list;
+ * 400 / 404 / 401 keep their status for the review tab's failure copy.
+ */
+export const getTaskChanges = (id: string, round: number) =>
+  reqWithStatus<ChangesSummary>(
+    `/tasks/${encodeURIComponent(id)}/changes?round=${round}`,
+    (json) => {
+      const data = (json as { data?: Partial<ChangesSummary> } | null)?.data;
+      return data && typeof data.round === "number" && Array.isArray(data.files)
+        ? (data as ChangesSummary)
+        : null;
+    }
+  );
+
+/** One file's diff payload; binary/oversized responses still validate. */
+export const getTaskChange = (id: string, round: number, index: number) =>
+  reqWithStatus<ChangeDetail>(
+    `/tasks/${encodeURIComponent(id)}/changes/${round}/${index}`,
+    (json) => {
+      const data = (json as { data?: Partial<ChangeDetail> } | null)?.data;
+      return data && typeof data.path === "string" && Array.isArray(data.hunks)
+        ? (data as ChangeDetail)
+        : null;
+    }
+  );
 
 /** Raised when the trace endpoint is unreachable / the file is missing. */
 export class TraceFetchError extends Error {

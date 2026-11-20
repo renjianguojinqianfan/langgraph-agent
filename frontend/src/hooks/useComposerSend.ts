@@ -50,7 +50,10 @@ export function useComposerSend({
 
   const onSubmit = useCallback(async () => {
     const input = text.trim();
-    if (!input || busy || view.inputDisabled) return;
+    // `canSend` carries the busy / loading / PENDING / RUNNING guards. Enter
+    // and the button share this path, so a running task can be typed into but
+    // never receives a second message mid-round (#342).
+    if (!input || !view.canSend) return;
     setBusy(true);
     setSendError(null);
     try {
@@ -91,7 +94,7 @@ export function useComposerSend({
   }, [
     text,
     busy,
-    view.inputDisabled,
+    view.canSend,
     view.parked,
     task,
     draftMode,

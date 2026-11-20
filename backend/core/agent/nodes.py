@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ...services import plan_file
 from ...services.plan_file import extract_plan, plan_hash, write_plan
@@ -31,7 +31,11 @@ from ..capability_packages import (
     injection_fragments as resolve_injection_fragments,
 )
 from ..llm.trace import llm_call_scope
-from ..runtime_context import workspace_root
+from ..runtime_context import (
+    reset_current_round,
+    set_current_round,
+    workspace_root,
+)
 from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
@@ -39,6 +43,10 @@ from .host import AgentHost
 from .policy import DangerPolicy
 from .prompts import EXECUTOR_SYSTEM, planner_system
 from .state import AgentState
+
+if TYPE_CHECKING:  # capture seam; the store lives in services and must not be
+    # imported by the graph's hot path for typing only.
+    from ...services.changes import ChangesRecorder
 
 logger = get_logger("agent.runtime")
 
@@ -132,6 +140,7 @@ class AgentRuntime:
         injection_fragments: Optional[frozenset[str]] = None,
         trace_source: str = "main",
         trace_owner: Optional[str] = None,
+        changes: Optional["ChangesRecorder"] = None,
     ) -> None:
         self.task_id = task_id
         self.parent_task_id = parent_task_id
@@ -150,6 +159,9 @@ class AgentRuntime:
         self._stop_watch_ids = [task_id] + ([parent_task_id] if parent_task_id else [])
         self.tm = task_manager
         self.llm = llm
+        #: #343: captures successful write/edit results per round. Optional so
+        #: every existing AgentHost test double keeps working unchanged.
+        self.changes = changes
         self.tools: Dict[str, BaseTool] = {t.name: t for t in tools}
         self.tool_schemas = tool_schemas
         # #139: plan mode gets the declared read-only tier (`explore`), not a
@@ -813,11 +825,38 @@ class AgentRuntime:
                 continue
 
             try:
-                result: ToolResult = tool.run(**rec["input"])
+                # #343: snapshot the before side only for a real write/edit
+                # dispatch; blocked and unknown tools never reach this line.
+                pending = (
+                    self.changes.begin(
+                        int(state.get("round_no", 1) or 1),
+                        rec["tool_name"],
+                        rec.get("input") or {},
+                        str(rec.get("id") or ""),
+                    )
+                    if self.changes is not None
+                    else None
+                )
+                # #343 review fix: a tool that spawns a sub-agent must hand the
+                # parent round across the pool (spec §5.1 attribution) — the
+                # subtask's own state round is always 1.
+                round_token = set_current_round(
+                    int(state.get("round_no", 1) or 1)
+                )
+                try:
+                    result: ToolResult = tool.run(**rec["input"])
+                finally:
+                    reset_current_round(round_token)
             except Exception as exc:  # final safety net
                 message = self._redact(str(exc))
                 logger.error("tool %s crashed: %s", rec["tool_name"], message)
                 result = ToolResult(success=False, error=message)
+                pending = None
+
+            # Capture only a successful write/edit. A failed call leaves no
+            # record at all (the store is never told a failed touch happened).
+            if pending is not None and result.success and self.changes is not None:
+                self.changes.commit(pending)
 
             # Dispatch used the raw args; the record (SSE / trace / steps) keeps
             # only the redacted copy.

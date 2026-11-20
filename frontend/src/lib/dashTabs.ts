@@ -1,7 +1,14 @@
-/** Right-column tab vocabulary: three fixed panes plus one tab per opened file. */
-export type DashTab = "files" | "plan" | "events" | `file:${string}`;
+/** Right-column tab vocabulary: three fixed panes plus one tab per opened file
+ * and one review tab per opened ``(task, round)`` change set (#343). */
+export type DashTab =
+  | "files"
+  | "plan"
+  | "events"
+  | `file:${string}`
+  | `change:${string}`;
 
 const FILE_PREFIX = "file:";
+const CHANGE_PREFIX = "change:";
 
 export function fileTabId(path: string): DashTab {
   return `${FILE_PREFIX}${path}`;
@@ -34,6 +41,49 @@ export function openFileTab(opened: readonly string[], path: string): string[] {
 
 export function closeFileTab(opened: readonly string[], path: string): string[] {
   return opened.filter((open) => open !== path);
+}
+
+export interface ChangeTabRef {
+  taskId: string;
+  round: number;
+}
+
+/** One review tab per (task, round); the id itself carries the identity. */
+export function changeTabId(taskId: string, round: number): DashTab {
+  return `${CHANGE_PREFIX}${taskId}:${round}`;
+}
+
+export function changeTabRef(tab: string): ChangeTabRef | null {
+  if (!tab.startsWith(CHANGE_PREFIX)) return null;
+  const body = tab.slice(CHANGE_PREFIX.length);
+  const separator = body.lastIndexOf(":");
+  if (separator <= 0) return null;
+  const round = Number(body.slice(separator + 1));
+  if (!Number.isInteger(round) || round < 1) return null;
+  return { taskId: body.slice(0, separator), round };
+}
+
+/** Open a review tab once; the same (task, round) only re-activates it. */
+export function openChangeTab(opened: readonly number[], round: number): number[] {
+  return opened.includes(round) ? [...opened] : [...opened, round];
+}
+
+export function closeChangeTab(opened: readonly number[], round: number): number[] {
+  return opened.filter((open) => open !== round);
+}
+
+/** Focus after closing a review tab: left neighbour, right neighbour, files. */
+export function tabAfterClosingChange(
+  opened: readonly number[],
+  round: number,
+  active: DashTab,
+  taskId: string
+): DashTab {
+  const index = opened.indexOf(round);
+  if (index < 0 || active !== changeTabId(taskId, round)) return active;
+  const remaining = opened.filter((item) => item !== round);
+  const next = remaining[index - 1] ?? remaining[index];
+  return next === undefined ? "files" : changeTabId(taskId, next);
 }
 
 /**

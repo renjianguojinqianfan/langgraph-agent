@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  changeTabId,
+  changeTabRef,
   closeFileTab,
   fileTabId,
   fileTabLabel,
   fileTabPath,
+  openChangeTab,
   openFileTab,
   tabAfterClosing,
+  tabAfterClosingChange,
 } from "./dashTabs";
 
 describe("file tab ids", () => {
@@ -65,5 +69,30 @@ describe("closeFileTab / tabAfterClosing", () => {
     expect(tabAfterClosing(opened, "a.txt", fileTabId("b.txt"))).toBe(
       fileTabId("b.txt")
     );
+  });
+});
+
+describe("change review tab ids", () => {
+  it("round-trips (task, round) and never collides with a file tab", () => {
+    const tab = changeTabId("task-1", 2);
+    expect(tab).toBe("change:task-1:2");
+    expect(changeTabRef(tab)).toEqual({ taskId: "task-1", round: 2 });
+    expect(changeTabRef("file:a.ts")).toBeNull();
+    expect(changeTabRef("changes")).toBeNull();
+  });
+
+  it("reuses one tab per (task, round) and keeps creation order", () => {
+    const opened = openChangeTab([], 1);
+    expect(opened).toEqual([1]);
+    expect(openChangeTab(opened, 1)).toEqual([1]);
+    expect(openChangeTab(opened, 2)).toEqual([1, 2]);
+  });
+
+  it("closing the active review tab picks a neighbour or the file list", () => {
+    expect(tabAfterClosingChange([1, 2], 2, changeTabId("t", 2), "t")).toBe(
+      changeTabId("t", 1)
+    );
+    expect(tabAfterClosingChange([1], 1, changeTabId("t", 1), "t")).toBe("files");
+    expect(tabAfterClosingChange([1, 2], 1, "plan", "t")).toBe("plan");
   });
 });
