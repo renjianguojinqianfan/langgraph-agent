@@ -157,6 +157,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | POST | `/api/tasks` | 下发新任务（默认 build 模式） | `{title?, input, mode?, workspace?, model?}` | `{task_id}`；空 `input` → 400 / 落盘失败 → 500（`{detail}`） |
 | GET | `/api/tasks` | 历史任务列表 | `?limit=50&dir=current\|<path>\|all` | `{tasks: Task[]}` |
 | GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
+| GET | `/api/skills` | 技能目录（#345；只读，复用 home / workspace 两层发现，不返回文件系统路径；同名技能两层各一行，由前端按 name 合并） | `?task_id=<id>` 或 `?workspace=<路径>`（都缺省 = 后台启动目录；同时给出时 `task_id` 优先） | `{enabled, skills:[{name,description,layer}]}`；`skills` 能力包关闭 → `enabled:false` 且 `skills:[]`；空技能目录 → `enabled:true, skills:[]`；未知任务 → 404 / 非法或不存在工作区 → 400 / 未认证 → 401 |
 | DELETE | `/api/tasks` | 删除某目录下全部任务历史（#241；`dir` 必填，不提供「全部」） | `?dir=<路径>` | `{deleted}`；400 / 任一运行中 → 409（不删）/ 落盘失败 → 500（整批回滚） |
 | DELETE | `/api/tasks/{id}` | 删除任务历史：记录 + checkpoint + trace + 本轮变更 sidecar（不改磁盘文件；任务名下后台进程一并终止，#241） | — | `{ok, cleanup:{checkpoint,trace,changes}}`；404 / 运行中 → 409 / 落盘失败 → 500（不清理） |
 | GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |

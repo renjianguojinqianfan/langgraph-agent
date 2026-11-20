@@ -26,6 +26,7 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from ..core.agent.inject import discover_skills
 from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
@@ -156,6 +157,53 @@ def validate_workspace_path(
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"not a directory: {normalized}")
     return _envelope(data={"path": normalized})
+
+
+@router.get("/skills")
+def list_skills(
+    request: Request,
+    task_id: str = "",
+    workspace: str = "",
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """The read-only skill catalogue for the `/` menu (#345).
+
+    Existing tasks resolve through ``task_id``; a new task passes the page's
+    ``workspace``; neither means the backend's launch directory. The response
+    carries no filesystem path — only the two-layer frontmatter facts.
+    """
+    manager = _tm(request)
+    if task_id:
+        task = manager.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        root = Path(task.workspace)
+    elif workspace.strip():
+        try:
+            root = Path(normalize_workspace(workspace))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+    else:
+        root = Path(manager.default_workspace)
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="workspace does not exist")
+
+    if "skills" not in manager.packages:
+        return _envelope(data={"enabled": False, "skills": []})
+    entries = discover_skills(Path.home(), root)
+    return _envelope(
+        data={
+            "enabled": True,
+            "skills": [
+                {
+                    "name": entry.name,
+                    "description": entry.description,
+                    "layer": entry.layer,
+                }
+                for entry in entries
+            ],
+        }
+    )
 
 
 @router.delete("/tasks")
