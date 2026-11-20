@@ -9,7 +9,6 @@ import {
   createPreviewGate,
   diffMode,
   diffPrefix,
-  diffTone,
   flattenHunks,
   hiddenChangeCount,
   reviewKey,
@@ -126,10 +125,7 @@ describe("flattenHunks", () => {
 });
 
 describe("diff row semantics", () => {
-  it("names the tone and unified marker once for both diff surfaces", () => {
-    expect(diffTone("add")).toBe("add");
-    expect(diffTone("delete")).toBe("delete");
-    expect(diffTone("context")).toBe("context");
+  it("names the unified marker once for both diff surfaces", () => {
     expect(diffPrefix("add")).toBe("+");
     expect(diffPrefix("delete")).toBe("-");
     expect(diffPrefix("context")).toBe(" ");

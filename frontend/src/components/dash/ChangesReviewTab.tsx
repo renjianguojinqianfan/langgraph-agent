@@ -1,23 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { getTaskChange, getTaskChanges } from "../../api/client";
 import {
   changeStatusLabel,
   changesFailure,
   diffMode,
-  diffPrefix,
-  diffTone,
-  flattenHunks,
   hasDiffBody,
   reviewKey,
   reviewedCount,
   reviewedText,
-  splitRows,
   type DiffMode,
-  type DiffTone,
 } from "../../lib/changes";
 import { useChangesReviewStore } from "../../store/changesReviewStore";
 import type { ChangeDetail, ChangeFileEntry, ChangesSummary } from "../../types";
 import { Button } from "../ui/Button";
+import { DiffView } from "./DiffView";
 import { FileDownloadLink } from "./FileDownloadLink";
 
 interface ChangesReviewTabProps {
@@ -46,23 +42,14 @@ type DetailState =
 
 const EMPTY: string[] = [];
 
-const TEXT_TONE: Record<DiffTone, string> = {
-  add: "text-state-ok",
-  delete: "text-state-danger",
-  context: "text-secondary",
-};
-
-const SIGN_TONE: Record<DiffTone, string> = {
-  add: "text-state-ok",
-  delete: "text-state-danger",
-  context: "text-tertiary",
-};
-
-const SPLIT_TONE: Record<DiffTone, string> = {
-  add: "text-state-ok",
-  delete: "text-state-danger",
-  context: "text-tertiary",
-};
+function detailNote(detail: ChangeDetail): string | null {
+  if (detail.binary) return "二进制文件：不显示内容与差异，可下载查看。";
+  if (detail.oversized) {
+    return "文件过大（或整轮超出上限）：不存内容、不计算差异，可下载查看。";
+  }
+  if (!hasDiffBody(detail)) return "没有可显示的差异。";
+  return null;
+}
 
 function EmptyHint({ text }: { text: string }) {
   return <p className="px-1 text-meta text-tertiary">{text}</p>;
@@ -130,11 +117,7 @@ export function ChangesReviewTab({
   }, [taskId, round, selectedKey, load, reload]);
 
   const detail = detailState.phase === "ready" ? detailState.detail : null;
-  const rows = useMemo(
-    () => (detail && hasDiffBody(detail) ? flattenHunks(detail.hunks) : []),
-    [detail]
-  );
-  const split = useMemo(() => splitRows(rows), [rows]);
+  const note = detail ? detailNote(detail) : null;
 
   if (summaryState.phase === "loading") {
     return <EmptyHint text="正在读取本轮变更…" />;
@@ -288,13 +271,9 @@ export function ChangesReviewTab({
 
       {detail && (
         <>
-          {(detail.binary || detail.oversized || !hasDiffBody(detail)) && (
+          {note && (
             <p className="rounded-well border border-rule bg-surface-well px-3 py-2 text-meta text-tertiary">
-              {detail.binary
-                ? "二进制文件：不显示内容与差异，可下载查看。"
-                : detail.oversized
-                  ? "文件过大（或整轮超出上限）：不存内容、不计算差异，可下载查看。"
-                  : "没有可显示的差异。"}
+              {note}
             </p>
           )}
 
@@ -305,78 +284,8 @@ export function ChangesReviewTab({
             <p className="text-meta text-state-warn">已截断：只显示前 2000 行差异。</p>
           )}
 
-          {hasDiffBody(detail) && effectiveMode === "unified" && (
-            <div className="min-h-0 overflow-auto rounded-well bg-surface-well font-mono text-code">
-              <div className={wrap ? "min-w-0" : "min-w-max"}>
-                {rows.map((row, i) => {
-                  const tone = diffTone(row.kind);
-                  return (
-                    <div
-                      key={i}
-                      className="grid grid-cols-[3rem_3rem_1.25rem_minmax(0,1fr)] gap-x-1 px-2"
-                    >
-                      <span className="select-none text-right tabular-nums text-tertiary">
-                        {row.oldLine ?? ""}
-                      </span>
-                      <span className="select-none text-right tabular-nums text-tertiary">
-                        {row.newLine ?? ""}
-                      </span>
-                      <span aria-hidden="true" className={SIGN_TONE[tone]}>
-                        {diffPrefix(tone)}
-                      </span>
-                      <span
-                        className={
-                          (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
-                          TEXT_TONE[tone]
-                        }
-                      >
-                        {row.text || " "}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {hasDiffBody(detail) && effectiveMode === "split" && (
-            <div className="min-h-0 overflow-auto rounded-well bg-surface-well font-mono text-code">
-              <div className={wrap ? "min-w-[36rem]" : "min-w-[44rem]"}>
-                {split.map((row, i) => {
-                  const oldTone: DiffTone = row.oldText === null ? "context" : "delete";
-                  const newTone: DiffTone = row.newText === null ? "context" : "add";
-                  return (
-                    <div
-                      key={i}
-                      className="grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem_minmax(0,1fr)] gap-x-1 px-2"
-                    >
-                      <span className="select-none text-right tabular-nums text-tertiary">
-                        {row.oldLine ?? ""}
-                      </span>
-                      <span
-                        className={
-                          (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
-                          SPLIT_TONE[oldTone]
-                        }
-                      >
-                        {row.oldText ?? " "}
-                      </span>
-                      <span className="select-none text-right tabular-nums text-tertiary">
-                        {row.newLine ?? ""}
-                      </span>
-                      <span
-                        className={
-                          (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
-                          SPLIT_TONE[newTone]
-                        }
-                      >
-                        {row.newText ?? " "}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+          {hasDiffBody(detail) && (
+            <DiffView detail={detail} mode={effectiveMode} wrap={wrap} />
           )}
         </>
       )}

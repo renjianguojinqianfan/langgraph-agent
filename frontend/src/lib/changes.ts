@@ -134,16 +134,19 @@ export function flattenHunks(hunks: readonly DiffHunk[]): DiffRow[] {
   return rows;
 }
 
-export type DiffTone = "add" | "delete" | "context";
+/** The flattened row kind is the semantic tone; components own the classes. */
+export type DiffKind = DiffRow["kind"];
 
-/** Semantic tone of one flattened diff row; components own the class names. */
-export function diffTone(kind: DiffRow["kind"]): DiffTone {
-  return kind;
-}
-
-/** The unified-view marker for a tone (the split view has no marker column). */
-export function diffPrefix(tone: DiffTone): string {
-  return tone === "add" ? "+" : tone === "delete" ? "-" : " ";
+/** The unified-view marker (the split view has no marker column). */
+export function diffPrefix(kind: DiffKind): string {
+  switch (kind) {
+    case "add":
+      return "+";
+    case "delete":
+      return "-";
+    default:
+      return " ";
+  }
 }
 
 /**
@@ -202,8 +205,16 @@ export function splitRows(rows: readonly DiffRow[]): SplitRow[] {
     for (let j = 0; j < length; j += 1) {
       const del = deletes[j];
       const add = adds[j];
+      let kind: SplitRow["kind"];
+      if (del && add) {
+        kind = "change";
+      } else if (del) {
+        kind = "delete";
+      } else {
+        kind = "add";
+      }
       split.push({
-        kind: del && add ? "change" : del ? "delete" : "add",
+        kind,
         oldLine: del?.oldLine ?? null,
         newLine: add?.newLine ?? null,
         oldText: del?.text ?? null,

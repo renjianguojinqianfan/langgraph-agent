@@ -16,7 +16,10 @@ import {
 import { requestTaskRail } from "../../lib/railEvents";
 import { insertSkillReference, skillGroupView } from "../../lib/skillCatalog";
 import {
+  buildMenuEntries,
   firstEnabledIndex,
+  menuEntryDescendantId,
+  menuEntryEnabled,
   moveSelection,
   removeCommandToken,
   slashCommandItems,
@@ -188,31 +191,17 @@ export function Composer() {
   const skillGroup = skillGroupView(skillCatalog, slashQuery);
   const skillItems = slashOpen ? skillGroup.items : [];
   const skillRetry = slashOpen && skillGroup.canRetry;
-  const entryCount = slash.items.length + skillItems.length + (skillRetry ? 1 : 0);
+  // One keyboard list: commands, then skills, then the retry row.
+  const menuEntries = buildMenuEntries(slash.items, skillItems, skillRetry);
+  const entryCount = menuEntries.length;
   const activeIndex =
     slashOpen && entryCount > 0
       ? Math.min(Math.max(selected, 0), entryCount - 1)
       : -1;
-  const activeCommand =
-    activeIndex >= 0 && activeIndex < slash.items.length
-      ? slash.items[activeIndex]
-      : undefined;
-  const activeSkillIndex = activeIndex - slash.items.length;
-  const activeSkill =
-    activeIndex >= slash.items.length &&
-    activeSkillIndex >= 0 &&
-    activeSkillIndex < skillItems.length
-      ? skillItems[activeSkillIndex]
-      : undefined;
-  const activeRetry =
-    skillRetry && activeIndex === slash.items.length + skillItems.length;
-  const activeDescendant = activeCommand
-    ? `${SLASH_MENU_ID}-${activeCommand.id}`
-    : activeSkill
-      ? `${SLASH_MENU_ID}-skill-${activeSkillIndex}`
-      : activeRetry
-        ? `${SLASH_MENU_ID}-skills-retry`
-        : undefined;
+  const activeEntry = activeIndex >= 0 ? menuEntries[activeIndex] : null;
+  const activeDescendant = activeEntry
+    ? menuEntryDescendantId(activeEntry, SLASH_MENU_ID)
+    : undefined;
   const helpItems = slashCommandItems("", slashContext);
   const bottomNote = view.bottomNote ?? commandNote;
 
@@ -222,11 +211,9 @@ export function Composer() {
   useEffect(() => {
     if (!slashOpen) return;
     setSelected(
-      firstEnabledIndex([
-        ...slash.items,
-        ...skillItems,
-        ...(skillRetry ? [{ enabled: true }] : []),
-      ])
+      firstEnabledIndex(
+        menuEntries.map((entry) => ({ enabled: menuEntryEnabled(entry) }))
+      )
     );
   }, [slashOpen, slashQuery, skillGroup.status, skillItems.length, skillRetry]);
 
@@ -509,9 +496,13 @@ export function Composer() {
                   // is a no-op so its reason stays readable; a no-match menu
                   // falls through and Enter sends the text normally.
                   e.preventDefault();
-                  if (activeCommand?.enabled) executeCommand(activeCommand.id);
-                  else if (activeSkill) executeSkill(activeSkill.name);
-                  else if (activeRetry) reloadSkills();
+                  if (activeEntry?.kind === "command") {
+                    if (activeEntry.enabled) executeCommand(activeEntry.id);
+                  } else if (activeEntry?.kind === "skill") {
+                    executeSkill(activeEntry.name);
+                  } else if (activeEntry?.kind === "retry") {
+                    reloadSkills();
+                  }
                   return;
                 }
               }

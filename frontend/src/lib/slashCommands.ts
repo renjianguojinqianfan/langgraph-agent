@@ -53,6 +53,45 @@ export interface SlashMenuState {
   items: SlashCommandItem[];
 }
 
+/** One row of the combined `/` keyboard list. */
+export type MenuEntry =
+  | { kind: "command"; id: SlashCommandId; enabled: boolean }
+  | { kind: "skill"; name: string; index: number }
+  | { kind: "retry" };
+
+/** Commands, then skills, then the optional skill-retry row. */
+export function buildMenuEntries(
+  commands: ReadonlyArray<Pick<SlashCommandItem, "id" | "enabled">>,
+  skills: ReadonlyArray<{ name: string }>,
+  retry: boolean
+): MenuEntry[] {
+  const entries: MenuEntry[] = commands.map((command) => ({
+    kind: "command",
+    id: command.id,
+    enabled: command.enabled,
+  }));
+  skills.forEach((skill, index) => {
+    entries.push({ kind: "skill", name: skill.name, index });
+  });
+  if (retry) entries.push({ kind: "retry" });
+  return entries;
+}
+
+export function menuEntryEnabled(entry: MenuEntry): boolean {
+  return entry.kind !== "command" || entry.enabled;
+}
+
+export function menuEntryDescendantId(entry: MenuEntry, prefix: string): string {
+  switch (entry.kind) {
+    case "command":
+      return `${prefix}-${entry.id}`;
+    case "skill":
+      return `${prefix}-skill-${entry.index}`;
+    case "retry":
+      return `${prefix}-skills-retry`;
+  }
+}
+
 const COMMANDS: ReadonlyArray<Omit<SlashCommandItem, "label" | "enabled" | "reason">> = [
   { id: "new", name: "new", description: "新建任务并清空输入" },
   { id: "stop", name: "stop", description: "停止当前运行中的任务" },

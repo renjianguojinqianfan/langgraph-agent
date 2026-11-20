@@ -156,9 +156,12 @@ export function FileTree({
       : "工作区还没有文件。任务写下文件后会出现在这里。";
   // #258 终审: a non-empty note wins on every face (rows included) so a failed
   // poll over an already-loaded list still shows the reason + retry.
-  const statusText =
-    filesPaneStatusText(state, note ?? "") ||
-    (state === "loading" ? "加载中…" : state === "empty" ? emptyCopy : "");
+  let statusText = filesPaneStatusText(state, note ?? "");
+  if (!statusText && state === "loading") {
+    statusText = "加载中…";
+  } else if (!statusText && state === "empty") {
+    statusText = emptyCopy;
+  }
   const filtered = query.trim().length > 0;
 
   const activate = (row: FileTreeRow) => {

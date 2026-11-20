@@ -6,9 +6,8 @@ import {
   changeStatusLabel,
   createPreviewGate,
   diffPrefix,
-  diffTone,
   flattenHunks,
-  type DiffTone,
+  type DiffKind,
 } from "../../lib/changes";
 import type { ChangeDetail, ChangesSummary } from "../../types";
 
@@ -27,7 +26,7 @@ type State =
 const PREVIEW_LINES = 14;
 const HOVER_DELAY_MS = 500;
 
-const PREVIEW_TONE: Record<DiffTone, string> = {
+const PREVIEW_TONE: Record<DiffKind, string> = {
   add: "text-state-ok",
   delete: "text-state-danger",
   context: "text-tertiary",
@@ -164,15 +163,15 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
                   </p>
                 ) : (
                   <div className="overflow-hidden font-mono text-code">
-                    {previewRows.slice(0, PREVIEW_LINES).map((row, i) => {
-                      const tone = diffTone(row.kind);
-                      return (
-                        <div key={i} className={`whitespace-pre ${PREVIEW_TONE[tone]}`}>
-                          {diffPrefix(tone)}
-                          {row.text}
-                        </div>
-                      );
-                    })}
+                    {previewRows.slice(0, PREVIEW_LINES).map((row, i) => (
+                      <div
+                        key={i}
+                        className={`whitespace-pre ${PREVIEW_TONE[row.kind]}`}
+                      >
+                        {diffPrefix(row.kind)}
+                        {row.text}
+                      </div>
+                    ))}
                     {previewRows.length > PREVIEW_LINES && (
                       <p className="pt-1 text-meta text-tertiary">预览已截断</p>
                     )}

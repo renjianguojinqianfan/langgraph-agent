@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Task, TaskMode, TaskStatus } from "../types";
 import {
+  buildMenuEntries,
   firstEnabledIndex,
+  menuEntryDescendantId,
+  menuEntryEnabled,
   moveSelection,
   removeCommandToken,
   slashMenuState,
@@ -270,5 +273,39 @@ describe("removeCommandToken (#342: execute clears the token, keeps the draft)",
     expect(
       removeCommandToken("/newx", slashTokenAt("/newx", 4)!)
     ).toBe("");
+  });
+});
+
+describe("combined menu entries", () => {
+  const commands = [
+    { id: "new" as const, enabled: true },
+    { id: "stop" as const, enabled: false },
+  ];
+  const skills = [{ name: "alpha" }, { name: "beta" }];
+
+  it("keeps commands, then skills, then the retry row", () => {
+    expect(buildMenuEntries(commands, skills, true)).toEqual([
+      { kind: "command", id: "new", enabled: true },
+      { kind: "command", id: "stop", enabled: false },
+      { kind: "skill", name: "alpha", index: 0 },
+      { kind: "skill", name: "beta", index: 1 },
+      { kind: "retry" },
+    ]);
+  });
+
+  it("marks only disabled commands as unavailable", () => {
+    const entries = buildMenuEntries(commands, skills, false);
+    expect(entries.map(menuEntryEnabled)).toEqual([true, false, true, true]);
+  });
+
+  it("derives one activedescendant id per entry kind", () => {
+    const entries = buildMenuEntries(commands, skills, true);
+    expect(entries.map((entry) => menuEntryDescendantId(entry, "menu"))).toEqual([
+      "menu-new",
+      "menu-stop",
+      "menu-skill-0",
+      "menu-skill-1",
+      "menu-skills-retry",
+    ]);
   });
 });
