@@ -28,6 +28,7 @@ import {
 } from "../lib/failureStates";
 import { isParked } from "../lib/taskState";
 import { shouldRefetchParked } from "../lib/requestPlan";
+import { OPEN_TASK_RAIL_EVENT } from "../lib/railEvents";
 
 export function TaskView() {
   const currentTaskId = useTaskStore((s) => s.currentTaskId);
@@ -106,6 +107,16 @@ export function TaskView() {
   useEffect(() => {
     if (view.closeOnWiden || view.closeForTrace) setOpen(null);
   }, [view.closeOnWiden, view.closeForTrace]);
+
+  // #342: `/tasks` asks for the rail from inside the composer. Wide screens
+  // already show it statically; only the drawer needs opening.
+  useEffect(() => {
+    const openRail = () => {
+      if (isLeftDrawer) setOpen("left");
+    };
+    window.addEventListener(OPEN_TASK_RAIL_EVENT, openRail);
+    return () => window.removeEventListener(OPEN_TASK_RAIL_EVENT, openRail);
+  }, [isLeftDrawer]);
 
   useEffect(() => {
     refreshModels();
