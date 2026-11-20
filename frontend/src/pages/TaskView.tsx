@@ -467,6 +467,7 @@ export function TaskView() {
           changeTabs={dash.changes}
           changeSelection={dash.changePaths}
           visible={!dashInert}
+          rowRef={dashRef}
           onTabChange={changeTab}
           onOpenFile={openFile}
           onCloseFile={closeFile}
