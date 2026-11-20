@@ -84,6 +84,14 @@ export function FileTree({
       ? focusPath
       : rows[0]?.path;
 
+  // #341: a different task starts from a clean tree, including the roving tab
+  // stop. Expansion/filter are reset by the host that owns them.
+  useEffect(() => {
+    setFocusPath(null);
+    setFocusRequest(null);
+    pendingEntry.current = false;
+  }, [taskId]);
+
   useEffect(() => {
     if (focusRequest === null) return;
     rowRefs.current.get(focusRequest)?.focus();
