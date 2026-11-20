@@ -103,7 +103,7 @@ export function SlashCommandMenu({
                 id={`${id}-skill-${index}`}
                 role="option"
                 aria-selected={row === activeIndex}
-                title={`${item.description || item.name} · ${item.layerLabel}`}
+                title={`${item.name}${item.description ? ` · ${item.description}` : ""} · ${item.layerLabel}`}
                 onMouseEnter={() => onHighlight(row)}
                 onClick={() => onPickSkill(item.name)}
                 className={cx(
@@ -111,7 +111,7 @@ export function SlashCommandMenu({
                   row === activeIndex && "bg-surface-hover"
                 )}
               >
-                <span className="shrink-0 font-mono text-machine text-primary">
+                <span className="min-w-0 max-w-[45%] shrink truncate font-mono text-machine text-primary">
                   {item.name}
                 </span>
                 <span className="min-w-0 flex-1">

@@ -31,7 +31,11 @@ from ..capability_packages import (
     injection_fragments as resolve_injection_fragments,
 )
 from ..llm.trace import llm_call_scope
-from ..runtime_context import workspace_root
+from ..runtime_context import (
+    reset_current_round,
+    set_current_round,
+    workspace_root,
+)
 from ..tools.base import BaseTool, ToolResult
 from . import inject
 from .context import compress_messages, evict_tool_results
@@ -833,7 +837,16 @@ class AgentRuntime:
                     if self.changes is not None
                     else None
                 )
-                result: ToolResult = tool.run(**rec["input"])
+                # #343 review fix: a tool that spawns a sub-agent must hand the
+                # parent round across the pool (spec §5.1 attribution) — the
+                # subtask's own state round is always 1.
+                round_token = set_current_round(
+                    int(state.get("round_no", 1) or 1)
+                )
+                try:
+                    result: ToolResult = tool.run(**rec["input"])
+                finally:
+                    reset_current_round(round_token)
             except Exception as exc:  # final safety net
                 message = self._redact(str(exc))
                 logger.error("tool %s crashed: %s", rec["tool_name"], message)

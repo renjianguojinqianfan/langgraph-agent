@@ -256,13 +256,20 @@ class TaskManager:
                 if (owner := package_for_tool(tool.name)) is None
                 or owner in self.packages
             ]
+        #: #343: per-round write/edit sidecars. One store per manager; tests can
+        #: read it directly (the HTTP face goes through the routes). Built before
+        #: the subagent executor so a spawned subtask records on the parent task
+        #: and its triggering round (spec §5.1 attribution).
+        self.changes = ChangesStore(settings)
         # D-56: the sub-agent face is derived from the package face (the legacy
         # subagent_enabled switch stays as an extra gate for existing configs).
         self._subagent_enabled = (
             subagent_package_enabled(self.packages) and settings.subagent_enabled
         )
         self._subagent = (
-            SubAgentExecutor(self, settings) if self._subagent_enabled else None
+            SubAgentExecutor(self, settings, self.changes)
+            if self._subagent_enabled
+            else None
         )
         # P2 item 1: connect MCP servers and append their tools (startup once).
         self._mcp: Optional[McpClientManager] = None
@@ -304,9 +311,6 @@ class TaskManager:
         )
         # P0 item 4: resident trace recorder (EventBus subscriber).
         self._trace: Optional[TraceRecorder] = TraceRecorder(settings) if settings.trace_enabled else None
-        #: #343: per-round write/edit sidecars. One store per manager; tests can
-        #: read it directly (the HTTP face goes through the routes).
-        self.changes = ChangesStore(settings)
 
         self._lock = threading.Lock()
         self._active_states: Dict[str, AgentState] = {}

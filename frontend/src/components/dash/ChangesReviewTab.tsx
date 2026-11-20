@@ -4,6 +4,8 @@ import {
   changeStatusLabel,
   changesFailure,
   diffMode,
+  diffPrefix,
+  diffTone,
   flattenHunks,
   hasDiffBody,
   reviewKey,
@@ -11,6 +13,7 @@ import {
   reviewedText,
   splitRows,
   type DiffMode,
+  type DiffTone,
 } from "../../lib/changes";
 import { useChangesReviewStore } from "../../store/changesReviewStore";
 import type { ChangeDetail, ChangeFileEntry, ChangesSummary } from "../../types";
@@ -42,6 +45,24 @@ type DetailState =
   | { phase: "failed"; status: number; detail: string };
 
 const EMPTY: string[] = [];
+
+const TEXT_TONE: Record<DiffTone, string> = {
+  add: "text-state-ok",
+  delete: "text-state-danger",
+  context: "text-secondary",
+};
+
+const SIGN_TONE: Record<DiffTone, string> = {
+  add: "text-state-ok",
+  delete: "text-state-danger",
+  context: "text-tertiary",
+};
+
+const SPLIT_TONE: Record<DiffTone, string> = {
+  add: "text-state-ok",
+  delete: "text-state-danger",
+  context: "text-tertiary",
+};
 
 function EmptyHint({ text }: { text: string }) {
   return <p className="px-1 text-meta text-tertiary">{text}</p>;
@@ -178,13 +199,15 @@ export function ChangesReviewTab({
                   : "flex min-w-0 items-center gap-2 px-2 py-1"
               }
             >
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={() => toggle(key, file.path)}
-                aria-label={`标记 ${file.path} 已审阅`}
-                className="shrink-0 accent-signal-now"
-              />
+              <label className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center [touch-action:manipulation]">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(key, file.path)}
+                  aria-label={`标记 ${file.path} 已审阅`}
+                  className="accent-signal-now"
+                />
+              </label>
               <button
                 type="button"
                 onClick={() => onSelectFile(file.path)}
@@ -285,50 +308,33 @@ export function ChangesReviewTab({
           {hasDiffBody(detail) && effectiveMode === "unified" && (
             <div className="min-h-0 overflow-auto rounded-well bg-surface-well font-mono text-code">
               <div className={wrap ? "min-w-0" : "min-w-max"}>
-                {rows.map((row, i) => (
-                  <div
-                    key={i}
-                    className="grid grid-cols-[3rem_3rem_1.25rem_minmax(0,1fr)] gap-x-1 px-2"
-                  >
-                    <span className="select-none text-right tabular-nums text-tertiary">
-                      {row.oldLine ?? ""}
-                    </span>
-                    <span className="select-none text-right tabular-nums text-tertiary">
-                      {row.newLine ?? ""}
-                    </span>
-                    <span
-                      aria-hidden="true"
-                      className={
-                        row.kind === "add"
-                          ? "text-state-ok"
-                          : row.kind === "delete"
-                            ? "text-state-danger"
-                            : "text-tertiary"
-                      }
+                {rows.map((row, i) => {
+                  const tone = diffTone(row.kind);
+                  return (
+                    <div
+                      key={i}
+                      className="grid grid-cols-[3rem_3rem_1.25rem_minmax(0,1fr)] gap-x-1 px-2"
                     >
-                      {row.kind === "add" ? "+" : row.kind === "delete" ? "-" : " "}
-                    </span>
-                    <span
-                      className={
-                        wrap
-                          ? "whitespace-pre-wrap break-words " +
-                            (row.kind === "add"
-                              ? "text-state-ok"
-                              : row.kind === "delete"
-                                ? "text-state-danger"
-                                : "text-secondary")
-                          : "whitespace-pre " +
-                            (row.kind === "add"
-                              ? "text-state-ok"
-                              : row.kind === "delete"
-                                ? "text-state-danger"
-                                : "text-secondary")
-                      }
-                    >
-                      {row.text || " "}
-                    </span>
-                  </div>
-                ))}
+                      <span className="select-none text-right tabular-nums text-tertiary">
+                        {row.oldLine ?? ""}
+                      </span>
+                      <span className="select-none text-right tabular-nums text-tertiary">
+                        {row.newLine ?? ""}
+                      </span>
+                      <span aria-hidden="true" className={SIGN_TONE[tone]}>
+                        {diffPrefix(tone)}
+                      </span>
+                      <span
+                        className={
+                          (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
+                          TEXT_TONE[tone]
+                        }
+                      >
+                        {row.text || " "}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -336,35 +342,39 @@ export function ChangesReviewTab({
           {hasDiffBody(detail) && effectiveMode === "split" && (
             <div className="min-h-0 overflow-auto rounded-well bg-surface-well font-mono text-code">
               <div className={wrap ? "min-w-[36rem]" : "min-w-[44rem]"}>
-                {split.map((row, i) => (
-                  <div
-                    key={i}
-                    className="grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem_minmax(0,1fr)] gap-x-1 px-2"
-                  >
-                    <span className="select-none text-right tabular-nums text-tertiary">
-                      {row.oldLine ?? ""}
-                    </span>
-                    <span
-                      className={
-                        (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
-                        (row.oldText === null ? "text-tertiary" : "text-state-danger")
-                      }
+                {split.map((row, i) => {
+                  const oldTone: DiffTone = row.oldText === null ? "context" : "delete";
+                  const newTone: DiffTone = row.newText === null ? "context" : "add";
+                  return (
+                    <div
+                      key={i}
+                      className="grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem_minmax(0,1fr)] gap-x-1 px-2"
                     >
-                      {row.oldText ?? " "}
-                    </span>
-                    <span className="select-none text-right tabular-nums text-tertiary">
-                      {row.newLine ?? ""}
-                    </span>
-                    <span
-                      className={
-                        (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
-                        (row.newText === null ? "text-tertiary" : "text-state-ok")
-                      }
-                    >
-                      {row.newText ?? " "}
-                    </span>
-                  </div>
-                ))}
+                      <span className="select-none text-right tabular-nums text-tertiary">
+                        {row.oldLine ?? ""}
+                      </span>
+                      <span
+                        className={
+                          (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
+                          SPLIT_TONE[oldTone]
+                        }
+                      >
+                        {row.oldText ?? " "}
+                      </span>
+                      <span className="select-none text-right tabular-nums text-tertiary">
+                        {row.newLine ?? ""}
+                      </span>
+                      <span
+                        className={
+                          (wrap ? "whitespace-pre-wrap break-words " : "whitespace-pre ") +
+                          SPLIT_TONE[newTone]
+                        }
+                      >
+                        {row.newText ?? " "}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

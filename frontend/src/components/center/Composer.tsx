@@ -29,6 +29,7 @@ import { TaskMode } from "../../types";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Segmented } from "../ui/Segmented";
+import { ComposerHelpDialog } from "./ComposerHelpDialog";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 
 /** D-32 / #232: four API paths + store writes live in the two hooks; this
@@ -552,42 +553,11 @@ export function Composer() {
         </span>
       </div>
 
-      <dialog
-        ref={helpRef}
-        aria-labelledby="slash-help-title"
+      <ComposerHelpDialog
+        dialogRef={helpRef}
+        items={helpItems}
         onClose={() => setHelpOpen(false)}
-        onClick={(event) => {
-          if (event.target === helpRef.current) helpRef.current?.close();
-        }}
-        className="m-auto w-[min(480px,calc(100vw-2rem))] rounded-dialog border border-rule bg-surface-column p-0 text-primary backdrop:bg-surface-page/80"
-      >
-        <div className="flex flex-col gap-3 p-5">
-          <div className="flex items-center justify-between gap-2">
-            <h2 id="slash-help-title" className="text-title">
-              命令
-            </h2>
-            <Button size="sm" onClick={() => setHelpOpen(false)}>
-              关闭
-            </Button>
-          </div>
-          <p className="text-meta text-secondary">
-            输入 / 打开菜单；↑/↓ 选择，Enter 或 Tab 执行，Esc
-            关闭。执行命令不会发送消息。
-          </p>
-          <ul className="flex flex-col gap-2">
-            {helpItems.map((item) => (
-              <li key={item.id} className="flex min-w-0 items-baseline gap-2">
-                <code className="shrink-0 font-mono text-machine text-primary">
-                  {item.label}
-                </code>
-                <span className="min-w-0 flex-1 text-meta text-secondary">
-                  {item.description}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </dialog>
+      />
     </div>
   );
 }

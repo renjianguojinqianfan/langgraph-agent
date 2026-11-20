@@ -32,8 +32,8 @@ export function changeCard(
   total: number,
   expanded: boolean
 ): ChangeCardModel {
-  const rows = expanded ? [...files] : files.slice(0, CHANGE_ROW_COLLAPSE);
-  const hidden = Math.max(0, files.length - rows.length);
+  const rows = visibleChangeFiles(files, expanded);
+  const hidden = hiddenChangeCount(files, expanded);
   return {
     header: changeHeader(files, total),
     rows,
@@ -132,6 +132,43 @@ export function flattenHunks(hunks: readonly DiffHunk[]): DiffRow[] {
     }
   }
   return rows;
+}
+
+export type DiffTone = "add" | "delete" | "context";
+
+/** Semantic tone of one flattened diff row; components own the class names. */
+export function diffTone(kind: DiffRow["kind"]): DiffTone {
+  return kind;
+}
+
+/** The unified-view marker for a tone (the split view has no marker column). */
+export function diffPrefix(tone: DiffTone): string {
+  return tone === "add" ? "+" : tone === "delete" ? "-" : " ";
+}
+
+/**
+ * Monotonic guard for the card's delayed hover preview. Each hover takes a
+ * generation, and a response may only land while that generation is still the
+ * newest — a pointer/focus leave (or unmount) invalidates the in-flight one.
+ */
+export interface PreviewGate {
+  next: () => number;
+  invalidate: () => void;
+  isCurrent: (generation: number) => boolean;
+}
+
+export function createPreviewGate(): PreviewGate {
+  let generation = 0;
+  return {
+    next: () => {
+      generation += 1;
+      return generation;
+    },
+    invalidate: () => {
+      generation += 1;
+    },
+    isCurrent: (value) => value === generation,
+  };
 }
 
 /**

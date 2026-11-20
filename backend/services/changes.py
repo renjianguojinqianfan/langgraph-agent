@@ -19,11 +19,9 @@ trace, SSE or logs.
 
 from __future__ import annotations
 
-import difflib
 import json
 import shutil
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional
@@ -32,6 +30,7 @@ from ..config import Settings
 from ..core.runtime_context import reject_non_local_path
 from ..core.workspace_files import resolve_in_workspace
 from ..utils.logging import get_logger
+from .changes_diff import _decode, _hunks, _line_count, _stats, _trim_hunks
 
 logger = get_logger("changes")
 
@@ -44,7 +43,6 @@ CHANGES_MAX_RENDERED_LINES = 2000
 CHANGES_DIFF_TIMEOUT_SEC = 0.1
 
 _TASK_ID_CHARS = set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-")
-_CONTEXT_LINES = 3
 
 
 def _is_safe_task_id(task_id: str) -> bool:
@@ -75,116 +73,6 @@ def _is_safe_rel_path(path: object) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _decode(raw: Optional[bytes]) -> tuple[Optional[str], bool]:
-    """``(text, binary)`` for one side; absent stays ``(None, False)``."""
-    if raw is None:
-        return None, False
-    if b"\x00" in raw:
-        return None, True
-    try:
-        return raw.decode("utf-8"), False
-    except UnicodeDecodeError:
-        return None, True
-
-
-def _line_count(text: Optional[str]) -> int:
-    return len(text.splitlines()) if text is not None else 0
-
-
-def _stats(before: str, after: str, timeout_sec: float) -> tuple[int, int, bool]:
-    """``(added, deleted, coarse)`` for a text change.
-
-    The timeout is measured around difflib. A timeout (or a non-positive
-    budget) degrades to one coarse whole-file replacement so the result is
-    deterministic instead of a partial diff.
-    """
-    old = before.splitlines()
-    new = after.splitlines()
-    started = time.perf_counter()
-    if timeout_sec <= 0:
-        return len(new), len(old), True
-    matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
-    opcodes = matcher.get_opcodes()
-    if time.perf_counter() - started > timeout_sec:
-        return len(new), len(old), True
-    added = deleted = 0
-    for tag, i1, i2, j1, j2 in opcodes:
-        if tag in ("replace", "delete"):
-            deleted += i2 - i1
-        if tag in ("replace", "insert"):
-            added += j2 - j1
-    return added, deleted, False
-
-
-def _coarse_hunk(old: List[str], new: List[str]) -> Dict[str, Any]:
-    return {
-        "oldStart": 1 if old else 0,
-        "oldLines": len(old),
-        "newStart": 1 if new else 0,
-        "newLines": len(new),
-        "lines": [f"-{line}" for line in old] + [f"+{line}" for line in new],
-    }
-
-
-def _hunks(before: str, after: str, coarse: bool) -> List[Dict[str, Any]]:
-    old = before.splitlines()
-    new = after.splitlines()
-    if coarse:
-        return [_coarse_hunk(old, new)]
-    matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
-    groups = list(matcher.get_grouped_opcodes(_CONTEXT_LINES))
-    hunks: List[Dict[str, Any]] = []
-    for group in groups:
-        i1 = group[0][1]
-        j1 = group[0][3]
-        old_lines = sum(i2 - i1_ for _, i1_, i2, _, _ in group)
-        new_lines = sum(j2 - j1_ for _, _, _, j1_, j2 in group)
-        lines: List[str] = []
-        for tag, a1, a2, b1, b2 in group:
-            if tag == "equal":
-                lines.extend(f" {line}" for line in old[a1:a2])
-            elif tag == "delete":
-                lines.extend(f"-{line}" for line in old[a1:a2])
-            elif tag == "insert":
-                lines.extend(f"+{line}" for line in new[b1:b2])
-            else:  # replace
-                lines.extend(f"-{line}" for line in old[a1:a2])
-                lines.extend(f"+{line}" for line in new[b1:b2])
-        hunks.append(
-            {
-                # Unified convention: a zero-length side keeps the boundary
-                # index as its start (0 for an insertion before line 1).
-                "oldStart": i1 + 1 if old_lines else i1,
-                "oldLines": old_lines,
-                "newStart": j1 + 1 if new_lines else j1,
-                "newLines": new_lines,
-                "lines": lines,
-            }
-        )
-    return hunks
-
-
-def _trim_hunks(
-    hunks: List[Dict[str, Any]], limit: int
-) -> tuple[List[Dict[str, Any]], bool]:
-    """Cap rendered diff lines at ``limit``; returns ``(hunks, truncated)``."""
-    rendered = sum(len(h["lines"]) for h in hunks)
-    if rendered <= limit:
-        return hunks, False
-    trimmed: List[Dict[str, Any]] = []
-    remaining = limit
-    for hunk in hunks:
-        lines = hunk["lines"]
-        if remaining <= 0:
-            break
-        kept = lines[:remaining]
-        remaining -= len(kept)
-        old_lines = sum(1 for line in kept if line[:1] in (" ", "-"))
-        new_lines = sum(1 for line in kept if line[:1] in (" ", "+"))
-        trimmed.append({**hunk, "oldLines": old_lines, "newLines": new_lines, "lines": kept})
-    return trimmed, True
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
@@ -747,10 +635,21 @@ class ChangesStore:
 class ChangesRecorder:
     """One task's capture seam around successful ``write`` / ``edit`` calls."""
 
-    def __init__(self, store: ChangesStore, task_id: str, workspace: Path) -> None:
+    def __init__(
+        self,
+        store: ChangesStore,
+        task_id: str,
+        workspace: Path,
+        *,
+        fixed_round: Optional[int] = None,
+    ) -> None:
         self.store = store
         self.task_id = task_id
         self.workspace = Path(workspace)
+        #: A subtask is not an independent Task: its graph round is always 1,
+        #: while the change belongs to the parent round that spawned it. When
+        #: set, this wins over the round passed to :meth:`begin`.
+        self.fixed_round = fixed_round
 
     def begin(
         self,
@@ -761,6 +660,8 @@ class ChangesRecorder:
     ) -> Optional[PendingCapture]:
         if tool_name not in ("write", "edit"):
             return None
+        if self.fixed_round is not None:
+            round_no = self.fixed_round
         raw_path = tool_input.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             return None

@@ -179,12 +179,17 @@ class Settings(BaseSettings):
     def changes_path(self) -> Path:
         """Round-change sidecar directory (defaults under ``data_path``).
 
-        Sidecars contain raw file contents (possibly secrets): the directory
-        stays in the local ``data/`` tree and is never exposed by an API.
+        A non-empty relative value resolves against ``PROJECT_ROOT`` like every
+        other path setting (``.env.example`` documents that contract); an empty
+        value means ``<data_dir>/changes``. Sidecars contain raw file contents
+        (possibly secrets): the directory stays in the local ``data/`` tree and
+        is never exposed by an API.
         """
+        if not self.changes_dir:
+            return self.data_path / "changes"
         p = Path(self.changes_dir)
-        if not self.changes_dir or not p.is_absolute():
-            p = self.data_path / "changes"
+        if not p.is_absolute():
+            p = PROJECT_ROOT / p
         return p
 
     @staticmethod

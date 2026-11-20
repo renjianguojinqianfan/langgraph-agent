@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { toggleReviewed } from "../lib/changes";
 
 /**
  * In-memory "reviewed" markers (#343). Never persisted or uploaded.
@@ -17,20 +18,11 @@ interface ChangesReviewState {
 export const useChangesReviewStore = create<ChangesReviewState>((set) => ({
   reviewed: {},
   toggle: (key, path) =>
-    set((state) => {
-      const current = state.reviewed[key] ?? [];
-      const next = current.includes(path)
-        ? current.filter((item) => item !== path)
-        : [...current, path];
-      return { reviewed: { ...state.reviewed, [key]: next } };
-    }),
+    set((state) => ({
+      reviewed: {
+        ...state.reviewed,
+        [key]: toggleReviewed(state.reviewed[key] ?? [], path),
+      },
+    })),
   clearAll: () => set({ reviewed: {} }),
 }));
-
-export function isReviewed(
-  state: Pick<ChangesReviewState, "reviewed">,
-  key: string,
-  path: string
-): boolean {
-  return (state.reviewed[key] ?? []).includes(path);
-}

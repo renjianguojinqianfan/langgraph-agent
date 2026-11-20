@@ -27,7 +27,7 @@ from ..agent.subagent import (
     SubTaskSpec,
     TierError,
 )
-from ..runtime_context import get_current_task_id
+from ..runtime_context import get_current_round, get_current_task_id
 from .base import BaseTool, ToolResult
 from .registry import register
 
@@ -114,6 +114,9 @@ class SpawnSubagentTool(BaseTool):
             parent_task_id=get_current_task_id() or "",
             tier=tier,
             tools=subset,
+            # #343: the round whose tool dispatch is running; the executor
+            # records the subtask's file writes on that parent round.
+            round_no=get_current_round() or 0,
         )
         # Resolved here rather than inside the executor so a request this run
         # cannot honor is refused before anything runs (issue #56: no side

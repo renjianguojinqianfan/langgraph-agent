@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getTaskChange, getTaskChanges } from "../../api/client";
 import {
   changeCard,
   changeCountsText,
   changeStatusLabel,
+  createPreviewGate,
+  diffPrefix,
+  diffTone,
   flattenHunks,
+  type DiffTone,
 } from "../../lib/changes";
 import type { ChangeDetail, ChangesSummary } from "../../types";
 
@@ -23,6 +27,12 @@ type State =
 const PREVIEW_LINES = 14;
 const HOVER_DELAY_MS = 500;
 
+const PREVIEW_TONE: Record<DiffTone, string> = {
+  add: "text-state-ok",
+  delete: "text-state-danger",
+  context: "text-tertiary",
+};
+
 /**
  * Turn-tail changed-files card (#343).
  *
@@ -37,11 +47,11 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
     null
   );
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mounted = useRef(true);
+  const gate = useRef(createPreviewGate());
 
   useEffect(
     () => () => {
-      mounted.current = false;
+      gate.current.invalidate();
       if (timer.current !== null) clearTimeout(timer.current);
     },
     []
@@ -60,14 +70,8 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
     };
   }, [taskId, round]);
 
-  useEffect(
-    () => () => {
-      if (timer.current !== null) clearTimeout(timer.current);
-    },
-    []
-  );
-
   const cancelPreview = () => {
+    gate.current.invalidate();
     if (timer.current !== null) {
       clearTimeout(timer.current);
       timer.current = null;
@@ -77,12 +81,21 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
 
   const schedulePreview = (path: string, index: number) => {
     cancelPreview();
+    const generation = gate.current.next();
     timer.current = setTimeout(() => {
+      timer.current = null;
       getTaskChange(taskId, round, index).then((result) => {
-        if (result.data && mounted.current) setPreview({ path, detail: result.data });
+        if (result.data && gate.current.isCurrent(generation)) {
+          setPreview({ path, detail: result.data });
+        }
       });
     }, HOVER_DELAY_MS);
   };
+
+  const previewRows = useMemo(
+    () => (preview ? flattenHunks(preview.detail.hunks) : []),
+    [preview]
+  );
 
   if (state.phase !== "ready" || state.summary.total === 0) return null;
   const model = changeCard(state.summary.files, state.summary.total, expanded);
@@ -112,7 +125,8 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
       </button>
 
       <ul className="border-t border-rule">
-        {model.rows.map((file) => (          <li key={file.index} className="relative">
+        {model.rows.map((file) => (
+          <li key={file.index} className="relative">
             <button
               type="button"
               onClick={() => onOpenChanges(round, file.path)}
@@ -150,24 +164,16 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
                   </p>
                 ) : (
                   <div className="overflow-hidden font-mono text-code">
-                    {flattenHunks(preview.detail.hunks)
-                      .slice(0, PREVIEW_LINES)
-                      .map((row, i) => (
-                        <div
-                          key={i}
-                          className={
-                            row.kind === "add"
-                              ? "whitespace-pre text-state-ok"
-                              : row.kind === "delete"
-                                ? "whitespace-pre text-state-danger"
-                                : "whitespace-pre text-tertiary"
-                          }
-                        >
-                          {row.kind === "add" ? "+" : row.kind === "delete" ? "-" : " "}
+                    {previewRows.slice(0, PREVIEW_LINES).map((row, i) => {
+                      const tone = diffTone(row.kind);
+                      return (
+                        <div key={i} className={`whitespace-pre ${PREVIEW_TONE[tone]}`}>
+                          {diffPrefix(tone)}
                           {row.text}
                         </div>
-                      ))}
-                    {flattenHunks(preview.detail.hunks).length > PREVIEW_LINES && (
+                      );
+                    })}
+                    {previewRows.length > PREVIEW_LINES && (
                       <p className="pt-1 text-meta text-tertiary">预览已截断</p>
                     )}
                   </div>

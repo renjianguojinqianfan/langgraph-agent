@@ -25,7 +25,7 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ...config import Settings
 from ...utils.logging import get_logger
@@ -37,6 +37,9 @@ from ..runtime_context import (
 )
 from .host import SubAgentHost
 from .state import AgentState
+
+if TYPE_CHECKING:  # #343 capture seam; services must not join the hot import cycle
+    from ...services.changes import ChangesStore
 
 logger = get_logger("agent.subagent")
 
@@ -158,6 +161,9 @@ class SubTaskSpec:
     tier: str = DEFAULT_TIER
     #: Extra narrowing inside ``tier`` (issue #56: narrow-only, validated there).
     tools: Optional[List[str]] = None
+    #: The parent round that triggered this spawn (#343 attribution). 0 means
+    #: "no round" — a direct caller, or a call outside a tool dispatch.
+    round_no: int = 0
 
 
 @dataclass
@@ -188,9 +194,19 @@ class SubTaskResult:
 class SubAgentExecutor:
     """Runs isolated subtasks on a bounded thread pool."""
 
-    def __init__(self, task_manager: SubAgentHost, settings: Settings) -> None:
+    def __init__(
+        self,
+        task_manager: SubAgentHost,
+        settings: Settings,
+        changes: Optional["ChangesStore"] = None,
+    ) -> None:
         self.tm = task_manager
         self.settings = settings
+        #: #343 review fix: the parent's round-change store. A subtask is not an
+        #: independent Task, so its write/edit is recorded on the parent using
+        #: the round that triggered the spawn. ``None`` keeps direct/unit
+        #: constructions working without capture.
+        self.changes = changes
         self._pool = ThreadPoolExecutor(
             max_workers=max(1, int(settings.subagent_max_concurrency))
         )
@@ -363,6 +379,24 @@ class SubAgentExecutor:
             from .nodes import AgentRuntime
 
             parent_id = spec.parent_task_id or spec.subtask_id
+            # #343 review fix: a spawned subtask edits the parent's workspace
+            # but is not an independent Task — its successful write/edit lands
+            # on the parent task and the parent round (spec §5.1). Without a
+            # parent link or a round there is no attribution, so no capture.
+            changes = None
+            if (
+                spec.parent_task_id
+                and spec.round_no > 0
+                and self.changes is not None
+            ):
+                from ...services.changes import ChangesRecorder
+
+                changes = ChangesRecorder(
+                    self.changes,
+                    spec.parent_task_id,
+                    parent_workspace or Path(self.settings.artifacts_path),
+                    fixed_round=spec.round_no,
+                )
             # The parent's round owns the model: a switch made while the parent
             # is running must not leak into a child spawned by that round.
             pinned = self.tm.round_llm_for(parent_id)
@@ -393,6 +427,7 @@ class SubAgentExecutor:
                 injection_fragments=self.tm.injection_fragments,
                 trace_source="subagent",
                 trace_owner=parent_id,
+                changes=changes,
             )
             from .graph import build_graph
 
