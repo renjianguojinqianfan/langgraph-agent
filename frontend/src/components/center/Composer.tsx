@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiErrorText, stopTask } from "../../api/client";
 import { useComposerControls } from "../../hooks/useComposerControls";
 import { useComposerSend } from "../../hooks/useComposerSend";
+import { useSkillCatalog } from "../../hooks/useSkillCatalog";
 import { BACKEND_UNREACHABLE } from "../../lib/copy";
 import { shouldSendOnEnter } from "../../lib/keys";
 import {
@@ -13,6 +14,7 @@ import {
   selectGroups,
 } from "../../lib/modelCatalog";
 import { requestTaskRail } from "../../lib/railEvents";
+import { insertSkillReference, skillGroupView } from "../../lib/skillCatalog";
 import {
   firstEnabledIndex,
   moveSelection,
@@ -65,6 +67,7 @@ export function Composer() {
   // #256: a 401 on the detail read; the entries offered are re-login ones.
   const detailAuthExpired = useTaskStore((s) => s.authExpired.detail);
   const setCurrentTask = useTaskStore((s) => s.setCurrentTask);
+  const workspaceDir = useTaskStore((s) => s.workspaceDir);
   const providers = useModelStore((s) => s.providers);
   const models = useModelStore((s) => s.models);
   const defaultModelId = useModelStore((s) => s.defaultId);
@@ -94,6 +97,11 @@ export function Composer() {
     draftModel,
     defaultModelId,
   });
+  // #345: the skill half of the `/` menu; independent of command execution.
+  const { catalog: skillCatalog, reload: reloadSkills } = useSkillCatalog(
+    currentTaskId,
+    workspaceDir
+  );
 
   // Catalog-outside model row (not part of the composerView matrix: it never
   // changes whether a message can be sent).
@@ -170,25 +178,56 @@ export function Composer() {
     customProviderId || selectedProviderId || providers[0]?.id || "";
 
   // #342: one derived answer for the whole menu; the component only holds the
-  // highlight and the Esc-dismissed flag.
+  // highlight and the Esc-dismissed flag. #345 adds the skill group to the
+  // same keyboard list (commands first, then skills, then the retry row).
   const slashContext = { task, mode, hasModels: models.length > 0 };
   const slash = slashMenuState(text, caret, slashContext);
   const slashOpen = slash.open && !dismissed;
+  const slashQuery = slash.token?.query ?? "";
+  const skillGroup = skillGroupView(skillCatalog, slashQuery);
+  const skillItems = slashOpen ? skillGroup.items : [];
+  const skillRetry = slashOpen && skillGroup.canRetry;
+  const entryCount = slash.items.length + skillItems.length + (skillRetry ? 1 : 0);
   const activeIndex =
-    slashOpen && slash.items.length > 0
-      ? Math.min(Math.max(selected, 0), slash.items.length - 1)
+    slashOpen && entryCount > 0
+      ? Math.min(Math.max(selected, 0), entryCount - 1)
       : -1;
-  const activeItem = activeIndex >= 0 ? slash.items[activeIndex] : undefined;
+  const activeCommand =
+    activeIndex >= 0 && activeIndex < slash.items.length
+      ? slash.items[activeIndex]
+      : undefined;
+  const activeSkillIndex = activeIndex - slash.items.length;
+  const activeSkill =
+    activeIndex >= slash.items.length &&
+    activeSkillIndex >= 0 &&
+    activeSkillIndex < skillItems.length
+      ? skillItems[activeSkillIndex]
+      : undefined;
+  const activeRetry =
+    skillRetry && activeIndex === slash.items.length + skillItems.length;
+  const activeDescendant = activeCommand
+    ? `${SLASH_MENU_ID}-${activeCommand.id}`
+    : activeSkill
+      ? `${SLASH_MENU_ID}-skill-${activeSkillIndex}`
+      : activeRetry
+        ? `${SLASH_MENU_ID}-skills-retry`
+        : undefined;
   const helpItems = slashCommandItems("", slashContext);
   const bottomNote = view.bottomNote ?? commandNote;
-  const slashQuery = slash.token?.query ?? "";
 
   // A new prefix starts from its first runnable option; availability changes
-  // (task status) keep the current highlight and clamp it at render time.
+  // (task status, skill catalog arrival) keep the current highlight and clamp
+  // it at render time.
   useEffect(() => {
     if (!slashOpen) return;
-    setSelected(firstEnabledIndex(slash.items));
-  }, [slashOpen, slashQuery]);
+    setSelected(
+      firstEnabledIndex([
+        ...slash.items,
+        ...skillItems,
+        ...(skillRetry ? [{ enabled: true }] : []),
+      ])
+    );
+  }, [slashOpen, slashQuery, skillGroup.status, skillItems.length, skillRetry]);
 
   const runStop = async (id: string) => {
     try {
@@ -243,6 +282,20 @@ export function Composer() {
         setHelpOpen(true);
         break;
     }
+  };
+
+  /** #345: insert the visible reference at the `/` token; selection keeps
+   * only the name because `load_skill` reads both layers. */
+  const executeSkill = (name: string) => {
+    if (!slash.token) return;
+    const next = insertSkillReference(text, slash.token, name);
+    setCommandNote(null);
+    setDismissed(false);
+    setText(next.text);
+    pendingCaretRef.current = next.caret;
+    setCaret(next.caret);
+    setSelected(0);
+    textareaRef.current?.focus();
   };
 
   const pickModel = (value: string) => {
@@ -386,10 +439,13 @@ export function Composer() {
         {slashOpen && (
           <SlashCommandMenu
             id={SLASH_MENU_ID}
-            items={slash.items}
+            commands={slash.items}
+            skillGroup={skillGroup}
             activeIndex={activeIndex}
             onHighlight={setSelected}
             onRun={executeCommand}
+            onPickSkill={executeSkill}
+            onRetrySkills={reloadSkills}
           />
         )}
         <div className="flex items-end gap-2">
@@ -398,11 +454,7 @@ export function Composer() {
             aria-label="任务输入"
             aria-controls={slashOpen ? SLASH_MENU_ID : undefined}
             aria-expanded={slashOpen}
-            aria-activedescendant={
-              slashOpen && activeItem
-                ? `${SLASH_MENU_ID}-${activeItem.id}`
-                : undefined
-            }
+            aria-activedescendant={slashOpen ? activeDescendant : undefined}
             className="min-h-[64px] flex-1 resize-none overscroll-contain rounded-composer border border-rule-strong bg-surface-well px-3 py-2.5 text-body text-primary placeholder:text-tertiary focus-visible:border-signal-now disabled:opacity-50"
             rows={2}
             placeholder={view.placeholder}
@@ -430,13 +482,13 @@ export function Composer() {
             onKeyDown={(e) => {
               if (slashOpen && !e.nativeEvent.isComposing) {
                 if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                  if (slash.items.length > 0) {
+                  if (entryCount > 0) {
                     e.preventDefault();
                     setSelected((current) =>
                       moveSelection(
                         current,
                         e.key === "ArrowDown" ? 1 : -1,
-                        slash.items.length
+                        entryCount
                       )
                     );
                     return;
@@ -450,13 +502,15 @@ export function Composer() {
                 }
                 if (
                   (e.key === "Enter" || e.key === "Tab") &&
-                  slash.items.length > 0
+                  entryCount > 0
                 ) {
-                  // A match wins over send/focus traversal. A disabled match
+                  // A match wins over send/focus traversal. A disabled command
                   // is a no-op so its reason stays readable; a no-match menu
                   // falls through and Enter sends the text normally.
                   e.preventDefault();
-                  if (activeItem?.enabled) executeCommand(activeItem.id);
+                  if (activeCommand?.enabled) executeCommand(activeCommand.id);
+                  else if (activeSkill) executeSkill(activeSkill.name);
+                  else if (activeRetry) reloadSkills();
                   return;
                 }
               }

@@ -60,6 +60,14 @@ export interface FilePreview {
   truncated: boolean;
 }
 
+/** One discoverable skill from ``GET /api/skills`` (#345). No path travels. */
+export interface SkillInfo {
+  name: string;
+  description: string;
+  /** Discovery layer: ``home`` or ``workspace``. */
+  layer: string;
+}
+
 export interface Task {
   id: string;
   title: string;
