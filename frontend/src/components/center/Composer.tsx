@@ -34,7 +34,9 @@ import { SlashCommandMenu } from "./SlashCommandMenu";
  * matrix (`composerView`). Copy, aria and disabled rules are unchanged.
  * #243 P2-3: the model control is a Provider → model native `<select>` with
  * `<optgroup>`s (D-37, no new overlay), plus the catalog-outside model row
- * (the service accepts `{provider, model}` and auto-creates a manual entry). */
+ * (the service accepts `{provider, model}` and auto-creates a manual entry).
+ * #342: a running task keeps the textarea editable for `/stop` and the next
+ * draft, but `canSend` stays false (button and Enter). */
 const MODE_OPTIONS: Array<{ value: TaskMode; label: string; title: string }> = [
   { value: "plan", label: "计划", title: "只读工具；产出可改的计划" },
   {

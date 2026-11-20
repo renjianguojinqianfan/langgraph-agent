@@ -3,7 +3,10 @@ import { isParked, isStoppable } from "./taskState";
 
 /** D-32: the Composer state matrix, derived as a pure function so every branch
  * is testable without a DOM (D-23). The copy below is copied verbatim from the
- * pre-split Composer (#232): behaviour and wording must not change. */
+ * pre-split Composer (#232): behaviour and wording must not change.
+ * #342 deliberate exception: RUNNING keeps the textarea editable (send stays
+ * disabled) so `/stop` and the next draft can be typed; PENDING / loading /
+ * detailError remain fully disabled. */
 export interface ComposerViewInput {
   task: Task | undefined;
   currentTaskId: string | null;
@@ -39,8 +42,11 @@ export function composerView(input: ComposerViewInput): ComposerView {
   // A selected task whose snapshot has not arrived yet must not be treated as
   // "new task": sending would silently create a second task.
   const loading = !!currentTaskId && !task && !detailError;
-  const inputDisabled = !!detailError || loading || (!!task && !parked);
-  const canSend = !busy && !inputDisabled && !!text.trim();
+  // #342: RUNNING keeps the textarea editable so the user can type `/stop`
+  // (and the next draft). Sending is still blocked below. PENDING / loading /
+  // a failed snapshot stay fully disabled — none of them can accept a message.
+  const inputDisabled = !!detailError || loading || task?.status === "PENDING";
+  const canSend = !busy && !inputDisabled && !running && !!text.trim();
 
   // One reason line under the input; the placeholder only carries the action
   // (new task / continue) and never repeats the disable reason.
