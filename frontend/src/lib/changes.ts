@@ -77,6 +77,17 @@ export function changeCountsText(added: number, deleted: number): string {
   return "无行数变化";
 }
 
+/**
+ * Mirrors backend `CHANGES_MAX_FILES` (backend/services/changes.py). The API
+ * reports `truncated` and the full `total`, but not the cap itself.
+ */
+export const CHANGES_MAX_FILES = 500;
+
+/** Truncated-summary copy shared by the tail card and the review tab. */
+export function changesTruncatedText(total: number): string {
+  return `文件过多：只列出前 ${CHANGES_MAX_FILES} 个（共 ${total} 个）。`;
+}
+
 /** A single-sided change cannot be shown side by side. */
 export function shouldForceUnified(file: Pick<ChangeFileEntry, "status">): boolean {
   return file.status === "added" || file.status === "deleted";
@@ -231,7 +242,7 @@ export interface ChangesFailureCopy {
 }
 
 /** Status-preserving failure copy; never echoes server detail / paths. */
-export function changesFailure(status: number, _detail = ""): ChangesFailureCopy {
+export function changesFailure(status: number): ChangesFailureCopy {
   if (status === 0) {
     return {
       title: "无法读取变更",

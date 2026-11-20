@@ -47,7 +47,7 @@
 - 每个 `(task_id, round, path)` 在**本轮第一次成功触碰前**保存 `before`（若之前不存在则标记 added），每次成功变更后更新 `after`；round 结束（停下/出错/完成）时 finalize。
 - 纯 shell 写入不列；被 `write`/`edit` 触达的路径，round 末的 `after` 可能包含其后 shell 改动——UI/文档要说明「变更集不是完整工作区 diff」。
 - 当前文件工具没有 delete/rename：**deleted 状态保留在 API/类型中，但当前不会产生**；不要把它写成已支持。
-- 同一文件在本轮多次写入合并成一张净变更；文件在 round 中途被 shell 删除且后续无 after 时，按 `deleted` 保留（仅当已有 before）或在实现时明确降级为 `missing`；不允许静默丢记录。
+- 同一文件在本轮多次写入合并成一张净变更；文件在 round 中途被 shell 删除且后续无 after 时，按 `deleted` 保留：已有 `before` 计删除行数，本轮创建后又删除记 0/0。**实现不产生 `missing`**——工作区缺失 / 改名不当作删除证据，保留最后一次 round 末记录；不允许静默丢记录。
 - **归属**：记在触发该工具调用的 Task 上；子代理若以独立 Task 运行则各自记录，父任务不合并；两个任务共享工作区时，各自记录自己的 before/after，不承诺全局一致。
 
 ### 5.2 存储与生命周期

@@ -4,11 +4,12 @@ import {
   changeCard,
   changeCountsText,
   changeStatusLabel,
+  changesTruncatedText,
   createPreviewGate,
   diffPrefix,
   flattenHunks,
-  type DiffKind,
 } from "../../lib/changes";
+import { DIFF_TONE } from "../../lib/diffTone";
 import type { ChangeDetail, ChangesSummary } from "../../types";
 
 interface ChangeCardProps {
@@ -25,12 +26,6 @@ type State =
 
 const PREVIEW_LINES = 14;
 const HOVER_DELAY_MS = 500;
-
-const PREVIEW_TONE: Record<DiffKind, string> = {
-  add: "text-state-ok",
-  delete: "text-state-danger",
-  context: "text-tertiary",
-};
 
 /**
  * Turn-tail changed-files card (#343).
@@ -166,7 +161,7 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
                     {previewRows.slice(0, PREVIEW_LINES).map((row, i) => (
                       <div
                         key={i}
-                        className={`whitespace-pre ${PREVIEW_TONE[row.kind]}`}
+                        className={`whitespace-pre ${DIFF_TONE[row.kind]}`}
                       >
                         {diffPrefix(row.kind)}
                         {row.text}
@@ -185,7 +180,7 @@ export function ChangeCard({ taskId, round, onOpenChanges }: ChangeCardProps) {
 
       {state.summary.truncated && (
         <p className="border-t border-rule px-3 py-1.5 text-meta text-state-warn">
-          文件过多：只列出前 500 个（共 {state.summary.total} 个）。
+          {changesTruncatedText(state.summary.total)}
         </p>
       )}
 

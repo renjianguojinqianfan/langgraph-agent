@@ -237,18 +237,23 @@ export function Composer() {
     const token = slash.token;
     setCommandNote(null);
     setDismissed(false);
+    setSelected(0);
+
+    // `/new` clears the whole draft; every other command only removes its token.
+    if (id === "new") {
+      setText("");
+      pendingCaretRef.current = 0;
+      setCaret(0);
+      setCurrentTask(null);
+      textareaRef.current?.focus();
+      return;
+    }
+
     setText(removeCommandToken(text, token));
     pendingCaretRef.current = token.start;
     setCaret(token.start);
-    setSelected(0);
 
     switch (id) {
-      case "new":
-        setText("");
-        pendingCaretRef.current = 0;
-        setCurrentTask(null);
-        textareaRef.current?.focus();
-        break;
       case "stop":
         if (task) void runStop(task.id);
         break;

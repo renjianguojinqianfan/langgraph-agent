@@ -3,6 +3,7 @@ import { getTaskChange, getTaskChanges } from "../../api/client";
 import {
   changeStatusLabel,
   changesFailure,
+  changesTruncatedText,
   diffMode,
   hasDiffBody,
   reviewKey,
@@ -32,13 +33,13 @@ interface ChangesReviewTabProps {
 type SummaryState =
   | { phase: "loading" }
   | { phase: "ready"; summary: ChangesSummary }
-  | { phase: "failed"; status: number; detail: string };
+  | { phase: "failed"; status: number };
 
 type DetailState =
   | { phase: "idle" }
   | { phase: "loading" }
   | { phase: "ready"; detail: ChangeDetail }
-  | { phase: "failed"; status: number; detail: string };
+  | { phase: "failed"; status: number };
 
 const EMPTY: string[] = [];
 
@@ -53,6 +54,20 @@ function detailNote(detail: ChangeDetail): string | null {
 
 function EmptyHint({ text }: { text: string }) {
   return <p className="px-1 text-meta text-tertiary">{text}</p>;
+}
+
+/** Summary and detail failures share one panel (#343). */
+function FailureFace({ status, onRetry }: { status: number; onRetry: () => void }) {
+  const copy = changesFailure(status);
+  return (
+    <div role="alert" className="rounded-well border border-rule bg-surface-well px-3 py-3">
+      <p className="text-body text-primary">{copy.title}</p>
+      <p className="mt-1 text-meta text-tertiary">{copy.hint}</p>
+      <Button className="mt-2" size="sm" variant="outline" onClick={onRetry}>
+        重试
+      </Button>
+    </div>
+  );
 }
 
 /**
@@ -90,7 +105,7 @@ export function ChangesReviewTab({
     getTaskChanges(taskId, round).then((result) => {
       if (cancelled) return;
       if (result.data) setSummaryState({ phase: "ready", summary: result.data });
-      else setSummaryState({ phase: "failed", status: result.status, detail: result.detail });
+      else setSummaryState({ phase: "failed", status: result.status });
     });
     return () => {
       cancelled = true;
@@ -109,7 +124,7 @@ export function ChangesReviewTab({
     getTaskChange(taskId, round, selectedKey).then((result) => {
       if (cancelled) return;
       if (result.data) setDetailState({ phase: "ready", detail: result.data });
-      else setDetailState({ phase: "failed", status: result.status, detail: result.detail });
+      else setDetailState({ phase: "failed", status: result.status });
     });
     return () => {
       cancelled = true;
@@ -118,27 +133,14 @@ export function ChangesReviewTab({
 
   const detail = detailState.phase === "ready" ? detailState.detail : null;
   const note = detail ? detailNote(detail) : null;
+  const retry = () => setReload((value) => value + 1);
 
   if (summaryState.phase === "loading") {
     return <EmptyHint text="正在读取本轮变更…" />;
   }
 
   if (summaryState.phase === "failed") {
-    const copy = changesFailure(summaryState.status, summaryState.detail);
-    return (
-      <div role="alert" className="rounded-well border border-rule bg-surface-well px-3 py-3">
-        <p className="text-body text-primary">{copy.title}</p>
-        <p className="mt-1 text-meta text-tertiary">{copy.hint}</p>
-        <Button
-          className="mt-2"
-          size="sm"
-          variant="outline"
-          onClick={() => setReload((value) => value + 1)}
-        >
-          重试
-        </Button>
-      </div>
-    );
+    return <FailureFace status={summaryState.status} onRetry={retry} />;
   }
 
   if (!summary || summary.files.length === 0) {
@@ -162,7 +164,7 @@ export function ChangesReviewTab({
       </p>
       {summary.truncated && (
         <p className="text-meta text-state-warn">
-          文件过多：只列出前 500 个（共 {summary.total} 个）。
+          {changesTruncatedText(summary.total)}
         </p>
       )}
 
@@ -251,22 +253,7 @@ export function ChangesReviewTab({
       {detailState.phase === "loading" && <EmptyHint text="正在读取差异…" />}
 
       {detailState.phase === "failed" && (
-        <div role="alert" className="rounded-well border border-rule bg-surface-well px-3 py-3">
-          <p className="text-body text-primary">
-            {changesFailure(detailState.status, detailState.detail).title}
-          </p>
-          <p className="mt-1 text-meta text-tertiary">
-            {changesFailure(detailState.status, detailState.detail).hint}
-          </p>
-          <Button
-            className="mt-2"
-            size="sm"
-            variant="outline"
-            onClick={() => setReload((value) => value + 1)}
-          >
-            重试
-          </Button>
-        </div>
+        <FailureFace status={detailState.status} onRetry={retry} />
       )}
 
       {detail && (

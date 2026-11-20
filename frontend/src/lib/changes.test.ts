@@ -6,6 +6,8 @@ import {
   changeHeader,
   changeStatusLabel,
   changesFailure,
+  changesTruncatedText,
+  CHANGES_MAX_FILES,
   createPreviewGate,
   diffMode,
   diffPrefix,
@@ -180,8 +182,16 @@ describe("failure copy", () => {
   });
 
   it("never echoes a server path or detail", () => {
-    const copy = changesFailure(500, "C:\\secret\\data\\changes");
-    expect(JSON.stringify(copy)).not.toContain("C:\\secret");
+    const copy = changesFailure(500);
+    expect(Object.keys(copy).sort()).toEqual(["hint", "title"]);
+  });
+});
+
+describe("truncated summary copy", () => {
+  it("names the mirror cap and the full round total", () => {
+    expect(changesTruncatedText(812)).toBe(
+      `文件过多：只列出前 ${CHANGES_MAX_FILES} 个（共 812 个）。`
+    );
   });
 });
 

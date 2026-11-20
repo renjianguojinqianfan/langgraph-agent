@@ -6,25 +6,8 @@ import {
   type DiffKind,
   type DiffMode,
 } from "../../lib/changes";
+import { DIFF_BODY_TONE, DIFF_TONE } from "../../lib/diffTone";
 import type { ChangeDetail } from "../../types";
-
-const TEXT_TONE: Record<DiffKind, string> = {
-  add: "text-state-ok",
-  delete: "text-state-danger",
-  context: "text-secondary",
-};
-
-const SIGN_TONE: Record<DiffKind, string> = {
-  add: "text-state-ok",
-  delete: "text-state-danger",
-  context: "text-tertiary",
-};
-
-const SPLIT_TONE: Record<DiffKind, string> = {
-  add: "text-state-ok",
-  delete: "text-state-danger",
-  context: "text-tertiary",
-};
 
 /** Read-only unified/split body for one change detail (#343). */
 export function DiffView({
@@ -57,13 +40,13 @@ export function DiffView({
                 <span className="select-none text-right tabular-nums text-tertiary">
                   {row.oldLine ?? ""}
                 </span>
-                <span className={lineClass + SPLIT_TONE[oldTone]}>
+                <span className={lineClass + DIFF_TONE[oldTone]}>
                   {row.oldText ?? " "}
                 </span>
                 <span className="select-none text-right tabular-nums text-tertiary">
                   {row.newLine ?? ""}
                 </span>
-                <span className={lineClass + SPLIT_TONE[newTone]}>
+                <span className={lineClass + DIFF_TONE[newTone]}>
                   {row.newText ?? " "}
                 </span>
               </div>
@@ -88,10 +71,10 @@ export function DiffView({
             <span className="select-none text-right tabular-nums text-tertiary">
               {row.newLine ?? ""}
             </span>
-            <span aria-hidden="true" className={SIGN_TONE[row.kind]}>
+            <span aria-hidden="true" className={DIFF_TONE[row.kind]}>
               {diffPrefix(row.kind)}
             </span>
-            <span className={lineClass + TEXT_TONE[row.kind]}>
+            <span className={lineClass + DIFF_BODY_TONE[row.kind]}>
               {row.text || " "}
             </span>
           </div>

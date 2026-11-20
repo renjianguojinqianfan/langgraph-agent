@@ -48,6 +48,14 @@ export interface SkillGroupView {
   canRetry: boolean;
 }
 
+/** While a command filter is typed, status-only rows stay out of the way. */
+const HIDDEN_VIEW: SkillGroupView = {
+  status: "hidden",
+  items: [],
+  note: null,
+  canRetry: false,
+};
+
 /** Merge same-name entries; the first non-empty description wins. */
 export function dedupeSkills(skills: ReadonlyArray<SkillInfo>): SkillGroupItem[] {
   const byName = new Map<string, SkillGroupItem>();
@@ -156,7 +164,7 @@ export function skillGroupView(
   }
   if (catalog.phase === "loading") {
     return filtering
-      ? { status: "hidden", items: [], note: null, canRetry: false }
+      ? HIDDEN_VIEW
       : {
           status: "loading",
           items: [],
@@ -166,7 +174,7 @@ export function skillGroupView(
   }
   if (!catalog.enabled) {
     return filtering
-      ? { status: "hidden", items: [], note: null, canRetry: false }
+      ? HIDDEN_VIEW
       : {
           status: "disabled",
           items: [],
@@ -178,7 +186,7 @@ export function skillGroupView(
   const all = dedupeSkills(catalog.skills);
   if (all.length === 0) {
     return filtering
-      ? { status: "hidden", items: [], note: null, canRetry: false }
+      ? HIDDEN_VIEW
       : {
           status: "empty",
           items: [],
