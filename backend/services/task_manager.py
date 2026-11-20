@@ -1212,6 +1212,11 @@ class TaskManager:
         self._start_run(task_id)
         return task_id
 
+    @property
+    def default_workspace(self) -> str:
+        """Directory a task without an explicit workspace runs in (#345)."""
+        return self._default_workspace
+
     def get_task(self, task_id: str) -> Optional[Task]:
         return self.persistence.load_task(task_id)
 

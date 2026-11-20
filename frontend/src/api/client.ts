@@ -14,6 +14,7 @@ import {
   ProvidersData,
   ProviderUpdateRequest,
   SSEvent,
+  SkillInfo,
   Task,
   TaskMode,
   WorkspaceFile,
@@ -384,6 +385,40 @@ export const listFiles = (id: string, signal?: AbortSignal) =>
     },
     signal ? { signal } : undefined
   );
+
+// ── #345: skill catalogue for the `/` menu ──
+export type SkillCatalogResult = StatusResult<{
+  enabled: boolean;
+  skills: SkillInfo[];
+}>;
+
+/**
+ * Read the two-layer skill catalogue for an existing task or a new task's
+ * workspace. The status is kept so the menu can name 400 / 401 / 500 inside
+ * the skill group while built-in commands stay usable.
+ */
+export const listSkills = (
+  params: { taskId?: string; workspace?: string } = {},
+  signal?: AbortSignal
+) => {
+  const search = new URLSearchParams();
+  if (params.taskId) search.set("task_id", params.taskId);
+  if (params.workspace) search.set("workspace", params.workspace);
+  const query = search.toString();
+  return reqWithStatus<{ enabled: boolean; skills: SkillInfo[] }>(
+    `/skills${query ? `?${query}` : ""}`,
+    (json) => {
+      const data = (json as { data?: { enabled?: unknown; skills?: unknown } } | null)
+        ?.data;
+      return data &&
+        typeof data.enabled === "boolean" &&
+        Array.isArray(data.skills)
+        ? { enabled: data.enabled, skills: data.skills as SkillInfo[] }
+        : null;
+    },
+    signal ? { signal } : undefined
+  );
+};
 
 export type PreviewResult = StatusResult<FilePreview>;
 
