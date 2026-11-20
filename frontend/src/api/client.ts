@@ -1,6 +1,8 @@
 import {
   ApiResponse,
   AuthTokenResponse,
+  ChangeDetail,
+  ChangesSummary,
   ChatTurn,
   CreateTaskRequest,
   DiscoverCandidate,
@@ -437,6 +439,35 @@ export const previewFile = (id: string, path: string) =>
 
 export const fileDownloadUrl = (id: string, path: string) =>
   _withToken(`${API_BASE}/tasks/${id}/files/download?path=${encodeURIComponent(path)}`);
+
+// ── #343: per-round changes ──
+
+/**
+ * One round's write/edit net changes. A missing round is a normal empty list;
+ * 400 / 404 / 401 keep their status for the review tab's failure copy.
+ */
+export const getTaskChanges = (id: string, round: number) =>
+  reqWithStatus<ChangesSummary>(
+    `/tasks/${encodeURIComponent(id)}/changes?round=${round}`,
+    (json) => {
+      const data = (json as { data?: Partial<ChangesSummary> } | null)?.data;
+      return data && typeof data.round === "number" && Array.isArray(data.files)
+        ? (data as ChangesSummary)
+        : null;
+    }
+  );
+
+/** One file's diff payload; binary/oversized responses still validate. */
+export const getTaskChange = (id: string, round: number, index: number) =>
+  reqWithStatus<ChangeDetail>(
+    `/tasks/${encodeURIComponent(id)}/changes/${round}/${index}`,
+    (json) => {
+      const data = (json as { data?: Partial<ChangeDetail> } | null)?.data;
+      return data && typeof data.path === "string" && Array.isArray(data.hunks)
+        ? (data as ChangeDetail)
+        : null;
+    }
+  );
 
 /** Raised when the trace endpoint is unreachable / the file is missing. */
 export class TraceFetchError extends Error {

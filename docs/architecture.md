@@ -159,7 +159,7 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/api/workspaces/validate` | 校验并归一化一个工作区目录（#242；只读，不列目录） | `?path=<路径>` | `{path}`；空 / 不存在 / 非目录 / 非本地路径 → 400 |
 | GET | `/api/skills` | 技能目录（#345；只读，复用 home / workspace 两层发现，不返回文件系统路径；同名技能两层各一行，由前端按 name 合并） | `?task_id=<id>` 或 `?workspace=<路径>`（都缺省 = 后台启动目录；同时给出时 `task_id` 优先） | `{enabled, skills:[{name,description,layer}]}`；`skills` 能力包关闭 → `enabled:false` 且 `skills:[]`；空技能目录 → `enabled:true, skills:[]`；未知任务 → 404 / 非法或不存在工作区 → 400 / 未认证 → 401 |
 | DELETE | `/api/tasks` | 删除某目录下全部任务历史（#241；`dir` 必填，不提供「全部」） | `?dir=<路径>` | `{deleted}`；400 / 任一运行中 → 409（不删）/ 落盘失败 → 500（整批回滚） |
-| DELETE | `/api/tasks/{id}` | 删除任务历史：记录 + checkpoint + trace（不改磁盘文件；任务名下后台进程一并终止，#241） | — | `{ok, cleanup:{checkpoint,trace}}`；404 / 运行中 → 409 / 落盘失败 → 500（不清理） |
+| DELETE | `/api/tasks/{id}` | 删除任务历史：记录 + checkpoint + trace + 本轮变更 sidecar（不改磁盘文件；任务名下后台进程一并终止，#241） | — | `{ok, cleanup:{checkpoint,trace,changes}}`；404 / 运行中 → 409 / 落盘失败 → 500（不清理） |
 | GET | `/api/tasks/{id}` | 任务完整状态 | — | `Task`；不存在 → 404 |
 | POST | `/api/tasks/{id}/stop` | 停止任务 | — | `{ok, status}`；落盘失败 → 500（`{detail}`） |
 | POST | `/api/tasks/{id}/resume` | 从最近 checkpoint 续跑（无新消息路径） | — | `TaskManager.resume` 结果；不能续 → 409 / 落盘失败 → 500（`{detail}`） |
@@ -173,6 +173,8 @@ START → agent ──有 tool call──→ tool ──→ agent
 | GET | `/api/tasks/{id}/files` | 工作区文件列表（可见性过滤，最多 2000 条；有界枚举，限额不改变排序） | — | `{files:[{path,size}], truncated}`；工作区不存在 → 409 |
 | GET | `/api/tasks/{id}/files/preview` | 预览工作区文本文件（最多返回前 200 KB，`truncated` 标记） | `?path=<相对路径>` | `{path,content,size,truncated}`；二进制 → 415；越界 → 400；文件不存在 → 404；工作区不存在 → 409。404 的 `detail` 是 `task not found` 或 `file not found`，前端据此区分任务与文件消失（`frontend/src/lib/preview.ts`） |
 | GET | `/api/tasks/{id}/files/download` | 流式下载工作区文件；auth 开启时可用 `?token=`（`<a href>` 例外端点） | `?path=<相对路径>` | 文件流（media_type 按扩展名推断，回退 `application/octet-stream`） |
+| GET | `/api/tasks/{id}/changes` | 某轮 `write`/`edit` 净变更列表（只读；sidecar 在 `CHANGES_DIR`，不返回绝对路径；不是 git diff） | `?round=N`（1-based） | `{round,total,truncated,added,deleted,files:[{index,path,display,status,added,deleted,binary,oversized}]}`；无变更 → 200 空；round 缺失 / 非整数 / <1 → 400；任务不存在 → 404。`deleted` 仅当 shell 删除已被捕获的文件时出现；当前文件工具没有删除，正常流程不会产生 |
+| GET | `/api/tasks/{id}/changes/{round}/{index}` | 单个变更文件的 unified diff（只读）；`binary`/`oversized` 带标记且 `hunks:[]`，`coarse` 表示 diff 超时后的整段替换 | — | `{path,status,added,deleted,binary,oversized,coarse,truncated,hunks:[{oldStart,oldLines,newStart,newLines,lines}]}`；index 不存在 → 404；round/index 非整数或 round<1 → 400；任务不存在 → 404 |
 | POST | `/api/models/{id}/default` | 设为全局默认模型条目 | — | `{ok, default}`；404 |
 | POST | `/api/models/{id}/test` | 测试该条目所属 Provider + 模型连通性 | — | 测试结果；404 |
 | GET | `/api/providers` | Provider 卡片列表 + 全局默认模型条目 id | — | `{providers: [...], default}`；只回 `key_set` / `key_source` |

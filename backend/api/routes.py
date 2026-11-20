@@ -751,6 +751,58 @@ def download_workspace_file(
     )
 
 
+def _changes_int(raw: str | None, field: str, minimum: int) -> int:
+    """Parse ``round`` / ``index`` manually: 400, never FastAPI's 422."""
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400, detail=f"{field} must be an integer"
+        ) from None
+    if value < minimum:
+        raise HTTPException(
+            status_code=400, detail=f"{field} must be at least {minimum}"
+        )
+    return value
+
+
+@router.get("/tasks/{task_id}/changes")
+def list_task_changes(
+    task_id: str,
+    request: Request,
+    round_no: str | None = Query(default=None, alias="round"),
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Read-only summary of one round's write/edit net changes (#343)."""
+    parsed_round = _changes_int(round_no, "round", 1)
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return _envelope(data=_tm(request).changes.read_round(task_id, parsed_round))
+
+
+@router.get("/tasks/{task_id}/changes/{round_no}/{index}")
+def get_task_change(
+    task_id: str,
+    request: Request,
+    round_no: str,
+    index: str,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """One file's unified diff for a round; binary/oversized carry flags only.
+
+    The path in the payload is always task-relative POSIX. Sidecar locations
+    and absolute workspace paths never leave the server.
+    """
+    parsed_round = _changes_int(round_no, "round", 1)
+    parsed_index = _changes_int(index, "index", 0)
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    detail = _tm(request).changes.read_detail(task_id, parsed_round, parsed_index)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="change not found")
+    return _envelope(data=detail)
+
+
 @router.get("/tasks/{task_id}/events")
 def task_events(
     task_id: str,

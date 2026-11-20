@@ -3,6 +3,7 @@ import { groupMarkers } from "../../lib/markers";
 import { isPlanNotice, splitRounds, stepsForRound } from "../../lib/rounds";
 import { useTaskStore } from "../../store/taskStore";
 import { AnswerSheet } from "./AnswerSheet";
+import { ChangeCard } from "./ChangeCard";
 import { CompressMarker } from "./CompressMarker";
 import { FailureBlock } from "./FailureBlock";
 import { PlanAnchor } from "./PlanAnchor";
@@ -12,9 +13,15 @@ import { UserBubble } from "./UserBubble";
 interface ConversationProps {
   task: Task;
   onOpenPlan?: () => void;
+  /** #343: open the review tab for one round (optionally on a file). */
+  onOpenChanges?: (round: number, path?: string) => void;
 }
 
-export function Conversation({ task, onOpenPlan }: ConversationProps) {
+export function Conversation({
+  task,
+  onOpenPlan,
+  onOpenChanges,
+}: ConversationProps) {
   const rounds = splitRounds(task.conversation);
   const markers = useTaskStore((s) => s.markers[task.id] ?? []);
   // Ownership is resolved once here; each block receives only its own markers.
@@ -42,6 +49,7 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
           const roundSteps = stepsForRound(task.steps, round.index);
           const roundMarkers = roundSteps.flatMap((step) => byStep.get(step.index) ?? []);
           const last = i === rounds.length - 1;
+          const live = running && last;
           return (
             <div key={round.index} className="flex flex-col gap-3">
               <UserBubble text={round.user.content} />
@@ -49,7 +57,7 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
                 <TurnProcess
                   steps={roundSteps}
                   markers={roundMarkers}
-                  live={running && last}
+                  live={live}
                   taskId={task.id}
                   answers={round.answers.map((turn) => turn.content)}
                 />
@@ -62,6 +70,15 @@ export function Conversation({ task, onOpenPlan }: ConversationProps) {
                 ) : (
                   <AnswerSheet key={j} content={turn.content} />
                 )
+              )}
+              {/* #343: the card belongs to a finished round; the live round
+                  must not advertise a half-captured change set. */}
+              {!live && onOpenChanges && (
+                <ChangeCard
+                  taskId={task.id}
+                  round={round.index}
+                  onOpenChanges={onOpenChanges}
+                />
               )}
             </div>
           );

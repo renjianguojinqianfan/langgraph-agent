@@ -38,7 +38,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 #: snapshots/, browser-evidence/ …) failed the suite with a misleading
 #: "the tests modified data/" message. Narrow the comparison to the surfaces
 #: this suite owns, and separately forbid new top-level entries.
-_GUARDED_DATA_SURFACES = ("tasks.json", "models.json", "logs", "traces", "checkpoints")
+_GUARDED_DATA_SURFACES = (
+    "tasks.json",
+    "models.json",
+    "logs",
+    "traces",
+    "checkpoints",
+    "changes",
+)
 
 
 def _stat_snapshot(root: Path) -> dict[str, tuple[str, int, int]]:
@@ -142,6 +149,7 @@ os.environ["TRACE_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "traces")
 # keeps its setdefault semantics: a shell that turns it on mounts the throwaway
 # store below, never the developer's.
 os.environ["CHECKPOINT_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "checkpoints")
+os.environ["CHANGES_DIR"] = str(_TEST_RUNTIME_ROOT / "data" / "changes")
 os.environ["QIANFAN_TEST_DATA_ROOT"] = str(_TEST_RUNTIME_ROOT)
 # pytest derives its ``tmp_path`` base from ``tempfile.gettempdir()``. A sandbox
 # that denies writes under OS temp makes Python fall back to the CWD (the
@@ -350,6 +358,9 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         # Explicit: a developer's CHECKPOINT_DIR must not leak one sqlite file
         # into every test that opts into checkpoints.
         checkpoint_dir="",
+        # #343: keep round-change sidecars inside tmp_path even when the
+        # developer exported CHANGES_DIR.
+        changes_dir="",
         # #259: the startup single-backend guard is production posture; the test
         # factory disables it explicitly (never "detect pytest"). Tests for the
         # guard build Settings directly with the default (on). Host stays
