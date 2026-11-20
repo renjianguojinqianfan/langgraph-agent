@@ -134,6 +134,7 @@ export function DashTabs({
                   <FilePane
                     task={task}
                     visible={visible && active}
+                    activePath={fileTabPath(tab)}
                     onOpenFile={onOpenFile}
                   />
                 ) : (

@@ -81,16 +81,31 @@ describe("composerView (#232 / D-32 state matrix)", () => {
     expect(view.running).toBe(true);
     expect(view.parked).toBe(false);
     expect(view.inputDisabled).toBe(true);
+    expect(view.canSend).toBe(false);
     expect(view.disabledReason).toBe("任务启动中，稍等片刻…");
     expect(view.placeholder).toBe("…");
   });
 
-  it("RUNNING is disabled with its own reason", () => {
+  it("RUNNING is editable but cannot send, with its own reason", () => {
     const view = present({ task: task("RUNNING"), currentTaskId: "t1", text: "hi" });
     expect(view.running).toBe(true);
-    expect(view.inputDisabled).toBe(true);
+    expect(view.inputDisabled).toBe(false);
+    expect(view.canSend).toBe(false);
     expect(view.disabledReason).toBe("任务运行中；停下或等这一轮结束再发");
     expect(view.placeholder).toBe("…");
+  });
+
+  it("RUNNING with a non-empty draft still cannot send (#342)", () => {
+    // The textarea stays editable so `/stop` and the next draft can be typed;
+    // send/Enter must never create a second message mid-round.
+    const view = present({
+      task: task("RUNNING"),
+      currentTaskId: "t1",
+      text: "/stop",
+    });
+    expect(view.inputDisabled).toBe(false);
+    expect(view.canSend).toBe(false);
+    expect(view.bottomNote).toBe("任务运行中；停下或等这一轮结束再发");
   });
 
   it("INTERRUPTED is parked: input enabled, continue copy", () => {
