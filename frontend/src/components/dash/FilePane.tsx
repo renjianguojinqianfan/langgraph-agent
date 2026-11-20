@@ -1,14 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { listFiles } from "../../api/client";
 import { cx } from "../../lib/cx";
 import { createFilePollLoop } from "../../lib/filePolling";
+import {
+  buildFileTree,
+  expandAncestors,
+  fileTreeRows,
+  isTreeKey,
+  toggleDir,
+  treeKeyAction,
+  type FileTreeRow,
+} from "../../lib/fileTree";
 import { filesLoadFailure, filesPaneState, filesPaneStatusText } from "../../lib/failureStates";
 import { formatBytes } from "../../lib/format";
 import { shouldPollFiles } from "../../lib/taskState";
 import type { Task, WorkspaceFile } from "../../types";
 import { Button } from "../ui/Button";
+import { Icon } from "../ui/Icon";
 import { FileDownloadLink } from "./FileDownloadLink";
-import { fileName, groupFiles } from "./fileGroup";
 
 /** Refresh cadence while a running task keeps writing files. */
 const POLL_MS = 2000;
@@ -16,10 +25,13 @@ const POLL_MS = 2000;
 export function FilePane({
   task,
   visible,
+  activePath,
   onOpenFile,
 }: {
   task: Task;
   visible: boolean;
+  /** The file whose preview tab is active; its ancestors stay expanded. */
+  activePath: string | null;
   onOpenFile: (path: string) => void;
 }) {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
@@ -28,6 +40,14 @@ export function FilePane({
   const [loading, setLoading] = useState(true);
   /** Bumped by the retry button; the load effect keys on it (#258 AC5). */
   const [reloadToken, setReloadToken] = useState(0);
+  /** Workspace dirs the user opened; the root is always open, so it is absent. */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const [query, setQuery] = useState("");
+  /** Roving tab stop; kept across polls and filter changes when still visible. */
+  const [focusPath, setFocusPath] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const paneRef = useRef<HTMLDivElement>(null);
 
   // A different task starts from a clean pane; a status change must not clear
   // the list the user is reading.
@@ -36,7 +56,23 @@ export function FilePane({
     setTruncated(false);
     setNote(null);
     setLoading(true);
+    setExpanded(new Set());
+    setQuery("");
+    setFocusPath(null);
+    setFocusRequest(null);
+    // #341: switching tasks also resets scroll. The scroll owner is the tab
+    // panel that keeps this list mounted, not this component.
+    paneRef.current
+      ?.closest<HTMLElement>('[role="tabpanel"]')
+      ?.scrollTo({ top: 0 });
   }, [task.id]);
+
+  // #341: opening a file (from the tree or elsewhere) reveals it, even when
+  // its directory was collapsed. Polling the same path does not touch this.
+  useEffect(() => {
+    if (!activePath) return;
+    setExpanded((current) => expandAncestors(current, activePath));
+  }, [activePath, task.id]);
 
   useEffect(() => {
     // #230: a closed drawer (narrow screens) must not fetch. Reopening re-runs
@@ -78,7 +114,22 @@ export function FilePane({
     };
   }, [task.id, task.status, visible, reloadToken]);
 
-  const groups = groupFiles(files);
+  const root = useMemo(() => buildFileTree(files), [files]);
+  const rows = useMemo(
+    () => fileTreeRows(root, expanded, query),
+    [root, expanded, query]
+  );
+  const tabbable =
+    focusPath && rows.some((row) => row.path === focusPath)
+      ? focusPath
+      : rows[0]?.path;
+
+  useEffect(() => {
+    if (focusRequest === null) return;
+    rowRefs.current.get(focusRequest)?.focus();
+    setFocusRequest(null);
+  }, [focusRequest]);
+
   // D-31 / #258 AC5: one face at a time — a failed read never also shows the
   // empty copy (same rule as historyListState, #256).
   const state = filesPaneState({ error: note ?? "", loading, count: files.length });
@@ -91,9 +142,41 @@ export function FilePane({
   const statusText =
     filesPaneStatusText(state, note ?? "") ||
     (state === "loading" ? "加载中…" : state === "empty" ? emptyCopy : "");
+  const filtered = query.trim().length > 0;
+
+  const activate = (row: FileTreeRow) => {
+    if (row.kind === "dir") setExpanded((current) => toggleDir(current, row.path));
+    else onOpenFile(row.path);
+  };
+
+  const onTreeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    // Nested links keep their own Enter / Tab behaviour.
+    if (target.closest("a,button,input") !== null) return;
+    const path = target.closest<HTMLElement>("[data-tree-path]")?.dataset.treePath;
+    if (!path) return;
+    const row = rows.find((item) => item.path === path);
+    if (!row) return;
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      activate(row);
+      return;
+    }
+    if (!isTreeKey(event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    const action = treeKeyAction(rows, path, event.key);
+    // Filtered rows are all rendered open; leave the saved expansion untouched
+    // so clearing the filter restores exactly what the user had before.
+    const { toggle } = action;
+    if (toggle && !filtered) {
+      setExpanded((current) => toggleDir(current, toggle));
+    }
+    if (action.focusPath) setFocusRequest(action.focusPath);
+  };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={paneRef} className="flex min-w-0 flex-col gap-4">
       {truncated && (
         <p className="text-meta text-tertiary">
           文件超过 2000 个，只显示前 2000 个；完整内容请下载。
@@ -132,38 +215,99 @@ export function FilePane({
       </div>
 
       {state === "rows" && (
-        groups.map((group) => (
-          <section key={group.dir || "__root"}>
-            <div
-              className="mb-1 font-mono text-machine text-tertiary"
-              title={group.dir || "工作区根目录"}
+        <div role="search" className="relative">
+          <Icon
+            name="search"
+            size={14}
+            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-tertiary"
+          />
+          <input
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            aria-label="按名称或路径过滤文件"
+            placeholder="按名称或路径过滤"
+            autoComplete="off"
+            spellCheck={false}
+            className="h-8 w-full rounded-control bg-surface-well pl-7 pr-7 text-meta text-primary placeholder:text-tertiary"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="清除过滤"
+              onClick={() => setQuery("")}
+              className="absolute right-1 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-control text-tertiary hover:bg-surface-hover hover:text-primary"
             >
-              {group.label}
-            </div>
-            <ul className="flex flex-col">
-              {group.files.map((file) => (
-                <li key={file.path}>
-                  <div className="flex items-center gap-2 py-1 pl-2 pr-1 hover:bg-surface-hover">
-                    <button
-                      type="button"
-                      onClick={() => onOpenFile(file.path)}
-                      className="min-w-0 flex-1 truncate text-left text-body text-primary"
-                      title={file.path}
-                    >
-                      {fileName(file.path)}
-                    </button>
-                    <span className="shrink-0 font-mono text-machine tabular-nums text-tertiary">
-                      {formatBytes(file.size)}
-                    </span>
-                    <FileDownloadLink taskId={task.id} path={file.path} />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
+              <Icon name="close" size={12} />
+            </button>
+          )}
+        </div>
       )}
 
+      {state === "rows" && filtered && rows.length === 0 && (
+        <p role="status" className="text-body text-tertiary">
+          没有匹配「{query.trim()}」的文件。
+        </p>
+      )}
+
+      {state === "rows" && rows.length > 0 && (
+        <div role="tree" aria-label="工作区文件" className="flex flex-col" onKeyDown={onTreeKeyDown}>
+          {rows.map((row) => {
+            const current = row.kind === "file" && row.path === activePath;
+            return (
+              <div
+                key={row.path}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(row.path, el);
+                  else rowRefs.current.delete(row.path);
+                }}
+                role="treeitem"
+                data-tree-path={row.path}
+                aria-level={row.depth + 1}
+                aria-expanded={row.kind === "dir" ? row.expanded : undefined}
+                aria-selected={row.kind === "file" ? current : undefined}
+                tabIndex={row.path === tabbable ? 0 : -1}
+                title={row.path}
+                style={{ paddingLeft: 4 + row.depth * 12 }}
+                onFocus={() => setFocusPath(row.path)}
+                onClick={() => {
+                  setFocusPath(row.path);
+                  activate(row);
+                }}
+                className={cx(
+                  "flex min-h-6 min-w-0 cursor-pointer items-center gap-1 rounded-control py-0.5 pr-1 text-body hover:bg-surface-hover",
+                  row.kind === "dir" ? "text-secondary" : "text-primary",
+                  current && "text-signal-now"
+                )}
+              >
+                {row.kind === "dir" ? (
+                  <Icon
+                    name="chevron"
+                    size={12}
+                    className={cx(
+                      "text-tertiary transition-transform duration-150",
+                      !row.expanded && "-rotate-90"
+                    )}
+                  />
+                ) : (
+                  <Icon name="file" size={12} className="text-tertiary" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-left">{row.name}</span>
+                {row.kind === "file" && (
+                  <>
+                    <span className="shrink-0 font-mono text-machine tabular-nums text-tertiary">
+                      {formatBytes(row.size)}
+                    </span>
+                    <span className="shrink-0" onClick={(event) => event.stopPropagation()}>
+                      <FileDownloadLink taskId={task.id} path={row.path} />
+                    </span>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

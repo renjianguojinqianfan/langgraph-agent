@@ -122,6 +122,7 @@ export function DashTabs({
       id: fileTabId(path),
       label: fileTabLabel(path, fileTabs),
       title: path,
+      icon: "file" as const,
       onClose: () => closeFile(path),
     })),
     ...(task
@@ -164,6 +165,7 @@ export function DashTabs({
                   <FilePane
                     task={task}
                     visible={visible && active}
+                    activePath={fileTabPath(tab)}
                     onOpenFile={onOpenFile}
                   />
                 ) : (

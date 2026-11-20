@@ -1,12 +1,14 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { cx } from "../../lib/cx";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 
 export interface TabItem<T extends string> {
   id: T;
   label: string;
   /** Full value for a truncated label (file paths). */
   title?: string;
+  /** Leading glyph (file tabs show the file icon, #344). */
+  icon?: IconName;
   /** Present on closable file tabs, rendered inside the tab chip (dsh shape). */
   onClose?: () => void;
 }
@@ -109,7 +111,10 @@ export function Tabs<T extends string>({
                 : "text-tertiary hover:text-secondary"
             )}
           >
-            <span className="block max-w-[140px] truncate">{t.label}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              {t.icon && <Icon name={t.icon} size={13} />}
+              <span className="block max-w-[140px] truncate">{t.label}</span>
+            </span>
             {t.onClose && (
               <button
                 type="button"
