@@ -26,6 +26,7 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from ..core.agent.inject import discover_skills
 from ..core.runtime_context import normalize_workspace
 from ..core.workspace_files import resolve_in_workspace, workspace_files
 from ..services.auth import TokenIssuer, verify_token
@@ -156,6 +157,53 @@ def validate_workspace_path(
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"not a directory: {normalized}")
     return _envelope(data={"path": normalized})
+
+
+@router.get("/skills")
+def list_skills(
+    request: Request,
+    task_id: str = "",
+    workspace: str = "",
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """The read-only skill catalogue for the `/` menu (#345).
+
+    Existing tasks resolve through ``task_id``; a new task passes the page's
+    ``workspace``; neither means the backend's launch directory. The response
+    carries no filesystem path — only the two-layer frontmatter facts.
+    """
+    manager = _tm(request)
+    if task_id:
+        task = manager.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        root = Path(task.workspace)
+    elif workspace.strip():
+        try:
+            root = Path(normalize_workspace(workspace))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+    else:
+        root = Path(manager.default_workspace)
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="workspace does not exist")
+
+    if "skills" not in manager.packages:
+        return _envelope(data={"enabled": False, "skills": []})
+    entries = discover_skills(Path.home(), root)
+    return _envelope(
+        data={
+            "enabled": True,
+            "skills": [
+                {
+                    "name": entry.name,
+                    "description": entry.description,
+                    "layer": entry.layer,
+                }
+                for entry in entries
+            ],
+        }
+    )
 
 
 @router.delete("/tasks")
@@ -701,6 +749,58 @@ def download_workspace_file(
         media_type=media_type or "application/octet-stream",
         filename=target.name,
     )
+
+
+def _changes_int(raw: str | None, field: str, minimum: int) -> int:
+    """Parse ``round`` / ``index`` manually: 400, never FastAPI's 422."""
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400, detail=f"{field} must be an integer"
+        ) from None
+    if value < minimum:
+        raise HTTPException(
+            status_code=400, detail=f"{field} must be at least {minimum}"
+        )
+    return value
+
+
+@router.get("/tasks/{task_id}/changes")
+def list_task_changes(
+    task_id: str,
+    request: Request,
+    round_no: str | None = Query(default=None, alias="round"),
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Read-only summary of one round's write/edit net changes (#343)."""
+    parsed_round = _changes_int(round_no, "round", 1)
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return _envelope(data=_tm(request).changes.read_round(task_id, parsed_round))
+
+
+@router.get("/tasks/{task_id}/changes/{round_no}/{index}")
+def get_task_change(
+    task_id: str,
+    request: Request,
+    round_no: str,
+    index: str,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """One file's unified diff for a round; binary/oversized carry flags only.
+
+    The path in the payload is always task-relative POSIX. Sidecar locations
+    and absolute workspace paths never leave the server.
+    """
+    parsed_round = _changes_int(round_no, "round", 1)
+    parsed_index = _changes_int(index, "index", 0)
+    if _tm(request).get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    detail = _tm(request).changes.read_detail(task_id, parsed_round, parsed_index)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="change not found")
+    return _envelope(data=detail)
 
 
 @router.get("/tasks/{task_id}/events")

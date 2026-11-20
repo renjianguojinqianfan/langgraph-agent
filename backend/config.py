@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     checkpoint_enabled: bool = True  # master switch (false -> no saver mounted)
     checkpoint_dir: str = ""  # "" -> <data_dir>/checkpoints
 
+    # ── Round changes (#343: write/edit review sidecars) ──
+    changes_dir: str = ""  # "" -> <data_dir>/changes
+
     # ── Server ──
     # This chapter is local-only: loopback listener + the app's own origins.
     host: str = "127.0.0.1"
@@ -170,6 +173,18 @@ class Settings(BaseSettings):
         p = Path(self.checkpoint_dir)
         if not self.checkpoint_dir or not p.is_absolute():
             p = self.data_path / "checkpoints"
+        return p
+
+    @property
+    def changes_path(self) -> Path:
+        """Round-change sidecar directory (defaults under ``data_path``).
+
+        Sidecars contain raw file contents (possibly secrets): the directory
+        stays in the local ``data/`` tree and is never exposed by an API.
+        """
+        p = Path(self.changes_dir)
+        if not self.changes_dir or not p.is_absolute():
+            p = self.data_path / "changes"
         return p
 
     @staticmethod

@@ -4,10 +4,13 @@ import { useViewportWidth } from "../../hooks/useViewportWidth";
 import { useWorkspaceFiles } from "../../hooks/useWorkspaceFiles";
 import { cx } from "../../lib/cx";
 import {
+  changeTabId,
+  changeTabRef,
   fileTabId,
   fileTabLabel,
   fileTabPath,
   tabAfterClosing,
+  tabAfterClosingChange,
   type DashTab,
 } from "../../lib/dashTabs";
 import { expandAncestors, toggleDir } from "../../lib/fileTree";
@@ -29,6 +32,7 @@ import {
   tabPanelId,
   type TabItem,
 } from "../ui/Tabs";
+import { ChangesReviewTab } from "./ChangesReviewTab";
 import { EventPane } from "./EventPane";
 import { FileNavigator } from "./FileNavigator";
 import { FilePane } from "./FilePane";
@@ -76,11 +80,17 @@ interface DashTabsProps {
   tab: DashTab;
   /** Open file tabs, in the order they were opened (#266). */
   fileTabs: readonly string[];
+  /** Open review tabs, one per round, in the order they were opened (#343). */
+  changeTabs: readonly number[];
+  /** Per-review-tab selected file; the tab itself owns no selection state. */
+  changeSelection: Readonly<Record<string, string>>;
   /** #230: false while the narrow-screen drawer is closed — panes must not poll. */
   visible: boolean;
   onTabChange: (tab: DashTab) => void;
   onOpenFile: (path: string) => void;
   onCloseFile: (path: string) => void;
+  onCloseChange: (round: number) => void;
+  onSelectChangeFile: (tabId: string, path: string) => void;
   onOpenTrace: () => void;
 }
 
@@ -88,10 +98,14 @@ export function DashTabs({
   task,
   tab,
   fileTabs,
+  changeTabs,
+  changeSelection,
   visible,
   onTabChange,
   onOpenFile,
   onCloseFile,
+  onCloseChange,
+  onSelectChangeFile,
   onOpenTrace,
 }: DashTabsProps) {
   // Focus management: opening a file (keyboard or mouse) moves focus from the
@@ -101,7 +115,9 @@ export function DashTabs({
   useEffect(() => {
     const previous = previousTab.current;
     previousTab.current = tab;
-    if (tab !== previous && fileTabPath(tab) !== null) focusTab(BASE_ID, tab);
+    if (tab !== previous && (fileTabPath(tab) !== null || changeTabRef(tab) !== null)) {
+      focusTab(BASE_ID, tab);
+    }
   }, [tab]);
   useEffect(() => {
     if (focusTarget === null) return;
@@ -198,6 +214,13 @@ export function DashTabs({
     onCloseFile(path);
   };
 
+  const closeChange = (round: number) => {
+    setFocusTarget(
+      task ? tabAfterClosingChange(changeTabs, round, tab, task.id) : "files"
+    );
+    onCloseChange(round);
+  };
+
   const tabs: TabItem<DashTab>[] = [
     ...TABS,
     ...fileTabs.map((path) => ({
@@ -207,6 +230,14 @@ export function DashTabs({
       icon: "file" as const,
       onClose: () => closeFile(path),
     })),
+    ...(task
+      ? changeTabs.map((round) => ({
+          id: changeTabId(task.id, round),
+          label: `变更 · 第 ${round} 轮`,
+          title: `第 ${round} 轮变更`,
+          onClose: () => closeChange(round),
+        }))
+      : []),
   ];
 
   const empty = (
@@ -307,6 +338,24 @@ export function DashTabs({
                   active={id === tab}
                   visible={visible}
                   navigator={navigatorFor(path)}
+                />
+              </DashPanel>
+            );
+          })}
+
+        {task &&
+          changeTabs.map((round) => {
+            const id = changeTabId(task.id, round);
+            return (
+              <DashPanel key={id} tabId={id} active={id === tab}>
+                <ChangesReviewTab
+                  taskId={task.id}
+                  round={round}
+                  selectedPath={changeSelection[id] ?? ""}
+                  onSelectFile={(path) => onSelectChangeFile(id, path)}
+                  onOpenFile={openFile}
+                  active={id === tab}
+                  visible={visible}
                 />
               </DashPanel>
             );

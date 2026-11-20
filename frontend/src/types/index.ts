@@ -60,6 +60,82 @@ export interface FilePreview {
   truncated: boolean;
 }
 
+// --- #343: per-round write/edit changes ---
+
+/** ``deleted`` exists in the API/type for future tools, but the current file
+ * tools cannot delete: a round never produces it through ``write``/``edit``. */
+export type ChangeStatus = "added" | "modified" | "deleted";
+
+/** One file's net change in a round, as listed by the changes API. */
+export interface ChangeFileEntry {
+  index: number;
+  /** Task-relative POSIX path; never an absolute workspace path. */
+  path: string;
+  display: string;
+  status: ChangeStatus;
+  added: number;
+  deleted: number;
+  binary: boolean;
+  oversized: boolean;
+}
+
+export interface ChangesSummary {
+  round: number;
+  total: number;
+  truncated: boolean;
+  added: number;
+  deleted: number;
+  files: ChangeFileEntry[];
+}
+
+/** One unified-diff hunk; every line carries its leading `` ``/``+``/``-``. */
+export interface DiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+
+export interface ChangeDetail {
+  path: string;
+  status: ChangeStatus;
+  added: number;
+  deleted: number;
+  binary: boolean;
+  oversized: boolean;
+  /** Diff timed out and degraded to one whole-file replacement. */
+  coarse: boolean;
+  /** Rendered lines were capped at 2000. */
+  truncated: boolean;
+  hunks: DiffHunk[];
+}
+
+/** One flattened diff line used by the unified view. */
+export interface DiffRow {
+  kind: "context" | "add" | "delete";
+  oldLine: number | null;
+  newLine: number | null;
+  text: string;
+}
+
+/** One side-by-side row (deletion/addition runs are paired index-wise). */
+export interface SplitRow {
+  kind: "context" | "add" | "delete" | "change";
+  oldLine: number | null;
+  newLine: number | null;
+  oldText: string | null;
+  newText: string | null;
+}
+
+/** One discoverable skill from ``GET /api/skills`` (#345). No path travels. */
+export interface SkillInfo {
+  name: string;
+  description: string;
+  /** Discovery layer: ``home`` or ``workspace``. */
+  layer: string;
+}
+
 export interface Task {
   id: string;
   title: string;

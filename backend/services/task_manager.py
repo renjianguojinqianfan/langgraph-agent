@@ -58,6 +58,7 @@ from ..core.tools.shell import ShellTool
 from ..core.tools.subagent_tool import SpawnSubagentTool
 from ..utils.logging import get_logger
 from . import plan_file
+from .changes import ChangesRecorder, ChangesStore
 from .event_bus import EventBus
 from .model_store import IMPLEMENTED_PROTOCOLS, ModelStore, ResolvedModel
 from .persistence import Persistence, PersistenceError
@@ -303,6 +304,9 @@ class TaskManager:
         )
         # P0 item 4: resident trace recorder (EventBus subscriber).
         self._trace: Optional[TraceRecorder] = TraceRecorder(settings) if settings.trace_enabled else None
+        #: #343: per-round write/edit sidecars. One store per manager; tests can
+        #: read it directly (the HTTP face goes through the routes).
+        self.changes = ChangesStore(settings)
 
         self._lock = threading.Lock()
         self._active_states: Dict[str, AgentState] = {}
@@ -343,6 +347,21 @@ class TaskManager:
         # Spec Issue #4 (D5): crash recovery reconciliation — a fresh process
         # owns no execution threads, so persisted RUNNING tasks are orphans.
         self._reconcile_orphans()
+        # #343: sidecar lifecycle uses the same authority — task directories
+        # no record owns are orphans, and a round cut off by the crash gets
+        # its best-effort finalize before its files can drift further.
+        self._reconcile_changes()
+
+    def _reconcile_changes(self) -> None:
+        tasks = self.persistence.list_all()
+        removed = self.changes.reconcile({task.id for task in tasks})
+        if removed:
+            logger.warning("Removed %d orphan changes director(ies)", removed)
+        for task in tasks:
+            try:
+                self.changes.finalize_task(task.id, Path(task.workspace))
+            except Exception:  # per-task isolation; a missing workspace is fine
+                logger.warning("changes finalize failed for %s", task.id, exc_info=True)
 
     def _mount_checkpointer(self, settings: Settings) -> None:
         """Mount the sqlite saver, or refuse a store this build cannot vouch for.
@@ -1212,6 +1231,11 @@ class TaskManager:
         self._start_run(task_id)
         return task_id
 
+    @property
+    def default_workspace(self) -> str:
+        """Directory a task without an explicit workspace runs in (#345)."""
+        return self._default_workspace
+
     def get_task(self, task_id: str) -> Optional[Task]:
         return self.persistence.load_task(task_id)
 
@@ -1305,7 +1329,12 @@ class TaskManager:
             self._round_models.pop(task_id, None)
             self._interrupt_announced.discard(task_id)
             self._threads.pop(task_id, None)
-        return {"checkpoint": checkpoint_removed, "trace": trace_removed}
+        changes_removed = self.changes.cleanup_task(task_id)
+        return {
+            "checkpoint": checkpoint_removed,
+            "trace": trace_removed,
+            "changes": changes_removed,
+        }
 
     # ── run loop ──
     def _start_run(self, task_id: str) -> None:
@@ -1401,6 +1430,18 @@ class TaskManager:
             active = self._active_states.get(task_id)
             active_round = int(active.get("round_no", 0) or 0) if active else 0
             active_step = (int(active.get("step_index", 0) or 0) or None) if active else None
+            if task is not None:
+                # #343: the round died here; settle its sidecars best-effort.
+                try:
+                    self.changes.finalize_round(
+                        task.id,
+                        active_round or self._round_number(task),
+                        Path(task.workspace),
+                    )
+                except Exception:
+                    logger.warning(
+                        "changes finalize failed after crash for %s", task.id, exc_info=True
+                    )
             self.event_bus.publish(
                 task_id,
                 "task_failed",
@@ -1443,6 +1484,7 @@ class TaskManager:
             injection_fragments=self.injection_fragments,
             trace_source="main",
             trace_owner=task.id,
+            changes=ChangesRecorder(self.changes, task.id, Path(task.workspace)),
         )
 
     def _prepare_new_round(self, _graph: Any, task: Task) -> AgentState:
@@ -1735,6 +1777,16 @@ class TaskManager:
         """
         candidate = task.model_copy(deep=True)
         status = final.get("status") or "FAILED"
+        # #343: a round is over (park / stop / error) — re-read every touched
+        # file into its after sidecar before the record is persisted.
+        try:
+            self.changes.finalize_round(
+                candidate.id,
+                int(final.get("round_no", 1) or 1),
+                Path(candidate.workspace),
+            )
+        except Exception:
+            logger.warning("changes finalize failed for %s", candidate.id, exc_info=True)
         candidate.steps = [
             StepRecord(**self._redact_step(s)) for s in final.get("steps", [])
         ]
