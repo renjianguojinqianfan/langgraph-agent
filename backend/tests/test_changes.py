@@ -395,6 +395,40 @@ def test_a_new_round_does_not_touch_the_previous_round(tmp_path: Path) -> None:
     assert store.read_round("task-1", 1)["total"] == 1
 
 
+def test_missing_workspace_keeps_the_last_captured_round(tmp_path: Path) -> None:
+    """A moved/deleted workspace must not turn every touched file into deleted.
+
+    Startup reconciliation finalizes persisted tasks; if the workspace is gone
+    the round must stay exactly as captured (no meta or sidecar rewrite).
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "f.txt").write_text("one\ntwo\n", encoding="utf-8")
+    store = ChangesStore(make_settings(tmp_path))
+    handle = ChangesRecorder(store, "task-1", ws).begin(
+        1, "edit", {"path": "f.txt"}, "call_1"
+    )
+    assert handle is not None
+    (ws / "f.txt").write_text("ONE\ntwo\n", encoding="utf-8")
+    ChangesRecorder(store, "task-1", ws).commit(handle)
+
+    captured = store.read_round("task-1", 1)
+    captured_detail = store.read_detail("task-1", 1, captured["files"][0]["index"])
+    assert captured["files"][0]["status"] == "modified"
+    assert captured["added"] == 1
+    assert captured["deleted"] == 1
+    assert captured_detail is not None
+
+    moved = tmp_path / "moved-ws"
+    ws.rename(moved)
+    store.finalize_round("task-1", 1, ws)
+    store.finalize_task("task-1", ws)
+
+    assert store.read_round("task-1", 1) == captured
+    assert store.read_detail("task-1", 1, captured["files"][0]["index"]) == captured_detail
+    assert captured["files"][0]["status"] != "deleted"
+
+
 def test_missing_after_with_a_before_is_deleted(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()

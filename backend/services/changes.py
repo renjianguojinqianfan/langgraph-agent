@@ -513,7 +513,17 @@ class ChangesStore:
         tools never delete, so this is a shell/out-of-band edge only). A
         finalized record is never rewritten: resume opens a new round, and a
         startup sweep must not erase what the round already produced.
+
+        A missing/renamed workspace is **not** evidence that its files were
+        deleted: startup reconciliation finalizes every persisted task, and
+        rewriting meta there would silently corrupt the stored review history.
+        Leave sidecars exactly as the last successful round end left them.
         """
+        try:
+            if not workspace.is_dir():
+                return
+        except OSError:
+            return
         round_dir = self._round_dir(task_id, round_no)
         if round_dir is None or not round_dir.is_dir():
             return
