@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useElementWidth } from "../../hooks/useElementWidth";
 import { useViewportWidth } from "../../hooks/useViewportWidth";
 import { useWorkspaceFiles } from "../../hooks/useWorkspaceFiles";
@@ -86,6 +93,8 @@ interface DashTabsProps {
   changeSelection: Readonly<Record<string, string>>;
   /** #230: false while the narrow-screen drawer is closed — panes must not poll. */
   visible: boolean;
+  /** #346: the right column element (border-box), so 420/560 are exact. */
+  rowRef?: RefObject<HTMLElement | null>;
   onTabChange: (tab: DashTab) => void;
   onOpenFile: (path: string) => void;
   onCloseFile: (path: string) => void;
@@ -101,6 +110,7 @@ export function DashTabs({
   changeTabs,
   changeSelection,
   visible,
+  rowRef,
   onTabChange,
   onOpenFile,
   onCloseFile,
@@ -125,11 +135,11 @@ export function DashTabs({
     setFocusTarget(null);
   }, [focusTarget]);
 
-  // #346: the right-column row drives float/side/fill. Measure the actual
-  // panel (the fixed 420 column, or the drawer on narrow screens); the 420
-  // fallback only covers the first frame before ResizeObserver reports.
+  // #346: the right-column row drives float/side/fill. Measure the column
+  // itself when the host passes it (border-box, so the 420/560 boundaries do
+  // not drift by the 1px border); the local root is the fallback/harness.
   const rootRef = useRef<HTMLDivElement>(null);
-  const rowWidth = useElementWidth(rootRef);
+  const rowWidth = useElementWidth(rowRef ?? rootRef);
   const viewportWidth = useViewportWidth();
   const layout = navigatorLayout(
     rowWidth > 0 ? rowWidth : 420,
