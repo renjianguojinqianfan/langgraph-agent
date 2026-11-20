@@ -182,12 +182,13 @@ export const getTaskSnapshot = (id: string) =>
     return data && typeof data.id === "string" ? (data as Task) : null;
   });
 
-/** #241: delete one task's history (record + checkpoint + trace; disk stays). */
+/** #241/#343: delete one task's history (record + checkpoint + trace + change
+ * sidecars; disk stays). */
 export const deleteTask = (id: string) =>
-  req<{ ok: boolean; cleanup: { checkpoint: boolean; trace: boolean } }>(
-    `/tasks/${id}`,
-    { method: "DELETE" }
-  );
+  req<{
+    ok: boolean;
+    cleanup: { checkpoint: boolean; trace: boolean; changes: boolean };
+  }>(`/tasks/${id}`, { method: "DELETE" });
 
 /** #241: delete one directory's history; `dir` is required (no "all"). */
 export const deleteWorkspaceTasks = (dir: string) =>
