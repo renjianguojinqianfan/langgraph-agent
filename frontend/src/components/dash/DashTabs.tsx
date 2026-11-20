@@ -99,6 +99,7 @@ export function DashTabs({
       id: fileTabId(path),
       label: fileTabLabel(path, fileTabs),
       title: path,
+      icon: "file" as const,
       onClose: () => closeFile(path),
     })),
   ];

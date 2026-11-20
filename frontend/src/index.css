@@ -61,6 +61,22 @@
 @layer base {
   :root {
     color-scheme: dark;
+
+    /* #344: Shiki's CSS-variables theme. Syntax colours are references to the
+       app palette (no new colour values): keywords reuse the inline-code
+       signal, strings success green, constants warning amber, comments and
+       punctuation tertiary, function names primary text. */
+    --shiki-foreground: var(--color-secondary);
+    --shiki-background: transparent;
+    --shiki-token-constant: var(--color-state-warn);
+    --shiki-token-string: var(--color-state-ok);
+    --shiki-token-string-expression: var(--color-state-ok);
+    --shiki-token-comment: var(--color-tertiary);
+    --shiki-token-keyword: var(--color-signal-now);
+    --shiki-token-parameter: var(--color-secondary);
+    --shiki-token-function: var(--color-primary);
+    --shiki-token-punctuation: var(--color-tertiary);
+    --shiki-token-link: var(--color-signal-now);
   }
 
   html,
