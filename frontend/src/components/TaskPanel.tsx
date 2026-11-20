@@ -19,6 +19,8 @@ interface TaskPanelProps {
   rightDrawer: boolean;
   onToggleRight: () => void;
   onOpenPlan: () => void;
+  /** #343: open (or re-activate) the review tab for a round. */
+  onOpenChanges: (round: number, path?: string) => void;
   traceOpen: boolean;
   onCloseTrace: () => void;
 }
@@ -31,6 +33,7 @@ export function TaskPanel({
   rightDrawer,
   onToggleRight,
   onOpenPlan,
+  onOpenChanges,
   traceOpen,
   onCloseTrace,
 }: TaskPanelProps) {
@@ -116,7 +119,11 @@ export function TaskPanel({
 
       <div className="flex min-h-0 flex-1 flex-col">
         {task ? (
-          <Conversation task={task} onOpenPlan={onOpenPlan} />
+          <Conversation
+            task={task}
+            onOpenPlan={onOpenPlan}
+            onOpenChanges={onOpenChanges}
+          />
         ) : loadError ? (
           <div className="flex flex-1 flex-col items-start justify-center gap-3 px-6">
             <p role="alert" className="text-body text-state-danger">

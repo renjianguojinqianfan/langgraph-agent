@@ -4,11 +4,15 @@ import { TaskPanel } from "../components/TaskPanel";
 import { DashTabs } from "../components/dash/DashTabs";
 import { IconButton } from "../components/ui/Button";
 import {
+  changeTabId,
+  closeChangeTab,
   closeFileTab,
   fileTabId,
   fileTabPath,
+  openChangeTab,
   openFileTab,
   tabAfterClosing,
+  tabAfterClosingChange,
   type DashTab,
 } from "../lib/dashTabs";
 import { getTask, getTaskSnapshot, listTasksSnapshot } from "../api/client";
@@ -19,6 +23,7 @@ import { useSSE } from "../hooks/useSSE";
 import { useModelStore } from "../store/modelStore";
 import { needsStatusRefetch } from "../store/reduceTask";
 import { useTaskStore } from "../store/taskStore";
+import { useChangesReviewStore } from "../store/changesReviewStore";
 import { SSEvent } from "../types";
 import { cx } from "../lib/cx";
 import {
@@ -48,10 +53,18 @@ export function TaskView() {
   const refreshModels = useModelStore((s) => s.refresh);
   const listRevision = useTaskStore((s) => s.listRevision);
   // File previews are tabs in the third column (#266), one per opened path.
-  // Tab and file list move together so a close never reads a stale list.
-  const [dash, setDash] = useState<{ tab: DashTab; files: string[] }>({
+  // Change reviews are tabs scoped to (task, round) (#343); tab and file list
+  // move together so a close never reads a stale list.
+  const [dash, setDash] = useState<{
+    tab: DashTab;
+    files: string[];
+    changes: number[];
+    changePaths: Record<string, string>;
+  }>({
     tab: "files",
     files: [],
+    changes: [],
+    changePaths: {},
   });
   const [traceOpen, setTraceOpen] = useState(false);
   // D-25: one breakpoint source for both columns (lib/breakpoints.ts); rail
@@ -229,20 +242,29 @@ export function TaskView() {
       .catch(() => {});
   }, [currentTaskId, status, detail?.final_answer, upsertTask]);
 
-  // Switching tasks closes the replay face and every file-preview tab; the
-  // plan/events choice is not a file tab and survives the switch.
+  // Switching tasks closes the replay face, every file-preview tab and every
+  // review tab; the plan/events choice is not a tab and survives the switch.
+  // Reviewed markers are in-memory and task-scoped, so they reset here too.
   useEffect(() => {
     // No ref reset here: `prevStatusRef` is keyed by task id, so a switch
     // simply reads as "another task" until this task's own status is observed.
     setTraceOpen(false);
+    useChangesReviewStore.getState().clearAll();
     setDash((current) => ({
       files: [],
-      tab: fileTabPath(current.tab) !== null ? "files" : current.tab,
+      changes: [],
+      changePaths: {},
+      tab:
+        fileTabPath(current.tab) !== null ||
+        current.tab.startsWith("change:")
+          ? "files"
+          : current.tab,
     }));
   }, [currentTaskId]);
 
   const openFile = useCallback((path: string) => {
     setDash((current) => ({
+      ...current,
       files: openFileTab(current.files, path),
       tab: fileTabId(path),
     }));
@@ -253,8 +275,56 @@ export function TaskView() {
 
   const closeFile = useCallback((path: string) => {
     setDash((current) => ({
+      ...current,
       files: closeFileTab(current.files, path),
       tab: tabAfterClosing(current.files, path, current.tab),
+    }));
+  }, []);
+
+  const openChanges = useCallback(
+    (round: number, path?: string) => {
+      if (!currentTaskId) return;
+      const id = changeTabId(currentTaskId, round);
+      setDash((current) => ({
+        ...current,
+        tab: id,
+        changes: openChangeTab(current.changes, round),
+        changePaths: path
+          ? { ...current.changePaths, [id]: path }
+          : current.changePaths,
+      }));
+      setOpen("right");
+    },
+    [currentTaskId]
+  );
+
+  const closeChanges = useCallback(
+    (round: number) => {
+      if (!currentTaskId) return;
+      setDash((current) => {
+        const id = changeTabId(currentTaskId, round);
+        const changePaths = { ...current.changePaths };
+        delete changePaths[id];
+        return {
+          ...current,
+          changes: closeChangeTab(current.changes, round),
+          changePaths,
+          tab: tabAfterClosingChange(
+            current.changes,
+            round,
+            current.tab,
+            currentTaskId
+          ),
+        };
+      });
+    },
+    [currentTaskId]
+  );
+
+  const selectChangeFile = useCallback((tabId: string, path: string) => {
+    setDash((current) => ({
+      ...current,
+      changePaths: { ...current.changePaths, [tabId]: path },
     }));
   }, []);
 
@@ -350,6 +420,7 @@ export function TaskView() {
               changeTab("plan");
               setOpen("right");
             }}
+            onOpenChanges={openChanges}
             traceOpen={traceOpen}
             onCloseTrace={() => setTraceOpen(false)}
           />
@@ -382,10 +453,14 @@ export function TaskView() {
           task={task}
           tab={dash.tab}
           fileTabs={dash.files}
+          changeTabs={dash.changes}
+          changeSelection={dash.changePaths}
           visible={!dashInert}
           onTabChange={changeTab}
           onOpenFile={openFile}
           onCloseFile={closeFile}
+          onCloseChange={closeChanges}
+          onSelectChangeFile={selectChangeFile}
           onOpenTrace={() => setTraceOpen(true)}
         />
       </aside>

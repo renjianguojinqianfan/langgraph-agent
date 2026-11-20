@@ -60,7 +60,11 @@ def test_delete_removes_history_checkpoint_and_trace_but_not_files(tmp_path):
         assert response.status_code == 200, response.text
         data = response.json()["data"]
         assert data["ok"] is True
-        assert data["cleanup"] == {"checkpoint": True, "trace": True}
+        assert data["cleanup"] == {
+            "checkpoint": True,
+            "trace": True,
+            "changes": False,
+        }
     finally:
         client.__exit__(None, None, None)
 
