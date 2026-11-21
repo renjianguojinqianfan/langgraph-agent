@@ -3,18 +3,18 @@
 > 单人 + 多工具的**实施/评审分离**制：qoder 写、opencode 审。
 > 触发：任何带 `ready-for-agent` 的实施票。规则冲突时以 `AGENTS.md`「跨任务安全边界」优先。
 
-## 流程（七步）
+## 流程
 
 | 步 | 执行者 | 动作 |
 |---|---|---|
 | 1 | **qoder** | 从 `master` 切 feature 分支（`feat/<slug>` 或 `fix/<slug>`，票号写进 PR）；读票面 + AGENTS.md 任务路由指定的权威文档 |
 | 2 | **qoder** | 实施：用户显式 `/implement`（该 skill 带 `disable-model-invocation: true`，agent 不能自动加载；见「技能调用语义」）；TDD：约定的 seam 上先写红测试，常跑类型检查与单测 |
 | 3 | **qoder** | 复核 `implement` 末尾的 `code-review` **自评审**结论（双轴：规范轴 + 需求轴）；若执行端未自动跑，显式调 `code-review`；返工发现后才进下一步 |
-| 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/archive/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」；**暴露面清理例外**：本机路径 / 用户目录的占位符替换优先于快照冻结，见 [`docs/security.md`](../security.md) §3 |
+| 3.5 | **qoder** | 调用 `neat-freak` skill 做**知识与文档收尾**（在提 PR 之前）：能力面 / 接口 / 配置语义变了，必须同步 `README.md`（「能力」节逐条对账）、`.env.example` 与对应架构文档；顺带清掉**本次自造的孤儿**（引导性 prompt、失同步的注释、失去消费者的配置键与形参）。历史交付快照（`docs/archive/incremental-prd-*.md`、mermaid 交付图、`lessons/`、`reference/`）不改，改在权威段声明「以本节为准」；**暴露面清理例外**：本机路径 / 用户目录的占位符替换优先于快照冻结，见 [`docs/security.md`](../security.md) §3 |
 | 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号，body 写 `Closes #N`（未自动关闭则合并后 `gh issue close`）；body 调 `pr` skill 写（Summary 最小可视化 / Before-After Evidence / Merge Danger）；验证状态四态如实写（通过/跳过/未运行/产物验收）；**返工 commit 后必须刷新 PR body**——Summary 的符号名、Evidence 的命令与数字与最终 head 对账（#274 实证：返工后 body 仍是 commit 1 快照，评审为三个数字往返一条评论） |
-| 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest）+ 危险动作钩子检查〔2026-10-14 起取代「冻结区检查」，冻结区随 ADR 0008 解除〕 + 真模型视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
+| 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest）+ 危险动作钩子检查〔2026-10-14 起取代「冻结区检查」，冻结区随 ADR 0008 解除〕 + 真模型视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改**；结论与返工项落 PR 评论（handoff 只作会话交接，不作为唯一凭证） |
 | 6 | 评审侧/用户 | 合并：按 `AGENTS.md`「验证入口与完成证据」+ [`docs/agents/issue-tracker.md`](issue-tracker.md)「Release conventions」走收尾门（机械验证 + 端到端验收）→ CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
-| 7 | 评审侧/用户（或实施侧按授权） | 合并后补票面声明的浏览器手测 / 真模型验证：证据落 PR 评论或 `docs/assets/verification/<日期>/`；PR body 的 Known limitations 随验证结果更新，不把「未运行」挂账到发布前 |
+| 7 | 评审侧/用户（或实施侧按授权） | 合并后补票面声明的浏览器手测 / 真模型验证：PR 评论至少写任务 id、模型、通过 / 未覆盖项，证据落 PR 评论或 `docs/assets/verification/<日期>/`（本机临时目录不算共享证据）；PR body 的 Known limitations 随验证结果更新，不把「未运行」挂账到发布前 |
 
 步 7 只关闭「已声明缺口」，不替代发布前的 10 场景验收；组件手测清单仍以 [`docs/frontend-design.md`](../frontend-design.md) §6 为准。
 
@@ -30,7 +30,7 @@
 ## 边界
 
 - **实施者不合并自己的 PR**——合并动作在评审侧或用户手里。
-- **opencode 评审不改代码**——返工回 qoder 分支（保持评审上下文干净，等价于「新人视角复审」）。
+- **opencode 评审默认不改代码**——返工回 qoder 分支（保持评审上下文干净，等价于「新人视角复审」）。**用户显式授权的返工例外**：用户明确要求评审侧直接改（如纯重构 / 简化）时，改动只限评审发现项，返工后由用户或另一侧复核；不把这条例外变成默认路径。
 - 挂起票 / 决策票（无代码）不走此流程；docs 小修走 AGENTS.md 的直推惯例。
 - ~~评审发现冻结区触碰 → 直接打回（无需商量）。~~ **2026-10-14 起作废**：冻结区（`resilience.py` /
   `registry.py` 的 CI 守卫）随 [ADR 0008](../adr/0008-single-loop-plan-build-modes.md) 解除，不再有「冻结区」这一说。
@@ -64,7 +64,7 @@
 
 ## 并行实施（多 worktree，2026-09-28 #49 试水首证）
 
-单票仍走上面七步；多票同时开工时叠加以下约定：
+单票仍走上面流程；多票同时开工时叠加以下约定：
 
 - **一票一 worktree**：qoder 用 `qoder --worktree <票号-短名>`（落 `.qoder/worktrees/`，已 gitignore）；OpenCode 或其它宿主用 `git worktree add`（落普通盘符路径，见 [`verification-notes.md`](verification-notes.md) §3）。AGENTS.md 在子路径自动注入，规则层不用向子代理复述
 - **claim 走 GitHub**：开工先 `gh issue edit <N> --add-assignee @me` 防并发会话撞车；子代理共享的父任务清单只认含本票号的条目
@@ -96,3 +96,4 @@
 - 该分工自 2026-09-26 起为现役约定（#58 的单工具交付是此前形态，非本工作流的样板）。
 - 步 3.5（`neat-freak` 文档收尾）同日为 #56 补入：评审发现的失同步（README 仍画已删节点、`.env.example` 仍承诺已失去执行点的超时）若不在这一步清掉，就会带着过期文档进 PR。
 - 两边共享同一技能组（`~/.agents/skills` 的 mattpocock 工程技能：implement / code-review / tdd 等），但**共享目录不等于同调用权限**：带 `disable-model-invocation: true` 的 skill 只能用户显式 `/name` 调用，见「技能调用语义」。
+- 2026-11-21（#347 复盘）：步 3.5 补「README 能力节逐条对账」；步 5 明确评审结论与返工项落 PR 评论（handoff 只作会话交接）；步 7 补合并后浏览器手测 / 真模型验证的证据与 Known limitations 收口；边界补「用户显式授权的评审侧返工例外」。
