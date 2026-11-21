@@ -14,6 +14,9 @@
 | 4 | **qoder** | 提交 PR：分阶段 commit **不 squash**；标题带票号，body 写 `Closes #N`（未自动关闭则合并后 `gh issue close`）；body 调 `pr` skill 写（Summary 最小可视化 / Before-After Evidence / Merge Danger）；验证状态四态如实写（通过/跳过/未运行/产物验收）；**返工 commit 后必须刷新 PR body**——Summary 的符号名、Evidence 的命令与数字与最终 head 对账（#274 实证：返工后 body 仍是 commit 1 快照，评审为三个数字往返一条评论） |
 | 5 | **opencode** | 以评审者身份独立评 PR：调 `code-review` skill 双轴评审 + 门禁核对（ruff/mypy/pytest）+ 危险动作钩子检查〔2026-10-14 起取代「冻结区检查」，冻结区随 ADR 0008 解除〕 + 真模型视票面需要（细则见「评审动作清单」）；**只提意见与返工要求，不直接替改** |
 | 6 | 评审侧/用户 | 合并：按 `AGENTS.md`「验证入口与完成证据」+ [`docs/agents/issue-tracker.md`](issue-tracker.md)「Release conventions」走收尾门（机械验证 + 端到端验收）→ CI 全绿 + opencode 评审通过 → merge commit（不 squash） |
+| 7 | 评审侧/用户（或实施侧按授权） | 合并后补票面声明的浏览器手测 / 真模型验证：证据落 PR 评论或 `docs/assets/verification/<日期>/`；PR body 的 Known limitations 随验证结果更新，不把「未运行」挂账到发布前 |
+
+步 7 只关闭「已声明缺口」，不替代发布前的 10 场景验收；组件手测清单仍以 [`docs/frontend-design.md`](../frontend-design.md) §6 为准。
 
 ## 技能调用语义
 

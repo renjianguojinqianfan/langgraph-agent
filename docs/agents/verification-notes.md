@@ -74,3 +74,22 @@ playwright-core，**一条命令跑一个动作**：
 **后台 PID 取证**：应用内 `shell` 工具跑 bash 时 `$!` 可能为空（`start` / 子 shell 的作业表不保证），
 不能拿「回显为空」判定进程没起来。用系统进程表核对（`tasklist /FI "PID eq <pid>"` 或 Win32
 进程查询），停止后再查一次确认消失；证据里记 PID 与两次查询结果。
+
+### 6.1 纯 CDP 配方（无 playwright-core，2026-11-21 #347 实证）
+
+本机没有 playwright / puppeteer 时，Chrome + CDP 足够跑完组件手测；Node 26 自带 `WebSocket`，不需新增依赖。
+
+1. 起独立 Chrome：`chrome --headless=new --remote-debugging-port=9222 --user-data-dir=<scratch>/chrome-profile about:blank`；`curl http://127.0.0.1:9222/json/version` 确认。
+2. 服务用隔离数据目录：harness 里的 Python 是 Low 完整性，写不了 Medium 的 `data/`；把
+   `DATA_DIR` / `ARTIFACTS_DIR` / `TRACE_DIR` / `CHECKPOINT_DIR` 指到 `<scratch>` 下，从干净工作目录启动
+   `qianfan --port <port> --no-browser`。Vite dev 在 Low 下也会因 `frontend/node_modules/.vite-temp`
+   EPERM，手测用已构建的 `frontend/dist`（uvicorn 直接服务）即可。
+3. 驱动脚本：`fetch http://127.0.0.1:9222/json/list` 取 page target，
+   `new WebSocket(webSocketDebuggerUrl)`；封装 `Runtime.evaluate` / `Page.captureScreenshot` /
+   `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent`。
+4. 交互坑：
+   - React 受控 textarea 用原生 value setter + `input` / `select` 事件；`Input.insertText` 本次实测没有更新受控状态。
+   - JS `element.click()` 不移动焦点；验 focus / inert / Esc 回焦要用真实鼠标事件。
+   - `Emulation.setDeviceMetricsOverride` 会随驱动会话 / 导航丢失；断言断点前先读 `innerWidth`，或启动 Chrome 时固定 `--window-size`。
+5. 证据：截图 + 元素级 `text` / `role` / `aria` 断言，不要整图像素 diff。组件手测证据放
+   `<scratch>/verify-evidence/`（未跟踪）；发布收口才进 `docs/assets/verification/<日期>/`。
