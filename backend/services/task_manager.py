@@ -31,7 +31,7 @@ from ..config import Settings
 from ..core.agent.graph import build_graph
 from ..core.agent.nodes import AgentRuntime
 from ..core.agent.policy import DangerPolicy, warn_unmatched_rules
-from ..core.agent.state import AgentState
+from ..core.agent.state import AgentState, initial_agent_state
 from ..core.agent.subagent import SubAgentExecutor
 from ..core.capability_packages import (
     enabled_tool_names,
@@ -45,6 +45,7 @@ from ..core.capability_packages import (
 from ..core.llm.client import LLMClient
 from ..core.llm.factory import build_llm_client
 from ..core.llm.openai_compat import create_llm_client
+from ..core.llm.trace import redact_structure
 from ..core.runtime_context import (
     get_current_task_id,
     normalize_workspace,
@@ -1503,25 +1504,15 @@ class TaskManager:
             "plan_version": 0,
             "plan_hash": "",
         }
-        return {
-            "task_id": task.id,
-            "mode": task.mode.value,
-            "messages": [{"role": "user", "content": task.user_input}],
-            "plan_text": seeded["plan_text"],
-            "plan_version": seeded["plan_version"],
-            "plan_hash": seeded["plan_hash"],
-            "steps": [],
-            "status": "RUNNING",
-            "stop_requested": False,
-            "round_no": self._round_number(task),
-            "step_index": 0,
-            "round_steps": 0,
-            "final_answer": "",
-            "error": "",
-            "_last_action": "",
-            "_current_tool_calls": [],
-            "subtasks": [],
-        }
+        return initial_agent_state(
+            task_id=task.id,
+            user_input=task.user_input,
+            mode=task.mode.value,
+            round_no=self._round_number(task),
+            plan_text=seeded["plan_text"],
+            plan_version=seeded["plan_version"],
+            plan_hash=seeded["plan_hash"],
+        )
 
     def _prepare_restored_round(
         self, graph: Any, task: Task, *, user_text: Optional[str] = None
@@ -1738,21 +1729,11 @@ class TaskManager:
 
     def _redact_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
         """Persist tool arguments redacted; dispatch already saw the raw copy."""
-
-        def redact_value(value: Any) -> Any:
-            if isinstance(value, str):
-                return self.redact(value)
-            if isinstance(value, list):
-                return [redact_value(item) for item in value]
-            if isinstance(value, dict):
-                return {self.redact(str(k)): redact_value(v) for k, v in value.items()}
-            return value
-
         calls = []
         for call in step.get("tool_calls") or []:
             call = dict(call)
             if "input" in call:
-                call["input"] = redact_value(call["input"])
+                call["input"] = redact_structure(call["input"], self.redact)
             calls.append(call)
         redacted = {**step, "tool_calls": calls}
         # D-38: the persisted reasoning is the display copy — redacted and
@@ -1960,58 +1941,84 @@ class TaskManager:
                 turns.append(ChatTurn(role=role, content=content))
         return turns
 
-    def resume(self, task_id: str) -> Dict[str, Any]:
-        """Continue an INTERRUPTED task from its last durable checkpoint.
+    def _wait_worker_settled(self, task_id: str) -> None:
+        """Wait out a worker still unwinding after ``stop()``.
 
-        Validates synchronously (state + live-thread + checkpoint existence),
-        then hands execution to a worker thread mirroring create_task().
-        Raises RuntimeError with an actionable message when resuming is
-        impossible — callers map that to HTTP 409. The whole validate-and-
-        claim section runs under ``self._lock`` as a compare-and-set so two
-        concurrent resumes can never both spawn workers on one thread_id.
+        ``stop()`` persists INTERRUPTED while the worker is still finishing
+        through the finish node and committing its last checkpoints. A bounded
+        join lets an instant resume / plan edit / continuation never race those
+        final writes (worst case the caller waits out a shutdown, reported 409).
         """
         thread = self._threads.get(task_id)
         if thread is not None and thread.is_alive():
-            # stop() persists INTERRUPTED while the worker is still unwinding
-            # through the finish node and committing its last checkpoints.
-            # Bounded join lets an instant resume never race those final
-            # writes (worst case the caller waits out a shutdown, reported 409).
             thread.join(timeout=5.0)
             if thread.is_alive():
                 raise RuntimeError(f"task {task_id} is still shutting down")
 
+    def _claim_restored_round(
+        self,
+        task_id: str,
+        *,
+        allow_failed: bool,
+        user_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate and claim one checkpoint-backed round.
+
+        Resume and continuation differ only in admission: ``resume`` accepts a
+        parked INTERRUPTED task and adds no turn; a continuation also accepts
+        FAILED and appends the user's message (B1 #219). Everything else —
+        workspace, plan precheck, live-worker refusal, checkpoint proof, trace
+        attach-before-flip and the RUNNING claim — is one compare-and-set under
+        the manager lock, so two claims can never both spawn workers on one
+        thread_id. Returns the claimed task snapshot taken under the lock.
+        """
+        self._wait_worker_settled(task_id)
         has_checkpoint = self._has_checkpoint(task_id)
-        # ── claim: single check-and-set under the manager lock ──
         with self._lock:
             task = self.persistence.load_task(task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} not found")
-            if task.status != TaskStatus.INTERRUPTED:
+            if allow_failed:
+                if task.status not in (TaskStatus.INTERRUPTED, TaskStatus.FAILED):
+                    raise RuntimeError(
+                        f"task {task_id} is {task.status.value}; "
+                        "only a parked (INTERRUPTED or FAILED) task can continue"
+                    )
+            elif task.status != TaskStatus.INTERRUPTED:
                 raise RuntimeError(
                     f"task {task_id} is {task.status.value}, "
                     "only INTERRUPTED tasks can be resumed"
                 )
             self._require_workspace(task)
             # Read the plan before accepting the round: a non-UTF-8 file is a
-            # readable 409 here, not a worker crash after the resume is taken.
+            # readable 409 here, not a worker crash after the claim is taken.
             self._seed_plan(task)
             live = self._threads.get(task_id)
             if live is not None and live.is_alive():
                 raise RuntimeError(f"task {task_id} is already running")
             if not has_checkpoint:
                 raise self._no_checkpoint_error(task_id)
-            # Flip to RUNNING inside the lock: any second resume() now sees
+            # Flip to RUNNING inside the lock: any second claim now sees
             # RUNNING and is rejected; a concurrent stop() flips it back and
-            # _resume_run re-checks before proceeding.
+            # the worker re-checks before proceeding.
             # Open the trace BEFORE flipping the record: a trace-file failure
             # must leave the task parked, never RUNNING without a worker.
             self._attach_trace(task_id, strict=True)
+            changes: Dict[str, Any] = {
+                "status": TaskStatus.RUNNING,
+                "updated_at": _now(),
+            }
+            if allow_failed:
+                # B1 (#219): a new round starts clean; the previous failure
+                # reason must not linger on a task that is running again.
+                changes["error"] = None
+            if user_text is not None:
+                changes["conversation"] = [
+                    *task.conversation,
+                    ChatTurn(role="user", content=user_text),
+                ]
             try:
-                self._mutate_task(
-                    task,
-                    changes={"status": TaskStatus.RUNNING, "updated_at": _now()},
-                    strict=True,
-                )
+                self._mutate_task(task, changes=changes, strict=True)
             except PersistenceError:
                 self._close_trace_quietly(task_id)
                 raise
@@ -2026,6 +2033,17 @@ class TaskManager:
                     ),
                 },
             )
+            return task.model_dump(mode="json")
+
+    def resume(self, task_id: str) -> Dict[str, Any]:
+        """Continue an INTERRUPTED task from its last durable checkpoint.
+
+        Validates synchronously (state + live-thread + checkpoint existence),
+        then hands execution to a worker thread mirroring create_task().
+        Raises RuntimeError with an actionable message when resuming is
+        impossible — callers map that to HTTP 409.
+        """
+        self._claim_restored_round(task_id, allow_failed=False)
 
         t = threading.Thread(target=self._resume_run, args=(task_id,), daemon=True)
         self._threads[task_id] = t
@@ -2122,11 +2140,7 @@ class TaskManager:
         """
         # Same window as resume: stop() settles the record before the worker
         # commits its last state. Wait the worker out rather than racing it.
-        thread = self._threads.get(task_id)
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=5.0)
-            if thread.is_alive():
-                raise RuntimeError(f"task {task_id} is still shutting down")
+        self._wait_worker_settled(task_id)
         with self._lock:
             task = self.persistence.load_task(task_id)
             if task is None:
@@ -2181,67 +2195,9 @@ class TaskManager:
         conversation instead of forcing a new task. ``resume`` stays
         INTERRUPTED-only; only this message path admits FAILED.
         """
-        thread = self._threads.get(task_id)
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=5.0)
-            if thread.is_alive():
-                raise RuntimeError(f"task {task_id} is still shutting down")
-
-        has_checkpoint = self._has_checkpoint(task_id)
-        with self._lock:
-            task = self.persistence.load_task(task_id)
-            if task is None:
-                raise RuntimeError(f"task {task_id} not found")
-            if task.status not in (TaskStatus.INTERRUPTED, TaskStatus.FAILED):
-                raise RuntimeError(
-                    f"task {task_id} is {task.status.value}; "
-                    "only a parked (INTERRUPTED or FAILED) task can continue"
-                )
-            self._require_workspace(task)
-            # Precheck the plan file for the same reason as resume(): the API
-            # must reject a continuation before the user message is persisted.
-            self._seed_plan(task)
-            live = self._threads.get(task_id)
-            if live is not None and live.is_alive():
-                raise RuntimeError(f"task {task_id} is already running")
-            if not has_checkpoint:
-                raise self._no_checkpoint_error(task_id)
-            # Same attach-before-flip contract as resume(): a trace-file error
-            # must leave the task parked with no worker and no user turn added.
-            self._attach_trace(task_id, strict=True)
-            turn_added = (
-                [*task.conversation, ChatTurn(role="user", content=user_text)]
-                if user_text is not None
-                else task.conversation
-            )
-            try:
-                self._mutate_task(
-                    task,
-                    changes={
-                        "status": TaskStatus.RUNNING,
-                        # B1 (#219): a new round starts clean; the previous failure
-                        # reason must not linger on a task that is running again.
-                        "error": None,
-                        "updated_at": _now(),
-                        "conversation": turn_added,
-                    },
-                    strict=True,
-                )
-            except PersistenceError:
-                self._close_trace_quietly(task_id)
-                raise
-            self.event_bus.publish(
-                task_id,
-                "task_resumed",
-                {
-                    "task_id": task_id,
-                    "status": TaskStatus.RUNNING.value,
-                    **self._task_event_revision(
-                        task, round_no=self._round_number(task)
-                    ),
-                },
-            )
-            snapshot = task.model_dump(mode="json")
+        snapshot = self._claim_restored_round(
+            task_id, allow_failed=True, user_text=user_text
+        )
 
         t = threading.Thread(
             target=self._continue_run,

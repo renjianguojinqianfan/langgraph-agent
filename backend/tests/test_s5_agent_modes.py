@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.schemas import ChatTurn, Task, TaskMode, TaskStatus
 from backend.core.agent.nodes import AgentRuntime
-from backend.core.agent.state import AgentState
+from backend.core.agent.state import AgentState, initial_agent_state
 from backend.core.agent.subagent import EXPLORE_TIER, tier_face_names
 from backend.core.llm.client import LLMResponse, MockLLMClient
 from backend.core.runtime_context import normalize_workspace
@@ -116,6 +116,47 @@ class _LoopingLLM(MockLLMClient):
 
 
 # ── mode -> tool face ───────────────────────────────────────────────────────
+def test_initial_agent_state_pins_the_round_contract() -> None:
+    """Both admission paths start from the same 17 channels and defaults."""
+    state = initial_agent_state(task_id="t1", user_input="do the thing")
+
+    assert set(state) == {
+        "task_id",
+        "mode",
+        "messages",
+        "plan_text",
+        "plan_version",
+        "plan_hash",
+        "steps",
+        "status",
+        "stop_requested",
+        "round_no",
+        "step_index",
+        "round_steps",
+        "final_answer",
+        "error",
+        "_last_action",
+        "_current_tool_calls",
+        "subtasks",
+    }
+    assert state == _state()
+
+    overridden = initial_agent_state(
+        task_id="t2",
+        user_input="plan it",
+        mode="plan",
+        round_no=3,
+        plan_text="# Plan",
+        plan_version=2,
+        plan_hash="abc",
+    )
+    assert overridden["mode"] == "plan"
+    assert overridden["round_no"] == 3
+    assert overridden["plan_text"] == "# Plan"
+    assert overridden["plan_version"] == 2
+    assert overridden["plan_hash"] == "abc"
+
+
 def test_an_empty_face_follows_the_mode_not_the_tool_count(tmp_path: Path) -> None:
     """#330: an empty face is legal in both modes and must not flip the mode.
 

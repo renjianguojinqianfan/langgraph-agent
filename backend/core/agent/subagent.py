@@ -36,7 +36,7 @@ from ..runtime_context import (
     set_runtime_context,
 )
 from .host import SubAgentHost
-from .state import AgentState
+from .state import AgentState, initial_agent_state
 
 if TYPE_CHECKING:  # #343 capture seam; services must not join the hot import cycle
     from ...services.changes import ChangesStore
@@ -347,28 +347,14 @@ class SubAgentExecutor:
             parent_workspace or Path(self.settings.artifacts_path),
         )
         try:
-            state: AgentState = {
-                "task_id": spec.subtask_id,
+            state: AgentState = initial_agent_state(
+                task_id=spec.subtask_id,
+                user_input=spec.instruction,
                 # A subtask has no mode switch: it always runs the build face
                 # over its declared tier (ADR 0008 decision 7 keeps sub-agents on
                 # the same tiers; plan mode simply never gets spawn_subagent).
-                "mode": "build",
-                "messages": [{"role": "user", "content": spec.instruction}],
-                "plan_text": "",
-                "plan_version": 0,
-                "plan_hash": "",
-                "steps": [],
-                "status": "RUNNING",
-                "stop_requested": False,
-                "step_index": 0,
-                "round_no": 1,
-                "round_steps": 0,
-                "final_answer": "",
-                "error": "",
-                "_last_action": "",
-                "_current_tool_calls": [],
-                "subtasks": [],
-            }
+                mode="build",
+            )
             tools = self._subtask_tools(spec)
             face = [t.name for t in tools]
             schemas = [t.to_openai_schema() for t in tools]

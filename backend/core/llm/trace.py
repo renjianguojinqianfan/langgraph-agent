@@ -147,16 +147,21 @@ def _json_default(value: Any) -> str:
     return repr(value)
 
 
-def _redact_strings(value: Any, redact: Optional[Redactor]) -> Any:
+def redact_structure(value: Any, redact: Optional[Redactor]) -> Any:
+    """Recursively redact every string in ``value``, dict keys included.
+
+    Lists and tuples become lists so a JSON-bound copy never carries a tuple
+    the encoder would have to guess at; dict keys are stringified and then
+    redacted too, since a key can itself be a secret.
+    """
     if isinstance(value, str):
         return redact(value) if redact is not None else value
-    if isinstance(value, list):
-        return [_redact_strings(item, redact) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_strings(item, redact) for item in value]
+    if isinstance(value, (list, tuple)):
+        return [redact_structure(item, redact) for item in value]
     if isinstance(value, dict):
         return {
-            str(key): _redact_strings(item, redact) for key, item in value.items()
+            redact_structure(str(key), redact): redact_structure(item, redact)
+            for key, item in value.items()
         }
     return value
 
@@ -199,7 +204,7 @@ def _http_request(request: Any, redact: Optional[Redactor]) -> Dict[str, Any]:
         "method": str(request.method),
         "url": _redact_url(str(request.url), redact),
         "headers": _headers_copy(request.headers),
-        "body": _redact_strings(body, redact),
+        "body": redact_structure(body, redact),
     }
 
 
@@ -212,7 +217,7 @@ def _http_response(response: Any, redact: Optional[Redactor]) -> Dict[str, Any]:
     return {
         "status": int(response.status_code),
         "headers": _headers_copy(response.headers),
-        "body": _redact_strings(body, redact),
+        "body": redact_structure(body, redact),
     }
 
 
@@ -298,7 +303,7 @@ class LLMCallRecorder:
 
     def set_fallback_request(self, request: Dict[str, Any]) -> None:
         """Adapter-prepared request for paths with no HTTP hook (Mock, stubs)."""
-        self._fallback_request = _redact_strings(request, self.scope.redact)
+        self._fallback_request = redact_structure(request, self.scope.redact)
 
     def finish(self, status: str, error: Optional[str] = None) -> None:
         """Finalize the call; never raises into the model result."""

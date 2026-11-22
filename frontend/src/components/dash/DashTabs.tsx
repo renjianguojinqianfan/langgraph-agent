@@ -12,12 +12,10 @@ import { useWorkspaceFiles } from "../../hooks/useWorkspaceFiles";
 import { cx } from "../../lib/cx";
 import {
   changeTabId,
-  changeTabRef,
   fileTabId,
   fileTabLabel,
   fileTabPath,
-  tabAfterClosing,
-  tabAfterClosingChange,
+  isClosableTab,
   type DashTab,
 } from "../../lib/dashTabs";
 import { expandAncestors, toggleDir } from "../../lib/fileTree";
@@ -119,21 +117,18 @@ export function DashTabs({
   onOpenTrace,
 }: DashTabsProps) {
   // Focus management: opening a file (keyboard or mouse) moves focus from the
-  // hidden list row onto its chip; closing returns focus to a neighbour.
-  const [focusTarget, setFocusTarget] = useState<DashTab | null>(null);
+  // hidden list row onto its chip; closing returns focus to a neighbour. The
+  // next active tab is already computed by TaskView and arrives as `tab`.
+  const pendingFocus = useRef(false);
   const previousTab = useRef<DashTab>(tab);
   useEffect(() => {
     const previous = previousTab.current;
     previousTab.current = tab;
-    if (tab !== previous && (fileTabPath(tab) !== null || changeTabRef(tab) !== null)) {
+    if (pendingFocus.current || (tab !== previous && isClosableTab(tab))) {
+      pendingFocus.current = false;
       focusTab(BASE_ID, tab);
     }
-  }, [tab]);
-  useEffect(() => {
-    if (focusTarget === null) return;
-    focusTab(BASE_ID, focusTarget);
-    setFocusTarget(null);
-  }, [focusTarget]);
+  }, [tab, fileTabs, changeTabs]);
 
   // #346: the right-column row drives float/side/fill. Measure the column
   // itself when the host passes it (border-box, so the 420/560 boundaries do
@@ -220,14 +215,12 @@ export function DashTabs({
   );
 
   const closeFile = (path: string) => {
-    setFocusTarget(tabAfterClosing(fileTabs, path, tab));
+    pendingFocus.current = true;
     onCloseFile(path);
   };
 
   const closeChange = (round: number) => {
-    setFocusTarget(
-      task ? tabAfterClosingChange(changeTabs, round, tab, task.id) : "files"
-    );
+    pendingFocus.current = true;
     onCloseChange(round);
   };
 

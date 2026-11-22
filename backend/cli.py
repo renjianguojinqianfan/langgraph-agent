@@ -268,20 +268,14 @@ def _preflight(
         print(f"[qianfan] {exc}")
         return 1
 
-    if not require_dist:
-        if not _port_available(port):
-            print(f"[qianfan] 端口 {port} 已被其他程序占用（不是可交接的 qianfan 后台）。")
-            print(f"[qianfan] 换一个端口：qianfan --port {port + 1}")
+    if require_dist:
+        dist: Path = settings.frontend_dist_path
+        if not (dist / "index.html").is_file():
+            print(f"[qianfan] 找不到前端构建产物：{dist}")
+            print("[qianfan] 先在 frontend/ 下执行 `npm install && npm run build`；改前端时用 `python start.py`。")
             return 1
-        return None
-
-    dist: Path = settings.frontend_dist_path
-    if not (dist / "index.html").is_file():
-        print(f"[qianfan] 找不到前端构建产物：{dist}")
-        print("[qianfan] 先在 frontend/ 下执行 `npm install && npm run build`；改前端时用 `python start.py`。")
-        return 1
-    if _stale_build(dist):
-        print("[qianfan] 前端产物比 frontend/src 旧，界面可能不是最新的；重新执行 `npm run build`。")
+        if _stale_build(dist):
+            print("[qianfan] 前端产物比 frontend/src 旧，界面可能不是最新的；重新执行 `npm run build`。")
     if not _port_available(port):
         print(f"[qianfan] 端口 {port} 已被其他程序占用（不是可交接的 qianfan 后台）。")
         print(f"[qianfan] 换一个端口：qianfan --port {port + 1}")

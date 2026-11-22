@@ -30,7 +30,7 @@ from ..capability_packages import INJECTION_SKILLS
 from ..capability_packages import (
     injection_fragments as resolve_injection_fragments,
 )
-from ..llm.trace import llm_call_scope
+from ..llm.trace import llm_call_scope, redact_structure
 from ..runtime_context import (
     reset_current_round,
     set_current_round,
@@ -459,18 +459,7 @@ class AgentRuntime:
 
     def _redact_value(self, value: Any) -> Any:
         """Recursively redact strings inside a tool result payload."""
-        if isinstance(value, str):
-            return self._redact(value)
-        if isinstance(value, list):
-            return [self._redact_value(item) for item in value]
-        if isinstance(value, dict):
-            # Keys can carry a key too; a collision overwrites one entry,
-            # which is safer than shipping the secret.
-            return {
-                self._redact(key if isinstance(key, str) else str(key)): self._redact_value(item)
-                for key, item in value.items()
-            }
-        return value
+        return redact_structure(value, self._redact)
 
     # ── nodes ──
     def agent(self, state: AgentState) -> AgentState:
@@ -523,123 +512,111 @@ class AgentRuntime:
             state,
         )
 
-        if mode == PLAN_MODE:
-            return self._plan_round(state, step)
-        return self._build_round(state, step)
-
-    def _plan_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
-        """Plan mode: read-only face; no tool call means the round is over.
-
-        A reply wrapped in the agreement markers is stored as the plan file and
-        bumped to the next version. Any other text is the model talking to the
-        user (e.g. the clarifying question ADR 0008 decision 1 allows) and
-        leaves the file untouched.
-        """
-        face = self._tool_face(PLAN_MODE)
-        schemas = [t.to_openai_schema() for t in face.values()]
-        resp = self._complete_plan(state, self._planner_system, schemas)
+        system = self._planner_system if mode == PLAN_MODE else EXECUTOR_SYSTEM
+        schemas = (
+            [t.to_openai_schema() for t in self._tool_face(PLAN_MODE).values()]
+            if mode == PLAN_MODE
+            else self.tool_schemas
+        )
+        resp = self._complete_round(state, mode, system, schemas)
         if resp is None:
             return state
         if resp.tool_calls:
             return self._handle_tool_calls(state, step, resp)
+        if mode == PLAN_MODE:
+            answer, updated = self._plan_answer(state, resp.content)
+        else:
+            # Strip before the ledger comparison: `_conversation_from` strips the
+            # persisted message, so a trailing newline used to make the answer
+            # never match `final_answer` and silently drop it from the ledger.
+            answer = (resp.content or "").strip() or "(no content)"
+            updated = False
+        return self._settle_final_answer(
+            state,
+            step,
+            answer,
+            resp.reasoning_content,
+            drop_previous_notes=updated,
+        )
 
-        plan_text = extract_plan(resp.content)
-        updated = False
+    def _plan_answer(
+        self, state: AgentState, content: Optional[str]
+    ) -> tuple[str, bool]:
+        """Resolve a tool-free plan-mode reply into ``(answer, plan_updated)``.
+
+        A reply wrapped in the agreement markers is stored as the plan file and
+        bumped to the next version. Any other text is the model talking to the
+        user (e.g. a clarifying question, ADR 0008 decision 1) and leaves the
+        file untouched.
+        """
+        text = content or ""
+        plan_text = extract_plan(text)
         if plan_text:
             workspace = workspace_root(self.tm.settings)
             try:
                 write_plan(workspace, self.task_id, plan_text)
             except ValueError as exc:
-                plan_text = ""
-                answer = f"[error] {exc}"
-            else:
-                state["plan_text"] = plan_text
-                state["plan_hash"] = plan_hash(plan_text)
-                state["plan_version"] = int(state.get("plan_version", 0)) + 1
-                answer = _plan_note_text(state["plan_version"])
-                updated = True
-        elif _is_tool_markup_only(resp.content):
+                return f"[error] {exc}", False
+            state["plan_text"] = plan_text
+            state["plan_hash"] = plan_hash(plan_text)
+            state["plan_version"] = int(state.get("plan_version", 0)) + 1
+            return _plan_note_text(state["plan_version"]), True
+        if _is_tool_markup_only(text):
             # Never persist provider protocol leakage as a conversation turn.
-            answer = "(no content)"
-        else:
-            # Not a plan: keep the previous plan and surface what the model
-            # actually said (e.g. a question) instead of inventing a step.
-            answer = (resp.content or "").strip() or "(no content)"
-        answer = self._redact(answer)
-        state["final_answer"] = answer
-        assistant_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
-        # Issue #45: thinking-mode providers require the trace back on the next
-        # turn; the plan round is no exception (a missing trace 400s forever).
-        # _stamp_reasoning also tags its D-39 provenance.
-        self._stamp_reasoning(assistant_turn, resp.reasoning_content)
-        messages = state.setdefault("messages", [])
-        if updated:
-            # One gray "plan updated" line: replace the previous one. A
-            # non-plan reply (e.g. a clarifying question) leaves it alone.
-            _drop_plan_notes(messages)
-        messages.append(assistant_turn)
-        step["thought"] = answer
-        step["reasoning"] = resp.reasoning_content or ""
-        self._publish(
-            "final_answer",
-            self._final_answer_payload(answer, resp.reasoning_content),
-            state,
-        )
-        state["_last_action"] = "final_answer"
-        return state
+            return "(no content)", False
+        return text.strip() or "(no content)", False
 
-    def _complete_plan(
+    def _complete_round(
         self,
         state: AgentState,
+        mode: str,
         system: str,
         schemas: List[Dict[str, Any]],
     ) -> Optional[Any]:
-        """One plan-mode LLM call; ``None`` means the error path already settled."""
+        """One mode's LLM call; ``None`` means the error path already settled.
+
+        Both modes share message building, trace attribution and the error
+        settlement; only the system prompt and the offered schemas differ.
+        """
         messages = self._build_messages(state, system)
         try:
             with self._llm_scope(self.trace_source, state):
                 return self.llm.complete(messages, tools=schemas)
         except Exception as exc:
             message = self._redact(str(exc))
-            logger.error("agent LLM error (plan mode): %s", message)
-            state["error"] = f"Plan-mode LLM error: {message}"
+            logger.error("agent LLM error (%s mode): %s", mode, message)
+            label = "Plan" if mode == PLAN_MODE else "Build"
+            state["error"] = f"{label}-mode LLM error: {message}"
             state["final_answer"] = f"[error] {message}"
             state["_last_action"] = "final_answer"
             return None
 
-    def _build_round(self, state: AgentState, step: Dict[str, Any]) -> AgentState:
-        """Build mode: every mounted tool, with the current plan as a brief."""
-        try:
-            with self._llm_scope(self.trace_source, state):
-                resp = self.llm.complete(
-                    self._build_messages(state, EXECUTOR_SYSTEM),
-                    tools=self.tool_schemas,
-                )
-        except Exception as exc:
-            message = self._redact(str(exc))
-            logger.error("agent LLM error (build mode): %s", message)
-            state["error"] = f"Build-mode LLM error: {message}"
-            state["final_answer"] = f"[error] {message}"
-            state["_last_action"] = "final_answer"
-            return state
-
-        if resp.tool_calls:
-            return self._handle_tool_calls(state, step, resp)
-
-        # Strip before the ledger comparison: `_conversation_from` strips the
-        # persisted message, so a trailing newline used to make the answer
-        # never match `final_answer` and silently drop it from the ledger.
-        answer = self._redact(resp.content or "").strip() or "(no content)"
+    def _settle_final_answer(
+        self,
+        state: AgentState,
+        step: Dict[str, Any],
+        answer: str,
+        reasoning: Optional[str],
+        *,
+        drop_previous_notes: bool = False,
+    ) -> AgentState:
+        """Close a round with the model's answer: state, turn, step and event."""
+        answer = self._redact(answer)
         state["final_answer"] = answer
-        final_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
-        # Issue #45, same rule as the tool-call turn; plus D-39 provenance.
-        self._stamp_reasoning(final_turn, resp.reasoning_content)
-        state.setdefault("messages", []).append(final_turn)
+        assistant_turn: Dict[str, Any] = {"role": "assistant", "content": answer}
+        # Issue #45: thinking-mode providers require the trace back on the next
+        # turn; _stamp_reasoning also tags its D-39 provenance.
+        self._stamp_reasoning(assistant_turn, reasoning or "")
+        messages = state.setdefault("messages", [])
+        if drop_previous_notes:
+            # One gray "plan updated" line: replace the previous one.
+            _drop_plan_notes(messages)
+        messages.append(assistant_turn)
         step["thought"] = answer
-        step["reasoning"] = resp.reasoning_content or ""
+        step["reasoning"] = reasoning or ""
         self._publish(
             "final_answer",
-            self._final_answer_payload(answer, resp.reasoning_content),
+            self._final_answer_payload(answer, reasoning or ""),
             state,
         )
         state["_last_action"] = "final_answer"
