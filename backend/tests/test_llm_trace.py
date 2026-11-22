@@ -18,7 +18,7 @@ from backend.core.agent.nodes import AgentRuntime
 from backend.core.llm.anthropic_native import AnthropicClient
 from backend.core.llm.client import MockLLMClient
 from backend.core.llm.openai_compat import OpenAICompatibleClient
-from backend.core.llm.trace import llm_call_scope
+from backend.core.llm.trace import llm_call_scope, redact_structure
 from backend.services.event_bus import EventBus
 from backend.services.trace import TraceRecorder
 from backend.tests.conftest import make_agent_host, make_settings
@@ -311,6 +311,22 @@ def test_the_placeholder_survives_as_aborted_when_the_call_is_interrupted():
     assert events[0]["data"]["pending"] is True
     assert events[1]["data"]["pending"] is False
     assert events[1]["data"]["response"] is None
+
+
+def test_redact_structure_covers_keys_tuples_lists_and_nested_strings():
+    """One walk handles every shape a trace/step copy can carry (AC 3)."""
+    redacted = redact_structure(
+        {
+            "sk-canary": ("sk-canary", [{"nested": "sk-canary"}]),
+            "ok": "value",
+        },
+        lambda text: text.replace("sk-canary", "[redacted]"),
+    )
+
+    assert redacted == {
+        "[redacted]": ["[redacted]", [{"nested": "[redacted]"}]],
+        "ok": "value",
+    }
 
 
 def test_trace_recorder_log_event_follows_the_existing_lifecycle(tmp_path):

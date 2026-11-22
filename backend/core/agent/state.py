@@ -38,3 +38,40 @@ class AgentState(TypedDict, total=False):
 
     # ── P1 item 2: sub-agent ──
     subtasks: List[Dict[str, Any]]          # SubTask dicts folded into the parent record
+
+
+def initial_agent_state(
+    *,
+    task_id: str,
+    user_input: str,
+    mode: str = "build",
+    round_no: int = 1,
+    plan_text: str = "",
+    plan_version: int = 0,
+    plan_hash: str = "",
+) -> AgentState:
+    """The one starting state for a fresh round (main task or subtask).
+
+    Both admission paths used to spell these 17 channels out by hand; one
+    factory keeps the defaults — and the key set every node assumes — from
+    drifting between the manager and the sub-agent executor.
+    """
+    return {
+        "task_id": task_id,
+        "mode": mode,
+        "messages": [{"role": "user", "content": user_input}],
+        "plan_text": plan_text,
+        "plan_version": plan_version,
+        "plan_hash": plan_hash,
+        "steps": [],
+        "status": "RUNNING",
+        "stop_requested": False,
+        "round_no": round_no,
+        "step_index": 0,
+        "round_steps": 0,
+        "final_answer": "",
+        "error": "",
+        "_last_action": "",
+        "_current_tool_calls": [],
+        "subtasks": [],
+    }
