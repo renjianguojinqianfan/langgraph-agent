@@ -6,6 +6,7 @@ import {
   fileTabId,
   fileTabLabel,
   fileTabPath,
+  isClosableTab,
   openChangeTab,
   openFileTab,
   tabAfterClosing,
@@ -94,5 +95,15 @@ describe("change review tab ids", () => {
     );
     expect(tabAfterClosingChange([1], 1, changeTabId("t", 1), "t")).toBe("files");
     expect(tabAfterClosingChange([1, 2], 1, "plan", "t")).toBe("plan");
+  });
+});
+
+describe("isClosableTab", () => {
+  it("is true only for opened files and review rounds", () => {
+    expect(isClosableTab("files")).toBe(false);
+    expect(isClosableTab("plan")).toBe(false);
+    expect(isClosableTab("events")).toBe(false);
+    expect(isClosableTab(fileTabId("src/App.tsx"))).toBe(true);
+    expect(isClosableTab(changeTabId("task-1", 2))).toBe(true);
   });
 });

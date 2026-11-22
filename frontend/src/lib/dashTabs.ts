@@ -63,6 +63,11 @@ export function changeTabRef(tab: string): ChangeTabRef | null {
   return { taskId: body.slice(0, separator), round };
 }
 
+/** True for the tabs a user can close: one opened file or one review round. */
+export function isClosableTab(tab: DashTab): boolean {
+  return fileTabPath(tab) !== null || changeTabRef(tab) !== null;
+}
+
 /** Open a review tab once; the same (task, round) only re-activates it. */
 export function openChangeTab(opened: readonly number[], round: number): number[] {
   return opened.includes(round) ? [...opened] : [...opened, round];
