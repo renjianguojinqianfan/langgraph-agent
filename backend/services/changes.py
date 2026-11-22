@@ -250,6 +250,63 @@ class ChangesStore:
         return total
 
     # ── capture ──
+    def _settle_meta(
+        self,
+        *,
+        status: str,
+        before: Optional[bytes],
+        after: Optional[bytes],
+        binary: bool,
+        oversized: bool,
+        after_size: Optional[int] = None,
+        round_budget_used: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """The one sidecar settlement both write paths share.
+
+        ``record`` settles a successful ``write`` / ``edit``; ``finalize_round``
+        re-reads the same path at round end. Decoding, the binary/oversized
+        merge, size bookkeeping and diff arithmetic must agree between them, so
+        they live here instead of in two copies.
+
+        ``after_size`` lets the finalize path pass a stat-derived size when the
+        current file was too large to read; ``round_budget_used`` is the
+        already-stored bytes of this round (record path only — a round budget
+        overflow marks this file oversized).
+        """
+        before_text, before_binary = _decode(before)
+        after_text, after_binary = _decode(after)
+        binary = binary or before_binary or after_binary
+        before_bytes = len(before) if before is not None else 0
+        if after_size is not None:
+            after_bytes = after_size
+        elif after is not None:
+            after_bytes = len(after)
+        else:
+            after_bytes = 0
+        oversized = oversized or (
+            before_bytes > self.max_file_bytes or after_bytes > self.max_file_bytes
+        )
+        if not binary and not oversized and round_budget_used is not None:
+            if round_budget_used + before_bytes + after_bytes > self.max_round_bytes:
+                oversized = True
+        coarse = False
+        added = deleted = 0
+        if status == "deleted":
+            deleted = _line_count(before_text)
+        elif not binary and not oversized:
+            added, deleted, coarse = _stats(
+                before_text or "", after_text or "", self.diff_timeout_sec
+            )
+        return {
+            "status": status,
+            "added": added,
+            "deleted": deleted,
+            "binary": binary,
+            "oversized": oversized,
+            "coarse": coarse,
+            "sizes": {"before": before_bytes, "after": after_bytes},
+        }
+
     def record(
         self,
         task_id: str,
@@ -289,57 +346,43 @@ class ChangesStore:
                 tool_call_id = str(meta.get("tool_call_id") or tool_call_id)
                 binary = bool(meta.get("binary"))
                 oversized = bool(meta.get("oversized"))
-                coarse = bool(meta.get("coarse"))
                 prev_own = self._own_stored(record_dir)
             else:
                 index = max(index_map.values(), default=-1) + 1
                 record_dir = round_dir / str(index)
-                binary = oversized = coarse = False
+                binary = oversized = False
                 prev_own = 0
             record_dir.mkdir(parents=True, exist_ok=True)
             if record_dir.is_symlink():
                 return
 
-            before_text, before_binary = _decode(before)
-            after_text, after_binary = _decode(after)
-            binary = binary or before_binary or after_binary
-            before_size = len(before) if before is not None else 0
-            after_size = len(after) if after is not None else 0
-            oversized = oversized or before_oversized or after_oversized or (
-                before_size > self.max_file_bytes or after_size > self.max_file_bytes
+            settled = self._settle_meta(
+                status="modified" if before_existed else "added",
+                before=before,
+                after=after,
+                binary=binary,
+                oversized=oversized or before_oversized or after_oversized,
+                round_budget_used=self._round_bytes.get(key, 0) - prev_own,
             )
-            if not binary and not oversized:
-                projected = (
-                    self._round_bytes.get(key, 0) - prev_own + before_size + after_size
-                )
-                if projected > self.max_round_bytes:
-                    oversized = True
-
-            added = deleted = 0
-            if not binary and not oversized:
-                added, deleted, coarse = _stats(
-                    before_text or "", after_text or "", self.diff_timeout_sec
-                )
-            else:
-                coarse = False
-
-            status = "modified" if before_existed else "added"
             meta = {
                 "path": path,
                 "display": path,
-                "status": status,
-                "added": added,
-                "deleted": deleted,
-                "binary": binary,
-                "oversized": oversized,
-                "coarse": coarse,
-                "sizes": {"before": before_size, "after": after_size},
+                **settled,
                 "tool_call_id": tool_call_id,
                 "had_before": before_existed,
                 "finalized": False,
             }
-            self._write_record(record_dir, meta, before, after, binary, oversized)
-            stored = 0 if (binary or oversized) else before_size + after_size
+            self._write_record(
+                record_dir,
+                meta,
+                before,
+                after,
+                settled["binary"],
+                settled["oversized"],
+            )
+            stored = 0 if (settled["binary"] or settled["oversized"]) else (
+                settled["sizes"]["before"] + settled["sizes"]["after"]
+            )
             self._round_bytes[key] = max(
                 0, self._round_bytes.get(key, 0) - prev_own + stored
             )
@@ -452,55 +495,32 @@ class ChangesStore:
                 binary = bool(meta.get("binary"))
                 oversized = bool(meta.get("oversized"))
                 if missing:
-                    if not before_existed:
-                        # A file created and deleted inside one round has no net
-                        # content; keep the record so nothing is silently lost.
-                        meta.update(
-                            {
-                                "status": "deleted",
-                                "added": 0,
-                                "deleted": 0,
-                                "sizes": {"before": 0, "after": 0},
-                                "finalized": True,
-                            }
-                        )
-                        self._write_record(record_dir, meta, None, None, binary, oversized)
-                        continue
+                    # A file created and deleted inside one round has no stored
+                    # before (before=None); _settle_meta still records status
+                    # "deleted" with 0/0 sizes so nothing is silently lost.
                     status = "deleted"
+                elif before_existed:
+                    status = "modified"
                 else:
-                    status = "modified" if before_existed else "added"
+                    status = "added"
 
-                before_text, before_binary = _decode(before)
-                after_text, after_binary = _decode(after)
-                binary = binary or before_binary or after_binary
-                before_size = len(before) if before is not None else 0
-                after_size = (
-                    after_size_stat if after_too_large else (len(after) if after is not None else 0)
+                settled = self._settle_meta(
+                    status=status,
+                    before=before,
+                    after=after,
+                    binary=binary,
+                    oversized=oversized or after_too_large,
+                    after_size=after_size_stat if after_too_large else None,
                 )
-                oversized = oversized or after_too_large or (
-                    before_size > self.max_file_bytes or after_size > self.max_file_bytes
+                meta.update({**settled, "finalized": True})
+                self._write_record(
+                    record_dir,
+                    meta,
+                    before,
+                    after,
+                    settled["binary"],
+                    settled["oversized"],
                 )
-                coarse = False
-                added = deleted = 0
-                if status == "deleted":
-                    deleted = _line_count(before_text)
-                elif not binary and not oversized:
-                    added, deleted, coarse = _stats(
-                        before_text or "", after_text or "", self.diff_timeout_sec
-                    )
-                meta.update(
-                    {
-                        "status": status,
-                        "added": added,
-                        "deleted": deleted,
-                        "binary": binary,
-                        "oversized": oversized,
-                        "coarse": coarse,
-                        "sizes": {"before": before_size, "after": after_size},
-                        "finalized": True,
-                    }
-                )
-                self._write_record(record_dir, meta, before, after, binary, oversized)
             self._reindex(task_id, round_no, round_dir)
 
     def finalize_task(self, task_id: str, workspace: Path) -> None:
