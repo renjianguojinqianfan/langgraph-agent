@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import socket
-import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -113,7 +112,7 @@ def test_ensure_spawns_the_detached_backend_and_opens_the_browser(tmp_path, monk
     assert code == 0
     assert len(seen) == 1
     call = seen[0]
-    assert call["cmd"][:4] == [sys.executable, "-m", "backend.serve", "--port"]
+    assert call["cmd"][:4] == [cli._detached_executable(), "-m", "backend.serve", "--port"]
     assert call["cmd"][4] == str(port)
     assert "--instance" in call["cmd"]
     instance = call["cmd"][call["cmd"].index("--instance") + 1]

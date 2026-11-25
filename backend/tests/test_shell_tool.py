@@ -36,14 +36,17 @@ import pytest
 from backend.config import Settings
 from backend.core.llm.client import MockLLMClient
 from backend.core.tools.shell import (
+    _CREATE_SUSPENDED,
     DEFAULT_SHELL,
     SHELL_BASH,
     SHELL_PWSH,
     ShellTool,
+    _shell_creation_flags,
     find_git_bash,
     find_pwsh,
 )
 from backend.tests.conftest import make_isolated_settings, make_manager, make_settings
+from backend.utils import hidden_process
 
 #: Every POSIX-syntax command below names its shell explicitly, so the same
 #: expectations hold on Windows (where the default is pwsh) and on POSIX.
@@ -63,6 +66,26 @@ def _shell_settings(tmp_path: Path, **overrides: Any) -> Settings:
         sandbox_timeout=5,
         **overrides,
     )
+
+
+def test_windows_creation_flags_include_suspend_and_no_window(monkeypatch):
+    """#356: the job-object suspend bit and the hidden console must coexist."""
+    monkeypatch.setattr(hidden_process, "_IS_WINDOWS", True)
+
+    suspended = _shell_creation_flags(suspended=True)
+    assert suspended & _CREATE_SUSPENDED
+    assert suspended & hidden_process.CREATE_NO_WINDOW
+
+    plain = _shell_creation_flags(suspended=False)
+    assert plain & hidden_process.CREATE_NO_WINDOW
+    assert not plain & _CREATE_SUSPENDED
+
+
+def test_creation_flags_are_empty_on_posix(monkeypatch):
+    monkeypatch.setattr(hidden_process, "_IS_WINDOWS", False)
+
+    assert _shell_creation_flags(suspended=True) == 0
+    assert _shell_creation_flags(suspended=False) == 0
 
 
 # ── shared execution guarantees (bash; 1:1 from the pre-S4 bash tool) ──────

@@ -208,9 +208,11 @@ def _spawn_detached(
     """Start ``cmd`` in its own session; stdout/stderr append to ``log_path``.
 
     Windows: ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` (plus
-    ``CREATE_NO_WINDOW`` so a console python.exe never flashes a window).
-    POSIX: ``start_new_session=True``. In both cases the launcher can exit
-    without signalling or reaping the server.
+    ``CREATE_NO_WINDOW``). The command from :func:`_child_command` also prefers
+    ``pythonw.exe``, because the venv's ``python.exe`` shim does not forward
+    the creation flags to the base interpreter it re-execs. POSIX:
+    ``start_new_session=True``. In both cases the launcher can exit without
+    signalling or reaping the server.
     """
     import subprocess
 
@@ -241,9 +243,27 @@ def _spawn_detached(
         handle.close()
 
 
+def _detached_executable() -> str:
+    """Interpreter for the detached server: ``pythonw.exe`` on Windows.
+
+    The venv's ``python.exe`` is a small launcher that re-execs the base
+    interpreter **without forwarding** ``CREATE_NO_WINDOW``; under a
+    console-less parent (the ``qianfan`` launcher) the base interpreter then
+    creates a visible console window. Its GUI-subsystem sibling
+    ``pythonw.exe`` never creates one, and stdout/stderr are already redirected
+    to the server log by :func:`_spawn_detached`. Falls back to
+    ``sys.executable`` when the sibling is missing (non-Windows, stripped venv).
+    """
+    executable = Path(sys.executable)
+    if not _IS_WINDOWS:
+        return str(executable)
+    gui = executable.with_name("pythonw.exe")
+    return str(gui) if gui.is_file() else str(executable)
+
+
 def _child_command(port: int, instance: str) -> list[str]:
     return [
-        sys.executable,
+        _detached_executable(),
         "-m",
         "backend.serve",
         "--port",

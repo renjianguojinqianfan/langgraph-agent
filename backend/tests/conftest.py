@@ -291,6 +291,22 @@ def _guard_repo_data_untouched():
     assert not problems, "the test session modified the checkout's data/: " + "; ".join(problems)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _hide_child_console_windows():
+    """#356: every child spawned by the suite gets ``CREATE_NO_WINDOW``.
+
+    Windows-only at runtime (the helper is inert elsewhere). ``subprocess.run``
+    / ``call`` / ``check_output`` resolve ``Popen`` through the module at call
+    time, so the one substitution covers the tests that spawn ``sys.executable``
+    with no flags of their own. Restores the exact original at session end.
+    """
+    from backend.tests._hidden_process import install_hidden_popen
+
+    patch = install_hidden_popen()
+    yield patch
+    patch.restore()
+
+
 def load_script_module(name: str, path: Path) -> ModuleType:
     """Load a ``scripts/`` module by path so tests exercise the exact file the
     gate command runs. ``sys.modules`` registration is needed only during exec

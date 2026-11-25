@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -84,3 +85,48 @@ def test_spawn_detached_creates_the_log_directory(tmp_path, monkeypatch):
 
     assert log_path.parent.is_dir()
     assert log_path.is_file()
+
+
+def test_detached_executable_prefers_pythonw_on_windows(tmp_path, monkeypatch):
+    """#356: the venv python.exe shim does not forward CREATE_NO_WINDOW."""
+    monkeypatch.setattr(cli, "_IS_WINDOWS", True)
+    console = tmp_path / "python.exe"
+    console.write_bytes(b"")
+    gui = tmp_path / "pythonw.exe"
+    gui.write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(console))
+
+    assert cli._detached_executable() == str(gui)
+
+
+def test_detached_executable_falls_back_without_pythonw(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_IS_WINDOWS", True)
+    console = tmp_path / "python.exe"
+    console.write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(console))
+
+    assert cli._detached_executable() == str(console)
+
+
+def test_detached_executable_keeps_sys_executable_outside_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_IS_WINDOWS", False)
+    console = tmp_path / "python.exe"
+    console.write_bytes(b"")
+    (tmp_path / "pythonw.exe").write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(console))
+
+    assert cli._detached_executable() == str(console)
+
+
+def test_child_command_starts_the_server_with_the_detached_executable(monkeypatch):
+    monkeypatch.setattr(cli, "_detached_executable", lambda: "pythonw.exe")
+
+    assert cli._child_command(9123, "tok") == [
+        "pythonw.exe",
+        "-m",
+        "backend.serve",
+        "--port",
+        "9123",
+        "--instance",
+        "tok",
+    ]

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from ...config import Settings, get_settings
+from ...utils import hidden_process
 from ...utils.logging import get_logger
 from ...utils.sandbox import build_child_env
 from .base import BaseTool, ToolResult
@@ -377,6 +378,7 @@ def _taskkill(pid: int) -> None:
             stderr=subprocess.DEVNULL,
             timeout=10,
             check=False,
+            creationflags=hidden_process.hidden_creationflags(),
         )
     except Exception:  # pragma: no cover - taskkill missing / wedged
         logger.warning("taskkill failed for pid %s", pid, exc_info=True)
@@ -466,6 +468,18 @@ class _BackgroundProcess:
 
 
 _CREATE_SUSPENDED = 0x00000004
+
+
+def _shell_creation_flags(*, suspended: bool) -> int:
+    """Windows flags for the shell child: no console window, optionally suspended.
+
+    ``suspended`` is set while a Job Object is in play: the shell must not spawn
+    descendants before it joins. Pure so the bits are assertable without
+    spawning; POSIX gets 0 (the caller uses ``start_new_session`` instead).
+    """
+    if not hidden_process._IS_WINDOWS:
+        return 0
+    return hidden_process.hidden_creationflags(_CREATE_SUSPENDED if suspended else 0)
 
 
 def _make_job() -> Any:
@@ -709,10 +723,7 @@ class ShellTool(BaseTool):
             shell=False,
         )
         job = _make_job()
-        if job is not None:
-            # Start suspended so the shell cannot spawn before it joins the job.
-            popen_kwargs["creationflags"] = _CREATE_SUSPENDED
-        elif os.name != "nt":
+        if job is None and os.name != "nt":
             # Own session -> the whole tree shares one process group.
             popen_kwargs["start_new_session"] = True
 
@@ -721,7 +732,11 @@ class ShellTool(BaseTool):
         else:
             argv = [prefix[0], "-c", command]
         try:
-            proc = subprocess.Popen(argv, **popen_kwargs)
+            proc = subprocess.Popen(
+                argv,
+                creationflags=_shell_creation_flags(suspended=job is not None),
+                **popen_kwargs,
+            )
         except Exception as exc:
             if job is not None:
                 job.close()

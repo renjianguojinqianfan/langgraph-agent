@@ -93,3 +93,24 @@ playwright-core，**一条命令跑一个动作**：
    - `Emulation.setDeviceMetricsOverride` 会随驱动会话 / 导航丢失；断言断点前先读 `innerWidth`，或启动 Chrome 时固定 `--window-size`。
 5. 证据：截图 + 元素级 `text` / `role` / `aria` 断言，不要整图像素 diff。组件手测证据放
    `<scratch>/verify-evidence/`（未跟踪）；发布收口才进 `docs/assets/verification/<日期>/`。
+
+## 7. Windows 子进程不弹控制台窗口（#356）
+
+- **测试侧**：`backend/tests/conftest.py` 的 session 级 autouse fixture
+  `_hide_child_console_windows` 给整个套件的 `subprocess.Popen` 补
+  `CREATE_NO_WINDOW`（实现 `backend/tests/_hidden_process.py`），保留调用方已有
+  flags；非 Windows 不安装补丁。`run` / `call` / `check_output` 都走模块级
+  `Popen`，所以测试里继续写裸 `subprocess` 即可，不要自行加 flag。
+- **生产侧**：新增 `subprocess.Popen` / `run` 必须传
+  `creationflags=hidden_creationflags(...)`（`backend/utils/hidden_process.py`；
+  ShellTool 走纯函数 `_shell_creation_flags`）。`backend/tests/test_process_spawn_flags.py`
+  的 AST 守卫会拦住裸调用；确需例外只能按「路径 + 函数 + 调用」写进白名单并给理由。
+- **detached 后台（#356 追加）**：`qianfan` 的常驻后台用 `pythonw.exe`
+  （`backend/cli.py::_detached_executable`，缺失时回退 `sys.executable`）。venv 的
+  `python.exe` 只是 46KB launcher，会把进程再交给 base Python 但不转发
+  `CREATE_NO_WINDOW`；无控制台的父进程下 base Python 会新建可见控制台。单加
+  creationflags 不够，必须换 GUI 子系统解释器。
+- **已知盲区**：`spawn = subprocess.Popen` 这类变量别名、`from subprocess import Popen`
+  之外的间接引用不在守卫内；MCP / anyio 等库自己调 `CreateProcess` 的子进程既不经过
+  测试补丁也不经过守卫——看到新窗口先查这两类。
+- issue: [#356](https://github.com/renjianguojinqianfan/langgraph-agent/issues/356)
