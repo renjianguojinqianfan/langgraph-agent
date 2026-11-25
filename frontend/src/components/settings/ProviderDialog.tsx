@@ -596,6 +596,9 @@ export function ProviderDialog({
                             <div className="flex flex-wrap items-center gap-2">
                               <input
                                 aria-label="搜索候选模型"
+                                name="draft-model-search"
+                                autoComplete="off"
+                                spellCheck={false}
                                 value={draftSearch}
                                 placeholder="搜索模型 ID 或名称"
                                 onChange={(event) => setDraftSearch(event.target.value)}
@@ -698,6 +701,9 @@ export function ProviderDialog({
                           <div className="flex flex-wrap items-center gap-2">
                             <input
                               aria-label="手动模型 ID"
+                              name="manual-model-id"
+                              autoComplete="off"
+                              spellCheck={false}
                               value={manualModel}
                               placeholder="模型 ID，例如 claude-sonnet-4"
                               onChange={(event) => setManualModel(event.target.value)}
@@ -711,6 +717,8 @@ export function ProviderDialog({
                             />
                             <input
                               aria-label="模型显示名称（可选）"
+                              name="manual-model-name"
+                              autoComplete="off"
                               value={manualName}
                               placeholder="显示名称（可选）"
                               onChange={(event) => setManualName(event.target.value)}
