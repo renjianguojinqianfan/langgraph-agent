@@ -12,7 +12,6 @@ import {
   draftProviderModels,
   filterDraftCandidates,
   firstFormError,
-  initialDraftSelection,
   isModelProtocol,
   KEY_SOURCE_LABEL,
   manualDraftModelError,
@@ -21,7 +20,6 @@ import {
   protocolLabel,
   providerUpdateBody,
   templateAvailable,
-  templateFill,
   toggleDiscoveryPick,
   validateProviderForm,
   type ProviderFormErrors,
@@ -111,6 +109,16 @@ export function ProviderDialog({
   /** Drops a discovery answer that belongs to a superseded form config. */
   const discoverySeq = useRef(0);
 
+  /** Drop the preview and invalidate an in-flight answer; manual rows stay. */
+  const resetDraftPreview = () => {
+    discoverySeq.current += 1;
+    setDraftCandidates(null);
+    setDraftPicked([]);
+    setDraftSearch("");
+    setDiscovering(false);
+    setDiscoverError("");
+  };
+
   const presets = providers.filter(
     (candidate) => candidate.preset && candidate.id !== provider?.id
   );
@@ -144,12 +152,7 @@ export function ProviderDialog({
     setNote(null);
     setSaving(false);
     setClearArmed(false);
-    discoverySeq.current += 1;
-    setDraftCandidates(null);
-    setDraftPicked([]);
-    setDraftSearch("");
-    setDiscovering(false);
-    setDiscoverError("");
+    resetDraftPreview();
     setManualModels([]);
     setManualModel("");
     setManualName("");
@@ -161,12 +164,7 @@ export function ProviderDialog({
   // (manual rows stay — they are not tied to the probe). The generation bump
   // also discards an in-flight answer.
   useEffect(() => {
-    discoverySeq.current += 1;
-    setDraftCandidates(null);
-    setDraftPicked([]);
-    setDraftSearch("");
-    setDiscovering(false);
-    setDiscoverError("");
+    resetDraftPreview();
   }, [open, values.protocol, values.base_url, values.api_key_env, keyDraft]);
 
   const applyPreset = (preset: Provider) => {
@@ -186,7 +184,7 @@ export function ProviderDialog({
   const applyOpencodeGoTemplate = () => {
     setPresetId("");
     setErrors({});
-    setValues(templateFill(OPENCODE_GO_TEMPLATE));
+    setValues({ ...OPENCODE_GO_TEMPLATE });
     setTab("custom");
   };
 
@@ -208,7 +206,7 @@ export function ProviderDialog({
       if (result.data) {
         const list = result.data.models ?? [];
         setDraftCandidates(list);
-        setDraftPicked(initialDraftSelection(list));
+        setDraftPicked(bulkDraftSelection(list, "all"));
       } else {
         setDiscoverError(discoveryFailureNote(apiErrorText(result)));
       }

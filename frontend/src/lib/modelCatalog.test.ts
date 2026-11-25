@@ -19,7 +19,6 @@ import {
   groupByProvider,
   hasEntry,
   initialDiscoverySelection,
-  initialDraftSelection,
   isModelProtocol,
   keyStateText,
   manualDraftModelError,
@@ -41,7 +40,6 @@ import {
   selectGroups,
   selectedModelId,
   templateAvailable,
-  templateFill,
   toggleDiscoveryPick,
   validateProviderForm,
   type ProviderFormValues,
@@ -411,7 +409,7 @@ describe("built-in OpenCode Go template (#353)", () => {
   });
 
   it("fills every form field including the suggested provider id", () => {
-    const filled = templateFill(OPENCODE_GO_TEMPLATE);
+    const filled = { ...OPENCODE_GO_TEMPLATE };
     expect(filled).toEqual({
       id: "opencode-go",
       name: "OpenCode Go",
@@ -433,20 +431,15 @@ describe("draft model discovery in the create dialog (#353)", () => {
   ];
 
   it("checks every discovered candidate by default and keeps candidate order", () => {
-    expect(initialDraftSelection(candidates)).toEqual([
-      "claude-sonnet-4",
-      "qwen3-coder",
-      "gpt-5",
-    ]);
-    expect(initialDraftSelection([])).toEqual([]);
-  });
-
-  it("select-all / deselect-all cover the whole candidate list", () => {
     expect(bulkDraftSelection(candidates, "all")).toEqual([
       "claude-sonnet-4",
       "qwen3-coder",
       "gpt-5",
     ]);
+    expect(bulkDraftSelection([], "all")).toEqual([]);
+  });
+
+  it("deselect-all clears the whole candidate list", () => {
     expect(bulkDraftSelection(candidates, "none")).toEqual([]);
   });
 
