@@ -8,15 +8,19 @@ file cannot satisfy or trip it. Rules:
   ``hidden_creationflags`` helper (or the shell tool's pure wrapper);
 * ``backend/tests/`` calls are covered at runtime by the autouse fixture that
   wraps ``subprocess.Popen`` for the whole session — its wiring is pinned in
-  ``test_hidden_process.py`` and re-asserted here;
+  ``test_hidden_process.py`` and re-asserted here. Because the fixture swaps
+  the module attribute, a test file must not bind ``Popen`` at import time
+  (``from subprocess import Popen`` before the fixture runs), and the scanner
+  rejects that;
 * a call that genuinely cannot follow the rule goes into ``_ALLOWLIST`` with a
   non-empty reason, keyed by its exact call site (never a whole file).
 
-Known blind spots (kept explicit, not claimed as covered): ``from subprocess
-import Popen`` aliasing is detected, but rebinding ``subprocess.Popen`` to a
-variable (``spawn = subprocess.Popen``) and libraries that call
-``CreateProcess`` themselves (for example MCP / anyio) bypass both this guard
-and the test-time ``subprocess.Popen`` patch.
+Known blind spots (kept explicit, not claimed as covered): rebinding
+``subprocess.Popen`` to a variable (``spawn = subprocess.Popen``) is invisible
+to this AST guard; the test-time patch still covers it when the rebinding
+resolves at call time, but not when it happens at import time before the
+session fixture runs. Libraries that call ``CreateProcess`` themselves (for
+example MCP / anyio) bypass both this guard and the test-time patch.
 """
 
 from __future__ import annotations
@@ -125,6 +129,18 @@ def spawn_calls(path: str, source: str) -> list[SpawnCall]:
     return found
 
 
+def _import_time_popen_bindings(source: str) -> list[int]:
+    """Lines with ``from subprocess import Popen``, which binds before the fixture."""
+    tree = ast.parse(source)
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "subprocess"
+        for alias in node.names
+        if alias.name == "Popen"
+    ]
+
+
 def violations(
     texts: dict[str, str],
     allowlist: Optional[dict[tuple[str, str, str], str]] = None,
@@ -134,7 +150,13 @@ def violations(
     problems: dict[str, list[str]] = {}
     for rel, source in texts.items():
         if rel.startswith("backend/tests/"):
-            # The session autouse fixture wraps subprocess.Popen for all of these.
+            # The session autouse fixture wraps subprocess.Popen for all of
+            # these, but a from-import binds the original before it runs.
+            for lineno in _import_time_popen_bindings(source):
+                problems.setdefault(rel, []).append(
+                    f"line {lineno}: from subprocess import Popen binds before "
+                    "the session fixture patches it; call subprocess.Popen instead"
+                )
             continue
         for call in spawn_calls(rel, source):
             if call.has_hidden_flags:
@@ -200,6 +222,25 @@ def test_scanner_detects_from_import_aliases() -> None:
 
 def test_scanner_treats_test_files_as_covered_by_the_fixture() -> None:
     assert violations({"backend/tests/test_example.py": _BARE}, allowlist={}) == {}
+
+
+def test_scanner_rejects_import_time_popen_bindings_in_tests() -> None:
+    source = "from subprocess import Popen as spawn\n\nspawn(['git'])\n"
+
+    assert violations({"backend/tests/test_example.py": source}, allowlist={}) == {
+        "backend/tests/test_example.py": [
+            "line 1: from subprocess import Popen binds before the session "
+            "fixture patches it; call subprocess.Popen instead"
+        ]
+    }
+
+
+def test_scanner_allows_call_time_popen_bindings_in_tests() -> None:
+    # run/call/check_output/check_call resolve Popen through the module at call
+    # time, so importing them by name stays behind the session patch.
+    source = "from subprocess import run\n\nrun(['git'])\n"
+
+    assert violations({"backend/tests/test_example.py": source}, allowlist={}) == {}
 
 
 def test_allowlist_is_keyed_by_the_exact_call_site() -> None:
