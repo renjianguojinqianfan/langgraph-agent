@@ -6,6 +6,7 @@ import {
   ChatTurn,
   CreateTaskRequest,
   DiscoverCandidate,
+  DraftModelCandidate,
   FilePreview,
   ModelEntry,
   ModelParamsUpdate,
@@ -13,6 +14,7 @@ import {
   PluginsSaveRequest,
   Provider,
   ProviderCreateRequest,
+  ProviderDiscoverRequest,
   ProvidersData,
   ProviderUpdateRequest,
   SSEvent,
@@ -335,6 +337,14 @@ export const discoverProviderModels = (id: string) =>
     `/providers/${encodeURIComponent(id)}/models/discover`,
     { method: "POST" }
   );
+
+/** Read-only draft discovery (#352): probe the create form's own address /
+ * protocol / key before the provider exists. Writes nothing. */
+export const discoverDraftProviderModels = (body: ProviderDiscoverRequest) =>
+  req<{ models: DraftModelCandidate[] }>("/providers/discover", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 
 // ── #67 P4-2: plugin packages / presets (data/plugins.json) ──
 // GET returns the presets, package manifest, the saved file and the backend's
