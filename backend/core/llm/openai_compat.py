@@ -20,11 +20,7 @@ from .client import (
     make_default_mock_client,
     make_mock_client_from_script,
 )
-from .identity import (
-    OPENCODE_SESSION_HEADER,
-    QIANFAN_USER_AGENT,
-    opencode_session_headers,
-)
+from .identity import QIANFAN_USER_AGENT, with_opencode_session
 from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_OPENAI
 from .trace import capture_http_request, capture_http_response
 
@@ -149,12 +145,14 @@ class OpenAICompatibleClient(LLMClient):
 
         # #351: an OpenCode target gets this conversation's stable id; a caller
         # that already set the same header (any casing) keeps its value.
-        request_headers = {
-            str(key): str(value)
-            for key, value in (kwargs.pop("extra_headers", None) or {}).items()
-        }
-        if not any(key.lower() == OPENCODE_SESSION_HEADER for key in request_headers):
-            request_headers.update(opencode_session_headers(self.base_url, session_id))
+        request_headers = with_opencode_session(
+            {
+                str(key): str(value)
+                for key, value in (kwargs.pop("extra_headers", None) or {}).items()
+            },
+            self.base_url,
+            session_id,
+        )
         if request_headers:
             payload["extra_headers"] = request_headers
 

@@ -27,8 +27,18 @@ def is_opencode_base_url(base_url: str) -> bool:
     return host in _OPENCODE_HOSTS
 
 
-def opencode_session_headers(base_url: str, session_id: str) -> Dict[str, str]:
-    """The session header, or nothing when the target/session does not call for it."""
+def with_opencode_session(
+    headers: Dict[str, str], base_url: str, session_id: str
+) -> Dict[str, str]:
+    """A copy of ``headers`` plus the session header when the target needs one.
+
+    A caller that already set the same header (any casing) keeps its value;
+    non-OpenCode hosts and empty session ids get no header.
+    """
+    merged = dict(headers)
     if not session_id or not is_opencode_base_url(base_url):
-        return {}
-    return {OPENCODE_SESSION_HEADER: session_id}
+        return merged
+    if any(key.lower() == OPENCODE_SESSION_HEADER for key in merged):
+        return merged
+    merged[OPENCODE_SESSION_HEADER] = session_id
+    return merged

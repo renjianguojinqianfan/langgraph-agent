@@ -22,11 +22,7 @@ import json
 from typing import Any, Dict, List
 
 from .client import LLMClient, LLMResponse
-from .identity import (
-    OPENCODE_SESSION_HEADER,
-    QIANFAN_USER_AGENT,
-    opencode_session_headers,
-)
+from .identity import QIANFAN_USER_AGENT, with_opencode_session
 from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_ANTHROPIC
 from .trace import capture_http_request, capture_http_response
 
@@ -113,14 +109,16 @@ class AnthropicClient(LLMClient):
         payload = self._build_payload(messages, tools, kwargs)
         import httpx
 
-        headers = {
-            "x-api-key": self.api_key,
-            "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-            "User-Agent": QIANFAN_USER_AGENT,
-        }
-        if not any(key.lower() == OPENCODE_SESSION_HEADER for key in headers):
-            headers.update(opencode_session_headers(self.base_url, session_id))
+        headers = with_opencode_session(
+            {
+                "x-api-key": self.api_key,
+                "anthropic-version": ANTHROPIC_VERSION,
+                "content-type": "application/json",
+                "User-Agent": QIANFAN_USER_AGENT,
+            },
+            self.base_url,
+            session_id,
+        )
         try:
             with httpx.Client(
                 timeout=self.timeout,

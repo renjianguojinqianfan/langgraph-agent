@@ -312,11 +312,6 @@ export function templateAvailable(
   return !providers.some((provider) => provider.id === id);
 }
 
-/** A copy for the dialog: the shared constant must survive user edits. */
-export function templateFill(template: Readonly<ProviderFormValues>): ProviderFormValues {
-  return { ...template };
-}
-
 // ── manual model entry / catalog-outside model ──
 
 /** Manual add form: non-empty and not already under this provider. */
@@ -379,15 +374,9 @@ export function discoveryBlockedReason(protocol: string): string {
 
 // ── draft discovery inside the create dialog (#353) ──
 
-/** A new dialog checks every candidate the upstream returned. */
-export function initialDraftSelection(
-  candidates: readonly DraftModelCandidate[]
-): string[] {
-  return candidates.map((candidate) => candidate.model);
-}
-
 /** 全选 / 取消全选 apply to the whole discovered list, not only the search
- * result; the selected count makes that visible. */
+ * result; the selected count makes that visible. A new dialog starts with
+ * every candidate checked. */
 export function bulkDraftSelection(
   candidates: readonly DraftModelCandidate[],
   mode: "all" | "none"
