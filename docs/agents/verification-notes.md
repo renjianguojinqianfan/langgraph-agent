@@ -1,6 +1,6 @@
 # 验证环境笔记：沙箱 / 预演合并 / 临时 worktree / 真机手测配方
 
-> 触发词：**沙箱 / 预演 / 临时树 / full-access / 假红 / 真机手测 / CDP / 后台 PID** → 本文件（AGENTS.md「验证入口」的
+> 触发词：**沙箱 / 预演 / 临时树 / full-access / 假红 / 真机手测 / CDP / 后台 PID / Windows 控制台窗口 / pythonw** → 本文件（AGENTS.md「验证入口」的
 > 前置指针，渐进披露、不内联）。2026-10-31 retro C24 立档：素材来自 #254 三切片交付
 > （实施 / 评审两条会话各把同一批环境问题重新诊断一次）与 2026-11-02 的一次全量实测。
 > 本文件记**环境判据与配方**，不记现役测试计数（数字必腐，以实跑为准）。
@@ -100,7 +100,10 @@ playwright-core，**一条命令跑一个动作**：
   `_hide_child_console_windows` 给整个套件的 `subprocess.Popen` 补
   `CREATE_NO_WINDOW`（实现 `backend/tests/_hidden_process.py`），保留调用方已有
   flags；非 Windows 不安装补丁。`run` / `call` / `check_output` 都走模块级
-  `Popen`，所以测试里继续写裸 `subprocess` 即可，不要自行加 flag。
+  `Popen`，所以测试里继续写裸 `subprocess` 即可，不要自行加 flag；但测试文件
+  **不要** `from subprocess import Popen`——它在 fixture 安装前绑定原类，AST 守卫
+  会直接报红（`from subprocess import run / call / ...` 仍在调用时查模块级
+  `Popen`，可以保留）。
 - **生产侧**：新增 `subprocess.Popen` / `run` 必须传
   `creationflags=hidden_creationflags(...)`（`backend/utils/hidden_process.py`；
   ShellTool 走纯函数 `_shell_creation_flags`）。`backend/tests/test_process_spawn_flags.py`
@@ -110,7 +113,8 @@ playwright-core，**一条命令跑一个动作**：
   `python.exe` 只是 46KB launcher，会把进程再交给 base Python 但不转发
   `CREATE_NO_WINDOW`；无控制台的父进程下 base Python 会新建可见控制台。单加
   creationflags 不够，必须换 GUI 子系统解释器。
-- **已知盲区**：`spawn = subprocess.Popen` 这类变量别名、`from subprocess import Popen`
-  之外的间接引用不在守卫内；MCP / anyio 等库自己调 `CreateProcess` 的子进程既不经过
-  测试补丁也不经过守卫——看到新窗口先查这两类。
+- **已知盲区**：`spawn = subprocess.Popen` 这类变量别名不在 AST 守卫内；测试补丁
+  是否覆盖取决于绑定时机（调用时解析才覆盖，import 期绑定不覆盖，测试因此禁止
+  `from subprocess import Popen`）。MCP / anyio 等库自己调 `CreateProcess` 的子进程
+  既不经过测试补丁也不经过守卫——看到新窗口先查这两类。
 - issue: [#356](https://github.com/renjianguojinqianfan/langgraph-agent/issues/356)

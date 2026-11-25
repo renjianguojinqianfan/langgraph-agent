@@ -80,7 +80,7 @@ npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.node.json  # �
 npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面必跑，细则见 docs/architecture.md §3.4
 ```
 
-- **触发词指针**：沙箱 / 预演合并 / 临时 worktree 跑门禁 / 真机手测的网页驱动与后台进程取证 → [`docs/agents/verification-notes.md`](docs/agents/verification-notes.md)（渐进披露，不内联；bash 假红专篇见 [`docs/harness-bash-false-red.md`](docs/harness-bash-false-red.md)）。
+- **触发词指针**：沙箱 / 预演合并 / 临时 worktree 跑门禁 / 真机手测的网页驱动与后台进程取证 / Windows 子进程控制台窗口（`pythonw`）→ [`docs/agents/verification-notes.md`](docs/agents/verification-notes.md)（渐进披露，不内联；bash 假红专篇见 [`docs/harness-bash-false-red.md`](docs/harness-bash-false-red.md)）。
 - 提交前钩子（[#114]）：`.venv314\Scripts\python.exe -m pre_commit install`（每台机器一次，含 commit-msg 钩子）；手动全量 `pre_commit run --all-files`；跳过 `SKIP=mypy` 单个或 `--no-verify` 全跳（跳了写清理由）。pre-commit entry 用仓库相对 `.venv314`，无本机绝对路径。钩子清单与实测耗时见 `.pre-commit-config.yaml` 头注。
 - **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单（**机械守卫**：`backend/tests/test_smoke_list_parity.py` 解析两处断言集合相等，且做 **Windows-only 标记扫描**——`backend/tests/test_*.py` 出现 `os.name` / `sys.platform` / `WinDLL` / `taskkill` 必须已在清单，已知例外走显式白名单 + 理由；漂移即红）；**进程树 / 子进程类由 B1（#197）起逐个验证并纳入**（连跑 3 次稳定才入清单）；新增同类文件仍按「一个文件一个 PR + 连跑 3 次观察」纳入，抖先修环境适配、不放宽断言；当前清单以上面那条命令为准。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。
