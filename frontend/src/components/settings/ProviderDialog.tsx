@@ -428,7 +428,7 @@ export function ProviderDialog({
                         ），不能重复添加。
                       </p>
                     )}
-                    {presets.length === 0 ? (
+                    {presets.length === 0 && !opencodeGoAvailable ? (
                       <div className="flex flex-col gap-2 text-body text-tertiary" role="status">
                         <p>
                           后端当前没有可用的第三方供应商预设；用「自定义模型 API」填写地址与协议。
@@ -441,7 +441,7 @@ export function ProviderDialog({
                           改用自定义
                         </Button>
                       </div>
-                    ) : (
+                    ) : presets.length > 0 ? (
                       <>
                         <div
                           className="flex flex-wrap gap-1.5"
@@ -476,7 +476,7 @@ export function ProviderDialog({
                           </p>
                         )}
                       </>
-                    )}
+                    ) : null}
                   </>
                 )}
 
