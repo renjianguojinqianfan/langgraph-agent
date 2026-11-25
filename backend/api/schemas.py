@@ -172,11 +172,23 @@ class TaskModelRequest(BaseModel):
         return self
 
 
+class ProviderModelCreateRequest(BaseModel):
+    model: str
+    name: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
+
+
 class ProviderCreateRequest(BaseModel):
     """A provider card (D-34). `key` is write-only: no response echoes it.
 
     D-36: the four sampling fields are provider-level defaults; a model entry
     may override them. All are optional (None = client default).
+
+    #352: an optional model draft list creates the provider and its catalog in
+    one transaction; a failure on any entry leaves nothing behind.
     """
 
     id: str
@@ -189,6 +201,20 @@ class ProviderCreateRequest(BaseModel):
     max_tokens: Optional[int] = None
     thinking: Optional[bool] = None
     reasoning_effort: Optional[str] = None
+    models: Optional[List[ProviderModelCreateRequest]] = None
+
+
+class ProviderDiscoverRequest(BaseModel):
+    """Read-only draft discovery (#352): nothing is persisted.
+
+    The form `key` wins; a blank one falls back to the named environment
+    variable. A blank key in both places sends no Authorization header.
+    """
+
+    protocol: str = "openai-compatible"
+    base_url: str
+    api_key_env: str = "LLM_API_KEY"
+    key: str = ""
 
 
 class ProviderUpdateRequest(BaseModel):
@@ -199,15 +225,6 @@ class ProviderUpdateRequest(BaseModel):
     base_url: Optional[str] = None
     api_key_env: Optional[str] = None
     key: Optional[str] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    thinking: Optional[bool] = None
-    reasoning_effort: Optional[str] = None
-
-
-class ProviderModelCreateRequest(BaseModel):
-    model: str
-    name: Optional[str] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     thinking: Optional[bool] = None
