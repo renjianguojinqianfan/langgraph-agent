@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from ..config import Settings
+from ..core.llm.identity import QIANFAN_USER_AGENT
 from ..core.llm.protocols import (
     IMPLEMENTED_PROTOCOLS,
     PROTOCOL_OPENAI,
@@ -60,6 +61,10 @@ _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 #: never stored and error text never contains the key.
 DISCOVER_TIMEOUT_SEC = 10.0
 DISCOVER_MAX_BYTES = 1_000_000
+_DISCOVERY_UNSUPPORTED_PROTOCOL = (
+    "协议暂不支持发现：当前只有 OpenAI 兼容协议支持自动获取模型目录，"
+    "请手动添加模型。"
+)
 
 #: Clock seam for the discovery **body-phase** deadline (tests replace this one
 #: function). It cuts slow-drip bodies off; connect / write / header waits are
@@ -561,11 +566,58 @@ class ModelStore:
             raise ValueError("model is required")
         return cleaned
 
-    def _new_entry_id(self) -> str:
+    def _new_entry_id(self, reserved: Optional[set[str]] = None) -> str:
         candidate = uuid.uuid4().hex[:12]
-        while candidate in self.model_entries:
+        while candidate in self.model_entries or (
+            reserved is not None and candidate in reserved
+        ):
             candidate = uuid.uuid4().hex[:12]
         return candidate
+
+    def _build_entry(
+        self,
+        provider: Provider,
+        *,
+        model: str,
+        name: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
+        reserved: Optional[set[str]] = None,
+    ) -> ModelEntry:
+        """Validate one entry's D-36 params and build it without persisting.
+
+        Shared by the single-entry and atomic batch create paths: the caller
+        owns the provider/duplicate checks and the rollback boundary.
+        """
+        self._validate_model_params(
+            protocol=provider.protocol,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
+        self._validate_protocol_params(
+            protocol=provider.protocol,
+            thinking=thinking if thinking is not None else provider.thinking,
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else provider.reasoning_effort
+            ),
+        )
+        return ModelEntry(
+            id=self._new_entry_id(reserved),
+            provider_id=provider.id,
+            model=model,
+            name=(name or "").strip() or model,
+            source="manual",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
 
     def set_default(self, model_id: str) -> None:
         if model_id not in self.model_entries:
@@ -612,6 +664,7 @@ class ModelStore:
         max_tokens: Optional[int] = None,
         thinking: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
+        models: Optional[List[Dict[str, Any]]] = None,
     ) -> Provider:
         provider_id = id.strip()
         if provider_id in self.providers:
@@ -649,29 +702,83 @@ class ModelStore:
             thinking=thinking,
             reasoning_effort=reasoning_effort,
         )
-        # Persist the provider first, then write the key: a credentials failure
-        # must not leave an orphaned secret keyed by an id the store never
-        # accepted. The other half of that trade-off is compensation — a failed
-        # key write rolls the card back so the user is not stuck with a
-        # half-created provider whose retry answers "already exists" (and the
-        # 409 reason is not replaced by that 400 on the next attempt).
+        # #352: validate every draft entry before touching memory or disk, so
+        # the provider and its catalog are all-or-nothing.
+        entries = self._prepare_new_entries(provider, models or [])
+        # Persist the provider (and its drafts) first, then write the key: a
+        # credentials failure must not leave an orphaned secret keyed by an id
+        # the store never accepted. The other half of that trade-off is
+        # compensation — a failed key write rolls the card and its entries back
+        # so the user is not stuck with a half-created provider whose retry
+        # answers "already exists" (and the 409 reason is not replaced by that
+        # 400 on the next attempt).
         self.providers[provider.id] = provider
-        self._save()
+        for entry in entries:
+            self.model_entries[entry.id] = entry
+        try:
+            self._save()
+        except Exception:
+            self._rollback_provider_create(provider.id, entries, persist=False)
+            raise
         if key.strip():
             try:
                 self.set_provider_key(provider.id, key)
             except CredentialsError:
-                self.providers.pop(provider.id, None)
-                try:
-                    self._save()
-                except OSError as exc:  # pragma: no cover - defensive
-                    logger.warning(
-                        "rollback after a failed key write could not persist %s: %s",
-                        self.data_file,
-                        exc,
-                    )
+                self._rollback_provider_create(provider.id, entries)
                 raise
         return provider
+
+    def _prepare_new_entries(
+        self, provider: Provider, drafts: List[Dict[str, Any]]
+    ) -> List[ModelEntry]:
+        """Validate provider model drafts; build entries only, no mutation."""
+        entries: List[ModelEntry] = []
+        seen_models: set[str] = set()
+        reserved_ids: set[str] = set()
+        for draft in drafts:
+            if not isinstance(draft, dict):
+                raise ValueError("model entries must be objects")
+            model = self._require_model_name(draft.get("model"))
+            if model in seen_models:
+                raise ValueError(
+                    f"model {model!r} already exists for provider {provider.id!r}"
+                )
+            seen_models.add(model)
+            entry = self._build_entry(
+                provider,
+                model=model,
+                name=draft.get("name"),
+                temperature=draft.get("temperature"),
+                max_tokens=draft.get("max_tokens"),
+                thinking=draft.get("thinking"),
+                reasoning_effort=draft.get("reasoning_effort"),
+                reserved=reserved_ids,
+            )
+            reserved_ids.add(entry.id)
+            entries.append(entry)
+        return entries
+
+    def _rollback_provider_create(
+        self,
+        provider_id: str,
+        entries: List[ModelEntry],
+        *,
+        persist: bool = True,
+    ) -> None:
+        """Undo an in-memory provider create; optionally rewrite the file."""
+        self.providers.pop(provider_id, None)
+        for entry in entries:
+            self.model_entries.pop(entry.id, None)
+        if not persist:
+            return
+        try:
+            self._save()
+        except OSError as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "rollback after a failed key write could not persist %s: %s",
+                self.data_file,
+                exc,
+            )
 
     def update_provider(
         self,
@@ -785,30 +892,10 @@ class ModelStore:
             for entry in self.model_entries.values()
         ):
             raise ValueError(f"model {model!r} already exists for provider {provider_id!r}")
-        self._validate_model_params(
-            protocol=provider.protocol,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            thinking=thinking,
-            reasoning_effort=reasoning_effort,
-        )
-        self._validate_protocol_params(
-            protocol=provider.protocol,
-            thinking=(
-                thinking if thinking is not None else provider.thinking
-            ),
-            reasoning_effort=(
-                reasoning_effort
-                if reasoning_effort is not None
-                else provider.reasoning_effort
-            ),
-        )
-        entry = ModelEntry(
-            id=self._new_entry_id(),
-            provider_id=provider_id,
+        entry = self._build_entry(
+            provider,
             model=model,
-            name=(name or "").strip() or model,
-            source="manual",
+            name=name,
             temperature=temperature,
             max_tokens=max_tokens,
             thinking=thinking,
@@ -1047,6 +1134,58 @@ class ModelStore:
         return values
 
 
+def resolve_discovery_key(api_key_env: str, key: str) -> str:
+    """Draft discovery key precedence: form value, then the named env var."""
+    form_key = (key or "").strip()
+    if form_key:
+        return form_key
+    return os.environ.get((api_key_env or "LLM_API_KEY").strip(), "")
+
+
+def discover_draft_models(
+    *,
+    protocol: str,
+    base_url: str,
+    api_key_env: str = "LLM_API_KEY",
+    key: str = "",
+    transport: Any = None,
+) -> List[Dict[str, str]]:
+    """Read-only discovery for an unsaved provider draft (#352).
+
+    Validation happens before the network call; the actual probe is the one
+    :func:`discover_provider_models` (same URL, timeout, size cap, redirect
+    refusal and error text). Nothing is persisted and a key echoed by an
+    upstream error is redacted before it leaves this function.
+    """
+    protocol = (protocol or PROTOCOL_OPENAI).strip() or PROTOCOL_OPENAI
+    base_url = (base_url or "").strip()
+    api_key_env = (api_key_env or "LLM_API_KEY").strip()
+    ModelStore._validate_provider_fields(
+        base_url=base_url,
+        api_key_env=api_key_env,
+        protocol=protocol,
+    )
+    if protocol != PROTOCOL_OPENAI:
+        raise ProviderDiscoveryError(_DISCOVERY_UNSUPPORTED_PROTOCOL)
+    provider = Provider(
+        id="draft",
+        name="draft",
+        protocol=protocol,
+        base_url=base_url,
+        api_key_env=api_key_env,
+    )
+    resolved_key = resolve_discovery_key(api_key_env, key)
+    try:
+        return discover_provider_models(provider, resolved_key, transport=transport)
+    except ProviderDiscoveryError as exc:
+        message = str(exc)
+        if resolved_key:
+            message = message.replace(resolved_key, "[redacted]")
+        if message == str(exc):
+            raise
+        raise ProviderDiscoveryError(message) from exc
+
+
 def discover_provider_models(
     provider: Provider, key: str, *, transport: Any = None
 ) -> List[Dict[str, str]]:
@@ -1061,14 +1200,14 @@ def discover_provider_models(
     callers pass nothing.
     """
     if provider.protocol != PROTOCOL_OPENAI:
-        raise ProviderDiscoveryError(
-            "协议暂不支持发现：当前只有 OpenAI 兼容协议支持自动获取模型目录，"
-            "请手动添加模型。"
-        )
+        raise ProviderDiscoveryError(_DISCOVERY_UNSUPPORTED_PROTOCOL)
     import httpx
 
     url = f"{provider.base_url.rstrip('/')}/models"
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    # #351: discovery is not a conversation — identity only, no session header.
+    headers = {"User-Agent": QIANFAN_USER_AGENT}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     timeout_message = f"请求超时（{DISCOVER_TIMEOUT_SEC:.0f}s）：检查 API 地址是否可达。"
     deadline = _monotonic() + DISCOVER_TIMEOUT_SEC
     try:

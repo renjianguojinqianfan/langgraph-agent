@@ -1136,8 +1136,12 @@ class TaskManager:
         if not key:
             return {"ok": False, "error": "key not set"}
         try:
+            # #351: probes are not part of a conversation, but OpenCode still
+            # requires a session; a fresh temporary id is never reused.
             self._build_llm(model, key).complete(
-                [{"role": "user", "content": "ping"}], max_tokens=1
+                [{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                session_id=uuid.uuid4().hex,
             )
             return {"ok": True}
         except Exception as exc:

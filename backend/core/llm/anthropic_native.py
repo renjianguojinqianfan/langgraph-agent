@@ -22,6 +22,7 @@ import json
 from typing import Any, Dict, List
 
 from .client import LLMClient, LLMResponse
+from .identity import QIANFAN_USER_AGENT, with_opencode_session
 from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_ANTHROPIC
 from .trace import capture_http_request, capture_http_response
 
@@ -101,16 +102,23 @@ class AnthropicClient(LLMClient):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
+        *,
+        session_id: str = "",
         **kwargs: Any,
     ) -> LLMResponse:
         payload = self._build_payload(messages, tools, kwargs)
         import httpx
 
-        headers = {
-            "x-api-key": self.api_key,
-            "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        }
+        headers = with_opencode_session(
+            {
+                "x-api-key": self.api_key,
+                "anthropic-version": ANTHROPIC_VERSION,
+                "content-type": "application/json",
+                "User-Agent": QIANFAN_USER_AGENT,
+            },
+            self.base_url,
+            session_id,
+        )
         try:
             with httpx.Client(
                 timeout=self.timeout,
