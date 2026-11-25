@@ -20,6 +20,11 @@ from .client import (
     make_default_mock_client,
     make_mock_client_from_script,
 )
+from .identity import (
+    OPENCODE_SESSION_HEADER,
+    QIANFAN_USER_AGENT,
+    opencode_session_headers,
+)
 from .protocols import DEFAULT_TEMPERATURE, PROTOCOL_OPENAI
 from .trace import capture_http_request, capture_http_response
 
@@ -76,6 +81,9 @@ class OpenAICompatibleClient(LLMClient):
             api_key=api_key or "EMPTY",
             timeout=timeout,
             http_client=http_client,
+            # #351: the SDK's own "OpenAI/Python x.y.z" identity is refused by
+            # OpenCode Go; this is the client's stable identity everywhere.
+            default_headers={"User-Agent": QIANFAN_USER_AGENT},
         )
         logger.info("OpenAICompatibleClient ready: model=%s base_url=%s", model, base_url)
 
@@ -133,9 +141,22 @@ class OpenAICompatibleClient(LLMClient):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
+        *,
+        session_id: str = "",
         **kwargs: Any,
     ) -> LLMResponse:
         payload = self._payload(messages, tools, kwargs)
+
+        # #351: an OpenCode target gets this conversation's stable id; a caller
+        # that already set the same header (any casing) keeps its value.
+        request_headers = {
+            str(key): str(value)
+            for key, value in (kwargs.pop("extra_headers", None) or {}).items()
+        }
+        if not any(key.lower() == OPENCODE_SESSION_HEADER for key in request_headers):
+            request_headers.update(opencode_session_headers(self.base_url, session_id))
+        if request_headers:
+            payload["extra_headers"] = request_headers
 
         resp = self._client.chat.completions.create(**payload)
         msg = resp.choices[0].message

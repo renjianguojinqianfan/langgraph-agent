@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from ..config import Settings
+from ..core.llm.identity import QIANFAN_USER_AGENT
 from ..core.llm.protocols import (
     IMPLEMENTED_PROTOCOLS,
     PROTOCOL_OPENAI,
@@ -1068,7 +1069,10 @@ def discover_provider_models(
     import httpx
 
     url = f"{provider.base_url.rstrip('/')}/models"
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    # #351: discovery is not a conversation — identity only, no session header.
+    headers = {"User-Agent": QIANFAN_USER_AGENT}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     timeout_message = f"请求超时（{DISCOVER_TIMEOUT_SEC:.0f}s）：检查 API 地址是否可达。"
     deadline = _monotonic() + DISCOVER_TIMEOUT_SEC
     try:
