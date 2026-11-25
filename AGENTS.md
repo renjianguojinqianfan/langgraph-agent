@@ -35,7 +35,7 @@
 
 | 任务触发 | 先读（权威源） | 完成判据 |
 |---|---|---|
-| 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：qoder 实施 + `code-review` 自评审 + `neat-freak` 文档收尾（步 3.5，能力面/接口/配置语义变了必须同步文档）+ 提 PR；opencode 独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
+| 新票实施（代码） | `docs/agents/workflow.md` | 实施/评审分离：实施侧实施 + `code-review` 自评审 + `neat-freak` 文档收尾（步 3.5，能力面/接口/配置语义变了必须同步文档）+ 提 PR；评审侧独立评 PR；CI 全绿 + 评审通过后由评审侧/用户合并 |
 | 后端改动 | `pyproject.toml` | 门禁命令原样跑且 0 错；零 ignore / override |
 | 前端改动 | `frontend/package.json` + `.github/workflows/ci.yml` 的 frontend-build job；视觉 / 交互 / 组件**设计规则（已交付）**加读 [`docs/frontend-design.md`](docs/frontend-design.md) | `npm ci` 口径；`npm run typecheck`（双项目：`tsconfig.json` + `tsconfig.node.json`）/ `npm test` 与 `npm run build` 通过；**状态面孔 / 组件接线改动**必须配一条纯函数或 store 断言 + 一条手测清单项，纯布局 / 视觉改动可只手测，不引 jsdom（`docs/frontend-design.md` §10.1，2026-11-07 拍板）；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse`；设计 token 面（`DESIGN.md` ↔ `index.css` `@theme`）→ `python scripts/check_design_tokens.py`；键盘与 #189 回归见设计基线 §6 / §10 |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
@@ -108,5 +108,5 @@ Single-context：根 `GLOSSARY.md`（指针式入口，词汇权威在 `backend/
 
 ### Implementation workflow
 
-新票实施分工：qoder 切分支 + `implement` + `code-review` 自评审 + `pr` 写 PR body + `neat-freak` 文档收尾 + 提 PR；合并后 `retro` 复盘；opencode 独立评 PR（不改代码只提返工）；评审侧/用户合并。多票大工程可整 spec 路由 `implement-spec`。See `docs/agents/workflow.md`.
+新票实施分工：实施侧切分支 + `implement` + `code-review` 自评审 + `pr` 写 PR body + `neat-freak` 文档收尾 + 提 PR；合并后 `retro` 复盘；评审侧独立评 PR（不改代码只提返工）；评审侧/用户合并。多票大工程可整 spec 路由 `implement-spec`。See `docs/agents/workflow.md`.
 
