@@ -35,6 +35,7 @@ from ..services.model_store import (
     PROTOCOL_OPENAI,
     CredentialsError,
     ProviderDiscoveryError,
+    discover_draft_models,
     require_implemented_protocol,
 )
 from ..services.persistence import PersistenceError
@@ -60,6 +61,7 @@ from .schemas import (
     McpServerInfo,
     PluginsUpdateRequest,
     ProviderCreateRequest,
+    ProviderDiscoverRequest,
     ProviderModelCreateRequest,
     ProviderModelUpdateRequest,
     ProviderUpdateRequest,
@@ -382,6 +384,40 @@ def list_providers(
     )
 
 
+@router.post("/providers/discover")
+def discover_draft_provider_models(
+    payload: ProviderDiscoverRequest,
+    request: Request,
+    _auth: str = Depends(verify_token),
+) -> ApiResponse:
+    """Preview an unsaved provider draft's model catalog (#352).
+
+    Read-only: no provider, catalog entry or credential is written. Validation
+    runs before any network call; the error path redacts both the form key and
+    the environment-variable fallback.
+    """
+    protocol = (payload.protocol or PROTOCOL_OPENAI).strip()
+    try:
+        candidates = discover_draft_models(
+            protocol=protocol,
+            base_url=payload.base_url,
+            api_key_env=payload.api_key_env,
+            key=payload.key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except ProviderDiscoveryError as exc:
+        detail = _tm(request).redact(str(exc))
+        for secret in (
+            payload.key.strip(),
+            os.environ.get((payload.api_key_env or "").strip(), ""),
+        ):
+            if secret:
+                detail = detail.replace(secret, "[redacted]")
+        raise HTTPException(status_code=400, detail=detail) from None
+    return _envelope(data={"models": candidates})
+
+
 @router.post("/providers")
 def create_provider(
     payload: ProviderCreateRequest,
@@ -403,6 +439,11 @@ def create_provider(
             max_tokens=payload.max_tokens,
             thinking=payload.thinking,
             reasoning_effort=payload.reasoning_effort,
+            models=(
+                [model.model_dump() for model in payload.models]
+                if payload.models
+                else None
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

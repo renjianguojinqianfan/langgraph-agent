@@ -19,6 +19,7 @@ from backend.services.model_store import (
     ModelStore,
     Provider,
     ProviderDiscoveryError,
+    discover_draft_models,
     discover_provider_models,
 )
 from backend.tests.conftest import make_manager, make_settings
@@ -370,6 +371,473 @@ def test_discover_anthropic_and_upstream_errors_are_readable(tmp_path, monkeypat
         assert "[redacted]" in leaked.json()["detail"]
     finally:
         client.__exit__(None, None, None)
+
+
+# ── #352: atomic provider + model catalog creation ──
+def test_provider_create_with_models_creates_the_whole_catalog_atomically(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        response = client.post(
+            "/api/providers",
+            json={
+                "id": "bailian",
+                "name": "Bailian",
+                "protocol": "openai-compatible",
+                "base_url": "https://dashscope.test/v1",
+                "api_key_env": _TEST_ENV_NAME,
+                "key": SENTINEL,
+                "models": [
+                    {"model": "qwen-max", "name": "Qwen Max"},
+                    {"model": "qwen-plus"},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        created = response.json()["data"]
+        assert created["id"] == "bailian"
+        assert created["key_set"] is True
+        assert SENTINEL not in response.text
+
+        catalog = client.get("/api/providers/bailian/models").json()["data"]["models"]
+        assert [(m["model"], m["name"], m["source"]) for m in catalog] == [
+            ("qwen-max", "Qwen Max", "manual"),
+            ("qwen-plus", "qwen-plus", "manual"),
+        ]
+        assert all(m["provider_id"] == "bailian" for m in catalog)
+        assert all(m["temperature"] is None for m in catalog)
+
+        # The store kept the existing v2 schema and reloads the catalog.
+        raw = tm.models.data_file.read_text(encoding="utf-8")
+        assert '"schema_version": 2' in raw
+        reloaded = ModelStore(tm.settings, home_dir=tm.settings.data_path / "home")
+        assert [m["model"] for m in reloaded.list_models("bailian")] == [
+            "qwen-max",
+            "qwen-plus",
+        ]
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_provider_create_rolls_back_on_a_duplicate_second_entry(tmp_path, monkeypatch):
+    monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        before = client.get("/api/providers").json()["data"]
+        response = client.post(
+            "/api/providers",
+            json={
+                "id": "bailian",
+                "base_url": "https://dashscope.test/v1",
+                "api_key_env": _TEST_ENV_NAME,
+                "key": SENTINEL,
+                "models": [{"model": "m1"}, {"model": "m1"}],
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert "already exists" in response.json()["detail"]
+        assert SENTINEL not in response.text
+
+        # Neither half of the transaction survived, including the credential.
+        assert client.get("/api/providers").json()["data"] == before
+        assert "bailian" not in tm.models.data_file.read_text(encoding="utf-8")
+        assert not tm.models.credentials_file.exists()
+
+        # The same id is still free to be created correctly afterwards.
+        created = _create_provider(
+            client, models=[{"model": "m1"}, {"model": "m2"}]
+        )
+        assert created["id"] == "bailian"
+        catalog = client.get("/api/providers/bailian/models").json()["data"]["models"]
+        assert [m["model"] for m in catalog] == ["m1", "m2"]
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "bad_models",
+    [
+        [{"model": "m1"}, {"model": "   "}],
+        [{"model": "m1"}, {"model": "m2", "temperature": 3.0}],
+    ],
+)
+def test_provider_create_rolls_back_on_any_bad_entry(
+    tmp_path, monkeypatch, bad_models
+):
+    monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        response = client.post(
+            "/api/providers",
+            json={
+                "id": "bailian",
+                "base_url": "https://dashscope.test/v1",
+                "api_key_env": _TEST_ENV_NAME,
+                "key": SENTINEL,
+                "models": bad_models,
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert SENTINEL not in response.text
+        ids = {p["id"] for p in client.get("/api/providers").json()["data"]["providers"]}
+        assert "bailian" not in ids
+        assert "bailian" not in tm.models.data_file.read_text(encoding="utf-8")
+        assert not tm.models.credentials_file.exists()
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_provider_create_with_models_rolls_back_when_the_key_write_fails(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv(_TEST_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        original_open = model_store_module.os.open
+
+        def deny(*args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(model_store_module.os, "open", deny)
+        refused = client.post(
+            "/api/providers",
+            json={
+                "id": "bailian",
+                "base_url": "https://dashscope.test/v1",
+                "api_key_env": _TEST_ENV_NAME,
+                "key": SENTINEL,
+                "models": [{"model": "m1"}, {"model": "m2"}],
+            },
+        )
+        assert refused.status_code == 409, refused.text
+        assert SENTINEL not in refused.text
+        assert (
+            client.get("/api/providers/bailian/models").status_code == 404
+        )
+
+        monkeypatch.setattr(model_store_module.os, "open", original_open)
+        created = _create_provider(client, models=[{"model": "m1"}])
+        assert created["id"] == "bailian"
+        catalog = client.get("/api/providers/bailian/models").json()["data"]["models"]
+        assert [m["model"] for m in catalog] == ["m1"]
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_provider_create_without_models_keeps_the_existing_behavior(tmp_path):
+    client, tm = _client(tmp_path)
+    try:
+        created = _create_provider(client)
+        assert created["id"] == "bailian"
+        assert client.get("/api/providers/bailian/models").json()["data"]["models"] == []
+        assert client.post(
+            "/api/providers",
+            json={"id": "other", "base_url": "https://other.test/v1", "models": []},
+        ).status_code == 200
+        assert client.get("/api/providers/other/models").json()["data"]["models"] == []
+    finally:
+        client.__exit__(None, None, None)
+
+
+# ── #352: draft discovery (no provider saved) ──
+_DRAFT_ENV_NAME = "QIANFAN_TEST_DRAFT_KEY"
+_DRAFT_FORM_KEY = "draft-form-key-sentinel-do-not-leak"
+_DRAFT_ENV_KEY = "draft-env-key-sentinel-do-not-leak"
+
+
+def _draft_body(**overrides):
+    body = {
+        "protocol": "openai-compatible",
+        "base_url": "https://draft.test/v1",
+        "api_key_env": _DRAFT_ENV_NAME,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_draft_discovery_returns_candidates_without_persisting_or_echoing_the_key(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv(_DRAFT_ENV_NAME, raising=False)
+    client, tm = _client(tmp_path)
+    try:
+        calls = []
+
+        def fake_discover(provider, key, *, transport=None):
+            calls.append((provider.protocol, provider.base_url, key))
+            return [
+                {"model": "qwen-max", "name": "Qwen Max"},
+                {"model": "qwen-plus", "name": "Qwen Plus"},
+            ]
+
+        monkeypatch.setattr(model_store_module, "discover_provider_models", fake_discover)
+        before_providers = client.get("/api/providers").json()["data"]
+        before_models_file = tm.models.data_file.read_text(encoding="utf-8")
+
+        response = client.post(
+            "/api/providers/discover", json=_draft_body(key=_DRAFT_FORM_KEY)
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"] == {
+            "models": [
+                {"model": "qwen-max", "name": "Qwen Max"},
+                {"model": "qwen-plus", "name": "Qwen Plus"},
+            ]
+        }
+        assert calls == [
+            ("openai-compatible", "https://draft.test/v1", _DRAFT_FORM_KEY)
+        ]
+        assert _DRAFT_FORM_KEY not in response.text
+        # Read-only: no provider, catalog entry or credential was written.
+        assert client.get("/api/providers").json()["data"] == before_providers
+        assert tm.models.data_file.read_text(encoding="utf-8") == before_models_file
+        assert not tm.models.credentials_file.exists()
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_draft_discovery_form_key_wins_over_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv(_DRAFT_ENV_NAME, _DRAFT_ENV_KEY)
+    client, tm = _client(tmp_path)
+    try:
+        seen = []
+
+        def fake_discover(provider, key, *, transport=None):
+            seen.append(key)
+            return []
+
+        monkeypatch.setattr(model_store_module, "discover_provider_models", fake_discover)
+        response = client.post(
+            "/api/providers/discover", json=_draft_body(key=f"  {_DRAFT_FORM_KEY}  ")
+        )
+        assert response.status_code == 200, response.text
+        assert seen == [_DRAFT_FORM_KEY]
+        assert _DRAFT_FORM_KEY not in response.text
+        assert _DRAFT_ENV_KEY not in response.text
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_draft_discovery_falls_back_to_the_environment_then_no_key(
+    tmp_path, monkeypatch
+):
+    client, tm = _client(tmp_path)
+    try:
+        seen = []
+
+        def fake_discover(provider, key, *, transport=None):
+            seen.append(key)
+            return []
+
+        monkeypatch.setattr(model_store_module, "discover_provider_models", fake_discover)
+
+        monkeypatch.setenv(_DRAFT_ENV_NAME, _DRAFT_ENV_KEY)
+        from_env = client.post("/api/providers/discover", json=_draft_body(key="   "))
+        assert from_env.status_code == 200, from_env.text
+        assert seen[-1] == _DRAFT_ENV_KEY
+        assert _DRAFT_ENV_KEY not in from_env.text
+
+        monkeypatch.delenv(_DRAFT_ENV_NAME, raising=False)
+        without_key = client.post("/api/providers/discover", json=_draft_body())
+        assert without_key.status_code == 200, without_key.text
+        assert seen[-1] == ""
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_draft_discovery_refuses_anthropic_before_any_request(tmp_path, monkeypatch):
+    client, tm = _client(tmp_path)
+    try:
+        called = []
+
+        def must_not_probe(provider, key, *, transport=None):
+            called.append(provider)
+            raise AssertionError("no request expected")
+
+        monkeypatch.setattr(model_store_module, "discover_provider_models", must_not_probe)
+        response = client.post(
+            "/api/providers/discover",
+            json=_draft_body(protocol=PROTOCOL_ANTHROPIC, key=_DRAFT_FORM_KEY),
+        )
+        assert response.status_code == 400, response.text
+        assert "协议暂不支持发现" in response.json()["detail"]
+        assert "请手动添加模型" in response.json()["detail"]
+        assert _DRAFT_FORM_KEY not in response.text
+        assert called == []
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"base_url": ""},
+        {"base_url": "ftp://draft.test/v1"},
+        {"api_key_env": "not a name"},
+        {"protocol": "grpc"},
+    ],
+)
+def test_draft_discovery_validates_before_any_request(
+    tmp_path, monkeypatch, overrides
+):
+    client, tm = _client(tmp_path)
+    try:
+        called = []
+
+        def must_not_probe(provider, key, *, transport=None):
+            called.append(provider)
+            return []
+
+        monkeypatch.setattr(model_store_module, "discover_provider_models", must_not_probe)
+        response = client.post(
+            "/api/providers/discover", json=_draft_body(**overrides)
+        )
+        assert response.status_code == 400, (overrides, response.text)
+        assert called == []
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_draft_discovery_failure_is_readable_redacted_and_not_persisted(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(_DRAFT_ENV_NAME, _DRAFT_ENV_KEY)
+    client, tm = _client(tmp_path)
+    try:
+        before_providers = client.get("/api/providers").json()["data"]
+        before_models_file = tm.models.data_file.read_text(encoding="utf-8")
+
+        def leaky_discover(provider, key, *, transport=None):
+            raise ProviderDiscoveryError(
+                f"upstream rejected {_DRAFT_FORM_KEY} and {_DRAFT_ENV_KEY}"
+            )
+
+        monkeypatch.setattr(model_store_module, "discover_provider_models", leaky_discover)
+        response = client.post(
+            "/api/providers/discover", json=_draft_body(key=_DRAFT_FORM_KEY)
+        )
+        assert response.status_code == 400, response.text
+        assert _DRAFT_FORM_KEY not in response.text
+        assert _DRAFT_ENV_KEY not in response.text
+        assert "[redacted]" in response.json()["detail"]
+        assert client.get("/api/providers").json()["data"] == before_providers
+        assert tm.models.data_file.read_text(encoding="utf-8") == before_models_file
+        assert not tm.models.credentials_file.exists()
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_draft_discovery_uses_the_shared_probe_and_identity_headers(monkeypatch):
+    monkeypatch.delenv(_DRAFT_ENV_NAME, raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["user_agent"] = request.headers.get("user-agent")
+        seen["authorization"] = request.headers.get("authorization")
+        seen["session"] = request.headers.get("x-opencode-session")
+        return httpx.Response(200, json={"data": [{"id": "m1", "name": "M1"}]})
+
+    models = discover_draft_models(
+        protocol="openai-compatible",
+        base_url="https://draft.test/v1",
+        api_key_env=_DRAFT_ENV_NAME,
+        key=_DRAFT_FORM_KEY,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert models == [{"model": "m1", "name": "M1"}]
+    assert seen == {
+        "url": "https://draft.test/v1/models",
+        "user_agent": "qianfan/0.1.0",
+        "authorization": f"Bearer {_DRAFT_FORM_KEY}",
+        "session": None,
+    }
+
+
+def test_draft_discovery_omits_authorization_without_any_key(monkeypatch):
+    monkeypatch.delenv(_DRAFT_ENV_NAME, raising=False)
+
+    def handler(request):
+        assert request.headers.get("authorization") is None
+        return httpx.Response(200, json={"data": []})
+
+    assert (
+        discover_draft_models(
+            protocol="openai-compatible",
+            base_url="https://draft.test/v1",
+            api_key_env=_DRAFT_ENV_NAME,
+            transport=httpx.MockTransport(handler),
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "status, fragment",
+    [(401, "认证失败"), (403, "认证失败"), (500, "获取模型目录失败"), (302, "重定向")],
+)
+def test_draft_discovery_http_errors_are_readable_and_never_echo_the_key(
+    monkeypatch, status, fragment
+):
+    monkeypatch.delenv(_DRAFT_ENV_NAME, raising=False)
+
+    def handler(request):
+        return httpx.Response(status, headers={"location": "https://elsewhere.test/models"})
+
+    with pytest.raises(ProviderDiscoveryError) as excinfo:
+        discover_draft_models(
+            protocol="openai-compatible",
+            base_url="https://draft.test/v1",
+            api_key_env=_DRAFT_ENV_NAME,
+            key=_DRAFT_FORM_KEY,
+            transport=httpx.MockTransport(handler),
+        )
+    message = str(excinfo.value)
+    assert fragment in message
+    assert _DRAFT_FORM_KEY not in message
+
+
+def test_draft_discovery_timeout_non_json_and_oversized_errors_are_readable(
+    monkeypatch,
+):
+    monkeypatch.delenv(_DRAFT_ENV_NAME, raising=False)
+
+    def timeout_handler(request):
+        raise httpx.TimeoutException("timed out")
+
+    with pytest.raises(ProviderDiscoveryError, match="超时"):
+        discover_draft_models(
+            protocol="openai-compatible",
+            base_url="https://draft.test/v1",
+            api_key_env=_DRAFT_ENV_NAME,
+            transport=httpx.MockTransport(timeout_handler),
+        )
+
+    def non_json_handler(request):
+        return httpx.Response(200, text="<html>nope</html>")
+
+    with pytest.raises(ProviderDiscoveryError, match="JSON"):
+        discover_draft_models(
+            protocol="openai-compatible",
+            base_url="https://draft.test/v1",
+            api_key_env=_DRAFT_ENV_NAME,
+            transport=httpx.MockTransport(non_json_handler),
+        )
+
+    def oversized_handler(request):
+        return httpx.Response(200, content=b"{" + b" " * DISCOVER_MAX_BYTES)
+
+    with pytest.raises(ProviderDiscoveryError, match="大小上限"):
+        discover_draft_models(
+            protocol="openai-compatible",
+            base_url="https://draft.test/v1",
+            api_key_env=_DRAFT_ENV_NAME,
+            transport=httpx.MockTransport(oversized_handler),
+        )
 
 
 def _provider(**overrides):
