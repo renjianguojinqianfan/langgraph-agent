@@ -23,6 +23,7 @@ from pathlib import Path
 from stat import S_ISLNK, S_ISREG
 from typing import Optional
 
+from ..utils.hidden_process import hidden_creationflags
 from ..utils.logging import get_logger
 from .runtime_context import reject_non_local_path
 
@@ -113,6 +114,7 @@ def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:
             [git, "-C", str(root), "rev-parse", "--show-toplevel"],
             capture_output=True,
             timeout=GIT_TIMEOUT_SEC,
+            creationflags=hidden_creationflags(),
         )
         if top.returncode != 0:
             return None  # not a repository: the normal fallback
@@ -130,6 +132,7 @@ def _git_files(root: Path, limit: Optional[int]) -> Optional[list[Path]]:
             ],
             capture_output=True,
             timeout=GIT_TIMEOUT_SEC,
+            creationflags=hidden_creationflags(),
         )
     except Exception:
         logger.warning("git ls-files failed; falling back to a .git-skipping walk", exc_info=True)

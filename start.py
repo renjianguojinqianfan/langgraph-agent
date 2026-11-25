@@ -22,6 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# stdlib-only helper: importing `backend.utils` does not pull in `backend.config`
+# (which still waits until a backend is actually launched).
+from backend.utils.hidden_process import hidden_creationflags
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -42,7 +46,13 @@ def _check_interpreter() -> None:
 
 def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> subprocess.Popen:
     print(f"[start] {' '.join(cmd)}", flush=True)
-    return subprocess.Popen(cmd, cwd=str(cwd or ROOT), env=env, shell=False)
+    return subprocess.Popen(
+        cmd,
+        cwd=str(cwd or ROOT),
+        env=env,
+        shell=False,
+        creationflags=hidden_creationflags(),
+    )
 
 
 def _npm_cmd(*args: str, windows: bool | None = None) -> list[str]:
@@ -81,7 +91,12 @@ def _install_backend_deps() -> None:
         flush=True,
     )
     for command in _pip_install_commands():
-        subprocess.run(command, cwd=str(ROOT), check=True)
+        subprocess.run(
+            command,
+            cwd=str(ROOT),
+            check=True,
+            creationflags=hidden_creationflags(),
+        )
 
 
 def _launcher_env(port: int, *, mock: bool = False, base: dict | None = None) -> dict:
@@ -155,7 +170,12 @@ def main() -> int:
     if args.install:
         _install_backend_deps()
         print("[start] installing frontend deps...")
-        subprocess.run(_npm_cmd("ci"), cwd=str(ROOT / "frontend"), check=True)
+        subprocess.run(
+            _npm_cmd("ci"),
+            cwd=str(ROOT / "frontend"),
+            check=True,
+            creationflags=hidden_creationflags(),
+        )
 
     # Both children (uvicorn and Vite) get the same PORT: the backend's CORS
     # own-origin follows settings.port, and the Vite proxy reads it too (D-41).
