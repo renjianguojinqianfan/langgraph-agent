@@ -41,12 +41,14 @@
   MCP server 定位到含私有 registry 凭证的 `npmrc`；这不改变「非安全边界」的定位。
   第三方 MCP server 需要额外变量（含代理 / 私有 registry / CA）时，只能在
   `mcp_servers[].env` 里显式声明——这是唯一通道（#254）。
-- **出站请求（模型发现，#243 P2-2 D-34）**：`POST /api/providers/{id}/models/discover`
-  只对该 Provider **自己配置的** `base_url` 发一次 `GET <base_url>/models`，带该 Provider 的
-  Key（无 Key 时不发 `Authorization`）；拒绝重定向（不把请求带离配置的主机）、10s 级超时
-  （httpx 每操作 + body 阶段墙钟）、1 MB 响应上限、错误文本脱敏、响应不落库。它**不新增 SSRF
-  面**：地址本来就由用户配置，且服务只监听回环；同一调用者也能直接配一个任意 `base_url`
-  让任务请求打过去。属本机单用户前提下可接受的暴露面，不是安全边界。
+- **出站请求（模型发现，#243 P2-2 D-34 / #352）**：两条发现路径——已保存 Provider 的
+  `POST /api/providers/{id}/models/discover` 只对该 Provider **自己配置的** `base_url` 发一次
+  `GET <base_url>/models`，带该 Provider 的 Key；未保存草稿的 `POST /api/providers/discover`
+  用请求体里的地址与表单 Key（留空回退环境变量，两者都没有时不发 `Authorization`），不接收
+  Provider ID、不写任何状态。两者都拒绝重定向（不把请求带离配置的主机）、10s 级超时
+  （httpx 每操作 + body 阶段墙钟）、1 MB 响应上限、错误文本脱敏、响应不落库。它们**不新增
+  SSRF 面**：地址本来就由用户配置，且服务只监听回环；同一调用者也能直接配一个任意
+  `base_url` 让任务请求打过去。属本机单用户前提下可接受的暴露面，不是安全边界。
 - **禁止**：Key 写进 `.env`（提交）/ 代码 / 文档 / 截图 / issue；测试只用假 Key（如 `sk-test`）；
   提交前依赖 GitHub secret scanning（公开仓库免费）。
 
@@ -215,3 +217,8 @@
   标 `truncated`；响应与错误完整保留，`usage` 只取实际返回值。trace 因此会含提示词、工具输出
   与模型回复副本（与既有任务内容同级的本机明文，见 §1/§7）；SSE 只发 `call_id` / `status` /
   摘要 / `(task_id, call_id)` 指针，不广播请求或响应。写入失败不改变模型结果，只记 WARNING。
+- 2026-11-25（#351 / #352）：所有模型请求与模型发现统一发送 `User-Agent: qianfan/0.1.0`；
+  `opencode.ai` / `www.opencode.ai` 目标额外带每次调用的 `x-opencode-session`（不含 Key /
+  本机信息）。新增只读草稿发现 `POST /api/providers/discover`：表单 Key 优先、留空回退环境
+  变量、两者都没有时不发 `Authorization`，不落库、不回显 Key；出站限制与已保存 Provider 的
+  发现共用同一实现。§2 出站条目与 `docs/architecture.md` 的 REST / 模型配置面同步。

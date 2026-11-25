@@ -104,7 +104,7 @@ Anthropic 路径自动用 `x-api-key` 认证，但该协议没有标准目录端
 任务详情 → Trace 区 → 模型 → 展开一次调用 → 请求 JSON 的 `headers`：
 
 - `User-Agent: qianfan/0.1.0` 应在。
-- 目标是 OpenCode host 时，`x-opencode-session` 应等于该任务的 id。
+- 目标是 OpenCode host 时，主任务 / 续说 / 新任务的 `x-opencode-session` 应等于该任务的 id；子代理与压缩摘要的 trace 会显示父任务 id，这是预期（见 §6）。
 - 看不到 `Authorization` / `x-api-key` 是预期：认证头在写入 trace 前已被脱敏。
 
 没有 `x-opencode-session` 时，先确认该次调用的 base URL 是 OpenCode host，再检查是否经过代理或网关。

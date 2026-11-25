@@ -107,7 +107,7 @@ agent ──有 tool call──> tool ──> agent
 
 ## 模型
 
-- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页按 Provider 卡片 + 模型目录展示（P2-3）；旧扁平 `/api/models` 投影与 CRUD 已移除（ADR 0013），设置页只读 `GET /api/providers` + `/api/providers/{id}/models`。后端预置的 Provider 种子仍是 **DeepSeek**；「添加模型提供商」对话框另有内置的 **OpenCode Go** 模板（只填地址、协议与环境变量名，不预置模型、不写存储），配置与排障见 [`docs/opencode-go.md`](docs/opencode-go.md)；协议支持 **OpenAI 兼容** 与 **Anthropic 原生**（非流式）；Anthropic 的「获取可用模型」暂不支持；`thinking` / `reasoning_effort` 可配置（OpenAI 兼容路径经 `extra_body` 透传）；Anthropic 路径只接受 thinking 关闭 / reasoning_effort 为空——开启思考或设置 reasoning_effort 会 400（见 [ADR 0011](docs/adr/0011-model-config-two-protocols.md)）。
+- 后端模型配置是 **v2：Provider（地址 / 协议 / Key）+ 模型目录**（一个 Provider 下挂多个模型条目）；设置页按 Provider 卡片 + 模型目录展示（P2-3）；旧扁平 `/api/models` 投影与 CRUD 已移除（ADR 0013），设置页只读 `GET /api/providers` + `/api/providers/{id}/models`。后端预置的 Provider 种子仍是 **DeepSeek**；「添加模型提供商」对话框另有内置的 **OpenCode Go** 模板（预填 Provider ID、名称、地址、协议与环境变量名，不预置模型、不写存储），配置与排障见 [`docs/opencode-go.md`](docs/opencode-go.md)；协议支持 **OpenAI 兼容** 与 **Anthropic 原生**（非流式）；Anthropic 的「获取可用模型」暂不支持；`thinking` / `reasoning_effort` 可配置（OpenAI 兼容路径经 `extra_body` 透传）；Anthropic 路径只接受 thinking 关闭 / reasoning_effort 为空——开启思考或设置 reasoning_effort 会 400（见 [ADR 0011](docs/adr/0011-model-config-two-protocols.md)）。
 - 旧格式 `data/models.json`（无 `schema_version` 的扁平 profile）不再迁移：加载时明确拒绝且原文件字节不变；请在设置页重新添加 Provider 与模型。坏文件 / 未来版本仍按 quarantine + seed 处理。
 - Key 两种来源：界面粘贴（存 `~/.qianfan/credentials.json`，仓库外，按 Provider 记）优先；其次配置里写的环境变量名（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）。接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无），不回 Key 本身。
 - 新建任务默认用全局默认，创建前也可先选一套；任务里可中途换模型，下一条消息生效；子代理与压缩摘要跟随父任务的模型。

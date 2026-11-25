@@ -574,6 +574,51 @@ class ModelStore:
             candidate = uuid.uuid4().hex[:12]
         return candidate
 
+    def _build_entry(
+        self,
+        provider: Provider,
+        *,
+        model: str,
+        name: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
+        reserved: Optional[set[str]] = None,
+    ) -> ModelEntry:
+        """Validate one entry's D-36 params and build it without persisting.
+
+        Shared by the single-entry and atomic batch create paths: the caller
+        owns the provider/duplicate checks and the rollback boundary.
+        """
+        self._validate_model_params(
+            protocol=provider.protocol,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
+        self._validate_protocol_params(
+            protocol=provider.protocol,
+            thinking=thinking if thinking is not None else provider.thinking,
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else provider.reasoning_effort
+            ),
+        )
+        return ModelEntry(
+            id=self._new_entry_id(reserved),
+            provider_id=provider.id,
+            model=model,
+            name=(name or "").strip() or model,
+            source="manual",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
+
     def set_default(self, model_id: str) -> None:
         if model_id not in self.model_entries:
             raise KeyError(model_id)
@@ -699,43 +744,18 @@ class ModelStore:
                     f"model {model!r} already exists for provider {provider.id!r}"
                 )
             seen_models.add(model)
-            temperature = draft.get("temperature")
-            max_tokens = draft.get("max_tokens")
-            thinking = draft.get("thinking")
-            reasoning_effort = draft.get("reasoning_effort")
-            self._validate_model_params(
-                protocol=provider.protocol,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                thinking=thinking,
-                reasoning_effort=reasoning_effort,
+            entry = self._build_entry(
+                provider,
+                model=model,
+                name=draft.get("name"),
+                temperature=draft.get("temperature"),
+                max_tokens=draft.get("max_tokens"),
+                thinking=draft.get("thinking"),
+                reasoning_effort=draft.get("reasoning_effort"),
+                reserved=reserved_ids,
             )
-            self._validate_protocol_params(
-                protocol=provider.protocol,
-                thinking=(
-                    thinking if thinking is not None else provider.thinking
-                ),
-                reasoning_effort=(
-                    reasoning_effort
-                    if reasoning_effort is not None
-                    else provider.reasoning_effort
-                ),
-            )
-            entry_id = self._new_entry_id(reserved_ids)
-            reserved_ids.add(entry_id)
-            entries.append(
-                ModelEntry(
-                    id=entry_id,
-                    provider_id=provider.id,
-                    model=model,
-                    name=(draft.get("name") or "").strip() or model,
-                    source="manual",
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    thinking=thinking,
-                    reasoning_effort=reasoning_effort,
-                )
-            )
+            reserved_ids.add(entry.id)
+            entries.append(entry)
         return entries
 
     def _rollback_provider_create(
@@ -872,30 +892,10 @@ class ModelStore:
             for entry in self.model_entries.values()
         ):
             raise ValueError(f"model {model!r} already exists for provider {provider_id!r}")
-        self._validate_model_params(
-            protocol=provider.protocol,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            thinking=thinking,
-            reasoning_effort=reasoning_effort,
-        )
-        self._validate_protocol_params(
-            protocol=provider.protocol,
-            thinking=(
-                thinking if thinking is not None else provider.thinking
-            ),
-            reasoning_effort=(
-                reasoning_effort
-                if reasoning_effort is not None
-                else provider.reasoning_effort
-            ),
-        )
-        entry = ModelEntry(
-            id=self._new_entry_id(),
-            provider_id=provider_id,
+        entry = self._build_entry(
+            provider,
             model=model,
-            name=(name or "").strip() or model,
-            source="manual",
+            name=name,
             temperature=temperature,
             max_tokens=max_tokens,
             thinking=thinking,
