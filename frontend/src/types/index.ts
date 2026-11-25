@@ -271,6 +271,28 @@ export interface DiscoverCandidate {
   added: boolean;
 }
 
+/** One candidate from the read-only draft discovery (`POST /providers/discover`,
+ * #352/#353). A draft has no catalog yet, so there is no `added` flag. */
+export interface DraftModelCandidate {
+  model: string;
+  name: string;
+}
+
+/** One model created atomically with its provider (#352). */
+export interface ProviderModelDraft {
+  model: string;
+  name?: string;
+}
+
+/** Draft discovery body (#352): no provider id and nothing persisted. The form
+ * key wins; a blank one falls back to the named environment variable. */
+export interface ProviderDiscoverRequest {
+  protocol: ModelProtocol;
+  base_url: string;
+  api_key_env: string;
+  key: string;
+}
+
 export interface ProviderCreateRequest {
   id: string;
   name: string;
@@ -279,6 +301,8 @@ export interface ProviderCreateRequest {
   api_key_env: string;
   /** Write-only: never echoed back. */
   key: string;
+  /** Optional catalog created in the same transaction; omitted = no models. */
+  models?: ProviderModelDraft[];
 }
 
 export interface ProviderUpdateRequest {

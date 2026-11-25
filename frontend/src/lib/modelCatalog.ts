@@ -1,10 +1,12 @@
 import { BACKEND_UNREACHABLE } from "./copy";
 import type {
   DiscoverCandidate,
+  DraftModelCandidate,
   ModelEntry,
   ModelKeySource,
   ModelProtocol,
   Provider,
+  ProviderModelDraft,
 } from "../types";
 
 /**
@@ -290,6 +292,31 @@ export function providerUpdateBody(
   return body;
 }
 
+// ── provider templates (#353) ──
+
+/** A built-in preset only fills the create form; it never writes storage and
+ * carries no model list (OpenCode Go's catalog changes upstream). */
+export const OPENCODE_GO_TEMPLATE: ProviderFormValues = {
+  id: "opencode-go",
+  name: "OpenCode Go",
+  protocol: PROTOCOL_OPENAI,
+  base_url: "https://opencode.ai/inference/go/openai/v1",
+  api_key_env: "OPENCODE_API_KEY",
+};
+
+/** The preset entry is offered only while the suggested id is still free. */
+export function templateAvailable(
+  id: string,
+  providers: readonly Pick<Provider, "id">[]
+): boolean {
+  return !providers.some((provider) => provider.id === id);
+}
+
+/** A copy for the dialog: the shared constant must survive user edits. */
+export function templateFill(template: Readonly<ProviderFormValues>): ProviderFormValues {
+  return { ...template };
+}
+
 // ── manual model entry / catalog-outside model ──
 
 /** Manual add form: non-empty and not already under this provider. */
@@ -348,6 +375,84 @@ export function discoveryBlockedReason(protocol: string): string {
   return protocol === PROTOCOL_ANTHROPIC
     ? "Anthropic 协议暂不支持自动获取模型目录（当前仅 OpenAI 兼容支持）；请手动添加模型 ID。"
     : "";
+}
+
+// ── draft discovery inside the create dialog (#353) ──
+
+/** A new dialog checks every candidate the upstream returned. */
+export function initialDraftSelection(
+  candidates: readonly DraftModelCandidate[]
+): string[] {
+  return candidates.map((candidate) => candidate.model);
+}
+
+/** 全选 / 取消全选 apply to the whole discovered list, not only the search
+ * result; the selected count makes that visible. */
+export function bulkDraftSelection(
+  candidates: readonly DraftModelCandidate[],
+  mode: "all" | "none"
+): string[] {
+  return mode === "all" ? candidates.map((candidate) => candidate.model) : [];
+}
+
+export function filterDraftCandidates(
+  candidates: readonly DraftModelCandidate[],
+  query: string
+): DraftModelCandidate[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...candidates];
+  return candidates.filter(
+    (candidate) =>
+      candidate.model.toLowerCase().includes(needle) ||
+      candidate.name.toLowerCase().includes(needle)
+  );
+}
+
+/** Manual row validation for a draft: the provider does not exist yet, so the
+ * candidates and the rows added so far are the only "already known" sets. */
+export function manualDraftModelError(
+  model: string,
+  candidates: readonly DraftModelCandidate[],
+  manual: readonly ProviderModelDraft[]
+): string {
+  const cleaned = model.trim();
+  if (!cleaned) return "模型 ID 必填";
+  if (candidates.some((candidate) => candidate.model === cleaned)) {
+    return "该模型已在候选列表中，勾选即可";
+  }
+  if (manual.some((row) => row.model === cleaned)) return "该模型已添加";
+  return "";
+}
+
+/** Save payload: picked candidates first (candidate order), then manual rows.
+ * Deduped by model id; a name equal to the id carries no information and is
+ * omitted so the backend falls back to the id itself. */
+export function draftProviderModels(
+  candidates: readonly DraftModelCandidate[],
+  picked: readonly string[],
+  manual: readonly ProviderModelDraft[]
+): ProviderModelDraft[] {
+  const chosen = new Set(picked);
+  const seen = new Set<string>();
+  const models: ProviderModelDraft[] = [];
+  for (const candidate of candidates) {
+    if (!chosen.has(candidate.model) || seen.has(candidate.model)) continue;
+    seen.add(candidate.model);
+    const name = candidate.name.trim();
+    models.push(
+      name && name !== candidate.model
+        ? { model: candidate.model, name }
+        : { model: candidate.model }
+    );
+  }
+  for (const row of manual) {
+    const model = row.model.trim();
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    const name = (row.name ?? "").trim();
+    models.push(name && name !== model ? { model, name } : { model });
+  }
+  return models;
 }
 
 // ── failure copy (reason + next step, D-31 style) ──

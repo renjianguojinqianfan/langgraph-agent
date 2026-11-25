@@ -1,26 +1,34 @@
 import { describe, expect, it } from "vitest";
 import type {
   DiscoverCandidate,
+  DraftModelCandidate,
   ModelEntry,
   Provider,
+  ProviderModelDraft,
 } from "../types";
 import {
+  bulkDraftSelection,
   customModelError,
   discoveryBlockedReason,
   discoveryFailureNote,
+  draftProviderModels,
   entryProviderId,
+  filterDraftCandidates,
   findEntryByModel,
   firstFormError,
   groupByProvider,
   hasEntry,
   initialDiscoverySelection,
+  initialDraftSelection,
   isModelProtocol,
   keyStateText,
+  manualDraftModelError,
   manualModelError,
   modelDeleteFailure,
   modelLabel,
   modelSwitchFailure,
   modelSwitchSuccess,
+  OPENCODE_GO_TEMPLATE,
   providerDeleteFailure,
   pickableCandidates,
   protocolLabel,
@@ -32,6 +40,8 @@ import {
   PROTOCOL_OPTIONS,
   selectGroups,
   selectedModelId,
+  templateAvailable,
+  templateFill,
   toggleDiscoveryPick,
   validateProviderForm,
   type ProviderFormValues,
@@ -378,5 +388,108 @@ describe("status-branched delete copy (#299 LOW-3)", () => {
     expect(modelDeleteFailure(401, "invalid token")).toContain("重新登录");
     expect(modelDeleteFailure(0, "")).toContain("无法连接后台");
     expect(modelDeleteFailure(500, "boom")).toContain("boom");
+  });
+});
+
+describe("built-in OpenCode Go template (#353)", () => {
+  it("carries the official address, protocol and env name", () => {
+    expect(OPENCODE_GO_TEMPLATE).toEqual({
+      id: "opencode-go",
+      name: "OpenCode Go",
+      protocol: PROTOCOL_OPENAI,
+      base_url: "https://opencode.ai/inference/go/openai/v1",
+      api_key_env: "OPENCODE_API_KEY",
+    });
+  });
+
+  it("is only offered while no provider owns the id", () => {
+    expect(templateAvailable("opencode-go", [])).toBe(true);
+    expect(templateAvailable("opencode-go", [deepseek()])).toBe(true);
+    expect(templateAvailable("opencode-go", [deepseek({ id: "opencode-go" })])).toBe(
+      false
+    );
+  });
+
+  it("fills every form field including the suggested provider id", () => {
+    const filled = templateFill(OPENCODE_GO_TEMPLATE);
+    expect(filled).toEqual({
+      id: "opencode-go",
+      name: "OpenCode Go",
+      protocol: PROTOCOL_OPENAI,
+      base_url: "https://opencode.ai/inference/go/openai/v1",
+      api_key_env: "OPENCODE_API_KEY",
+    });
+    // A copy: typing into the dialog must not mutate the shared constant.
+    filled.id = "changed";
+    expect(OPENCODE_GO_TEMPLATE.id).toBe("opencode-go");
+  });
+});
+
+describe("draft model discovery in the create dialog (#353)", () => {
+  const candidates: DraftModelCandidate[] = [
+    { model: "claude-sonnet-4", name: "Claude Sonnet 4" },
+    { model: "qwen3-coder", name: "Qwen3 Coder" },
+    { model: "gpt-5", name: "gpt-5" },
+  ];
+
+  it("checks every discovered candidate by default and keeps candidate order", () => {
+    expect(initialDraftSelection(candidates)).toEqual([
+      "claude-sonnet-4",
+      "qwen3-coder",
+      "gpt-5",
+    ]);
+    expect(initialDraftSelection([])).toEqual([]);
+  });
+
+  it("select-all / deselect-all cover the whole candidate list", () => {
+    expect(bulkDraftSelection(candidates, "all")).toEqual([
+      "claude-sonnet-4",
+      "qwen3-coder",
+      "gpt-5",
+    ]);
+    expect(bulkDraftSelection(candidates, "none")).toEqual([]);
+  });
+
+  it("filters by model id or name, case-insensitively, without mutating", () => {
+    expect(filterDraftCandidates(candidates, "")).toEqual(candidates);
+    expect(filterDraftCandidates(candidates, "  ")).toEqual(candidates);
+    expect(filterDraftCandidates(candidates, "QWEN3").map((c) => c.model)).toEqual([
+      "qwen3-coder",
+    ]);
+    expect(filterDraftCandidates(candidates, "sonnet").map((c) => c.model)).toEqual([
+      "claude-sonnet-4",
+    ]);
+    expect(filterDraftCandidates(candidates, "gpt-5").map((c) => c.model)).toEqual([
+      "gpt-5",
+    ]);
+    expect(filterDraftCandidates(candidates, "missing")).toEqual([]);
+    expect(candidates).toHaveLength(3);
+  });
+
+  it("manual validation rejects blank, candidate duplicates and added rows", () => {
+    const manual: ProviderModelDraft[] = [{ model: "manual-one", name: "Manual One" }];
+    expect(manualDraftModelError("  ", candidates, manual)).toContain("必填");
+    expect(manualDraftModelError("qwen3-coder", candidates, manual)).toContain("候选");
+    expect(manualDraftModelError("manual-one", candidates, manual)).toContain("已添加");
+    expect(manualDraftModelError(" manual-two ", candidates, manual)).toBe("");
+  });
+
+  it("saves picked candidates in candidate order then manual rows, deduped", () => {
+    expect(
+      draftProviderModels(candidates, ["gpt-5", "claude-sonnet-4"], [
+        { model: "manual-one", name: "Manual One" },
+        { model: "gpt-5", name: "duplicate" },
+        { model: " manual-two ", name: "manual-two" },
+      ])
+    ).toEqual([
+      { model: "claude-sonnet-4", name: "Claude Sonnet 4" },
+      { model: "gpt-5" },
+      { model: "manual-one", name: "Manual One" },
+      { model: "manual-two" },
+    ]);
+  });
+
+  it("returns no models when nothing is picked (the caller omits the field)", () => {
+    expect(draftProviderModels(candidates, [], [])).toEqual([]);
   });
 });

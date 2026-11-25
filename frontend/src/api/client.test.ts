@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   apiErrorText,
+  discoverDraftProviderModels,
   getTaskSnapshot,
   listFiles,
   listTasksSnapshot,
@@ -206,5 +207,36 @@ describe("apiErrorText：FastAPI 422 detail 数组（#308 LOW④）", () => {
   it("无可读内容时仍回退「操作失败」", () => {
     expect(apiErrorText({ detail: [] })).toBe("操作失败");
     expect(apiErrorText(null)).toBe("操作失败");
+  });
+});
+
+/** #353: the create dialog probes its own form values before any provider
+ * exists; the request must carry exactly those fields and no provider id. */
+describe("discoverDraftProviderModels (#353)", () => {
+  it("POSTs the draft form to /providers/discover and returns the candidates", async () => {
+    const fetchMock = vi.fn(async () => ({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        data: { models: [{ model: "m1", name: "M1" }] },
+        message: "ok",
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const body = {
+      protocol: "openai-compatible" as const,
+      base_url: "https://opencode.ai/inference/go/openai/v1",
+      api_key_env: "OPENCODE_API_KEY",
+      key: "sk-draft",
+    };
+    const r = await discoverDraftProviderModels(body);
+
+    expect(r.data).toEqual({ models: [{ model: "m1", name: "M1" }] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/providers/discover");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual(body);
   });
 });
