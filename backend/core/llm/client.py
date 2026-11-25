@@ -55,9 +55,16 @@ class LLMClient(ABC):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
+        *,
+        session_id: str = "",
         **kwargs: Any,
     ) -> LLMResponse:
         """Run one completion; when a call scope is seated, record the call.
+
+        ``session_id`` is the caller-owned conversation identity (task id,
+        parent task id for subagents/compaction, or a temporary id for probes).
+        It is explicit — adapters must not infer it from trace scope — and is
+        only put on the wire by providers that require it.
 
         The logical call id and immutable owner/source/round/step come from the
         scope; provider adapters see the active recorder through a contextvar
@@ -65,12 +72,12 @@ class LLMClient(ABC):
         """
         scope = current_scope()
         if scope is None:
-            return self._complete(messages, tools, **kwargs)
+            return self._complete(messages, tools, session_id=session_id, **kwargs)
         recorder = LLMCallRecorder(scope, self.model, self.protocol)
         recorder.set_fallback_request(self._request_snapshot(messages, tools, kwargs))
         token = set_active_call(recorder)
         try:
-            response = self._complete(messages, tools, **kwargs)
+            response = self._complete(messages, tools, session_id=session_id, **kwargs)
         except Exception as exc:
             recorder.finish("error", str(exc))
             raise
@@ -88,6 +95,8 @@ class LLMClient(ABC):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
+        *,
+        session_id: str = "",
         **kwargs: Any,
     ) -> LLMResponse:
         """Provider implementation behind :meth:`complete`'s recording wrapper."""
@@ -146,6 +155,8 @@ class MockLLMClient(LLMClient):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] | None = None,
+        *,
+        session_id: str = "",
         **kwargs: Any,
     ) -> LLMResponse:
         if self._turn < len(self.tool_calls):

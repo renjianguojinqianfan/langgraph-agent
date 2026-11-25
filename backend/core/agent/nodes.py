@@ -306,6 +306,8 @@ class AgentRuntime:
                 head_chars=settings.context_evict_head_chars,
                 tail_chars=settings.context_evict_tail_chars,
                 redact=self._redact,
+                # #351: a subtask's summary belongs to the parent conversation.
+                session_id=self.trace_owner,
             )
         state["context_tokens"] = meta["context_tokens"]
         if meta["compressed"]:
@@ -581,7 +583,9 @@ class AgentRuntime:
         messages = self._build_messages(state, system)
         try:
             with self._llm_scope(self.trace_source, state):
-                return self.llm.complete(messages, tools=schemas)
+                return self.llm.complete(
+                    messages, tools=schemas, session_id=self.trace_owner
+                )
         except Exception as exc:
             message = self._redact(str(exc))
             logger.error("agent LLM error (%s mode): %s", mode, message)

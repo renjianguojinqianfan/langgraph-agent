@@ -367,8 +367,12 @@ def summarize_messages(
     max_tokens: int = 300,
     *,
     redact: Optional[Callable[[str], str]] = None,
+    session_id: str = "",
 ) -> str:
     """Ask ``llm`` to compress ``messages`` into a single summary string.
+
+    ``session_id`` is forwarded to the model call so a summary belongs to the
+    same conversation as the main round (OpenCode keys on it).
 
     Failures are non-fatal: any error degrades to a short fallback note so the
     caller always receives a usable system block.
@@ -382,7 +386,7 @@ def summarize_messages(
         f"总字数控制在约 {budget_chars} 字以内，不要输出额外说明：\n\n{text}"
     )
     try:
-        resp = llm.complete([{"role": "user", "content": prompt}])
+        resp = llm.complete([{"role": "user", "content": prompt}], session_id=session_id)
         summary = (resp.content or "").strip()
         return summary or "[上下文摘要生成失败，已省略早期消息]"
     except Exception as exc:  # pragma: no cover - defensive
@@ -469,6 +473,7 @@ def _summarize_candidate(
     llm: Any,
     summary_max_tokens: int,
     redact: Optional[Callable[[str], str]] = None,
+    session_id: str = "",
 ) -> Tuple[List[Dict[str, Any]], int]:
     """The ``summarize`` layout: one LLM summary block in place of the early history.
 
@@ -481,7 +486,11 @@ def _summarize_candidate(
     if not dropped:
         return messages, 0
     summary = summarize_messages(
-        llm, messages[:dropped], summary_max_tokens, redact=redact
+        llm,
+        messages[:dropped],
+        summary_max_tokens,
+        redact=redact,
+        session_id=session_id,
     )
     return [{"role": "system", "content": summary}, *messages[dropped:]], dropped
 
@@ -499,6 +508,7 @@ def compress_messages(
     head_chars: int = 800,
     tail_chars: int = 400,
     redact: Optional[Callable[[str], str]] = None,
+    session_id: str = "",
 ) -> Tuple[List[Dict[str, Any]], Meta]:
     """Compress ``messages`` when they exceed the configured thresholds.
 
@@ -548,7 +558,12 @@ def compress_messages(
     if strategy == "summarize" and llm is not None:
         meta_base["strategy"] = "summarize"
         candidate, dropped = _summarize_candidate(
-            messages, keep_recent, llm, summary_max_tokens, redact=redact
+            messages,
+            keep_recent,
+            llm,
+            summary_max_tokens,
+            redact=redact,
+            session_id=session_id,
         )
     else:
         candidate, dropped = _truncate_candidate(messages, keep_recent)
