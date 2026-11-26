@@ -26,7 +26,7 @@ from backend.services.model_store import ModelStore
 from backend.tests.conftest import make_settings
 
 
-def _settings(monkeypatch, tmp_path, port=8000):
+def _settings(monkeypatch, tmp_path, port=8000, host="127.0.0.1"):
     dist = tmp_path / "dist"
     dist.mkdir(exist_ok=True)
     (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
@@ -36,6 +36,7 @@ def _settings(monkeypatch, tmp_path, port=8000):
         data_dir=str(tmp_path / "data"),
         artifacts_dir=str(tmp_path / "artifacts"),
         port=port,
+        host=host,
     )
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     return settings
@@ -83,6 +84,69 @@ def test_handoff_with_no_browser_does_not_open(tmp_path, monkeypatch):
 
     assert code == 0
     assert opened == []
+
+
+def test_ipv6_handoff_opens_a_bracketed_url(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, tmp_path, host="::1")
+    server_lock.claim_lock(server_lock.lock_path(settings), _lock())
+    opened: list[str] = []
+
+    code = cli.main(
+        [],
+        open_browser=opened.append,
+        probe=lambda port, timeout: {"instance": "tok"},
+    )
+
+    assert code == 0
+    assert opened == [f"http://[::1]:9123/?dir={quote(os.getcwd())}"]
+
+
+def test_ipv6_serve_uses_the_configured_host(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, tmp_path, host="::1")
+    lock_file = server_lock.lock_path(settings)
+    server_lock.claim_lock(lock_file, _lock(pid=999_999, instance="old"))
+
+    served: list[tuple[str, int]] = []
+    code = cli.main(
+        ["serve", "--port", "9130"],
+        serve=lambda host, port: served.append((host, port)),
+        probe=lambda port, timeout: None,
+    )
+
+    assert code == 0
+    assert served == [("::1", 9130)]
+    assert server_lock.read_lock(lock_file) is None
+
+
+def test_ensure_probes_the_configured_host(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, tmp_path, host="::1")
+    seen: dict[str, str] = {}
+
+    def fake_find_running(lock_file, **kwargs):
+        seen["host"] = kwargs["host"]
+        return _lock()
+
+    monkeypatch.setattr(server_lock, "find_running", fake_find_running)
+
+    code, port = cli.ensure_backend(
+        settings,
+        port=9123,
+        probe=lambda target, timeout: {"instance": "tok"},
+        browser=None,
+    )
+
+    assert code == 0
+    assert port == 9123
+    assert seen["host"] == "::1"
+
+
+@pytest.mark.skipif(not socket.has_ipv6, reason="IPv6 loopback is unavailable")
+def test_port_probe_uses_the_configured_ipv6_host():
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+        probe.bind(("::1", 0))
+        probe.listen(1)
+        port = probe.getsockname()[1]
+        assert cli._port_available(port, "::1") is False
 
 
 def test_stale_pid_is_taken_over(tmp_path, monkeypatch):
@@ -338,7 +402,7 @@ def fake_open(url):
 
 
 cli.webbrowser.open = fake_open
-cli.server_lock.find_running = lambda lock_file, probe=None: ServerLock(
+cli.server_lock.find_running = lambda lock_file, **kwargs: ServerLock(
     pid=1,
     port=9123,
     started_at="2026-01-01T00:00:00+00:00",

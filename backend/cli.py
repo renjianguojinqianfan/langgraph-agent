@@ -60,8 +60,9 @@ SERVER_LOG_NAME = "server.log"
 _IS_WINDOWS = os.name == "nt"
 
 
-def _port_available(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+def _port_available(port: int, host: str = HOST) -> bool:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
         if os.name != "nt":
             # uvicorn binds with SO_REUSEADDR; without it a just-stopped
             # backend's TIME_WAIT connections make this probe report a free
@@ -69,7 +70,7 @@ def _port_available(port: int) -> bool:
             # active listener, so the strict check stays.
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            probe.bind((HOST, port))
+            probe.bind((host, port))
         except OSError:
             return False
     return True
@@ -147,10 +148,11 @@ def _argv_preset(argv: list[str]) -> Optional[str]:
     return None
 
 
-def _open_at(port: int, browser: Callable[[str], None]) -> None:
-    url = f"http://{HOST}:{port}/?dir={quote(os.getcwd())}"
+def _open_at(port: int, browser: Callable[[str], None], host: str = HOST) -> None:
+    target = _host_for_url(host)
+    url = f"http://{target}:{port}/?dir={quote(os.getcwd())}"
     browser(url)
-    print(f"[qianfan] 已有后台在 http://{HOST}:{port}/，本目录：{os.getcwd()}")
+    print(f"[qianfan] 已有后台在 http://{target}:{port}/，本目录：{os.getcwd()}")
 
 
 def _handoff(
@@ -159,6 +161,7 @@ def _handoff(
     browser: Optional[Callable[[str], None]],
     *,
     accept_dev: bool = False,
+    host: str = HOST,
 ) -> int:
     """Point the caller at a healthy backend; a refusal changes nothing.
 
@@ -173,9 +176,9 @@ def _handoff(
         )
         return 2
     if browser is None or no_browser:
-        print(f"[qianfan] 已有后台在 http://{HOST}:{running.port}/，本目录：{os.getcwd()}")
+        print(f"[qianfan] 已有后台在 http://{_host_for_url(host)}:{running.port}/，本目录：{os.getcwd()}")
         return 0
-    _open_at(running.port, browser)
+    _open_at(running.port, browser, host=host)
     return 0
 
 
@@ -296,7 +299,7 @@ def _preflight(
             return 1
         if _stale_build(dist):
             print("[qianfan] 前端产物比 frontend/src 旧，界面可能不是最新的；重新执行 `npm run build`。")
-    if not _port_available(port):
+    if not _port_available(port, settings.host):
         print(f"[qianfan] 端口 {port} 已被其他程序占用（不是可交接的 qianfan 后台）。")
         print(f"[qianfan] 换一个端口：qianfan --port {port + 1}")
         return 1
@@ -326,14 +329,20 @@ def ensure_backend(
     for a client that never serves the UI; ``accept_dev=True`` reuses a
     ``start.py`` backend on its API port.
     """
-    probe_health = probe or server_lock.probe_health
+    probe_health = probe or (
+        lambda target_port, timeout: server_lock.probe_health(
+            target_port, timeout, host=settings.host
+        )
+    )
     lock_file = server_lock.lock_path(settings)
 
-    running = server_lock.find_running(lock_file, probe=probe_health)
+    running = server_lock.find_running(lock_file, probe=probe_health, host=settings.host)
     if running is not None:
         if preset:
             print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
-        code = _handoff(running, browser is None, browser, accept_dev=accept_dev)
+        code = _handoff(
+            running, browser is None, browser, accept_dev=accept_dev, host=settings.host
+        )
         return code, running.port if code == 0 else 0
 
     preflight = _preflight(settings, port, preset, require_dist=require_dist)
@@ -346,11 +355,15 @@ def ensure_backend(
     )
     if not server_lock.claim_lock(lock_file, lock):
         # Lost a race with another launcher: hand off to the winner.
-        running = server_lock.find_running(lock_file, probe=probe_health)
+        running = server_lock.find_running(
+            lock_file, probe=probe_health, host=settings.host
+        )
         if running is not None:
             if preset:
                 print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
-            code = _handoff(running, browser is None, browser, accept_dev=accept_dev)
+            code = _handoff(
+                running, browser is None, browser, accept_dev=accept_dev, host=settings.host
+            )
             return code, running.port if code == 0 else 0
         print(f"[qianfan] 后台可能正在启动或登记记录损坏（{lock_file}），请稍后再试。")
         print("[qianfan] 若确认没有进程在跑，可手动删除该文件；qianfan 不会按 pid 杀进程。")
@@ -365,7 +378,8 @@ def ensure_backend(
         print(f"[qianfan] 后台启动失败（{exc}）；日志：{log_path}")
         return 1, 0
 
-    url = f"http://{HOST}:{port}/?dir={quote(os.getcwd())}"
+    target = _host_for_url(settings.host)
+    url = f"http://{target}:{port}/?dir={quote(os.getcwd())}"
     ready = _open_when_ready(
         url,
         port,
@@ -389,7 +403,7 @@ def ensure_backend(
             print(f"[qianfan] 后台启动失败（退出码 {code}）；日志：{log_path}")
         server_lock.release_lock(lock_file, instance)
         return 1, 0
-    print(f"[qianfan] 后台已就绪（pid={child.pid}）：http://{HOST}:{port}/")
+    print(f"[qianfan] 后台已就绪（pid={child.pid}）：http://{target}:{port}/")
     return 0, port
 
 
@@ -457,11 +471,18 @@ def _serve_foreground(
     )
     args = parser.parse_args(argv)
 
-    probe_health = probe or server_lock.probe_health
+    probe_health = probe or (
+        lambda target_port, timeout: server_lock.probe_health(
+            target_port, timeout, host=settings.host
+        )
+    )
     lock_file = server_lock.lock_path(settings)
-    running = server_lock.find_running(lock_file, probe=probe_health)
+    running = server_lock.find_running(lock_file, probe=probe_health, host=settings.host)
     if running is not None:
-        print(f"[qianfan] 已有后台在 http://{HOST}:{running.port}/ 运行；serve 不启动第二个。")
+        print(
+            f"[qianfan] 已有后台在 http://{_host_for_url(settings.host)}:"
+            f"{running.port}/ 运行；serve 不启动第二个。"
+        )
         return 2
 
     preflight = _preflight(settings, args.port, args.preset)
@@ -492,7 +513,7 @@ def _serve_foreground(
 
             return run(host, port, instance)
 
-        (runner or default_runner)(HOST, args.port)
+        (runner or default_runner)(settings.host, args.port)
     finally:
         server_lock.release_lock(lock_file, instance)
     return 0
