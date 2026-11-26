@@ -118,26 +118,65 @@ def test_ipv6_serve_uses_the_configured_host(tmp_path, monkeypatch):
     assert server_lock.read_lock(lock_file) is None
 
 
-def test_ensure_probes_the_configured_host(tmp_path, monkeypatch):
+def test_ensure_probes_the_configured_host_on_a_cold_start(tmp_path, monkeypatch):
+    """The default probe (no ``probe=`` seam) must carry ``settings.host``.
+
+    Cold start also covers the readiness URL: the launcher waits through the
+    real ``_health_probe`` lambda and opens the bracketed IPv6 URL.
+    """
     settings = _settings(monkeypatch, tmp_path, host="::1")
-    seen: dict[str, str] = {}
+    probed: list[str] = []
 
-    def fake_find_running(lock_file, **kwargs):
-        seen["host"] = kwargs["host"]
-        return _lock()
+    def fake_probe_health(port, timeout=1.0, host="127.0.0.1"):
+        probed.append(host)
+        return {"instance": "child"}
 
-    monkeypatch.setattr(server_lock, "find_running", fake_find_running)
+    monkeypatch.setattr(server_lock, "probe_health", fake_probe_health)
+    checked: list[str] = []
+    monkeypatch.setattr(
+        cli, "_port_available", lambda port, host: checked.append(host) or True
+    )
+    opened: list[str] = []
+    spawned: list[bool] = []
+
+    class FakeChild:
+        pid = 424242
+
+        def poll(self):
+            return None
+
+    def fake_spawn(cmd, env, log_path):
+        spawned.append(True)
+        return FakeChild()
 
     code, port = cli.ensure_backend(
-        settings,
-        port=9123,
-        probe=lambda target, timeout: {"instance": "tok"},
-        browser=None,
+        settings, port=9123, spawn=fake_spawn, browser=opened.append
     )
 
-    assert code == 0
-    assert port == 9123
-    assert seen["host"] == "::1"
+    assert (code, port) == (0, 9123)
+    assert spawned == [True]
+    assert checked == ["::1"]
+    assert probed and set(probed) == {"::1"}
+    assert opened == [f"http://[::1]:9123/?dir={quote(os.getcwd())}"]
+
+
+def test_handoff_probes_the_configured_host(tmp_path, monkeypatch):
+    settings = _settings(monkeypatch, tmp_path, host="::1")
+    server_lock.claim_lock(server_lock.lock_path(settings), _lock())
+    probed: list[str] = []
+
+    def fake_probe_health(port, timeout=1.0, host="127.0.0.1"):
+        probed.append(host)
+        return {"instance": "tok"}
+
+    monkeypatch.setattr(server_lock, "probe_health", fake_probe_health)
+    opened: list[str] = []
+
+    code, port = cli.ensure_backend(settings, port=9123, browser=opened.append)
+
+    assert (code, port) == (0, 9123)
+    assert probed == ["::1"]
+    assert opened == [f"http://[::1]:9123/?dir={quote(os.getcwd())}"]
 
 
 @pytest.mark.skipif(not socket.has_ipv6, reason="IPv6 loopback is unavailable")

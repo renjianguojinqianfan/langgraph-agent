@@ -276,6 +276,18 @@ def _child_command(port: int, instance: str) -> list[str]:
     ]
 
 
+def _health_probe(
+    settings: Any,
+    probe: Optional[Callable[[int, float], Optional[dict[str, Any]]]] = None,
+) -> Callable[[int, float], Optional[dict[str, Any]]]:
+    """Probe ``/health`` on the configured host unless a test seam is injected."""
+    if probe is not None:
+        return probe
+    return lambda port, timeout: server_lock.probe_health(
+        port, timeout, host=settings.host
+    )
+
+
 def _preflight(
     settings: Any, port: int, preset: Optional[str], *, require_dist: bool = True
 ) -> Optional[int]:
@@ -329,14 +341,10 @@ def ensure_backend(
     for a client that never serves the UI; ``accept_dev=True`` reuses a
     ``start.py`` backend on its API port.
     """
-    probe_health = probe or (
-        lambda target_port, timeout: server_lock.probe_health(
-            target_port, timeout, host=settings.host
-        )
-    )
+    probe_health = _health_probe(settings, probe)
     lock_file = server_lock.lock_path(settings)
 
-    running = server_lock.find_running(lock_file, probe=probe_health, host=settings.host)
+    running = server_lock.find_running(lock_file, probe=probe_health)
     if running is not None:
         if preset:
             print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
@@ -355,9 +363,7 @@ def ensure_backend(
     )
     if not server_lock.claim_lock(lock_file, lock):
         # Lost a race with another launcher: hand off to the winner.
-        running = server_lock.find_running(
-            lock_file, probe=probe_health, host=settings.host
-        )
+        running = server_lock.find_running(lock_file, probe=probe_health)
         if running is not None:
             if preset:
                 print("[qianfan] --preset 只在本次启动生效；已有后台在跑，忽略该参数。")
@@ -471,13 +477,9 @@ def _serve_foreground(
     )
     args = parser.parse_args(argv)
 
-    probe_health = probe or (
-        lambda target_port, timeout: server_lock.probe_health(
-            target_port, timeout, host=settings.host
-        )
-    )
+    probe_health = _health_probe(settings, probe)
     lock_file = server_lock.lock_path(settings)
-    running = server_lock.find_running(lock_file, probe=probe_health, host=settings.host)
+    running = server_lock.find_running(lock_file, probe=probe_health)
     if running is not None:
         print(
             f"[qianfan] 已有后台在 http://{_host_for_url(settings.host)}:"
@@ -534,9 +536,7 @@ def _status(
     if record is None or not server_lock.pid_alive(record.pid):
         print("[qianfan] 未运行：没有 qianfan 后台在跑")
         return 1
-    probe_health = probe or (
-        lambda port, timeout: server_lock.probe_health(port, timeout, host=settings.host)
-    )
+    probe_health = _health_probe(settings, probe)
     health = probe_health(record.port, 1.0)
     healthy = health is not None and str(health.get("instance") or "") == record.instance
     print(
@@ -675,9 +675,7 @@ def _stop(
         print(f"[qianfan] 后台返回了意外状态 {status}；未确认停止")
         return 1
 
-    probe_health = probe or (
-        lambda port, timeout: server_lock.probe_health(port, timeout, host=settings.host)
-    )
+    probe_health = _health_probe(settings, probe)
     deadline = clock() + timeout
     while True:
         if probe_health(record.port, 0.5) is None and not is_alive(record.pid):
