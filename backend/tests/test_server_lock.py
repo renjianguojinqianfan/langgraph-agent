@@ -441,7 +441,7 @@ def fake_open(url):
 
 
 cli.webbrowser.open = fake_open
-cli.server_lock.find_running = lambda lock_file, **kwargs: ServerLock(
+cli.server_lock.find_running = lambda lock_file, probe=None: ServerLock(
     pid=1,
     port=9123,
     started_at="2026-01-01T00:00:00+00:00",
