@@ -5,7 +5,7 @@
 
 ## 项目定位与适用范围
 
-基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 工具生态 / 两层注入 / 工作区文件）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/archive/pivot-plan-build.md`。能力见 `README.md`「能力」，交付长史见 `docs/archive/OVERVIEW.md`，设计与 spec 见 `docs/`。
+基于 **LangGraph 1.2.x（StateGraph）** 的自主任务 Agent 平台：自然语言任务 → **一条 loop、计划 / 执行两模式** → 工具调用 → SSE 实时可视化；深度在运行时（续跑 / 计划-执行两模式 / 工具生态 / 两层注入 / 工作区文件）。转向决策见 [ADR 0008](docs/adr/0008-single-loop-plan-build-modes.md)，切法与片号见 `docs/archive/pivot-plan-build.md`。能力见 `README.md`「能力」，日常操作见 `docs/usage.md`，交付长史见 `docs/archive/OVERVIEW.md`，设计与 spec 见 `docs/`。
 
 - **最简 agent 一章（pi 式工具面、计划文件、一条命令启动，2026-10-22 已交付）**：[ADR 0009](docs/adr/0009-minimal-agent-chapter.md)，切片 C1–C7 见 `docs/capability-registry-rescope.md` §0.9。现役以下面的「跨任务安全边界」表 + 代码为准。
 - **日常形态补充（启动目录即工作区、共用一个后台、多套模型配置，2026-10-22 已交付）**：[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)；实施记录见 `docs/specs/qianfan-daily-form-plan.md`（spec #166，切片 PR #167、#176–#187）。现役以下表 + 代码为准。
@@ -21,7 +21,7 @@
 | 触发词 | 不变量 | 权威源 |
 |---|---|---|
 | 危险动作拦截 | 危险动作由**设置里的规则表 + 一个钩子**当场拒：命中即不执行，把 `{block, reason}` 当该次调用的结果回给模型；**不弹框、不进图重入**。钩子**不改参数、不 terminate**（与 pi 的有意分歧） | `docs/adr/0008` + `backend/core/agent/policy.py`（规则表）与 `nodes.py::_handle_tool_calls`（钩子所在）+ [docs/security.md](docs/security.md)（起步集与威胁模型） |
-| 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /api/tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值（跑着 / 停下 / 出错），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源）；停下时可整份改（`PUT /api/tasks/{id}/plan` 写文件），改动随后续消息生效 | `docs/adr/0008`（决策 1–8）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/plan_file.py`（计划文件）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
+| 计划 / 执行两模式 | 一个任务 = 一段多轮对话（同一 `thread_id` / checkpoint，停下后 `POST /api/tasks/{id}/messages` 续说）；**一条 loop 一个 `agent` 节点**；**默认执行模式**，用户显式切才走计划（任务上的开关，**黏性**）；正常轮末最后一次 `agent` 调用没有工具调用即停下，停止请求 / 轮内步数上限也进 `finish`（`INTERRUPTED`），LLM 错误进 `FAILED`；状态三值（跑着 / 停下 / 出错；`PENDING` 只是创建瞬间），**没有「完成」终态**；计划模式工具面 = `explore` 档（只读、派发时也拒绝档外工具），执行模式 = 全部已挂载工具；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源）；停下时可整份改（`PUT /api/tasks/{id}/plan` 写文件），改动随后续消息生效 | `docs/adr/0008`（决策 1–8）+ `backend/core/agent/nodes.py`（`agent` 节点）+ `backend/services/plan_file.py`（计划文件）+ `backend/services/task_manager.py`（续说 / 模式 / 计划） |
 | 工具挂载与失败回传 | 工具面按**能力包**装配（`files` / `shell` / `skills` / `web-search` / `subagent` / `mcp`；预设 `minimal` / `research` / `full`，**默认 `full` = 原行为**；关掉的包不实例化、不进 schema / dispatch / 注入、不连 MCP，见 ADR 0012）；保存态在 `data/plugins.json`（设置页 / `PUT /api/plugins` 写入、**重启生效**；一次性 `--preset` 覆盖；优先级 CLI > 文件 > `PLUGINS_PRESET` env > full）；MCP 工具由 `task_manager` 显式追加且只在 `mcp` 包启用时连接（不经 `@register`）；工具每次调用**只执行一次**，失败原因原样回给模型——**无自动重试、无熔断**（ADR 0003 已退役） | `backend/core/capability_packages.py`（包 / 预设清单）+ `backend/services/plugins_store.py`（文件读写 / 生效解析）+ `backend/services/task_manager.py`（装配 / MCP 追加）+ `backend/core/agent/nodes.py::tool_node` + [ADR 0012](docs/adr/0012-plugin-packages-and-presets.md) |
 | 密钥 | Key 只存在仓库外的 `~/.qianfan/credentials.json`（界面粘贴）或配置里写的环境变量（如 `LLM_API_KEY` / `DASHSCOPE_API_KEY`）；不进仓库、日志、trace、SSE；接口只回「已设 / 未设」与来源（粘贴 / 环境变量 / 无）；`.env` 的 `llm_api_key` 保持留空；不硬编码、不打印明文 | `backend/services/model_store.py` + `.env.example` 注释 + [docs/security.md](docs/security.md)（明文决策 / 轮换 / 暴露面） |
 | 质量门禁 | `ruff check backend scripts start.py` 与 `mypy` 必须 0 错；类型错误用真实签名修复（不留 ignore / `noqa`）；mypy 零 override；工具链钉在 `requirements-dev.txt` | `pyproject.toml` 注释（规则集与每条取舍理由）——改配置前先读 |
@@ -40,7 +40,7 @@
 | 前端改动 | `frontend/package.json` + `.github/workflows/ci.yml` 的 frontend-build job；视觉 / 交互 / 组件**设计规则（已交付）**加读 [`docs/frontend-design.md`](docs/frontend-design.md) | `npm ci` 口径；`npm run typecheck`（双项目：`tsconfig.json` + `tsconfig.node.json`）/ `npm test` 与 `npm run build` 通过；**状态面孔 / 组件接线改动**必须配一条纯函数或 store 断言 + 一条手测清单项，纯布局 / 视觉改动可只手测，不引 jsdom（`docs/frontend-design.md` §10.1，2026-11-07 拍板）；**动到对应判据面再加该面的 `check:*`**：SSE 事件面（发布点 / 注册表 / §3.4 表）→ `npm run check:sse`；设计 token 面（`DESIGN.md` ↔ `index.css` `@theme`）→ `python scripts/check_design_tokens.py`；键盘与 #189 回归见设计基线 §6 / §10 |
 | stop / resume / checkpoint / durability | `docs/incremental-arch-p3-resume.md` + `docs/migration-langgraph-1x.md`（§2 存储守卫、§5 durability） | TaskManager 权威信号（`_stop_flags`）在；两类 409 拒绝逐条成立（非 INTERRUPTED、无 checkpoint） |
 | 启动对账 / 终态写入 | `docs/architecture.md` §4.2 + `docs/incremental-arch-p3-resume.md`（§2.3 孤儿对账） | 终态记录（INTERRUPTED / FAILED）里没有 `running` / `pending` 的步骤或工具调用——启动对账与 `_finalize_terminal` 两个写入口走同一收尾，`backend/tests/conftest.py::assert_no_in_flight` 对**读盘记录**断言；RUNNING / PENDING 孤儿转 INTERRUPTED，旧记录只收尾步骤、不重写任务状态 |
-| 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/archive/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑）+ `backend/services/plan_file.py`（计划文件） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；一轮的最后一次 `agent` 调用没有工具调用即停下；状态三值、无「完成」终态；步数上限按**轮**计；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源） |
+| 计划 / 执行两模式 / 状态机 | `docs/adr/0008`（决策）+ `docs/archive/pivot-plan-build.md`（切法与片号）+ `backend/core/agent/graph.py`（拓扑）+ `backend/services/plan_file.py`（计划文件） | 一个任务 = 一段多轮对话；**一条 loop 一个 `agent` 节点**；**默认执行模式**、用户显式切才走计划（黏性）；正常轮末没有工具调用即停下，停止 / 步数上限 → `INTERRUPTED`，LLM 错误 → `FAILED`；状态三值（`PENDING` 只是创建瞬间）、无「完成」终态；步数上限按**轮**计；计划 = 任务目录里的 `.qianfan/plans/<task_id>.md`（唯一来源） |
 | 依赖升级 | `requirements.txt` 注释 | 本地复现 CI 确切命令后合并 |
 | 开 issue / 定标签 / 领域文档 / 文档归属 | `docs/agents/` 三件套（issue-tracker / triage-labels / domain——「文档归属」表在 domain） | 标签流转按 triage-labels；文档一律落 `docs/` |
 | 语义/设计歧义需拍板（如产物定义、面板去留） | 调研 opencode / codex / pi / dsh 等开源 agent 仓库的同类处理（GitHub 实码为证，不靠记忆）；读料可交后台代理跑 `research` skill | 调研产物落 `docs/`（按 domain「文档归属」表，带文件级引用），票面只留结论 + 链接，再拍板 |
@@ -48,7 +48,14 @@
 ## 验证入口与完成证据
 
 ```bash
-# 离线回归（唯一权威）——解释器一律 .venv314；根目录 .venv 是 3.13 且无依赖，不要用
+# 首次开发环境（Windows；Git Bash 用 source .venv314/Scripts/activate）
+uv venv --python 3.14 --seed .venv314
+.\.venv314\Scripts\activate
+.\.venv314\Scripts\python.exe -m pip install -r requirements-dev.txt
+python start.py --install   # 运行期依赖按 CI 同口径（pip install -r requirements.txt）+ npm ci
+python start.py             # 后端 --reload + Vite 热重载；根目录 .venv 会被拦截
+
+# 离线回归（唯一权威）——解释器一律 .venv314；根目录 .venv 不是本项目环境，start.py 会拦截
 .\.venv314\Scripts\python.exe -m pytest backend/tests/ -q
 
 # 例外：harness 里跑离线回归可能整文件假红——MSYS bash 初始化即死，退出码 3221225794、stderr 含
@@ -85,7 +92,7 @@ npm run check:sse    # SSE 事件词汇表四处对齐（#92）；改事件面�
 - **Windows 冒烟清单**（`.github/workflows/ci.yml` 的 `backend-windows-smoke`）：新增「只在 Windows 跑」的行为测试（`os.name`、`sys.platform`、路径分隔符）时，把对应测试文件同时加进该 job 的 pytest 命令与上面那条本地命令，两边保持同一清单（**机械守卫**：`backend/tests/test_smoke_list_parity.py` 解析两处断言集合相等，且做 **Windows-only 标记扫描**——`backend/tests/test_*.py` 出现 `os.name` / `sys.platform` / `WinDLL` / `taskkill` 必须已在清单，已知例外走显式白名单 + 理由；漂移即红）；**进程树 / 子进程类由 B1（#197）起逐个验证并纳入**（连跑 3 次稳定才入清单）；新增同类文件仍按「一个文件一个 PR + 连跑 3 次观察」纳入，抖先修环境适配、不放宽断言；当前清单以上面那条命令为准。
 - 报告完成时区分四种状态：**通过 / 跳过 / 未运行 / 产物验收**；未执行的项写明原因与影响面——`exit 0` ≠ 全验收。
 - 既有测试只增不减、不得跳过或放宽；文档不写现役测试计数（数字必腐，以实跑为准）。
-- 改接口 / 配置后同步 `.env.example` 与 `README.md`（含新配置前缀）。
+- 改接口 / 配置后同步 `.env.example`、`README.md` 与 `docs/usage.md`（含新配置前缀与操作口径）。
 
 ## Agent skills
 
