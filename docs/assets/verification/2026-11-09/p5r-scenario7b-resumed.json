@@ -66,7 +66,7 @@
             "timeout": 30
           },
           "output": {
-            "stdout": "Mon Nov  9 21:28:03     2026\n-rw-r--r-- 1 DELL 197121 5 Nov  9 21:26 p5r-orphan-begin.txt\n",
+            "stdout": "Mon Nov  9 21:28:03     2026\n-rw-r--r-- 1 <user> 197121 5 Nov  9 21:26 p5r-orphan-begin.txt\n",
             "stderr": "",
             "exit_code": 0,
             "cwd": "<repo>\\.qoder\\tmp\\p5r-20261109\\project-a",
@@ -122,7 +122,7 @@
             "timeout": 30
           },
           "output": {
-            "stdout": "Mon Nov  9 21:28:55     2026\n---\ntotal 7\ndrwxr-xr-x 1 DELL 197121  0 Nov  9 21:18 canary-p5r\n-rw-r--r-- 1 DELL 197121 11 Nov  9 21:22 p5r-a-continued.txt\n-rw-r--r-- 1 DELL 197121 11 Nov  9 21:20 p5r-bash-made.txt\n-rw-r--r-- 1 DELL 197121 12 Nov  9 21:16 p5r-human-edited.txt\n-rw-r--r-- 1 DELL 197121  5 Nov  9 21:26 p5r-orphan-begin.txt\n-rw-r--r-- 1 DELL 197121 12 Nov  9 21:25 p5r-restart-stop.txt\n-rw-r--r-- 1 DELL 197121  7 Nov  9 21:08 p5r-scenario1.txt\n-rw-r--r-- 1 DELL 197121 14 Nov  9 21:18 p5r-stop-end.txt\n",
+            "stdout": "Mon Nov  9 21:28:55     2026\n---\ntotal 7\ndrwxr-xr-x 1 <user> 197121  0 Nov  9 21:18 canary-p5r\n-rw-r--r-- 1 <user> 197121 11 Nov  9 21:22 p5r-a-continued.txt\n-rw-r--r-- 1 <user> 197121 11 Nov  9 21:20 p5r-bash-made.txt\n-rw-r--r-- 1 <user> 197121 12 Nov  9 21:16 p5r-human-edited.txt\n-rw-r--r-- 1 <user> 197121  5 Nov  9 21:26 p5r-orphan-begin.txt\n-rw-r--r-- 1 <user> 197121 12 Nov  9 21:25 p5r-restart-stop.txt\n-rw-r--r-- 1 <user> 197121  7 Nov  9 21:08 p5r-scenario1.txt\n-rw-r--r-- 1 <user> 197121 14 Nov  9 21:18 p5r-stop-end.txt\n",
             "stderr": "",
             "exit_code": 0,
             "cwd": "<repo>\\.qoder\\tmp\\p5r-20261109\\project-a",

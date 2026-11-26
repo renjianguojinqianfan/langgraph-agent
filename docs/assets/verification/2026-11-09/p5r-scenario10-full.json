@@ -45,7 +45,7 @@
             "command": "cat p5r-full.txt; echo \"---\"; ls -l p5r-full.txt"
           },
           "output": {
-            "stdout": "FULL-P5R\r\n---\n-rw-r--r-- 1 DELL 197121 10 Nov  9 21:37 p5r-full.txt\n",
+            "stdout": "FULL-P5R\r\n---\n-rw-r--r-- 1 <user> 197121 10 Nov  9 21:37 p5r-full.txt\n",
             "stderr": "",
             "exit_code": 0,
             "cwd": "<repo>\\.qoder\\tmp\\p5r-20261109\\project-a",

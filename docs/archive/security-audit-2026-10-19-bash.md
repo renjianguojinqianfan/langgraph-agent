@@ -53,7 +53,7 @@
 **本机探针（TestClient，非真实网络）**
 
 ```text
-base_url=http://192.168.1.5:8000  GET /health        -> 400（Host 不合法）
+base_url=http://192.0.2.10:8000  GET /health        -> 400（Host 不合法）
 同一请求 + Host: localhost                          -> 200（Host 检查被伪造）
 evil origin preflight                               -> 400, 无 ACAO
 自身 origin preflight (http://localhost:5173)        -> 200, ACAO=http://localhost:5173

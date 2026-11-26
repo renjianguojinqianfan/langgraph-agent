@@ -30,7 +30,7 @@
             "command": "ls -la"
           },
           "output": {
-            "stdout": "total 5\ndrwxr-xr-x 1 DELL 197121 0 Nov  9 21:15 .\ndrwxr-xr-x 1 DELL 197121 0 Nov  9 21:06 ..\ndrwxr-xr-x 1 DELL 197121 0 Nov  9 21:08 .git\ndrwxr-xr-x 1 DELL 197121 0 Nov  9 21:15 .qianfan\n-rw-r--r-- 1 DELL 197121 7 Nov  9 21:08 p5r-scenario1.txt\n",
+            "stdout": "total 5\ndrwxr-xr-x 1 <user> 197121 0 Nov  9 21:15 .\ndrwxr-xr-x 1 <user> 197121 0 Nov  9 21:06 ..\ndrwxr-xr-x 1 <user> 197121 0 Nov  9 21:08 .git\ndrwxr-xr-x 1 <user> 197121 0 Nov  9 21:15 .qianfan\n-rw-r--r-- 1 <user> 197121 7 Nov  9 21:08 p5r-scenario1.txt\n",
             "stderr": "",
             "exit_code": 0,
             "cwd": "<repo>\\.qoder\\tmp\\p5r-20261109\\project-a",
@@ -80,7 +80,7 @@
             "command": "ls -la p5r-human-edited.txt p5r-plan-v1.txt 2>&1; echo '---'; cat p5r-human-edited.txt"
           },
           "output": {
-            "stdout": "ls: cannot access 'p5r-plan-v1.txt': No such file or directory\n-rw-r--r-- 1 DELL 197121 12 Nov  9 21:16 p5r-human-edited.txt\n---\nEDITED-P5R\r\n",
+            "stdout": "ls: cannot access 'p5r-plan-v1.txt': No such file or directory\n-rw-r--r-- 1 <user> 197121 12 Nov  9 21:16 p5r-human-edited.txt\n---\nEDITED-P5R\r\n",
             "stderr": "",
             "exit_code": 0,
             "cwd": "<repo>\\.qoder\\tmp\\p5r-20261109\\project-a",
