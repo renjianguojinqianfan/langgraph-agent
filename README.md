@@ -34,7 +34,7 @@ agent ──有 tool call──> tool ──> agent
 
 - 在哪个目录敲 `qianfan`，新任务就在哪个目录读写、执行命令、加载那里的 `AGENTS.md` 与 `.agents/skills`；页面地址带 `?dir=` 时以它为准（[ADR 0010](docs/adr/0010-launch-dir-workspace-and-model-profiles.md)）。历史默认当前目录，可切「全部」；页面内可切换工作区，任务头标出目录，目录被删后续说返回 409。
 - 历史可逐条或按目录删除：只删 `tasks.json` 记录、checkpoint、trace 与 `data/changes/<task_id>/` 变更 sidecar，**不动工作区文件**；运行中的任务会被拒绝（409）。
-- 一台机器共用一个后台：日常 `qianfan` 发现健康实例就复用、否则 detach 拉起，关掉启动终端不停后台；停止 / 状态用 `qianfan stop` / `qianfan status`。`start.py` 起的开发后台请回它的终端 Ctrl-C；手工 `uvicorn backend.main:app` 一律被拒。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等启动期直接拒绝。细节与已知限制见 [使用手册](docs/usage.md#2-共享后台)。
+- 一台机器共用一个后台：日常 `qianfan` 发现健康实例就复用、否则 detach 拉起，关掉启动终端不停后台；停止 / 状态用 `qianfan stop` / `qianfan status`。`start.py` 起的开发后台请回它的终端 Ctrl-C；手工 `uvicorn backend.main:app` 一律被拒。`host` 只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等启动期直接拒绝。细节见 [使用手册](docs/usage.md#2-共享后台)。
 
 ## 能力
 

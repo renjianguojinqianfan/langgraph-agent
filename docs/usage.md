@@ -45,9 +45,6 @@
   守卫，请用 `qianfan`、`qianfan serve` 或 `python start.py`。
 - **host**：只允许回环（`127.0.0.1` / `localhost` / `::1`），`0.0.0.0` 等非回环值在启动期直接拒绝；
   开发态 Vite 代理固定 `127.0.0.1`（只用 IPv4 回环）。
-- **已知限制（待修）**：`host=::1` 时，日常 `qianfan` 的 ensure 探测与浏览器地址仍固定
-  `127.0.0.1`，`qianfan serve` 也固定 `127.0.0.1`；`python start.py` 的 uvicorn 跟随 host，但
-  Vite 代理仍只走 IPv4。修好前请保持 `host=127.0.0.1`，或等后续修复。
 - **前端产物**：`frontend/dist` 由后端同源托管；产物缺失或比 `frontend/src` 旧时 `qianfan` 会提示
   先构建。
 
@@ -122,8 +119,8 @@ qianfan repl
   Provider / 缺省。
 - **坏文件与旧格式**：旧格式 `data/models.json`（无 `schema_version` 的扁平 profile）不再迁移：
   加载时明确拒绝且原文件字节不变，请在设置页重新添加 Provider 与模型。JSON 解析失败、结构不是对象或
-  未来版本会 quarantine 后 seed；v2 里单条非法 provider / 条目只丢弃该条。**非 UTF-8 文件目前可能
-  直接报解码错误**，后续修复会按坏文件处理。
+  未来版本会 quarantine 后 seed；v2 里单条非法 provider / 条目只丢弃该条。**非 UTF-8 文件也按
+  坏文件处理**（quarantine 后 seed，原文件字节保留）。
 - **明文与条款**：粘贴的 Key 明文落盘，同账号的 `shell` 读得到；Coding Plan 条款通常不允许自建
   客户端调用，用「自定义」后果自担。
 
@@ -142,8 +139,8 @@ qianfan repl
   子代理实际面 = 固定档 ∩ 已启用包 ∩ 父任务已挂载工具。
 - **错误口径**：未知 preset / 包 id 启动即错；`data/plugins.json` 的 JSON 语法 / 校验错误会指出路径
   与修法。**CLI 一次性覆盖不豁免坏文件**——文件非法时即使带 `--preset` 也启动即错（文件仍是权威配置，
-  不允许静默绕过；先删除或修好文件）。**非 UTF-8 的 `plugins.json` 目前可能直接报解码错误**，后续修复
-  会转成同样的可读错误。
+  不允许静默绕过；先删除或修好文件）。**非 UTF-8 的 `plugins.json` 按同样的可读错误处理**
+  （指出路径与修法）。
 - **`GET /api/plugins`**：`saved` 是文件内容（含 `exists`），`active` 是实际装配面；文件存在且
   preset / overrides 与 active 不同时 `restart_required=true`。
 
