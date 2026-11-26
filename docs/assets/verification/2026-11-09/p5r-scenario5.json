@@ -49,7 +49,7 @@
             "command": "printf 'P5R-BASH-OK' > p5r-bash-made.txt && ls -l p5r-bash-made.txt && cat p5r-bash-made.txt"
           },
           "output": {
-            "stdout": "-rw-r--r-- 1 DELL 197121 11 Nov  9 21:20 p5r-bash-made.txt\nP5R-BASH-OK",
+            "stdout": "-rw-r--r-- 1 <user> 197121 11 Nov  9 21:20 p5r-bash-made.txt\nP5R-BASH-OK",
             "stderr": "",
             "exit_code": 0,
             "cwd": "<repo>\\.qoder\\tmp\\p5r-20261109\\project-a",
