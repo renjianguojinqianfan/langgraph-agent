@@ -192,6 +192,21 @@ def test_invalid_file_json_is_a_readable_error(tmp_path):
     assert "修法" in message
 
 
+def test_non_utf8_file_is_a_readable_error(tmp_path):
+    settings = make_settings(tmp_path)
+    path = plugins_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'{"preset": "full", "overrides": {}}\xff')
+
+    with pytest.raises(PluginsConfigError) as excinfo:
+        load_plugins_config(settings)
+
+    message = str(excinfo.value)
+    assert str(path) in message
+    assert "UTF-8" in message
+    assert "修法" in message
+
+
 @pytest.mark.parametrize(
     "payload",
     [

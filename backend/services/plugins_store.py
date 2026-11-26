@@ -112,6 +112,10 @@ def _read_raw(settings: Settings) -> Optional[dict]:
         return None
     try:
         text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise PluginsConfigError(
+            f"能力包配置 {path} 不是 UTF-8 文本（{exc}）。{_fix_hint(settings)}"
+        ) from None
     except OSError as exc:
         raise PluginsConfigError(
             f"无法读取能力包配置 {path}：{exc}. {_fix_hint(settings)}"

@@ -274,6 +274,12 @@ class ModelStore:
     def _load(self) -> None:
         try:
             text = self.data_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Not OSError: a corrupted/non-UTF-8 state file must be moved
+            # aside like a JSON parse failure, never rewritten in place.
+            self._quarantine(self.data_file)
+            self._seed()
+            return
         except OSError:
             self._seed()
             return
