@@ -16,7 +16,7 @@
 # docs/agents/workflow.md「并行实施」节一致。另三个钩子（check:sse / frontend-tsc /
 # frontend-tsc-config）走 node，
 # 版本由 frontend/package.json 钉——「零第二版本源」的承诺只覆盖 Python 侧。
-# 本机绝对路径不进公开仓库：entry 一律用仓库相对路径（安装说明见 README「质量门禁」）。
+# 本机绝对路径不进公开仓库：entry 一律用仓库相对路径（安装说明见 AGENTS.md「验证入口与完成证据」）。
 #
 # 实测（2026-10-07 初测，2026-11-07 补 doc-links 与双 tsc；本机，供后人调档位参考）：
 #   ruff ~1s · mypy 冷启 27s / 热 3s · check:sse 0.6s ·

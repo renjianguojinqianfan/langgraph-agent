@@ -6,8 +6,8 @@ status: accepted
 
 > 2026-11-18 由 spec [#326](https://github.com/renjianguojinqianfan/langgraph-agent/issues/326) 的 S0（#327）落库；
 > 目标与验收见 [实施计划](../specs/qianfan-runtime-simplification-plan.md)，切片票 S1–S12 挂在 #326 下。
-> 本文只记四项已确认裁定及其与既有 ADR 的关系，不复制切片实施细节；S1–S12 已在集成分支
-> 实施（见该计划 §10 实施记录），**合并前**的现态仍以集成分支代码与 `AGENTS.md`「跨任务安全边界」表为准。
+> 本文只记四项已确认裁定及其与既有 ADR 的关系，不复制切片实施细节；S1–S12 已合并
+> （见该计划 §10 实施记录，PR #340 / #349），现态以 master 代码与 `AGENTS.md`「跨任务安全边界」表为准。
 
 ## 背景
 

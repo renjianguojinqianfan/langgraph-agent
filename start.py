@@ -30,16 +30,16 @@ ROOT = Path(__file__).resolve().parent
 
 
 def _check_interpreter() -> None:
-    """Block the known-bad root ``.venv`` (Python 3.13 without dependencies).
+    """Block the known-bad root ``.venv`` path (not this project's environment).
 
-    AGENTS.md mandates ``.venv314`` for this project; the root ``.venv`` has no
-    dependencies installed and would fail with ImportError. Other interpreters
-    (system Python, CI, containers) pass through untouched.
+    AGENTS.md mandates ``.venv314`` for this project; a root ``.venv`` is not
+    this checkout's environment, so the guard keeps everyone on ``.venv314``.
+    Other interpreters (system Python, CI, containers) pass through untouched.
     """
     exe = Path(sys.executable).resolve()
     for parent in exe.parents:
         if parent.name == ".venv" and parent.parent == ROOT:
-            print("[start] 错误：当前使用根目录 .venv（Python 3.13，未装依赖），无法运行本项目。", flush=True)
+            print("[start] 错误：当前使用根目录 .venv，不是本项目环境，无法运行本项目。", flush=True)
             print("[start] 请改用 .venv314，例如：.\\.venv314\\Scripts\\python.exe start.py", flush=True)
             raise SystemExit(1)
 

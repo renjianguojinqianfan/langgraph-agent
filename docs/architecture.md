@@ -1,8 +1,8 @@
 # 系统架构：基于 LangGraph 的自主任务 Agent 平台
 
-> **状态：现役架构文档**（2026-10-23 全量刷新；其后随各片增量更新，最近 2026-11-10 文档对账）。旧的 v0.1 原始设计档（2025-08-24）原文保留在 git 历史：`git log --follow docs/architecture.md`。
+> **状态：现役架构文档**（2026-10-23 全量刷新；其后随各片增量更新，最近 2026-11-26 门厅 / 使用手册拆分对账）。旧的 v0.1 原始设计档（2025-08-24）原文保留在 git 历史：`git log --follow docs/architecture.md`。
 >
-> 本文讲「是什么、怎么连」；**决策理由**在 [`docs/adr/`](adr/)（现役：0001、0002（部分退役）、0008、0009、0010、0011、0012），**能力清单**在 [`README.md`](../README.md)「能力」，**跨任务硬规则**在 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」，**发布前验收**在 [`docs/manual-verification.md`](manual-verification.md)，**安全边界与暴露面**在 [`docs/security.md`](security.md)。
+> 本文讲「是什么、怎么连」；**决策理由**在 [`docs/adr/`](adr/)（现役：0001、0002（部分退役）、0008、0009、0010、0011、0012、0013），**能力清单**在 [`README.md`](../README.md)「能力」，**日常操作**在 [`docs/usage.md`](usage.md)，**跨任务硬规则**在 [`AGENTS.md`](../AGENTS.md)「跨任务安全边界」，**发布前验收**在 [`docs/manual-verification.md`](manual-verification.md)，**安全边界与暴露面**在 [`docs/security.md`](security.md)。
 >
 > **契约面有三处机械守卫，改之前先读**：
 > - **§3.4 事件表**被 `npm run check:sse`（`frontend/scripts/check-sse-event-registry.mjs`）与 `backend/tests/test_sse_publish_ast.py` 双向解析；`docs/architecture.md` 是 CI `paths` 白名单的**唯一 docs 例外**——改它触发全套 CI（见 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）。
@@ -379,7 +379,7 @@ python start.py --install     # 开发：先按 CI 同口径装后端依赖（pi
 python start.py               # 开发：改前端时用（后端 --reload + Vite 热重载）；与 qianfan 互斥
 ```
 
-一台机器**只共用一个后台**，后台是独立进程并持 `data/server.json`：启动器 detach 拉起 `backend.serve`、等 `/health` 就绪后退出，**退出启动终端不停后台**。第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；`qianfan repl` 复用同一后台（也接受 `start.py` 的开发后台，但不接管其锁或停止它），关闭终端只断连。`qianfan stop` 校验 instance 后按顺序收尾（拒绝新运行 → 停止任务并解除可取消阻塞 I/O → 等 worker → 落盘 → 请求 uvicorn 退出；锁在 uvicorn 返回后由 `serve.run` 释放），超时非 0 并报告未完成，不把「已收到请求」写成「已停止」；收尾期间 503 门仍放行 `/health`、`/api/server/stop` 与 `/api/auth/token`（认证开启时重试要重新登录）。`start.py` 起的开发后台没有可编程退出钩子，端点直接 409 拒绝（不触碰任务、不释放锁），请在开发终端 Ctrl-C。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `qianfan serve` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`::1` 的健康探针按配置 host 构造（方括号）。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
+一台机器**只共用一个后台**，后台是独立进程并持 `data/server.json`：启动器 detach 拉起 `backend.serve`、等 `/health` 就绪后退出，**退出启动终端不停后台**。第二个 `qianfan` 只把浏览器开到已在跑的后台并退出；`qianfan repl` 复用同一后台（也接受 `start.py` 的开发后台，但不接管其锁或停止它），关闭终端只断连。`qianfan stop` 校验 instance 后按顺序收尾（拒绝新运行 → 停止任务并解除可取消阻塞 I/O → 等 worker → 落盘 → 请求 uvicorn 退出；锁在 uvicorn 返回后由 `serve.run` 释放），超时非 0 并报告未完成，不把「已收到请求」写成「已停止」；收尾期间 503 门仍放行 `/health`、`/api/server/stop` 与 `/api/auth/token`（认证开启时重试要重新登录）。`start.py` 起的开发后台没有可编程退出钩子，端点直接 409 拒绝（不触碰任务、不释放锁），请在开发终端 Ctrl-C。`start.py` 与 `qianfan` 互斥（启动前先抢 `server.json`，再起 uvicorn；`--reload` 时锁 pid 保持 supervisor，worker 不接管）。**手工 `uvicorn backend.main:app` 一律被拒**（无 `QIANFAN_INSTANCE` 会绕过守卫），请用 `qianfan` / `qianfan serve` / `python start.py`；`host` 非回环（如 `0.0.0.0`）在 `create_app` 组装期即拒，`start.py` 与 detached `backend.serve` 的健康探针按配置 host 构造（`::1` 用方括号）；**已知限制（待修）**：日常 `qianfan` 的 ensure 探测与浏览器地址、`qianfan serve` 的绑定仍固定 `127.0.0.1`；修好前 `host` 请保持 `127.0.0.1`，详见 [`docs/usage.md`](usage.md)「共享后台」。开发态 Vite 代理读取 `PORT`（`start.py --port` 已注入，仅接受 1–65535 的正整数，非法回落 8000），同时代理 `/api` 与 `/health`，target 固定 `127.0.0.1`（只用 IPv4 回环）。
 
 后台启动装配（`build_runtime`）与终端 HTTP 客户端构造（`ApiClient`）都会先改写进程 env 的 `NO_PROXY` / `no_proxy`：括号化 IPv6 条目改成裸主机，`[host]:port` 丢掉端口。httpx 把 `NO_PROXY` 拼成代理挂载键时只认裸主机，`[::1]` 会让客户端在构造时抛 `InvalidURL`；后台发生改写时打一条 WARNING 日志（#317），终端侧静默修正后继续连接。
 
@@ -411,7 +411,7 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 
 ## 7. 安全边界（这不是安全边界）
 
-`qianfan` 只监听回环、Host 检查只认 `127.0.0.1` / `localhost`（挡 DNS 重绑定）、CORS 只放行自身来源——这些是**减少暴露面**，不是沙箱。完整口径与审计证据见 [`README.md`](../README.md)「这不是安全边界」与 [`security-audit-2026-10-19-bash.md`](archive/security-audit-2026-10-19-bash.md)。
+`qianfan` 只监听回环、Host 只认 `127.0.0.1` / `localhost` / `::1`（挡 DNS 重绑定）、CORS 只放行自身来源——这些是**减少暴露面**，不是沙箱。完整口径与操作者 checklist 见 [`docs/security.md`](security.md) §1 / §4，审计证据见 [`security-audit-2026-10-19-bash.md`](archive/security-audit-2026-10-19-bash.md)。
 
 - **默认没有登录**：同机其他进程/用户可直接驱动 API；`auth_enabled` 只挡无凭据访问，不是权限边界。远程访问不在本章范围。
 - **`shell` 拿运行账号权限**：工作目录只是起点，`data/`、`.git`、`.env`、家目录与网络都可读写；trace 不是防篡改审计日志。撤销靠 git。
@@ -427,9 +427,10 @@ python start.py               # 开发：改前端时用（后端 --reload + Vit
 
 | 想知道 | 去这里 |
 |---|---|
-| 能力清单 / 快速开始 / 模型与工作区形态 | [`README.md`](../README.md) |
+| 能力清单 / 门厅与快速开始 | [`README.md`](../README.md) |
+| 日常操作：工作区、终端、计划 / 续说、模型、能力包、排障 | [`docs/usage.md`](usage.md) |
 | 跨任务硬规则、任务路由、验证入口 | [`AGENTS.md`](../AGENTS.md) |
-| 决策与理由（现役 5 份 + 退役 5 份） | [`docs/adr/`](adr/) |
+| 决策与理由（0001–0013；状态总表见 [`docs/agents/domain.md`](agents/domain.md)） | [`docs/adr/`](adr/) |
 | 交付历史（五轮迭代 + 切片） | [`docs/archive/OVERVIEW.md`](archive/OVERVIEW.md)、[`docs/archive/pivot-plan-build.md`](archive/pivot-plan-build.md) |
 | LangGraph 0.2 → 1.2.x 迁移实测 | [`docs/migration-langgraph-1x.md`](migration-langgraph-1x.md) |
 | stop / resume / durability 说明 | [`docs/incremental-arch-p3-resume.md`](incremental-arch-p3-resume.md) |
