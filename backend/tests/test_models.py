@@ -199,6 +199,22 @@ def test_corrupt_models_json_is_quarantined_not_overwritten(tmp_path):
     assert list(settings.data_path.glob("models.json.corrupt-*"))
 
 
+def test_non_utf8_models_json_is_quarantined_and_reseeded(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.data_path.mkdir(parents=True, exist_ok=True)
+    path = settings.data_path / "models.json"
+    original = b'{"schema_version": 2, "providers": [], "models": []}\xff'
+    path.write_bytes(original)
+
+    store = ModelStore(settings, home_dir=tmp_path / "home")
+
+    assert store.get_model("default") is not None
+    backups = list(settings.data_path.glob("models.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    assert json.loads(store.data_file.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
 def test_key_never_in_models_json(tmp_path, monkeypatch):
     store, _ = _store(tmp_path)
     store.set_provider_key("default", SENTINEL)
